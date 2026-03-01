@@ -123,7 +123,7 @@ const MOCK_CURRENT_USER: UserType = {
 };
 
 const App: React.FC = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(MOCK_NODES_INITIAL);
   const [isConnected, setIsConnected] = useState(false);
