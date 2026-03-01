@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { BrainCircuit, Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import { NodeAgent } from '../types';
 
@@ -14,31 +13,31 @@ const AIInsights: React.FC<{
   const analyzeFleet = async () => {
     setLoading(true);
     try {
-      // Use user-provided key if available, otherwise fallback to default
-      const apiKey = userApiKey || process.env.API_KEY;
-      if (!apiKey) {
+      const ollamaEndpoint = userApiKey;
+      if (!ollamaEndpoint) {
         throw new Error("Local Ollama instance not connected. Please configure your endpoint in Security settings.");
       }
-      
-      const ai = new GoogleGenAI({ apiKey });
-      
-      const prompt = `Analyze this AI fleet data and provide a concise JSON-formatted strategic optimization report.
-      Fleet Snapshot:
-      ${JSON.stringify(nodes, null, 2)}
-      
-      Requirements:
-      1. Identify critical nodes based on Thermal (over 75C) or VRAM (over 90% usage).
-      2. Suggest if load balancing should be shifted.
-      3. Recommend specific WASM interceptors to improve efficiency.
-      
-      Format the output as a Markdown report with a "Strategic Optimization" header.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
+      const prompt = `Analyze this AI fleet data and provide a concise strategic optimization report.
+Fleet Snapshot:
+${JSON.stringify(nodes, null, 2)}
+
+Requirements:
+1. Identify critical nodes based on Thermal (over 75C) or VRAM (over 90% usage).
+2. Suggest if load balancing should be shifted.
+3. Recommend specific WASM interceptors to improve efficiency.
+
+Format the output as a Markdown report with a "Strategic Optimization" header.`;
+
+      const response = await fetch(`${ollamaEndpoint}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'phi3:mini', prompt, stream: false }),
       });
 
-      setInsight(response.text || "Failed to generate insights.");
+      if (!response.ok) throw new Error(`Ollama returned ${response.status}`);
+      const data = await response.json();
+      setInsight(data.response || "Failed to generate insights.");
     } catch (error) {
       console.error(error);
       setInsight("Error communicating with local model. Please ensure Ollama is running and reachable.");
@@ -49,7 +48,7 @@ const AIInsights: React.FC<{
 
   return (
     <div className="space-y-6">
-      {!userApiKey && !process.env.API_KEY && (
+      {!userApiKey && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-amber-500" />

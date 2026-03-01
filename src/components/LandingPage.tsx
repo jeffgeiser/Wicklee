@@ -28,14 +28,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
       </div>
 
       {/* Navigation */}
-      <nav className="max-w-7xl mx-auto px-8 py-8 flex items-center justify-between relative z-10">
+      <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <Logo className="text-3xl" active={true} />
-        <div className="flex items-center gap-8">
-          <a href="#" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
-          <a href="#" className="text-sm font-medium text-gray-400 hover:text-white transition-colors">GitHub</a>
-          <button 
+        <div className="flex items-center gap-4 sm:gap-8">
+          <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
+          <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">GitHub</a>
+          <button
             onClick={onLogin}
-            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
+            className="px-4 sm:px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
           >
             Launch Console
           </button>
@@ -43,25 +43,25 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
       </nav>
 
       {/* Hero Section */}
-      <section className="max-w-5xl mx-auto px-8 pt-20 pb-32 text-center relative z-10">
-        <h1 className="text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
+      <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-16 sm:pb-32 text-center relative z-10">
+        <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
           Your GPU fleet is flying blind. <br />
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-400">
             Wicklee fixes that in 5 minutes.
           </span>
         </h1>
-        <p className="text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
+        <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
           Most teams find out a node is thermal throttling from a user complaint — not an alert. Wicklee gives you real-time GPU health, thermal-aware traffic rerouting, and fleet cost visibility in a single binary. Install in 60 seconds. No config required.
         </p>
-        <div className="flex items-center justify-center gap-4">
-          <button 
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
+          <button
             onClick={onLogin}
-            className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl transition-all shadow-xl shadow-blue-500/30 flex items-center gap-2 text-lg"
+            className="w-full sm:w-auto px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 text-lg"
           >
             Install Free — 60 seconds
             <ChevronRight className="w-5 h-5" />
           </button>
-          <button className="px-8 py-4 bg-gray-900 border border-gray-800 hover:border-gray-700 text-white font-bold rounded-2xl transition-all text-lg flex items-center gap-2">
+          <button className="w-full sm:w-auto px-8 py-4 bg-gray-900 border border-gray-800 hover:border-gray-700 text-white font-bold rounded-2xl transition-all text-lg flex items-center justify-center gap-2">
             <Github className="w-5 h-5" />
             View on GitHub →
           </button>
@@ -69,16 +69,16 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
       </section>
 
       {/* Install Command Section */}
-      <section className="max-w-3xl mx-auto px-8 pb-32 relative z-10">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl relative group overflow-hidden">
+      <section className="max-w-3xl mx-auto px-4 sm:px-8 pb-16 sm:pb-32 relative z-10">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-2xl relative group overflow-hidden">
           <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
-          <div className="flex items-center justify-between relative z-10">
-            <div className="font-mono text-sm sm:text-base space-y-2">
-              <p className="text-zinc-500"># One-line install — works on Linux and macOS</p>
-              <p className="text-white">curl -fsSL https://get.wicklee.dev | sh</p>
-              <p className="text-zinc-500"># Then run: wicklee start</p>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 relative z-10">
+            <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
+              <p className="text-zinc-500 whitespace-nowrap"># One-line install — works on Linux and macOS</p>
+              <p className="text-white whitespace-nowrap">curl -fsSL https://get.wicklee.dev | sh</p>
+              <p className="text-zinc-500 whitespace-nowrap"># Then run: wicklee start</p>
             </div>
-            <button 
+            <button
               onClick={() => {
                 navigator.clipboard.writeText('curl -fsSL https://get.wicklee.dev | sh');
                 const btn = document.getElementById('copy-install-btn');
@@ -91,7 +91,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
                 }
               }}
               id="copy-install-btn"
-              className="ml-4 p-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
+              className="shrink-0 self-end sm:self-auto p-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
             >
               <Copy className="w-4 h-4" />
               Copy
@@ -101,7 +101,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
       </section>
 
       {/* Feature Grid */}
-      <section className="max-w-7xl mx-auto px-8 py-32 border-t border-gray-900 relative z-10">
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-32 border-t border-gray-900 relative z-10">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           <FeatureCard 
             icon={Cpu}
@@ -122,9 +122,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
       </section>
 
       {/* How it works Section */}
-      <section className="max-w-7xl mx-auto px-8 pb-40 relative z-10">
-        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-12 overflow-hidden relative">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-40 relative z-10">
+        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12 overflow-hidden relative">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-16 items-center">
             <div>
               <h2 className="text-4xl font-bold text-white mb-8 tracking-tight">How it works</h2>
               <div className="space-y-8">
@@ -153,7 +153,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
             </div>
             
             <div className="relative">
-              <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 font-mono text-xs text-gray-500 shadow-2xl">
+              <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 font-mono text-xs text-gray-500 shadow-2xl overflow-x-auto">
                 <div className="flex items-center gap-2 mb-4">
                   <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
                   <div className="w-3 h-3 rounded-full bg-amber-500/50"></div>

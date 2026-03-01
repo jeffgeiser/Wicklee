@@ -1,7 +1,6 @@
 
 import React, { useState } from 'react';
 import { Shield, Key, Smartphone, LogOut, ChevronRight, Monitor, Laptop, ExternalLink, Lock, CheckCircle2, AlertCircle, Loader2, Eye, EyeOff, BarChart3 } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
 
 interface SecurityViewProps {
   byokMode: boolean;
@@ -20,13 +19,9 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
     setIsValidating(true);
     setValidationStatus('idle');
     try {
-      const ai = new GoogleGenAI({ apiKey: userApiKey });
-      // Low-cost test call: list models
-      await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: 'test',
-        config: { maxOutputTokens: 1 }
-      });
+      // Test connection by listing available models from the Ollama endpoint
+      const response = await fetch(`${userApiKey}/api/tags`);
+      if (!response.ok) throw new Error(`Ollama returned ${response.status}`);
       setValidationStatus('success');
     } catch (error) {
       console.error(error);
