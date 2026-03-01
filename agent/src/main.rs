@@ -210,6 +210,50 @@ fn parse_ioreg_gpu(text: &str) -> Option<f32> {
     None
 }
 
+/// Memory pressure via `vm_stat` — no sudo required.
+///
+/// Formula (per user spec):
+///   used  = active + inactive + speculative + wired
+///   total = free + used
+///   pressure % = used / total × 100
+async fn read_memory_pressure_vmstat() -> Option<f32> {
+    let out = tokio::process::Command::new("vm_stat")
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() { return None; }
+    parse_vmstat_pressure(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_vmstat_pressure(text: &str) -> Option<f32> {
+    let mut free:        u64 = 0;
+    let mut active:      u64 = 0;
+    let mut inactive:    u64 = 0;
+    let mut speculative: u64 = 0;
+    let mut wired:       u64 = 0;
+    let mut found_any = false;
+
+    for line in text.lines() {
+        let line = line.trim();
+        // Each vm_stat line is "Label:    NNN." — strip trailing dot, parse integer.
+        let parse_val = |prefix: &str| -> Option<u64> {
+            let rest = line.strip_prefix(prefix)?;
+            rest.trim().trim_end_matches('.').trim().parse().ok()
+        };
+        if      let Some(v) = parse_val("Pages free:")        { free = v;        found_any = true; }
+        else if let Some(v) = parse_val("Pages active:")      { active = v;      found_any = true; }
+        else if let Some(v) = parse_val("Pages inactive:")    { inactive = v;    found_any = true; }
+        else if let Some(v) = parse_val("Pages speculative:") { speculative = v; found_any = true; }
+        else if let Some(v) = parse_val("Pages wired down:")  { wired = v;       found_any = true; }
+    }
+
+    if !found_any { return None; }
+    let used  = active + inactive + speculative + wired;
+    let total = free + used;
+    if total == 0 { return None; }
+    Some((used as f32 / total as f32) * 100.0)
+}
+
 /// powermetrics without sudo — parses CPU power + memory pressure.
 async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
     let out = tokio::process::Command::new("powermetrics")
@@ -347,12 +391,17 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
             // 2. GPU: IOAccelerator → IOGPUDevice (Apple Silicon AGX)
             m.gpu_utilization_percent = read_gpu_ioreg().await;
 
-            // 3. CPU power / memory pressure via powermetrics (no sudo)
+            // 3. Memory pressure via vm_stat (no sudo required)
+            m.memory_pressure_percent = read_memory_pressure_vmstat().await;
+
+            // 4. CPU power via powermetrics (no sudo — overrides mem_pressure if available)
             if let Some(pm) = try_powermetrics_nosudo().await {
-                m.cpu_power_w             = pm.cpu_power_w;
-                m.ecpu_power_w            = pm.ecpu_power_w;
-                m.pcpu_power_w            = pm.pcpu_power_w;
-                m.memory_pressure_percent = pm.memory_pressure_percent;
+                m.cpu_power_w  = pm.cpu_power_w;
+                m.ecpu_power_w = pm.ecpu_power_w;
+                m.pcpu_power_w = pm.pcpu_power_w;
+                if pm.memory_pressure_percent.is_some() {
+                    m.memory_pressure_percent = pm.memory_pressure_percent;
+                }
                 if pm.thermal_state.is_some() { m.thermal_state = pm.thermal_state; }
                 if m.gpu_utilization_percent.is_none() {
                     m.gpu_utilization_percent = pm.gpu_utilization_percent;
