@@ -21,10 +21,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
 // ── Embedded Frontend ─────────────────────────────────────────────────────────
-// At compile time, rust-embed reads every file under agent/frontend/dist/ and
-// bakes them into the binary with Brotli compression.  The folder path is
-// relative to this crate's Cargo.toml.  Run `npm run build` from the repo root
-// first — vite.config.ts is already configured to output there.
 
 #[derive(RustEmbed)]
 #[folder = "frontend/dist"]
@@ -44,18 +40,16 @@ struct ModelInfo {
     size: u64,
 }
 
-/// Apple Silicon deep-metal metrics harvested from powermetrics.
-/// All fields are `Option<f32>` so they serialize as JSON `null` when
-/// powermetrics is unavailable (no sudo, non-Apple hardware, etc.).
+/// Apple Silicon / macOS deep-metal metrics.
+/// All fields are `Option` — serialize as JSON `null` when unavailable.
 #[derive(Serialize, Clone, Default)]
 struct AppleSiliconMetrics {
-    cpu_power_w:            Option<f32>,
-    ecpu_power_w:           Option<f32>,
-    pcpu_power_w:           Option<f32>,
+    cpu_power_w:             Option<f32>,
+    ecpu_power_w:            Option<f32>,
+    pcpu_power_w:            Option<f32>,
     gpu_utilization_percent: Option<f32>,
     memory_pressure_percent: Option<f32>,
-    /// "Normal" | "Elevated" | "High" | "Critical" — or null if unavailable.
-    thermal_state:          Option<String>,
+    thermal_state:           Option<String>,
 }
 
 /// Streamed by /api/metrics at 1 Hz.
@@ -65,10 +59,10 @@ struct MetricsPayload {
     cpu_usage_percent:       f32,
     total_memory_mb:         u64,
     used_memory_mb:          u64,
-    available_memory_mb:     u64,
+    available_memory_mb:     u64,   // Bug 1 fix: computed as total - used
     cpu_core_count:          usize,
     timestamp_ms:            u64,
-    // ── Apple Silicon deep metal (null on non-Apple / no-sudo) ──────────────
+    // Deep-metal (null when unavailable)
     cpu_power_w:             Option<f32>,
     ecpu_power_w:            Option<f32>,
     pcpu_power_w:            Option<f32>,
@@ -77,59 +71,104 @@ struct MetricsPayload {
     thermal_state:           Option<String>,
 }
 
-// ── powermetrics harvester ────────────────────────────────────────────────────
-//
-// Spawned once as a background tokio task.  Runs `powermetrics` every ~2 s
-// (slightly offset from the 1 Hz SSE loop to avoid lock contention), parses
-// the plain-text output, and stores the result in a shared `Arc<Mutex<…>>`.
-//
-// The SSE loop reads the latest snapshot on each tick — no blocking, no sudo
-// escalation inside the hot path.
+// ── Hardware Helpers ──────────────────────────────────────────────────────────
 
-/// Parse the plain-text `powermetrics` output for the fields we care about.
+/// Read CPU thermal pressure level via `sysctl` — no subprocess, no sudo.
 ///
-/// Relevant lines look like:
+/// Key `machdep.xcpm.cpu_thermal_level` is Intel-specific; returns `None`
+/// on Apple Silicon (key absent) — the caller falls back to other sources.
+/// Values: 0 = Normal, 1 = Elevated, 2 = High, 3+ = Critical.
+fn read_thermal_sysctl() -> Option<String> {
+    use sysctl::Sysctl;
+    let ctl = sysctl::Ctl::new("machdep.xcpm.cpu_thermal_level").ok()?;
+    let val: i32 = ctl.value_string().ok()?.trim().parse().ok()?;
+    Some(match val {
+        0 => "Normal",
+        1 => "Elevated",
+        2 => "High",
+        _ => "Critical",
+    }.to_string())
+}
+
+/// Read GPU utilization % via `ioreg -r -c IOAccelerator` — no sudo required.
+///
+/// Parses `"Device Utilization %":N` out of the PerformanceStatistics
+/// dictionary that every Metal-capable GPU publishes.
+async fn read_gpu_ioreg() -> Option<f32> {
+    let out = tokio::process::Command::new("ioreg")
+        .args(["-r", "-c", "IOAccelerator"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_ioreg_gpu(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_ioreg_gpu(text: &str) -> Option<f32> {
+    for line in text.lines() {
+        if let Some(pos) = line.find("\"Device Utilization %\"") {
+            let after = &line[pos + "\"Device Utilization %\"".len()..];
+            let after = after.trim_start_matches(|c: char| c == ':' || c == ' ');
+            let num: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(v) = num.parse::<f32>() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Attempt `powermetrics` without sudo — works on some macOS configs where
+/// the binary has been granted the `com.apple.private.iokit.powerlogging`
+/// entitlement or the user has a NOPASSWD sudoers entry.
+/// Gracefully returns `None` if it exits non-zero.
+async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
+    let out = tokio::process::Command::new("powermetrics")
+        .args(["--samplers", "cpu_power,gpu_power,thermal", "-n", "1", "-i", "1000"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(parse_powermetrics(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Parse plain-text `powermetrics` output.
+///
+/// Relevant lines:
 ///   "CPU Power: 3210 mW"
 ///   "E-Cluster Power: 812 mW"
 ///   "P-Cluster Power: 2398 mW"
-///   "GPU Power: 450 mW"         (sometimes absent on low-power samples)
 ///   "GPU Active residency: 12.45%"
-///   "System Memory Pressure: 23%"   (or "Memory Pressure: 23%")
+///   "System Memory Pressure: 23%"
 ///   "Thermal level: Normal"
 fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
     let mut m = AppleSiliconMetrics::default();
-
     for line in output.lines() {
         let line = line.trim();
-
-        // CPU total power
         if let Some(rest) = line.strip_prefix("CPU Power: ") {
             m.cpu_power_w = parse_mw(rest);
-        }
-        // Efficiency cluster
-        else if let Some(rest) = line.strip_prefix("E-Cluster Power: ")
+        } else if let Some(rest) = line.strip_prefix("E-Cluster Power: ")
             .or_else(|| line.strip_prefix("E-core Power: "))
         {
             m.ecpu_power_w = parse_mw(rest);
-        }
-        // Performance cluster
-        else if let Some(rest) = line.strip_prefix("P-Cluster Power: ")
+        } else if let Some(rest) = line.strip_prefix("P-Cluster Power: ")
             .or_else(|| line.strip_prefix("P-core Power: "))
         {
             m.pcpu_power_w = parse_mw(rest);
-        }
-        // GPU active residency (utilisation %)
-        else if let Some(rest) = line.strip_prefix("GPU Active residency: ") {
+        } else if let Some(rest) = line.strip_prefix("GPU Active residency: ") {
             m.gpu_utilization_percent = parse_percent(rest);
-        }
-        // Memory pressure
-        else if let Some(rest) = line.strip_prefix("System Memory Pressure: ")
+        } else if let Some(rest) = line.strip_prefix("System Memory Pressure: ")
             .or_else(|| line.strip_prefix("Memory Pressure: "))
         {
             m.memory_pressure_percent = parse_percent(rest);
-        }
-        // Thermal state
-        else if let Some(rest) = line.strip_prefix("Thermal level: ")
+        } else if let Some(rest) = line.strip_prefix("Thermal level: ")
             .or_else(|| line.strip_prefix("Thermal pressure: "))
         {
             let state = rest.split_whitespace().next().unwrap_or("").to_string();
@@ -138,88 +177,63 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
             }
         }
     }
-
     m
 }
 
-/// Parse "3210 mW" → Some(3.21)  (convert mW → W)
 fn parse_mw(s: &str) -> Option<f32> {
     let num: f32 = s.split_whitespace().next()?.parse().ok()?;
     Some(num / 1000.0)
 }
 
-/// Parse "12.45%" → Some(12.45)
 fn parse_percent(s: &str) -> Option<f32> {
-    let clean = s.trim_end_matches('%').split_whitespace().next()?;
-    clean.parse().ok()
+    s.trim_end_matches('%').split_whitespace().next()?.parse().ok()
 }
 
-/// Spawn the background harvester task.
-///
-/// Returns an `Arc<Mutex<AppleSiliconMetrics>>` that the SSE loop can clone
-/// and read on every tick.  If powermetrics is unavailable the mutex always
-/// contains the `Default` (all-null) value.
-fn start_powermetrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
+// ── Background Harvester ──────────────────────────────────────────────────────
+//
+// Runs every 2 s (offset from the 1 Hz SSE loop to avoid lock contention).
+// Priority order per the spec:
+//   1. Thermal  → sysctl (sync, zero cost, no subprocess)
+//   2. GPU      → ioreg  (async subprocess, no sudo)
+//   3. CPU power / mem pressure → powermetrics without sudo (may fail)
+//
+// All sources degrade gracefully to null — the loop never panics.
+
+fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
     let shared = Arc::new(Mutex::new(AppleSiliconMetrics::default()));
     let shared_clone = Arc::clone(&shared);
 
     tokio::spawn(async move {
-        // Check once whether powermetrics is even on this system.
-        // On non-macOS builds, or without sudo, we log and exit the task
-        // immediately — the SSE stream will emit null fields gracefully.
-        let probe = tokio::process::Command::new("sudo")
-            .args(["-n", "powermetrics", "--samplers", "cpu_power,gpu_power,thermal",
-                   "-n", "1", "-i", "500"])
-            .output()
-            .await;
-
-        match probe {
-            Err(e) => {
-                eprintln!("[powermetrics] spawn error — deep metal disabled: {e}");
-                return;
-            }
-            Ok(out) if !out.status.success() => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                eprintln!("[powermetrics] not available (non-zero exit) — deep metal disabled.\n  → {stderr}");
-                return;
-            }
-            Ok(out) => {
-                // First sample succeeded — parse and store immediately.
-                let text = String::from_utf8_lossy(&out.stdout);
-                let parsed = parse_powermetrics(&text);
-                if let Ok(mut guard) = shared_clone.lock() {
-                    *guard = parsed;
-                }
-            }
-        }
-
-        // Steady-state: refresh every 2 s (interleaved with 1 Hz SSE ticks).
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
             interval.tick().await;
 
-            let result = tokio::process::Command::new("sudo")
-                .args(["-n", "powermetrics", "--samplers", "cpu_power,gpu_power,thermal",
-                       "-n", "1", "-i", "500"])
-                .output()
-                .await;
+            let mut m = AppleSiliconMetrics::default();
 
-            match result {
-                Ok(out) if out.status.success() => {
-                    let text = String::from_utf8_lossy(&out.stdout);
-                    let parsed = parse_powermetrics(&text);
-                    if let Ok(mut guard) = shared_clone.lock() {
-                        *guard = parsed;
-                    }
+            // 1. Thermal via sysctl — fast, synchronous, no subprocess
+            m.thermal_state = read_thermal_sysctl();
+
+            // 2. GPU utilization via ioreg — no sudo
+            m.gpu_utilization_percent = read_gpu_ioreg().await;
+
+            // 3. CPU power + memory pressure via powermetrics (no sudo)
+            if let Some(pm) = try_powermetrics_nosudo().await {
+                m.cpu_power_w             = pm.cpu_power_w;
+                m.ecpu_power_w            = pm.ecpu_power_w;
+                m.pcpu_power_w            = pm.pcpu_power_w;
+                m.memory_pressure_percent = pm.memory_pressure_percent;
+                // powermetrics thermal overrides sysctl if present
+                if pm.thermal_state.is_some() {
+                    m.thermal_state = pm.thermal_state;
                 }
-                Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!("[powermetrics] sample failed: {stderr}");
-                    // Keep the last good values in the mutex — don't zero them out.
+                // powermetrics may also give GPU — prefer ioreg if we already have it
+                if m.gpu_utilization_percent.is_none() {
+                    m.gpu_utilization_percent = pm.gpu_utilization_percent;
                 }
-                Err(e) => {
-                    eprintln!("[powermetrics] spawn error: {e}");
-                }
+            }
+
+            if let Ok(mut guard) = shared_clone.lock() {
+                *guard = m;
             }
         }
     });
@@ -241,12 +255,6 @@ async fn handle_tags() -> Json<TagsResponse> {
 }
 
 /// GET /api/metrics — SSE stream, one telemetry snapshot per second.
-///
-/// Architecture: a dedicated tokio task owns the `System` handle and refreshes
-/// it every second, then sends the payload through an mpsc channel.
-/// `ReceiverStream` bridges the channel into the `Stream` that `Sse` requires.
-/// When the client disconnects the receiver is dropped, `tx.send()` returns
-/// `Err`, and the task exits cleanly — no zombie threads.
 async fn handle_metrics(
     axum::extract::Extension(apple_metrics): axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
@@ -257,8 +265,8 @@ async fn handle_metrics(
         let node_id = System::host_name()
             .unwrap_or_else(|| "wicklee-sentinel-01".to_string());
 
-        // Seed the CPU baseline — sysinfo computes usage as a delta between two
-        // consecutive reads.  Without this first read the first tick returns 0.
+        // Seed CPU baseline — sysinfo needs two reads separated by ~200ms
+        // for an accurate delta; without this the first tick returns 0%.
         sys.refresh_all();
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -274,21 +282,25 @@ async fn handle_metrics(
                 .unwrap_or_default()
                 .as_millis() as u64;
 
-            // Snapshot the latest Apple Silicon metrics (non-blocking mutex read).
+            let total    = sys.total_memory();
+            let used     = sys.used_memory();
+            // Bug 1 fix: sysinfo's available_memory() returns 0 on some macOS
+            // versions; derive it reliably from total - used instead.
+            let available = total.saturating_sub(used);
+
             let apple = apple_metrics
                 .lock()
                 .map(|g| g.clone())
                 .unwrap_or_default();
 
             let payload = MetricsPayload {
-                node_id: node_id.clone(),
-                cpu_usage_percent: sys.global_cpu_info().cpu_usage(),
-                total_memory_mb:   sys.total_memory()     / 1024 / 1024,
-                used_memory_mb:    sys.used_memory()      / 1024 / 1024,
-                available_memory_mb: sys.available_memory() / 1024 / 1024,
-                cpu_core_count:    sys.cpus().len(),
+                node_id:             node_id.clone(),
+                cpu_usage_percent:   sys.global_cpu_info().cpu_usage(),
+                total_memory_mb:     total     / 1024 / 1024,
+                used_memory_mb:      used      / 1024 / 1024,
+                available_memory_mb: available / 1024 / 1024,
+                cpu_core_count:      sys.cpus().len(),
                 timestamp_ms,
-                // Apple Silicon deep metal (null on non-Apple / no-sudo)
                 cpu_power_w:             apple.cpu_power_w,
                 ecpu_power_w:            apple.ecpu_power_w,
                 pcpu_power_w:            apple.pcpu_power_w,
@@ -314,16 +326,6 @@ async fn handle_metrics(
 
 // ── Static Asset Serving ──────────────────────────────────────────────────────
 
-/// Fallback handler — serves every request that isn't an /api/* route.
-///
-/// Lookup order:
-///   1. Exact asset match in the embed (e.g. `/assets/main-abc123.js`)
-///   2. `/` or bare path → serve `index.html`
-///   3. Unknown path (e.g. `/nodes`, `/team`) → serve `index.html`
-///      so client-side React Router takes over (SPA fallback).
-///
-/// If the build hasn't been run yet and the embed is empty, a helpful
-/// error message is returned instead of a blank 404.
 async fn static_handler(uri: Uri) -> impl IntoResponse {
     let raw = uri.path().trim_start_matches('/');
     let path = if raw.is_empty() { "index.html" } else { raw };
@@ -331,7 +333,6 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 }
 
 fn serve_asset(path: &str) -> Response<Body> {
-    // ── 1. Exact match ────────────────────────────────────────────────────────
     if let Some(content) = StaticAssets::get(path) {
         let mime = from_path(path).first_or_octet_stream();
         return Response::builder()
@@ -340,8 +341,6 @@ fn serve_asset(path: &str) -> Response<Body> {
             .body(Body::from(content.data.into_owned()))
             .unwrap();
     }
-
-    // ── 2 & 3. SPA fallback: serve index.html for all unknown paths ───────────
     if let Some(index) = StaticAssets::get("index.html") {
         return Response::builder()
             .status(StatusCode::OK)
@@ -349,8 +348,6 @@ fn serve_asset(path: &str) -> Response<Body> {
             .body(Body::from(index.data.into_owned()))
             .unwrap();
     }
-
-    // ── Frontend not built yet ────────────────────────────────────────────────
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
         .header(header::CONTENT_TYPE, "text/plain")
@@ -365,13 +362,8 @@ fn serve_asset(path: &str) -> Response<Body> {
 
 #[tokio::main]
 async fn main() {
-    // Start the Apple Silicon powermetrics harvester in the background.
-    // Returns immediately with a shared handle; the harvester probes
-    // `sudo -n powermetrics` and self-disables gracefully if unavailable.
-    let apple_metrics = start_powermetrics_harvester();
+    let apple_metrics = start_metrics_harvester();
 
-    // Permissive CORS so the Railway-hosted dashboard can reach a locally
-    // running Sentinel even when origins differ (e.g. during development).
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -380,7 +372,6 @@ async fn main() {
     let app = Router::new()
         .route("/api/tags",    get(handle_tags))
         .route("/api/metrics", get(handle_metrics))
-        // Every other path (including /) goes to the SPA handler.
         .fallback(static_handler)
         .layer(axum::extract::Extension(apple_metrics))
         .layer(cors);
