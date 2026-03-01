@@ -153,7 +153,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
   const cpuPowerStr = sentinel?.cpu_power_w    != null ? `${sentinel.cpu_power_w.toFixed(1)} W`    : null;
   const gpuUtilStr  = sentinel?.gpu_utilization_percent != null ? `${sentinel.gpu_utilization_percent.toFixed(0)}%` : null;
   const memPressStr = sentinel?.memory_pressure_percent != null ? `${sentinel.memory_pressure_percent.toFixed(0)}%` : null;
-  const hasApple    = cpuPowerStr !== null || gpuUtilStr !== null;
+  const hasApple    = cpuPowerStr !== null || gpuUtilStr !== null || memPressStr !== null;
 
   return (
     <div className="space-y-6">
