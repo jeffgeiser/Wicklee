@@ -1,0 +1,5 @@
+{
+  "name": "Wicklee",
+  "description": "A high-performance observability and orchestration dashboard for managing local AI engine fleets (Ollama/vLLM) with thermal-aware load balancing and WASM-based request interception.",
+  "requestFramePermissions": []
+}
