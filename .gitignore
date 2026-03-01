@@ -38,3 +38,7 @@ yarn-error.log*
 **/*.rs.bk
 Cargo.lock
 .claude/
+!agent/Cargo.lock
+
+# Local progress / notes (never commit)
+PROGRESS.md
