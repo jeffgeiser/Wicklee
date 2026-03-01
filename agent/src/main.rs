@@ -96,25 +96,48 @@ async fn read_thermal_pmset() -> Option<String> {
 fn parse_pmset_therm(output: &str) -> Option<String> {
     for line in output.lines() {
         let line = line.trim();
-        // Try CPU_Speed_Limit first, then CPU_Scheduler_Limit
-        let val_str = if let Some(rest) = line.strip_prefix("CPU_Speed_Limit") {
+
+        // Intel / older macOS: CPU_Speed_Limit or CPU_Scheduler_Limit = N
+        let speed_val = if let Some(rest) = line.strip_prefix("CPU_Speed_Limit") {
             Some(rest)
         } else if let Some(rest) = line.strip_prefix("CPU_Scheduler_Limit") {
             Some(rest)
         } else {
             None
         };
-        if let Some(rest) = val_str {
+        if let Some(rest) = speed_val {
             let val: u32 = rest
                 .trim_start_matches(|c: char| c == ' ' || c == '=')
                 .trim()
                 .parse()
                 .ok()?;
             return Some(match val {
-                100       => "Normal",
-                80..=99   => "Elevated",
-                50..=79   => "High",
-                _         => "Critical",
+                100     => "Normal",
+                80..=99 => "Elevated",
+                50..=79 => "High",
+                _       => "Critical",
+            }.to_string());
+        }
+
+        // Apple Silicon / macOS Ventura+: "No thermal warning level: N"
+        // 0 = not throttling (Normal); any other value means throttled.
+        if let Some(rest) = line.strip_prefix("No thermal warning level:") {
+            let val: u32 = rest.trim().parse().unwrap_or(0);
+            return Some(if val == 0 { "Normal" } else { "Elevated" }.to_string());
+        }
+
+        // Apple Silicon alternative: "Thermal Warning Level = N"
+        if let Some(rest) = line.strip_prefix("Thermal Warning Level") {
+            let val: u32 = rest
+                .trim_start_matches(|c: char| c == ' ' || c == '=')
+                .trim()
+                .parse()
+                .unwrap_or(0);
+            return Some(match val {
+                0 => "Normal",
+                1 => "Elevated",
+                2 => "High",
+                _ => "Critical",
             }.to_string());
         }
     }
@@ -144,15 +167,33 @@ async fn try_ioreg_class(class: &str) -> Option<f32> {
 
 fn parse_ioreg_gpu(text: &str) -> Option<f32> {
     for line in text.lines() {
+        // Intel / AMD: "Device Utilization %" = N  (integer percent, e.g. 42)
         if let Some(pos) = line.find("\"Device Utilization %\"") {
             let after = &line[pos + "\"Device Utilization %\"".len()..];
-            let after = after.trim_start_matches(|c: char| c == ':' || c == ' ');
+            let after = after.trim_start_matches(|c: char| c == ':' || c == ' ' || c == '=');
             let num: String = after
                 .chars()
                 .take_while(|c| c.is_ascii_digit() || *c == '.')
                 .collect();
             if let Ok(v) = num.parse::<f32>() {
                 return Some(v);
+            }
+        }
+
+        // Apple Silicon AGX (AGXAcceleratorG14G etc.):
+        // "GPU Core Utilization" = N  — float 0.0–1.0 in ioreg output.
+        if let Some(pos) = line.find("\"GPU Core Utilization\"") {
+            let after = &line[pos + "\"GPU Core Utilization\"".len()..];
+            // ioreg formats as: "key" = value  (value may be unquoted float)
+            let after = after.trim_start_matches(|c: char| c == ':' || c == ' ' || c == '=' || c == '"');
+            let num: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(v) = num.parse::<f32>() {
+                // AGX reports 0.0–1.0; multiply by 100 to get percent.
+                // Guard against already-percent values (> 1.0) just in case.
+                return Some(if v <= 1.0 { v * 100.0 } else { v });
             }
         }
     }
@@ -231,52 +272,63 @@ async fn run_startup_diagnostics() {
         }
     }
 
-    // 2. pmset -g therm (M-series thermal)
+    // 2. pmset -g therm (M-series thermal) — print FULL raw output so we can see the key names
     match tokio::process::Command::new("pmset").args(["-g", "therm"]).output().await {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
             eprintln!("[diag] pmset -g therm          exit={}", out.status);
-            // Print relevant lines only
+            eprintln!("[diag] pmset raw output (full):");
             for line in text.lines() {
-                let l = line.trim();
-                if l.starts_with("CPU_Speed_Limit") || l.starts_with("CPU_Scheduler_Limit")
-                    || l.starts_with("GPU_Available") || l.starts_with("System-wide") {
-                    eprintln!("[diag]   {}", l);
-                }
+                eprintln!("[diag]   | {}", line);
             }
             match parse_pmset_therm(&text) {
                 Some(state) => eprintln!("[diag] pmset thermal parsed    OK  → {}", state),
-                None        => eprintln!("[diag] pmset thermal parsed    MISS → no CPU_Speed_Limit or CPU_Scheduler_Limit found"),
+                None        => eprintln!("[diag] pmset thermal parsed    MISS → no known thermal key found"),
             }
         }
         Err(e) => eprintln!("[diag] pmset -g therm          ERR → {}", e),
     }
 
-    // 3. ioreg IOAccelerator (Intel/AMD GPU)
+    // 3. ioreg IOAccelerator (Intel/AMD GPU + Apple Silicon AGXAccelerator)
     match tokio::process::Command::new("ioreg").args(["-r", "-c", "IOAccelerator"]).output().await {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
             eprintln!("[diag] ioreg IOAccelerator      exit={} size={}B", out.status, text.len());
-            let preview: String = text.chars().take(300).collect();
-            eprintln!("[diag]   preview: {}", preview.replace('\n', "↵"));
+            // Print lines containing GPU/Util/Performance/Device keywords so we can see exact key names
+            eprintln!("[diag] IOAccelerator lines with GPU/Util/Performance/Device/Core:");
+            for line in text.lines() {
+                let upper = line.to_ascii_uppercase();
+                if upper.contains("UTIL") || upper.contains("GPU") || upper.contains("PERFORMANCE")
+                    || upper.contains("DEVICE") || upper.contains("CORE") || upper.contains("ACCELERATOR")
+                {
+                    eprintln!("[diag]   {}", line.trim());
+                }
+            }
             match parse_ioreg_gpu(&text) {
                 Some(v) => eprintln!("[diag] IOAccelerator GPU util   OK  → {}%", v),
-                None    => eprintln!("[diag] IOAccelerator GPU util   MISS → 'Device Utilization %' not found"),
+                None    => eprintln!("[diag] IOAccelerator GPU util   MISS → no known GPU util key found"),
             }
         }
         Err(e) => eprintln!("[diag] ioreg IOAccelerator      ERR → {}", e),
     }
 
-    // 4. ioreg IOGPUDevice (Apple Silicon AGX)
+    // 4. ioreg IOGPUDevice (Apple Silicon fallback)
     match tokio::process::Command::new("ioreg").args(["-r", "-c", "IOGPUDevice"]).output().await {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
             eprintln!("[diag] ioreg IOGPUDevice        exit={} size={}B", out.status, text.len());
-            let preview: String = text.chars().take(300).collect();
-            eprintln!("[diag]   preview: {}", preview.replace('\n', "↵"));
+            eprintln!("[diag] IOGPUDevice lines with GPU/Util/Performance/Device/Core:");
+            for line in text.lines() {
+                let upper = line.to_ascii_uppercase();
+                if upper.contains("UTIL") || upper.contains("GPU") || upper.contains("PERFORMANCE")
+                    || upper.contains("DEVICE") || upper.contains("CORE")
+                {
+                    eprintln!("[diag]   {}", line.trim());
+                }
+            }
             match parse_ioreg_gpu(&text) {
                 Some(v) => eprintln!("[diag] IOGPUDevice GPU util     OK  → {}%", v),
-                None    => eprintln!("[diag] IOGPUDevice GPU util     MISS → 'Device Utilization %' not found"),
+                None    => eprintln!("[diag] IOGPUDevice GPU util     MISS → no known GPU util key found"),
             }
         }
         Err(e) => eprintln!("[diag] ioreg IOGPUDevice        ERR → {}", e),
