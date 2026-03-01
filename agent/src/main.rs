@@ -1,5 +1,6 @@
 use axum::{
     body::Body,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{header, Response, StatusCode, Uri},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -17,6 +18,7 @@ use std::{
     time::Duration,
 };
 use sysinfo::System;
+use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -420,6 +422,93 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
     shared
 }
 
+// ── 10 Hz Metrics Broadcaster (WebSocket feed) ────────────────────────────────
+
+/// Spawns a 100 ms sysinfo loop that serialises MetricsPayload and broadcasts
+/// the JSON string to every active WebSocket subscriber.
+/// The broadcast channel has capacity 64 — lagged subscribers simply skip frames.
+fn start_metrics_broadcaster(
+    apple_metrics: Arc<Mutex<AppleSiliconMetrics>>,
+) -> broadcast::Sender<String> {
+    let (tx, _) = broadcast::channel::<String>(64);
+    let tx_clone = tx.clone();
+
+    tokio::spawn(async move {
+        let mut sys = System::new_all();
+        let node_id = System::host_name()
+            .unwrap_or_else(|| "wicklee-sentinel-01".to_string());
+
+        // Warm-up: two reads separated by 200 ms gives sysinfo an accurate CPU delta.
+        sys.refresh_all();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            interval.tick().await;
+            sys.refresh_all();
+            sys.refresh_memory();
+
+            let timestamp_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            let total     = sys.total_memory();
+            let used      = sys.used_memory();
+            let available = total.saturating_sub(used);
+
+            let apple = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+
+            let payload = MetricsPayload {
+                node_id:                 node_id.clone(),
+                cpu_usage_percent:       sys.global_cpu_info().cpu_usage(),
+                total_memory_mb:         total     / 1024 / 1024,
+                used_memory_mb:          used      / 1024 / 1024,
+                available_memory_mb:     available / 1024 / 1024,
+                cpu_core_count:          sys.cpus().len(),
+                timestamp_ms,
+                cpu_power_w:             apple.cpu_power_w,
+                ecpu_power_w:            apple.ecpu_power_w,
+                pcpu_power_w:            apple.pcpu_power_w,
+                gpu_utilization_percent: apple.gpu_utilization_percent,
+                memory_pressure_percent: apple.memory_pressure_percent,
+                thermal_state:           apple.thermal_state,
+            };
+
+            if let Ok(json) = serde_json::to_string(&payload) {
+                // send() only errors when there are zero subscribers — that's fine.
+                let _ = tx_clone.send(json);
+            }
+        }
+    });
+
+    tx
+}
+
+// ── WebSocket Handler ─────────────────────────────────────────────────────────
+
+async fn handle_ws(
+    ws: WebSocketUpgrade,
+    axum::extract::Extension(tx): axum::extract::Extension<broadcast::Sender<String>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| ws_session(socket, tx))
+}
+
+async fn ws_session(mut socket: WebSocket, tx: broadcast::Sender<String>) {
+    let mut rx = tx.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(json) => {
+                if socket.send(Message::Text(json.into())).await.is_err() {
+                    break; // client disconnected
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue, // skip stale frames
+            Err(broadcast::error::RecvError::Closed)    => break,
+        }
+    }
+}
+
 // ── API Handlers ──────────────────────────────────────────────────────────────
 
 async fn handle_tags() -> Json<TagsResponse> {
@@ -532,7 +621,8 @@ async fn main() {
     // Run diagnostics first so the output appears before the banner
     run_startup_diagnostics().await;
 
-    let apple_metrics = start_metrics_harvester();
+    let apple_metrics  = start_metrics_harvester();
+    let broadcast_tx   = start_metrics_broadcaster(Arc::clone(&apple_metrics));
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -541,9 +631,11 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/tags",    get(handle_tags))
-        .route("/api/metrics", get(handle_metrics))
+        .route("/api/metrics", get(handle_metrics))  // SSE fallback (1 Hz)
+        .route("/ws",          get(handle_ws))        // WebSocket primary (10 Hz)
         .fallback(static_handler)
         .layer(axum::extract::Extension(apple_metrics))
+        .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:7700")

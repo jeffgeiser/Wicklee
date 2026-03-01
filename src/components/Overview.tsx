@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, MemoryStick, Wind } from 'lucide-react';
 import { NodeAgent } from '../types';
@@ -101,48 +101,92 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
     ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6)
     : "0.000000";
 
-  // ── SSE live data from local Sentinel ──────────────────────────────────────
+  // ── Live telemetry — WS primary (10 Hz), SSE fallback (1 Hz) ──────────────
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
-  const [sseConnected, setSseConnected] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
+
+  // Ring-buffer for the live performance chart (max 60 points = 6 s at 10 Hz)
+  interface CpuPoint { time: string; cpu: number; mem: number; }
+  const [cpuHistory, setCpuHistory] = useState<CpuPoint[]>([]);
+  const MAX_HISTORY = 60;
+
+  const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  useEffect(() => {
-    let retryTimer: ReturnType<typeof setTimeout>;
+  const handleMetrics = useCallback((data: SentinelMetrics) => {
+    setSentinel(data);
+    setConnected(true);
+    setCpuHistory(prev => {
+      const ts  = new Date(data.timestamp_ms);
+      const lbl = `${ts.getMinutes().toString().padStart(2, '0')}:${ts.getSeconds().toString().padStart(2, '0')}`;
+      const pt  = { time: lbl, cpu: data.cpu_usage_percent, mem: (data.used_memory_mb / (data.total_memory_mb || 1)) * 100 };
+      const next = [...prev, pt];
+      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+    });
+  }, []);
 
-    const connect = () => {
-      // Relative URL — works whether the frontend is served from the embedded
-      // Rust binary (port 7700) or the Vite dev server (port 3000, proxied).
+  useEffect(() => {
+    let retryWs:  ReturnType<typeof setTimeout>;
+    let retrySse: ReturnType<typeof setTimeout>;
+    let wsFailed  = false;
+
+    const connectSSE = () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) return; // WS recovered
       const es = new EventSource('/api/metrics');
       esRef.current = es;
-
-      es.onopen = () => setSseConnected(true);
-
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data) as SentinelMetrics;
-          setSentinel(data);
-          setSseConnected(true);
-        } catch {
-          // malformed frame — ignore
-        }
+      es.onopen    = () => setTransport('sse');
+      es.onmessage = (ev) => {
+        try { handleMetrics(JSON.parse(ev.data) as SentinelMetrics); setTransport('sse'); }
+        catch { /* malformed frame */ }
       };
-
       es.onerror = () => {
-        setSseConnected(false);
+        setConnected(false);
         es.close();
         esRef.current = null;
-        // Back-off and retry after 3 s so the card shows "Reconnecting…"
-        retryTimer = setTimeout(connect, 3000);
+        retrySse = setTimeout(connectSSE, 3000);
       };
     };
 
-    connect();
+    const connectWS = () => {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      wsRef.current = ws;
+
+      ws.onmessage = (ev) => {
+        try {
+          handleMetrics(JSON.parse(ev.data as string) as SentinelMetrics);
+          setTransport('ws');
+          // WS is healthy — close the SSE fallback if it was running
+          if (esRef.current) { esRef.current.close(); esRef.current = null; }
+        } catch { /* malformed frame */ }
+      };
+
+      ws.onerror = () => { wsFailed = true; };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        setConnected(false);
+        if (wsFailed) {
+          // Server doesn't support WS yet — fall back permanently to SSE
+          connectSSE();
+        } else {
+          // Transient disconnect — retry WS, SSE picks up the gap
+          if (!esRef.current) connectSSE();
+          retryWs = setTimeout(() => { wsFailed = false; connectWS(); }, 3000);
+        }
+      };
+    };
+
+    connectWS();
 
     return () => {
-      clearTimeout(retryTimer);
+      clearTimeout(retryWs);
+      clearTimeout(retrySse);
+      wsRef.current?.close();
       esRef.current?.close();
     };
-  }, []);
+  }, [handleMetrics]);
 
   // Derived display values (show "—" until first SSE frame arrives)
   const cpuPct      = sentinel ? `${sentinel.cpu_usage_percent.toFixed(1)}%`         : '—';
@@ -224,13 +268,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
           </div>
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
-              {sseConnected && (
+              {connected && (
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
               )}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${sseConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
             </span>
-            <span className={`text-[10px] font-medium ${sseConnected ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
-              {sseConnected ? 'Live' : 'Reconnecting…'}
+            <span className={`text-[10px] font-medium ${connected ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
+              {connected ? (transport === 'ws' ? 'Live · WS' : 'Live · SSE') : 'Reconnecting…'}
             </span>
           </div>
         </div>
@@ -280,7 +324,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
-            <h3 className="font-semibold text-gray-800 dark:text-gray-200">System Performance History</h3>
+            <h3 className="font-semibold text-gray-800 dark:text-gray-200">
+              System Performance
+              {cpuHistory.length > 0 && <span className="ml-2 text-[10px] font-mono text-indigo-400 font-normal">LIVE · {transport === 'ws' ? '10 Hz' : '1 Hz'}</span>}
+            </h3>
             <select className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs rounded-lg px-2 py-1 outline-none text-gray-600 dark:text-gray-400">
               <option>Last 24 Hours</option>
               <option>Last 7 Days</option>
@@ -288,21 +335,42 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
           </div>
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={MOCK_HISTORY}>
+              <AreaChart data={cpuHistory.length > 0 ? cpuHistory : MOCK_HISTORY}>
                 <defs>
-                  <linearGradient id="colorReq" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#1c64f2" stopOpacity={0.3}/>
+                  <linearGradient id="colorCpu" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.35}/>
+                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="#22d3ee" stopOpacity={0.25}/>
                     <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-gray-200 dark:text-gray-800" vertical={false} />
-                <XAxis dataKey="time" stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} />
-                <YAxis stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: 'var(--tooltip-bg, #fff)', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '12px' }}
-                  itemStyle={{ color: '#1c64f2' }}
+                <XAxis
+                  dataKey="time"
+                  stroke="#9ca3af"
+                  fontSize={10}
+                  axisLine={false}
+                  tickLine={false}
+                  interval="preserveStartEnd"
                 />
-                <Area type="monotone" dataKey="requests" stroke="#1c64f2" fillOpacity={1} fill="url(#colorReq)" strokeWidth={2} />
+                <YAxis
+                  stroke="#9ca3af"
+                  fontSize={10}
+                  axisLine={false}
+                  tickLine={false}
+                  domain={[0, 100]}
+                  tickFormatter={(v: number) => `${v}%`}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: 'var(--tooltip-bg, #1f2937)', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
+                  formatter={(value: number, name: string) => [`${value.toFixed(1)}%`, name === 'cpu' ? 'CPU' : 'Memory']}
+                />
+                <Area type="monotone" dataKey={cpuHistory.length > 0 ? 'cpu'      : 'requests'} name="cpu" stroke="#6366f1" fillOpacity={1} fill="url(#colorCpu)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                {cpuHistory.length > 0 && (
+                  <Area type="monotone" dataKey="mem" name="mem" stroke="#22d3ee" fillOpacity={1} fill="url(#colorMem)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           </div>
