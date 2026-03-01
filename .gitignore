@@ -32,3 +32,8 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Rust / Cargo
+/target/
+**/*.rs.bk
+Cargo.lock
