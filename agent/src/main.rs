@@ -126,6 +126,16 @@ fn parse_pmset_therm(output: &str) -> Option<String> {
             return Some(if val == 0 { "Normal" } else { "Elevated" }.to_string());
         }
 
+        // Apple Silicon macOS Sequoia+: pmset reports notes instead of numeric keys.
+        // "Note: No thermal warning level has been recorded" → no throttling = Normal.
+        if line.starts_with("Note: No thermal warning level") {
+            return Some("Normal".to_string());
+        }
+        // "Note: No performance warning level has been recorded" → also Normal signal.
+        if line.starts_with("Note: No performance warning level") {
+            return Some("Normal".to_string());
+        }
+
         // Apple Silicon alternative: "Thermal Warning Level = N"
         if let Some(rest) = line.strip_prefix("Thermal Warning Level") {
             let val: u32 = rest
