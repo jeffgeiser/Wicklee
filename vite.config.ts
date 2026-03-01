@@ -7,6 +7,18 @@ export default defineConfig(() => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        // Dev-mode proxy: forwards /api and /ws to the local Sentinel on 7700
+        // so `npm run dev` works alongside `cargo run` without CORS issues.
+        proxy: {
+          '/api': 'http://localhost:7700',
+          '/ws':  { target: 'ws://localhost:7700', ws: true },
+        },
+      },
+      build: {
+        // Output directly into the agent crate so RustEmbed picks it up at
+        // compile time via #[folder = "frontend/dist"].
+        outDir: 'agent/frontend/dist',
+        emptyOutDir: true,
       },
       plugins: [react()],
       resolve: {
