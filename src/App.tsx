@@ -152,7 +152,10 @@ const App: React.FC = () => {
     if (!isLoggedIn) return;
 
     const connectWS = () => {
-      const wsUrl = `ws://localhost:3000/ws?tenant_id=${currentTenant.id}&user_id=${currentUser.id}`;
+      // Use the current host so the embedded binary (port 7700) connects to
+      // itself, and the Railway deploy connects to its own origin automatically.
+      const wsHost = window.location.host || 'localhost:7700';
+      const wsUrl = `ws://${wsHost}/ws?tenant_id=${currentTenant.id}&user_id=${currentUser.id}`;
       console.log(`Connecting to Wicklee Backend for tenant ${currentTenant.name}...`);
       
       const socket = new WebSocket(wsUrl);
