@@ -282,82 +282,44 @@ async fn run_startup_diagnostics() {
         }
     }
 
-    // 2. pmset -g therm (M-series thermal) — print FULL raw output so we can see the key names
+    // 2. pmset -g therm
     match tokio::process::Command::new("pmset").args(["-g", "therm"]).output().await {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
-            eprintln!("[diag] pmset -g therm          exit={}", out.status);
-            eprintln!("[diag] pmset raw output (full):");
-            for line in text.lines() {
-                eprintln!("[diag]   | {}", line);
-            }
             match parse_pmset_therm(&text) {
-                Some(state) => eprintln!("[diag] pmset thermal parsed    OK  → {}", state),
-                None        => eprintln!("[diag] pmset thermal parsed    MISS → no known thermal key found"),
+                Some(state) => eprintln!("[diag] pmset thermal           OK  → {}", state),
+                None        => eprintln!("[diag] pmset thermal           MISS → no known key"),
             }
         }
-        Err(e) => eprintln!("[diag] pmset -g therm          ERR → {}", e),
+        Err(e) => eprintln!("[diag] pmset thermal           ERR → {}", e),
     }
 
-    // 3. ioreg IOAccelerator (Intel/AMD GPU + Apple Silicon AGXAccelerator)
+    // 3. ioreg IOAccelerator GPU utilization
     match tokio::process::Command::new("ioreg").args(["-r", "-c", "IOAccelerator"]).output().await {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
-            eprintln!("[diag] ioreg IOAccelerator      exit={} size={}B", out.status, text.len());
-            // Print lines containing GPU/Util/Performance/Device keywords so we can see exact key names
-            eprintln!("[diag] IOAccelerator lines with GPU/Util/Performance/Device/Core:");
-            for line in text.lines() {
-                let upper = line.to_ascii_uppercase();
-                if upper.contains("UTIL") || upper.contains("GPU") || upper.contains("PERFORMANCE")
-                    || upper.contains("DEVICE") || upper.contains("CORE") || upper.contains("ACCELERATOR")
-                {
-                    eprintln!("[diag]   {}", line.trim());
-                }
-            }
             match parse_ioreg_gpu(&text) {
-                Some(v) => eprintln!("[diag] IOAccelerator GPU util   OK  → {}%", v),
-                None    => eprintln!("[diag] IOAccelerator GPU util   MISS → no known GPU util key found"),
+                Some(v) => eprintln!("[diag] ioreg GPU util          OK  → {}%", v),
+                None    => eprintln!("[diag] ioreg GPU util          MISS → no known key in IOAccelerator"),
             }
         }
-        Err(e) => eprintln!("[diag] ioreg IOAccelerator      ERR → {}", e),
+        Err(e) => eprintln!("[diag] ioreg GPU util          ERR → {}", e),
     }
 
-    // 4. ioreg IOGPUDevice (Apple Silicon fallback)
-    match tokio::process::Command::new("ioreg").args(["-r", "-c", "IOGPUDevice"]).output().await {
-        Ok(out) => {
-            let text = String::from_utf8_lossy(&out.stdout);
-            eprintln!("[diag] ioreg IOGPUDevice        exit={} size={}B", out.status, text.len());
-            eprintln!("[diag] IOGPUDevice lines with GPU/Util/Performance/Device/Core:");
-            for line in text.lines() {
-                let upper = line.to_ascii_uppercase();
-                if upper.contains("UTIL") || upper.contains("GPU") || upper.contains("PERFORMANCE")
-                    || upper.contains("DEVICE") || upper.contains("CORE")
-                {
-                    eprintln!("[diag]   {}", line.trim());
-                }
-            }
-            match parse_ioreg_gpu(&text) {
-                Some(v) => eprintln!("[diag] IOGPUDevice GPU util     OK  → {}%", v),
-                None    => eprintln!("[diag] IOGPUDevice GPU util     MISS → no known GPU util key found"),
-            }
-        }
-        Err(e) => eprintln!("[diag] ioreg IOGPUDevice        ERR → {}", e),
-    }
-
-    // 5. powermetrics without sudo
+    // 4. powermetrics without sudo
     match tokio::process::Command::new("powermetrics")
         .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
         .output()
         .await
     {
         Ok(out) => {
-            eprintln!("[diag] powermetrics (no sudo)   exit={}", out.status);
-            let stdout_p: String = String::from_utf8_lossy(&out.stdout).chars().take(200).collect();
-            let stderr_p: String = String::from_utf8_lossy(&out.stderr).chars().take(200).collect();
-            eprintln!("[diag]   stdout[0..200]: {}", stdout_p.replace('\n', "↵"));
-            eprintln!("[diag]   stderr[0..200]: {}", stderr_p.replace('\n', "↵"));
+            if out.status.success() {
+                eprintln!("[diag] powermetrics            OK  → available");
+            } else {
+                eprintln!("[diag] powermetrics            MISS → requires root (cpu_power_w will be null)");
+            }
         }
-        Err(e) => eprintln!("[diag] powermetrics (no sudo)   ERR → {}", e),
+        Err(e) => eprintln!("[diag] powermetrics            ERR → {}", e),
     }
 
     eprintln!("──────────────────────────────────────────────");
