@@ -10,6 +10,7 @@ serde         = { version = "1.0", features = ["derive"] }
 serde_json    = "1.0"
 tower-http    = { version = "0.5", features = ["cors"] }
 sysinfo       = "0.30"
+sysctl        = "0.5"
 nvml-wrapper  = "0.10"
 # Embed the compiled frontend into the binary at compile time.
 # `compression` applies Brotli to each asset, keeping binary size tight.
