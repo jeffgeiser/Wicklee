@@ -1,12 +1,30 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, MemoryStick, Wind } from 'lucide-react';
 import { NodeAgent } from '../types';
 import EventFeed from './EventFeed';
 
 interface OverviewProps {
   nodes: NodeAgent[];
   isPro?: boolean;
+}
+
+// ── SSE payload shape (mirrors MetricsPayload in agent/src/main.rs) ──────────
+interface SentinelMetrics {
+  node_id: string;
+  cpu_usage_percent: number;
+  total_memory_mb: number;
+  used_memory_mb: number;
+  available_memory_mb: number;
+  cpu_core_count: number;
+  timestamp_ms: number;
+  // Apple Silicon deep-metal (null on non-Apple / no-sudo)
+  cpu_power_w:             number | null;
+  ecpu_power_w:            number | null;
+  pcpu_power_w:            number | null;
+  gpu_utilization_percent: number | null;
+  memory_pressure_percent: number | null;
+  thermal_state:           string | null;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -35,36 +53,116 @@ const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon:
   </div>
 );
 
+// Compact card used in the Sentinel hardware row
+const SentinelCard: React.FC<{
+  label: string;
+  value: string;
+  sub?: string;
+  icon: React.ElementType;
+  accent: string;
+}> = ({ label, value, sub, icon: Icon, accent }) => (
+  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
+    <div className={`shrink-0 p-2 rounded-lg ${accent} bg-opacity-10`}>
+      <Icon className={`w-4 h-4 ${accent.replace('bg-', 'text-')}`} />
+    </div>
+    <div className="min-w-0">
+      <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium truncate">{label}</p>
+      <p className="text-base font-bold text-gray-900 dark:text-white leading-tight truncate">{value}</p>
+      {sub && <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{sub}</p>}
+    </div>
+  </div>
+);
+
+// Thermal state → badge colours
+const thermalColour = (state: string | null) => {
+  switch (state?.toLowerCase()) {
+    case 'normal':   return 'text-green-400';
+    case 'elevated': return 'text-yellow-400';
+    case 'high':     return 'text-orange-400';
+    case 'critical': return 'text-red-400';
+    default:         return 'text-gray-400';
+  }
+};
+
 const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
   const activeNodes = isPro ? nodes : nodes.slice(0, 1);
   const totalRPS = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
   const avgTemp = (activeNodes.reduce((acc, n) => acc + n.gpuTemp, 0) / activeNodes.length).toFixed(1);
   const totalVRAM = activeNodes.reduce((acc, n) => acc + n.vramUsed, 0).toFixed(1);
   const totalWattage = activeNodes.reduce((acc, n) => acc + n.powerUsage, 0);
-  
+
   const hasTDP = activeNodes.every(n => n.tdp !== undefined);
-  
-  // Wattage per 1k tokens
-  // Assuming 1 req = 500 tokens. Total tokens/s = totalRPS * 500
-  // Formula: (totalWattage / (totalRPS * 500)) * 1000
-  const wattagePer1kTokens = totalRPS > 0 
+
+  const wattagePer1kTokens = totalRPS > 0
     ? ((totalWattage / (totalRPS * 500)) * 1000).toFixed(1)
     : "0.0";
 
-  // Mock calculation: $ per 1k tokens
-  // Assuming 1 req = 500 tokens. Total tokens/s = totalRPS * 500
-  // Cost = (totalWattage / 1000) * (1/3600) * $0.15 per kWh
-  const costPer1kTokens = totalRPS > 0 
+  const costPer1kTokens = totalRPS > 0
     ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6)
     : "0.000000";
 
+  // ── SSE live data from local Sentinel ──────────────────────────────────────
+  const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
+  const [sseConnected, setSseConnected] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    let retryTimer: ReturnType<typeof setTimeout>;
+
+    const connect = () => {
+      // Relative URL — works whether the frontend is served from the embedded
+      // Rust binary (port 7700) or the Vite dev server (port 3000, proxied).
+      const es = new EventSource('/api/metrics');
+      esRef.current = es;
+
+      es.onopen = () => setSseConnected(true);
+
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as SentinelMetrics;
+          setSentinel(data);
+          setSseConnected(true);
+        } catch {
+          // malformed frame — ignore
+        }
+      };
+
+      es.onerror = () => {
+        setSseConnected(false);
+        es.close();
+        esRef.current = null;
+        // Back-off and retry after 3 s so the card shows "Reconnecting…"
+        retryTimer = setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      clearTimeout(retryTimer);
+      esRef.current?.close();
+    };
+  }, []);
+
+  // Derived display values (show "—" until first SSE frame arrives)
+  const cpuPct      = sentinel ? `${sentinel.cpu_usage_percent.toFixed(1)}%`         : '—';
+  const memUsed     = sentinel ? `${(sentinel.used_memory_mb / 1024).toFixed(1)} GB`  : '—';
+  const memTotal    = sentinel ? `${(sentinel.total_memory_mb / 1024).toFixed(0)} GB` : '';
+  const memAvail    = sentinel ? `${(sentinel.available_memory_mb / 1024).toFixed(1)} GB` : '—';
+  const coreCount   = sentinel ? `${sentinel.cpu_core_count} cores`                   : '—';
+  const cpuPowerStr = sentinel?.cpu_power_w    != null ? `${sentinel.cpu_power_w.toFixed(1)} W`    : null;
+  const gpuUtilStr  = sentinel?.gpu_utilization_percent != null ? `${sentinel.gpu_utilization_percent.toFixed(0)}%` : null;
+  const memPressStr = sentinel?.memory_pressure_percent != null ? `${sentinel.memory_pressure_percent.toFixed(0)}%` : null;
+  const hasApple    = cpuPowerStr !== null || gpuUtilStr !== null;
+
   return (
     <div className="space-y-6">
+      {/* ── Fleet stat cards ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 [&>*]:min-w-0">
         <StatCard title="Throughput" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalRPS.toFixed(1)} req/s</p>} icon={Zap} trend="+12.4%" color="bg-amber-500" />
         <StatCard title="Avg Temperature" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTemp}°C</p>} icon={Thermometer} trend="-2.1%" color="bg-red-500" />
         <StatCard title="Total VRAM Usage" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalVRAM} GB</p>} icon={Database} trend="+4.3%" color="bg-blue-600" />
-        <StatCard 
+        <StatCard
           title={
             <div className="flex items-center gap-1.5">
               <span>Wattage / 1k tkn</span>
@@ -75,7 +173,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
                 </div>
               </div>
             </div>
-          } 
+          }
           value={
             hasTDP ? (
               <div>
@@ -89,26 +187,96 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
                 </p>
               </button>
             )
-          } 
-          icon={Zap} 
-          trend="-3.2%" 
-          color="bg-emerald-500" 
+          }
+          icon={Zap}
+          trend="-3.2%"
+          color="bg-emerald-500"
         />
-        <StatCard 
-          title="Cost per 1k Tokens" 
+        <StatCard
+          title="Cost per 1k Tokens"
           value={
             <div>
               <p className="text-2xl font-bold text-gray-900 dark:text-white">${costPer1kTokens}</p>
               <p className="text-[10px] text-gray-500 font-medium">per 1k tokens</p>
             </div>
-          } 
-          icon={Zap} 
-          trend="-8.2%" 
-          color="bg-cyan-400" 
+          }
+          icon={Zap}
+          trend="-8.2%"
+          color="bg-cyan-400"
         />
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Cpu} color="bg-green-500" />
       </div>
 
+      {/* ── Sentinel live hardware telemetry ────────────────────────────────── */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm dark:shadow-none">
+        {/* Header with SSE connection dot */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Activity className="w-4 h-4 text-gray-400" />
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+              Sentinel Node — Live Hardware
+            </h3>
+            {sentinel?.node_id && (
+              <span className="text-[10px] font-mono text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded">
+                {sentinel.node_id}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              {sseConnected && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              )}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${sseConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
+            </span>
+            <span className={`text-[10px] font-medium ${sseConnected ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
+              {sseConnected ? 'Live' : 'Reconnecting…'}
+            </span>
+          </div>
+        </div>
+
+        {/* Core metrics row */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <SentinelCard label="CPU Usage"      value={cpuPct}   icon={Cpu}         accent="bg-indigo-500" />
+          <SentinelCard label="Memory Used"    value={memUsed}  sub={memTotal ? `of ${memTotal}` : undefined} icon={MemoryStick} accent="bg-blue-500" />
+          <SentinelCard label="Mem Available"  value={memAvail} icon={Database}    accent="bg-sky-500" />
+          <SentinelCard label="CPU Cores"      value={coreCount} icon={Cpu}        accent="bg-violet-500" />
+
+          {/* Thermal state — shown with dynamic colour when data is available */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
+            <div className="shrink-0 p-2 rounded-lg bg-orange-500 bg-opacity-10">
+              <Thermometer className="w-4 h-4 text-orange-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">Thermal State</p>
+              <p className={`text-base font-bold leading-tight ${thermalColour(sentinel?.thermal_state ?? null)}`}>
+                {sentinel?.thermal_state ?? '—'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Apple Silicon deep-metal row — only rendered when data is available */}
+        {hasApple && (
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {cpuPowerStr && (
+              <SentinelCard label="CPU Power" value={cpuPowerStr}
+                sub={sentinel!.ecpu_power_w != null && sentinel!.pcpu_power_w != null
+                  ? `E ${sentinel!.ecpu_power_w!.toFixed(1)}W  P ${sentinel!.pcpu_power_w!.toFixed(1)}W`
+                  : undefined}
+                icon={Zap} accent="bg-amber-500" />
+            )}
+            {gpuUtilStr && (
+              <SentinelCard label="GPU Utilization" value={gpuUtilStr} icon={Activity} accent="bg-purple-500" />
+            )}
+            {memPressStr && (
+              <SentinelCard label="Mem Pressure" value={memPressStr} icon={Wind} accent="bg-rose-500" />
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Charts + event feed ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
@@ -123,14 +291,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
               <AreaChart data={MOCK_HISTORY}>
                 <defs>
                   <linearGradient id="colorReq" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#1c64f2" stopOpacity={0.3}/>
+                    <stop offset="5%"  stopColor="#1c64f2" stopOpacity={0.3}/>
                     <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-gray-200 dark:text-gray-800" vertical={false} />
                 <XAxis dataKey="time" stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} />
                 <YAxis stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} />
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg, #fff)', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '12px' }}
                   itemStyle={{ color: '#1c64f2' }}
                 />
