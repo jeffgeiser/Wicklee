@@ -212,10 +212,13 @@ fn parse_ioreg_gpu(text: &str) -> Option<f32> {
 
 /// Memory pressure via `vm_stat` — no sudo required.
 ///
-/// Formula (per user spec):
-///   used  = active + inactive + speculative + wired
-///   total = free + used
-///   pressure % = used / total × 100
+/// Formula (matches Activity Monitor "Used" definition):
+///   in_use = wired + active          ← cannot be reclaimed without eviction
+///   total  = free + active + inactive + speculative + wired
+///   pressure % = in_use / total × 100
+///
+/// Inactive and speculative pages are reclaimable cached data — excluding them
+/// prevents the metric from reading 99% on a healthy system.
 async fn read_memory_pressure_vmstat() -> Option<f32> {
     let out = tokio::process::Command::new("vm_stat")
         .output()
@@ -248,10 +251,10 @@ fn parse_vmstat_pressure(text: &str) -> Option<f32> {
     }
 
     if !found_any { return None; }
-    let used  = active + inactive + speculative + wired;
-    let total = free + used;
+    let in_use = wired + active;
+    let total  = free + active + inactive + speculative + wired;
     if total == 0 { return None; }
-    Some((used as f32 / total as f32) * 100.0)
+    Some((in_use as f32 / total as f32) * 100.0)
 }
 
 /// powermetrics without sudo — parses CPU power + memory pressure.
