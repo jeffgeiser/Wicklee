@@ -197,7 +197,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
   const cpuPowerStr = sentinel?.cpu_power_w    != null ? `${sentinel.cpu_power_w.toFixed(1)} W`    : null;
   const gpuUtilStr  = sentinel?.gpu_utilization_percent != null ? `${sentinel.gpu_utilization_percent.toFixed(0)}%` : null;
   const memPressStr = sentinel?.memory_pressure_percent != null ? `${sentinel.memory_pressure_percent.toFixed(0)}%` : null;
-  const hasApple    = cpuPowerStr !== null || gpuUtilStr !== null || memPressStr !== null;
+  // Show the Apple Silicon row whenever GPU util or mem pressure is live (confirms Apple platform).
+  // CPU Power is always rendered in this row — either with live watts or a locked-state placeholder.
+  const hasApple    = gpuUtilStr !== null || memPressStr !== null;
 
   return (
     <div className="space-y-6">
@@ -300,15 +302,26 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
           </div>
         </div>
 
-        {/* Apple Silicon deep-metal row — only rendered when data is available */}
+        {/* Apple Silicon deep-metal row — rendered when GPU util or mem pressure confirms Apple platform */}
         {hasApple && (
           <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {cpuPowerStr && (
+            {cpuPowerStr ? (
               <SentinelCard label="CPU Power" value={cpuPowerStr}
                 sub={sentinel!.ecpu_power_w != null && sentinel!.pcpu_power_w != null
                   ? `E ${sentinel!.ecpu_power_w!.toFixed(1)}W  P ${sentinel!.pcpu_power_w!.toFixed(1)}W`
                   : undefined}
                 icon={Zap} accent="bg-amber-500" />
+            ) : (
+              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
+                <div className="shrink-0 p-2 rounded-lg bg-amber-500 bg-opacity-10">
+                  <Zap className="w-4 h-4 text-amber-500 opacity-40" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
+                  <p className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 leading-tight">—</p>
+                  <p className="text-[9px] text-gray-500 dark:text-gray-600 font-mono leading-tight mt-0.5">requires elevated permissions</p>
+                </div>
+              </div>
             )}
             {gpuUtilStr && (
               <SentinelCard label="GPU Utilization" value={gpuUtilStr} icon={Activity} accent="bg-purple-500" />
