@@ -7,7 +7,7 @@ You are acting as a Senior Principal Engineer working on **Wicklee**, a high-per
 - **Styling**: Tailwind CSS (Utility-first, dark mode focus).
 - **Icons**: Lucide React.
 - **Charts**: Recharts (Customized for dark-mode telemetry).
-- **AI**: Google Gemini API (`@google/genai` @ ^1.38.0) using `gemini-3-flash-preview`.
+- **AI**: Local Ollama REST API (`/api/generate`, `/api/tags`) — no cloud dependency. Default model: `phi3:mini`.
 - **Backend (Contextual)**: Rust (Axum) with DuckDB for analytical storage.
 - **Communication**: WebSockets for real-time telemetry updates.
 
@@ -40,10 +40,10 @@ Wicklee follows a "High-Tech Dark" aesthetic designed for systems engineers.
 - *Implementation*: Use the `usePermissions` hook in `hooks/usePermissions.ts`.
 
 ### 3. Resilience & Mocking
-- The dashboard operates in a "Mock-First" mode. If the local Rust agent at `localhost:3000` is unavailable, the UI must gracefully fall back to high-fidelity mock data and show a "Disconnected" warning with a link to the Scaffolding setup guide.
+- The dashboard operates in a "Mock-First" mode. If the local Rust agent at `localhost:7700` is unavailable, the UI must gracefully fall back to high-fidelity mock data and show a "Disconnected" warning with a link to the Scaffolding setup guide.
 
 ### 4. Fleet Intelligence Lab
-- Use the Gemini 3 Flash model for analyzing node JSON telemetry.
+- Uses local Ollama for analyzing node JSON telemetry — no data leaves the machine.
 - Focus on: Thermal-aware load balancing suggestions and WASM interceptor recommendations.
 
 ## 🛠️ Coding Guidelines
@@ -56,7 +56,7 @@ Wicklee follows a "High-Tech Dark" aesthetic designed for systems engineers.
 - `App.tsx`: Central orchestrator, WebSocket lifecycle, and tab routing.
 - `types.ts`: Source of truth for NodeAgent, TraceRecord, and User interfaces.
 - `ScaffoldingView.tsx`: Technical reference for Rust backend implementations.
-- `AIInsights.tsx`: Implementation of Gemini-driven telemetry analysis.
+- `AIInsights.tsx`: Implementation of local Ollama-driven telemetry analysis.
 
 ## 🎯 Current Objectives
 - Implementing WASM binary upload flows.
