@@ -41,5 +41,5 @@ Cargo.lock
 !agent/Cargo.lock
 
 # Local progress / notes (never commit)
-PROGRESS.md
+docs/PROGRESS.md
 docs/Progress*.rtf
