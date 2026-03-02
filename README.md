@@ -20,6 +20,7 @@ Wicklee is a high-performance, distributed control plane designed for orchestrat
 ## Getting Started
 
 1. Deploy the Wicklee Rust Agent on your local worker nodes.
+   > **Note:** `sudo` is required only to copy the binary to `/usr/local/bin`. The agent runs without elevated permissions.
 2. Connect the Control Plane via the dashboard.
 3. Configure your tenant ID and start routing inference requests.
 
