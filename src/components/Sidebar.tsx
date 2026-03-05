@@ -1,7 +1,7 @@
 import React from 'react';
-import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, Users, RefreshCw, LogOut, Leaf, Key, CreditCard } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, Users, RefreshCw, LogOut, Leaf, Key, CreditCard, Cloud, CloudLightning } from 'lucide-react';
 import Logo from './Logo';
-import { DashboardTab, User, UserRole } from '../types';
+import { DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
 interface SidebarProps {
@@ -11,9 +11,12 @@ interface SidebarProps {
   onUserChange: (user: User) => void;
   onLogout: () => void;
   isConnected?: boolean;
+  isLocalMode?: boolean;
+  pairingInfo?: PairingInfo | null;
+  onOpenPairing?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, isConnected = false }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, isConnected = false, isLocalMode = true, pairingInfo, onOpenPairing }) => {
   const permissions = usePermissions(currentUser);
 
   const items = [
@@ -22,8 +25,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.TRACES, icon: Activity, label: 'Observability', show: true },
     { id: DashboardTab.SCAFFOLDING, icon: Terminal, label: 'Scaffolding', show: currentUser.isPro && permissions.canViewScaffolding },
     { id: DashboardTab.AI_INSIGHTS, icon: BrainCircuit, label: 'Local Intelligence', show: permissions.canRunAIAnalysis },
-    { id: DashboardTab.AI_PROVIDERS, icon: Key, label: 'AI Key Vault', show: currentUser.isPro },
-    { id: DashboardTab.TEAM, icon: Users, label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam },
+    { id: DashboardTab.AI_PROVIDERS, icon: Key, label: 'AI Key Vault', show: currentUser.isPro && !isLocalMode },
+    { id: DashboardTab.TEAM, icon: Users, label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
     { id: DashboardTab.SUSTAINABILITY, icon: Leaf, label: 'Sustainability', show: true },
   ];
 
@@ -60,8 +63,44 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
         ))}
       </nav>
 
-      <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-4">
-        <button 
+      <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-3">
+        {(() => {
+          const status = pairingInfo?.status;
+          const nodeId = pairingInfo?.node_id;
+          const isPending = status === 'pending';
+          const isConnectedFleet = status === 'connected';
+
+          const borderClass = isConnectedFleet
+            ? 'border-green-500/30 hover:border-green-500/50'
+            : isPending
+            ? 'border-amber-500/30 hover:border-amber-500/50'
+            : 'border-gray-700/50 hover:border-gray-600/50';
+
+          return (
+            <button
+              onClick={onOpenPairing}
+              className={`w-full px-4 py-3 rounded-xl border text-left transition-all ${borderClass}`}
+            >
+              <div className="flex items-center gap-2">
+                {isConnectedFleet ? (
+                  <CloudLightning className="w-4 h-4 text-green-400 shrink-0" />
+                ) : (
+                  <Cloud className={`w-4 h-4 shrink-0 ${isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
+                )}
+                <span className={`text-xs font-semibold ${isConnectedFleet ? 'text-green-400' : isPending ? 'text-amber-400' : 'text-gray-400'}`}>
+                  {isConnectedFleet ? 'Fleet Connected' : isPending ? 'Pairing…' : 'Sovereign Mode'}
+                </span>
+              </div>
+              {nodeId && (
+                <p className="mt-0.5 text-[10px] font-mono text-gray-500 pl-6 truncate">{nodeId}</p>
+              )}
+              {!isConnectedFleet && !isPending && (
+                <p className="mt-0.5 text-[10px] text-indigo-400 pl-6">Connect →</p>
+              )}
+            </button>
+          );
+        })()}
+        <button
           onClick={onLogout}
           className="w-full flex items-center gap-3 px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/5 rounded-lg transition-all border border-transparent hover:border-red-200 dark:hover:border-red-500/20"
         >

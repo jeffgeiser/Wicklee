@@ -141,6 +141,7 @@ const App: React.FC = () => {
   const socketRef = useRef<WebSocket | null>(null);
 
   const permissions = usePermissions(currentUser);
+  const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
 
   const fetchPairingStatus = useCallback(async () => {
     try {
@@ -263,10 +264,10 @@ const App: React.FC = () => {
         return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} />;
       case DashboardTab.NODES:
         return (
-          <NodesList 
-            nodes={nodes} 
-            isPro={currentUser.isPro} 
-            onUpgradeClick={() => setIsUpgradeModalOpen(true)}
+          <NodesList
+            nodes={nodes}
+            isPro={currentUser.isPro}
+            onUpgradeClick={isLocalMode ? undefined : () => setIsUpgradeModalOpen(true)}
             onToggleSentinel={handleToggleSentinel}
           />
         );
@@ -321,13 +322,16 @@ const App: React.FC = () => {
         onGenerate={generatePairingCode}
         onDisconnect={disconnectFleet}
       />
-      <Sidebar 
-        activeTab={activeTab} 
-        setActiveTab={handleTabChange} 
-        currentUser={currentUser} 
-        onUserChange={setCurrentUser} 
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={handleTabChange}
+        currentUser={currentUser}
+        onUserChange={setCurrentUser}
         onLogout={handleLogout}
         isConnected={isConnected}
+        isLocalMode={isLocalMode}
+        pairingInfo={pairingInfo}
+        onOpenPairing={() => setIsPairingModalOpen(true)}
       />
       
       <main className="flex-1 flex flex-col overflow-hidden">
