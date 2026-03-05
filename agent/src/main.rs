@@ -19,6 +19,8 @@ use std::{
 };
 use sysinfo::System;
 use tokio::sync::broadcast;
+#[cfg(target_os = "linux")]
+use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -35,6 +37,17 @@ struct TagsResponse { models: Vec<ModelInfo> }
 
 #[derive(Serialize)]
 struct ModelInfo { name: String, size: u64 }
+
+// NVIDIA GPU metrics — populated only on Linux nodes with NVIDIA drivers.
+// All fields are Option so the payload serialises cleanly as null on other platforms.
+#[derive(Serialize, Clone, Default)]
+struct NvidiaMetrics {
+    nvidia_gpu_utilization_percent: Option<f32>,
+    nvidia_vram_used_mb:            Option<u64>,
+    nvidia_vram_total_mb:           Option<u64>,
+    nvidia_gpu_temp_c:              Option<u32>,
+    nvidia_power_draw_w:            Option<f32>,
+}
 
 #[derive(Serialize, Clone, Default)]
 struct AppleSiliconMetrics {
@@ -55,12 +68,19 @@ struct MetricsPayload {
     available_memory_mb:     u64,
     cpu_core_count:          usize,
     timestamp_ms:            u64,
+    // Apple Silicon deep-metal
     cpu_power_w:             Option<f32>,
     ecpu_power_w:            Option<f32>,
     pcpu_power_w:            Option<f32>,
     gpu_utilization_percent: Option<f32>,
     memory_pressure_percent: Option<f32>,
     thermal_state:           Option<String>,
+    // NVIDIA GPU fields (null on non-NVIDIA platforms)
+    nvidia_gpu_utilization_percent: Option<f32>,
+    nvidia_vram_used_mb:            Option<u64>,
+    nvidia_vram_total_mb:           Option<u64>,
+    nvidia_gpu_temp_c:              Option<u32>,
+    nvidia_power_draw_w:            Option<f32>,
 }
 
 // ── Hardware Helpers ──────────────────────────────────────────────────────────
@@ -371,7 +391,73 @@ async fn run_startup_diagnostics() {
         Err(e) => eprintln!("[diag] powermetrics            ERR → {}", e),
     }
 
+    // 5. NVML / NVIDIA GPU
+    #[cfg(target_os = "linux")]
+    match Nvml::init() {
+        Ok(nvml) => {
+            let count = nvml.device_count().unwrap_or(0);
+            eprintln!("[diag] NVML                    OK  → {} device{}", count, if count == 1 { "" } else { "s" });
+        }
+        Err(e) => eprintln!("[diag] NVML                    MISS → {} (nvidia_* fields will be null)", e),
+    }
+    #[cfg(not(target_os = "linux"))]
+    eprintln!("[diag] NVML                    MISS → not Linux (nvidia_* fields will be null)");
+
     eprintln!("──────────────────────────────────────────────");
+}
+
+// ── NVIDIA Harvester ──────────────────────────────────────────────────────────
+//
+// Initialises NVML on the first call; if unavailable (no drivers, macOS, etc.)
+// returns immediately with an all-None cache — no crash, no retry spam.
+// Polls device 0 every 2 s for: GPU util, VRAM, temperature, board power draw.
+// No sudo required on Linux — NVML reads through the kernel driver interface.
+
+fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
+    let shared = Arc::new(Mutex::new(NvidiaMetrics::default()));
+
+    #[cfg(target_os = "linux")]
+    {
+        let shared_clone = Arc::clone(&shared);
+        tokio::spawn(async move {
+            let nvml = match Nvml::init() {
+                Ok(n) => n,
+                Err(_) => return, // diagnostic already logged in run_startup_diagnostics
+            };
+
+            let mut interval = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+
+                let device = match nvml.device_by_index(0) {
+                    Ok(d)  => d,
+                    Err(_) => continue,
+                };
+
+                let mut m = NvidiaMetrics::default();
+
+                m.nvidia_gpu_utilization_percent =
+                    device.utilization_rates().ok().map(|u| u.gpu as f32);
+
+                if let Ok(mem) = device.memory_info() {
+                    m.nvidia_vram_used_mb  = Some(mem.used  / 1_048_576);
+                    m.nvidia_vram_total_mb = Some(mem.total / 1_048_576);
+                }
+
+                m.nvidia_gpu_temp_c =
+                    device.temperature(TemperatureSensor::Gpu).ok();
+
+                m.nvidia_power_draw_w =
+                    device.power_usage().ok().map(|mw| mw as f32 / 1_000.0);
+
+                if let Ok(mut guard) = shared_clone.lock() {
+                    *guard = m;
+                }
+            }
+        });
+    }
+
+    shared
 }
 
 // ── Background Harvester ──────────────────────────────────────────────────────
@@ -428,7 +514,8 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
 /// the JSON string to every active WebSocket subscriber.
 /// The broadcast channel has capacity 64 — lagged subscribers simply skip frames.
 fn start_metrics_broadcaster(
-    apple_metrics: Arc<Mutex<AppleSiliconMetrics>>,
+    apple_metrics:  Arc<Mutex<AppleSiliconMetrics>>,
+    nvidia_metrics: Arc<Mutex<NvidiaMetrics>>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -457,7 +544,8 @@ fn start_metrics_broadcaster(
             let used      = sys.used_memory();
             let available = total.saturating_sub(used);
 
-            let apple = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let nvidia = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
@@ -473,6 +561,11 @@ fn start_metrics_broadcaster(
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 thermal_state:           apple.thermal_state,
+                nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
+                nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
+                nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
+                nvidia_gpu_temp_c:              nvidia.nvidia_gpu_temp_c,
+                nvidia_power_draw_w:            nvidia.nvidia_power_draw_w,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -522,7 +615,8 @@ async fn handle_tags() -> Json<TagsResponse> {
 }
 
 async fn handle_metrics(
-    axum::extract::Extension(apple_metrics): axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
+    axum::extract::Extension(apple_metrics):  axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
+    axum::extract::Extension(nvidia_metrics): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -550,7 +644,8 @@ async fn handle_metrics(
             let used      = sys.used_memory();
             let available = total.saturating_sub(used);
 
-            let apple = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let nvidia = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -566,6 +661,11 @@ async fn handle_metrics(
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 thermal_state:           apple.thermal_state,
+                nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
+                nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
+                nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
+                nvidia_gpu_temp_c:              nvidia.nvidia_gpu_temp_c,
+                nvidia_power_draw_w:            nvidia.nvidia_power_draw_w,
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -622,7 +722,8 @@ async fn main() {
     run_startup_diagnostics().await;
 
     let apple_metrics  = start_metrics_harvester();
-    let broadcast_tx   = start_metrics_broadcaster(Arc::clone(&apple_metrics));
+    let nvidia_metrics = start_nvidia_harvester();
+    let broadcast_tx   = start_metrics_broadcaster(Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -635,6 +736,7 @@ async fn main() {
         .route("/ws",          get(handle_ws))        // WebSocket primary (10 Hz)
         .fallback(static_handler)
         .layer(axum::extract::Extension(apple_metrics))
+        .layer(axum::extract::Extension(nvidia_metrics))
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 

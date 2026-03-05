@@ -25,6 +25,12 @@ interface SentinelMetrics {
   gpu_utilization_percent: number | null;
   memory_pressure_percent: number | null;
   thermal_state:           string | null;
+  // NVIDIA GPU fields (null on non-NVIDIA platforms)
+  nvidia_gpu_utilization_percent: number | null;
+  nvidia_vram_used_mb:            number | null;
+  nvidia_vram_total_mb:           number | null;
+  nvidia_gpu_temp_c:              number | null;
+  nvidia_power_draw_w:            number | null;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -197,9 +203,18 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
   const cpuPowerStr = sentinel?.cpu_power_w    != null ? `${sentinel.cpu_power_w.toFixed(1)} W`    : null;
   const gpuUtilStr  = sentinel?.gpu_utilization_percent != null ? `${sentinel.gpu_utilization_percent.toFixed(0)}%` : null;
   const memPressStr = sentinel?.memory_pressure_percent != null ? `${sentinel.memory_pressure_percent.toFixed(0)}%` : null;
-  // Show the Apple Silicon row whenever GPU util or mem pressure is live (confirms Apple platform).
-  // CPU Power is always rendered in this row — either with live watts or a locked-state placeholder.
-  const hasApple    = gpuUtilStr !== null || memPressStr !== null;
+  // NVIDIA display strings
+  const nvidiaGpuUtilStr = sentinel?.nvidia_gpu_utilization_percent != null
+    ? `${sentinel.nvidia_gpu_utilization_percent.toFixed(0)}%` : null;
+  const nvidiaVramStr = sentinel?.nvidia_vram_used_mb != null && sentinel?.nvidia_vram_total_mb != null
+    ? `${(sentinel.nvidia_vram_used_mb / 1024).toFixed(1)} GB` : null;
+  const nvidiaVramTotalStr = sentinel?.nvidia_vram_total_mb != null
+    ? `${(sentinel.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
+  const nvidiaTempStr  = sentinel?.nvidia_gpu_temp_c   != null ? `${sentinel.nvidia_gpu_temp_c}°C`            : null;
+  const nvidiaPowerStr = sentinel?.nvidia_power_draw_w != null ? `${sentinel.nvidia_power_draw_w.toFixed(1)} W` : null;
+  // Show the hardware row when any platform-specific metrics are live.
+  const hasHardwareRow = gpuUtilStr !== null || memPressStr !== null
+    || nvidiaGpuUtilStr !== null || nvidiaVramStr !== null;
 
   return (
     <div className="space-y-6">
@@ -302,32 +317,50 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
           </div>
         </div>
 
-        {/* Apple Silicon deep-metal row — rendered when GPU util or mem pressure confirms Apple platform */}
-        {hasApple && (
-          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {cpuPowerStr ? (
-              <SentinelCard label="CPU Power" value={cpuPowerStr}
-                sub={sentinel!.ecpu_power_w != null && sentinel!.pcpu_power_w != null
-                  ? `E ${sentinel!.ecpu_power_w!.toFixed(1)}W  P ${sentinel!.pcpu_power_w!.toFixed(1)}W`
-                  : undefined}
-                icon={Zap} accent="bg-amber-500" />
-            ) : (
-              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-                <div className="shrink-0 p-2 rounded-lg bg-amber-500 bg-opacity-10">
-                  <Zap className="w-4 h-4 text-amber-500 opacity-40" />
+        {/* Hardware deep-metal row — rendered when any platform-specific metrics are live */}
+        {hasHardwareRow && (
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {/* ── Apple Silicon ── */}
+            {(gpuUtilStr !== null || memPressStr !== null) && (
+              cpuPowerStr ? (
+                <SentinelCard label="CPU Power" value={cpuPowerStr}
+                  sub={sentinel!.ecpu_power_w != null && sentinel!.pcpu_power_w != null
+                    ? `E ${sentinel!.ecpu_power_w!.toFixed(1)}W  P ${sentinel!.pcpu_power_w!.toFixed(1)}W`
+                    : undefined}
+                  icon={Zap} accent="bg-amber-500" />
+              ) : (
+                <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
+                  <div className="shrink-0 p-2 rounded-lg bg-amber-500 bg-opacity-10">
+                    <Zap className="w-4 h-4 text-amber-500 opacity-40" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
+                    <p className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 leading-tight">—</p>
+                    <p className="text-[9px] text-gray-500 dark:text-gray-600 font-mono leading-tight mt-0.5">requires elevated permissions</p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
-                  <p className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 leading-tight">—</p>
-                  <p className="text-[9px] text-gray-500 dark:text-gray-600 font-mono leading-tight mt-0.5">requires elevated permissions</p>
-                </div>
-              </div>
+              )
             )}
             {gpuUtilStr && (
               <SentinelCard label="GPU Utilization" value={gpuUtilStr} icon={Activity} accent="bg-purple-500" />
             )}
             {memPressStr && (
               <SentinelCard label="Mem Pressure" value={memPressStr} icon={Wind} accent="bg-rose-500" />
+            )}
+            {/* ── NVIDIA ── */}
+            {nvidiaGpuUtilStr && (
+              <SentinelCard label="NVIDIA GPU" value={nvidiaGpuUtilStr} icon={Activity} accent="bg-green-500" />
+            )}
+            {nvidiaVramStr && (
+              <SentinelCard label="VRAM Used" value={nvidiaVramStr}
+                sub={nvidiaVramTotalStr ? `of ${nvidiaVramTotalStr}` : undefined}
+                icon={Database} accent="bg-emerald-500" />
+            )}
+            {nvidiaTempStr && (
+              <SentinelCard label="GPU Temp" value={nvidiaTempStr} icon={Thermometer} accent="bg-orange-500" />
+            )}
+            {nvidiaPowerStr && (
+              <SentinelCard label="Board Power" value={nvidiaPowerStr} icon={Zap} accent="bg-yellow-500" />
             )}
           </div>
         )}
