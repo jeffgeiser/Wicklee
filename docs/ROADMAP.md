@@ -20,7 +20,7 @@
 
 ## Phase 2: The Multi-Node Fleet
 - [ ] **NVIDIA/NVML Support:** Board power draw (Watts), VRAM used/total, GPU Temp — Linux nodes via `nvml-wrapper`
-- [ ] **Fleet Connect:** Pair local agents to the hosted Fleet View at `wicklee.app` via 6-digit pairing code. Zero config, instant aggregation. Dual-stream: 100ms local, 500ms cloud.
+- [ ] **Fleet Connect:** Pair local agents to the hosted Fleet View at `wicklee.dev` via 6-digit pairing code. Zero config, instant aggregation. Dual-stream: 100ms local, 500ms cloud.
 - [ ] **Multi-Tenant Backend:** Fleet-wide aggregation, node history, and alert management on Railway
 
 ---

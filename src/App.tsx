@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff } from 'lucide-react';
-import { DashboardTab, NodeAgent, Tenant, User as UserType } from './types';
+import { DashboardTab, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Overview from './components/Overview';
@@ -17,6 +17,7 @@ import PreferencesView from './components/PreferencesView';
 import SustainabilityView from './components/SustainabilityView';
 import PricingPage from './components/PricingPage';
 import AIProvidersView from './components/AIProvidersView';
+import PairingModal from './components/PairingModal';
 import { usePermissions } from './hooks/usePermissions';
 import { X, Sparkles, Zap, Shield, Globe } from 'lucide-react';
 
@@ -132,12 +133,42 @@ const App: React.FC = () => {
   const [byokMode, setByokMode] = useState(false);
   const [userApiKey, setUserApiKey] = useState('');
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
+  const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
   const socketRef = useRef<WebSocket | null>(null);
 
   const permissions = usePermissions(currentUser);
+
+  const fetchPairingStatus = useCallback(async () => {
+    try {
+      const r = await fetch('/api/pair/status');
+      if (r.ok) setPairingInfo(await r.json());
+    } catch {}
+  }, []);
+
+  const generatePairingCode = useCallback(async () => {
+    try {
+      const r = await fetch('/api/pair/generate', { method: 'POST' });
+      if (r.ok) setPairingInfo(await r.json());
+    } catch {}
+  }, []);
+
+  const disconnectFleet = useCallback(async () => {
+    try {
+      const r = await fetch('/api/pair/disconnect', { method: 'POST' });
+      if (r.ok) setPairingInfo(await r.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchPairingStatus();
+    if (pairingInfo?.status !== 'pending') return;
+    const id = setInterval(fetchPairingStatus, 4000);
+    return () => clearInterval(id);
+  }, [pairingInfo?.status, fetchPairingStatus]);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -229,7 +260,7 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} isPro={currentUser.isPro} />;
+        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} />;
       case DashboardTab.NODES:
         return (
           <NodesList 
@@ -260,7 +291,7 @@ const App: React.FC = () => {
       case DashboardTab.PROFILE:
         return <ProfileView currentUser={currentUser} />;
       case DashboardTab.SECURITY:
-        return <SecurityView byokMode={byokMode} setByokMode={setByokMode} userApiKey={userApiKey} setUserApiKey={setUserApiKey} />;
+        return <SecurityView byokMode={byokMode} setByokMode={setByokMode} userApiKey={userApiKey} setUserApiKey={setUserApiKey} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onGenerateCode={generatePairingCode} onDisconnect={disconnectFleet} />;
       case DashboardTab.API_KEYS:
         return <APIKeysView />;
       case DashboardTab.PREFERENCES:
@@ -272,16 +303,23 @@ const App: React.FC = () => {
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} />;
+        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} />;
     }
   };
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-300">
-      <UpgradeModal 
-        isOpen={isUpgradeModalOpen} 
-        onClose={() => setIsUpgradeModalOpen(false)} 
-        onUpgrade={handleUpgrade} 
+      <UpgradeModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        onUpgrade={handleUpgrade}
+      />
+      <PairingModal
+        isOpen={isPairingModalOpen}
+        onClose={() => setIsPairingModalOpen(false)}
+        pairingInfo={pairingInfo}
+        onGenerate={generatePairingCode}
+        onDisconnect={disconnectFleet}
       />
       <Sidebar 
         activeTab={activeTab} 
@@ -293,16 +331,18 @@ const App: React.FC = () => {
       />
       
       <main className="flex-1 flex flex-col overflow-hidden">
-        <Header 
-          activeTab={activeTab} 
-          tenants={MOCK_TENANTS} 
-          currentTenant={currentTenant} 
+        <Header
+          activeTab={activeTab}
+          tenants={MOCK_TENANTS}
+          currentTenant={currentTenant}
           onTenantChange={setCurrentTenant}
           currentUser={currentUser}
           onLogout={handleLogout}
           setActiveTab={setActiveTab}
           theme={theme}
           onToggleTheme={toggleTheme}
+          pairingInfo={pairingInfo}
+          onOpenPairing={() => setIsPairingModalOpen(true)}
         />
         
         <div className="flex-1 overflow-y-auto p-6 scroll-smooth">

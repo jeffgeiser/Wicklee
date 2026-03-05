@@ -1,15 +1,20 @@
 
 import React, { useState } from 'react';
-import { Shield, Key, Smartphone, LogOut, ChevronRight, Monitor, Laptop, ExternalLink, Lock, CheckCircle2, AlertCircle, Loader2, Eye, EyeOff, BarChart3 } from 'lucide-react';
+import { Shield, Key, Smartphone, LogOut, ChevronRight, Monitor, Laptop, ExternalLink, Lock, CheckCircle2, AlertCircle, Loader2, Eye, EyeOff, BarChart3, Cloud, CloudLightning } from 'lucide-react';
+import { PairingInfo } from '../types';
 
 interface SecurityViewProps {
   byokMode: boolean;
   setByokMode: (mode: boolean) => void;
   userApiKey: string;
   setUserApiKey: (key: string) => void;
+  pairingInfo?: PairingInfo | null;
+  onOpenPairing?: () => void;
+  onGenerateCode?: () => void;
+  onDisconnect?: () => void;
 }
 
-const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, userApiKey, setUserApiKey }) => {
+const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, userApiKey, setUserApiKey, pairingInfo, onOpenPairing, onGenerateCode, onDisconnect }) => {
   const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [showKey, setShowKey] = useState(false);
@@ -147,6 +152,82 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
             )}
           </div>
         </div>
+        {/* Fleet Connection section */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+          <div className="p-6 border-b border-gray-800 flex items-center justify-between bg-gradient-to-r from-indigo-600/5 to-transparent">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-600/10 rounded-lg">
+                {pairingInfo?.status === 'connected'
+                  ? <CloudLightning className="w-5 h-5 text-green-400" />
+                  : <Cloud className="w-5 h-5 text-indigo-400" />}
+              </div>
+              <div>
+                <h3 className="font-bold text-white">Fleet Connection</h3>
+                <p className="text-xs text-gray-500">Persistent node identity and fleet pairing.</p>
+              </div>
+            </div>
+            <span className={`px-3 py-1 text-[10px] font-bold uppercase rounded-full border tracking-widest ${
+              pairingInfo?.status === 'connected'
+                ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                : pairingInfo?.status === 'pending'
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+            }`}>
+              {pairingInfo?.status === 'connected' ? 'Connected' : pairingInfo?.status === 'pending' ? 'Pairing' : 'Sovereign'}
+            </span>
+          </div>
+          <div className="p-6 space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-500">Node Identity</span>
+              <span className="font-mono text-indigo-400">{pairingInfo?.node_id ?? '—'}</span>
+            </div>
+            <div className="flex items-start justify-between text-sm gap-4">
+              <span className="text-gray-500 shrink-0">Status</span>
+              <span className="text-gray-300 text-right font-mono text-xs">
+                {pairingInfo?.status === 'connected'
+                  ? pairingInfo.fleet_url
+                  : pairingInfo?.status === 'pending'
+                    ? `Code: ${pairingInfo.code} · ${Math.max(0, Math.floor(((pairingInfo.expires_at ?? 0) - Date.now()) / 1000))}s remaining`
+                    : 'Unpaired'}
+              </span>
+            </div>
+            <div className="flex gap-3 pt-2">
+              {(!pairingInfo || pairingInfo.status === 'unpaired') && (
+                <button
+                  onClick={onGenerateCode}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-all"
+                >
+                  Generate Pairing Code
+                </button>
+              )}
+              {pairingInfo?.status === 'pending' && (
+                <>
+                  <button
+                    onClick={onOpenPairing}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-all"
+                  >
+                    View Code
+                  </button>
+                  <button
+                    onClick={onDisconnect}
+                    className="px-4 py-2 border border-gray-700 hover:border-gray-600 text-gray-400 hover:text-gray-200 text-xs font-medium rounded-xl transition-all"
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+              {pairingInfo?.status === 'connected' && (
+                <button
+                  onClick={onDisconnect}
+                  className="px-4 py-2 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 text-xs font-medium rounded-xl transition-all"
+                >
+                  Disconnect — Return to Sovereign Mode
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
           <div className="p-6 border-b border-gray-800 flex items-center justify-between">
             <div className="flex items-center gap-3">

@@ -35,7 +35,7 @@ The agent serves a React dashboard at `http://localhost:7700`. Built for the per
 - **Access:** Free, always, with no account required
 
 ### Hosted — The Fleet View
-The hosted dashboard at `wicklee.app` aggregates all paired agents for the operator or team lead.
+The hosted dashboard at `wicklee.dev` aggregates all paired agents for the operator or team lead.
 
 - **Latency:** 500ms–1s polling from each agent
 - **Scope:** All paired nodes — full fleet in one view

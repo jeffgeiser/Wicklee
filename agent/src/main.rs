@@ -6,14 +6,15 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse,
     },
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use mime_guess::from_path;
 use rust_embed::RustEmbed;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::{
     convert::Infallible,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -81,6 +82,36 @@ struct MetricsPayload {
     nvidia_vram_total_mb:           Option<u64>,
     nvidia_gpu_temp_c:              Option<u32>,
     nvidia_power_draw_w:            Option<f32>,
+}
+
+// ── Fleet Pairing Types ───────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Default)]
+struct WickleeConfig {
+    node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fleet_url: Option<String>,
+}
+
+#[derive(Clone)]
+enum PairingStatus {
+    Unpaired,
+    Pending { code: String, expires_at: u64 },
+    Connected { fleet_url: String },
+}
+
+struct PairingState {
+    status: PairingStatus,
+    node_id: String,
+}
+
+#[derive(Serialize)]
+struct PairingStatusResponse {
+    status: &'static str,
+    node_id: String,
+    code: Option<String>,
+    expires_at: Option<u64>,
+    fleet_url: Option<String>,
 }
 
 // ── Hardware Helpers ──────────────────────────────────────────────────────────
@@ -328,13 +359,95 @@ fn parse_percent(s: &str) -> Option<f32> {
     s.trim_end_matches('%').split_whitespace().next()?.parse().ok()
 }
 
+// ── Fleet Pairing Helpers ─────────────────────────────────────────────────────
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    Path::new(&home).join(".wicklee").join("config.toml")
+}
+
+fn generate_node_id() -> String {
+    format!("WK-{:04X}", now_ms() & 0xFFFF)
+}
+
+fn load_or_create_config() -> WickleeConfig {
+    let path = config_path();
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
+                return cfg;
+            }
+        }
+    }
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None };
+    save_config(&cfg);
+    cfg
+}
+
+fn save_config(cfg: &WickleeConfig) {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(content) = toml::to_string(cfg) {
+        let _ = std::fs::write(&path, content);
+    }
+}
+
+fn generate_code() -> String {
+    format!("{:06}", now_ms() % 1_000_000)
+}
+
+fn print_pairing_box(node_id: &str, code: &str) {
+    println!("┌─────────────────────────────────┐");
+    println!("│  Wicklee Fleet Pairing          │");
+    println!("│  Node Identity: {:<16} │", node_id);
+    println!("│  Pairing Code:  {:<16} │", code);
+    println!("│  Enter at: wicklee.dev          │");
+    println!("│  Expires in: 5:00               │");
+    println!("└─────────────────────────────────┘");
+}
+
+fn pairing_response(state: &PairingState) -> PairingStatusResponse {
+    match &state.status {
+        PairingStatus::Unpaired => PairingStatusResponse {
+            status: "unpaired",
+            node_id: state.node_id.clone(),
+            code: None,
+            expires_at: None,
+            fleet_url: None,
+        },
+        PairingStatus::Pending { code, expires_at } => PairingStatusResponse {
+            status: "pending",
+            node_id: state.node_id.clone(),
+            code: Some(code.clone()),
+            expires_at: Some(*expires_at),
+            fleet_url: None,
+        },
+        PairingStatus::Connected { fleet_url } => PairingStatusResponse {
+            status: "connected",
+            node_id: state.node_id.clone(),
+            code: None,
+            expires_at: None,
+            fleet_url: Some(fleet_url.clone()),
+        },
+    }
+}
+
 // ── Startup Diagnostics ───────────────────────────────────────────────────────
 //
 // Runs once at boot and prints to stderr so you can see exactly which source
 // is available on this machine.  Safe to leave in production — it's just
 // informational stderr and adds < 2 s to startup.
 
-async fn run_startup_diagnostics() {
+async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
     eprintln!("──────────────────────────────────────────────");
     eprintln!("[diag] Wicklee Sentinel — hardware source probe");
     eprintln!("──────────────────────────────────────────────");
@@ -402,6 +515,10 @@ async fn run_startup_diagnostics() {
     }
     #[cfg(not(target_os = "linux"))]
     eprintln!("[diag] NVML                    MISS → not Linux (nvidia_* fields will be null)");
+
+    // 6. Node identity + pairing state
+    eprintln!("[diag] Node identity           OK  → {}", node_id);
+    eprintln!("[diag] Pairing state           OK  → {}", pairing_status);
 
     eprintln!("──────────────────────────────────────────────");
 }
@@ -602,6 +719,63 @@ async fn ws_session(mut socket: WebSocket, tx: broadcast::Sender<String>) {
     }
 }
 
+// ── Fleet Pairing Handlers ────────────────────────────────────────────────────
+
+async fn handle_pair_status(
+    axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
+) -> Json<PairingStatusResponse> {
+    let mut state = pairing_state.lock().unwrap();
+    if let PairingStatus::Pending { expires_at, .. } = &state.status {
+        if now_ms() > *expires_at {
+            state.status = PairingStatus::Unpaired;
+        }
+    }
+    Json(pairing_response(&state))
+}
+
+async fn handle_pair_generate(
+    axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
+) -> Json<PairingStatusResponse> {
+    let mut state = pairing_state.lock().unwrap();
+    let code = generate_code();
+    let expires_at = now_ms() + 300_000;
+    state.status = PairingStatus::Pending { code, expires_at };
+    Json(pairing_response(&state))
+}
+
+#[derive(Deserialize)]
+struct ClaimBody { code: String }
+
+async fn handle_pair_claim(
+    axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
+    Json(body): Json<ClaimBody>,
+) -> Json<PairingStatusResponse> {
+    let mut state = pairing_state.lock().unwrap();
+    let valid = match &state.status {
+        PairingStatus::Pending { code, expires_at } => {
+            body.code == *code && now_ms() <= *expires_at
+        }
+        _ => false,
+    };
+    if valid {
+        let fleet_url = "https://wicklee.dev/fleet/mock-token".to_string();
+        let cfg = WickleeConfig { node_id: state.node_id.clone(), fleet_url: Some(fleet_url.clone()) };
+        save_config(&cfg);
+        state.status = PairingStatus::Connected { fleet_url };
+    }
+    Json(pairing_response(&state))
+}
+
+async fn handle_pair_disconnect(
+    axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
+) -> Json<PairingStatusResponse> {
+    let mut state = pairing_state.lock().unwrap();
+    state.status = PairingStatus::Unpaired;
+    let cfg = WickleeConfig { node_id: state.node_id.clone(), fleet_url: None };
+    save_config(&cfg);
+    Json(pairing_response(&state))
+}
+
 // ── API Handlers ──────────────────────────────────────────────────────────────
 
 async fn handle_tags() -> Json<TagsResponse> {
@@ -718,8 +892,26 @@ fn serve_asset(path: &str) -> Response<Body> {
 
 #[tokio::main]
 async fn main() {
+    let config = load_or_create_config();
+    let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
+    let pairing_state = Arc::new(Mutex::new(PairingState {
+        node_id: config.node_id.clone(),
+        status: match config.fleet_url.clone() {
+            Some(url) => PairingStatus::Connected { fleet_url: url },
+            None      => PairingStatus::Unpaired,
+        },
+    }));
+
+    let pair_on_start = std::env::args().any(|a| a == "--pair");
+    if pair_on_start {
+        let code = generate_code();
+        let expires_at = now_ms() + 300_000;
+        pairing_state.lock().unwrap().status = PairingStatus::Pending { code: code.clone(), expires_at };
+        print_pairing_box(&config.node_id, &code);
+    }
+
     // Run diagnostics first so the output appears before the banner
-    run_startup_diagnostics().await;
+    run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }).await;
 
     let apple_metrics  = start_metrics_harvester();
     let nvidia_metrics = start_nvidia_harvester();
@@ -731,10 +923,15 @@ async fn main() {
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/api/tags",    get(handle_tags))
-        .route("/api/metrics", get(handle_metrics))  // SSE fallback (1 Hz)
-        .route("/ws",          get(handle_ws))        // WebSocket primary (10 Hz)
+        .route("/api/tags",           get(handle_tags))
+        .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
+        .route("/ws",                 get(handle_ws))             // WebSocket primary (10 Hz)
+        .route("/api/pair/status",    get(handle_pair_status))
+        .route("/api/pair/generate",  post(handle_pair_generate))
+        .route("/api/pair/claim",     post(handle_pair_claim))
+        .route("/api/pair/disconnect",post(handle_pair_disconnect))
         .fallback(static_handler)
+        .layer(axum::extract::Extension(pairing_state))
         .layer(axum::extract::Extension(apple_metrics))
         .layer(axum::extract::Extension(nvidia_metrics))
         .layer(axum::extract::Extension(broadcast_tx))

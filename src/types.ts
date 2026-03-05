@@ -41,6 +41,16 @@ export interface Tenant {
   name: string;
 }
 
+export type FleetPairingStatus = 'unpaired' | 'pending' | 'connected';
+
+export interface PairingInfo {
+  status: FleetPairingStatus;
+  node_id: string;
+  code?: string | null;
+  expires_at?: number | null;
+  fleet_url?: string | null;
+}
+
 export enum DashboardTab {
   OVERVIEW = 'overview',
   NODES = 'nodes',

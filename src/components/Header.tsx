@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Bell, Settings, User, ChevronDown, Building2, LogOut, Key, UserCircle, Shield, Moon, Sun, BrainCircuit, CreditCard } from 'lucide-react';
-import { DashboardTab, Tenant, User as UserType } from '../types';
+import { Search, Bell, Settings, User, ChevronDown, Building2, LogOut, Key, UserCircle, Shield, Moon, Sun, BrainCircuit, CreditCard, Cloud, CloudLightning } from 'lucide-react';
+import { DashboardTab, PairingInfo, Tenant, User as UserType } from '../types';
 
 interface HeaderProps {
   activeTab: DashboardTab;
@@ -12,9 +12,11 @@ interface HeaderProps {
   setActiveTab?: (tab: DashboardTab) => void;
   theme?: 'light' | 'dark';
   onToggleTheme?: () => void;
+  pairingInfo?: PairingInfo | null;
+  onOpenPairing?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTenantChange, currentUser, onLogout, setActiveTab, theme, onToggleTheme }) => {
+const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTenantChange, currentUser, onLogout, setActiveTab, theme, onToggleTheme, pairingInfo, onOpenPairing }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
 
@@ -71,7 +73,28 @@ const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTe
         </div>
 
         <div className="flex items-center gap-4">
-          <button 
+          {/* Fleet Connect button */}
+          <button
+            onClick={onOpenPairing}
+            className="flex items-center gap-1.5 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative"
+            title={`${pairingInfo?.node_id ?? '—'} — Connect to Fleet`}
+          >
+            {pairingInfo?.status === 'connected' ? (
+              <CloudLightning className="w-5 h-5 text-green-400" />
+            ) : (
+              <div className="relative">
+                {pairingInfo?.status === 'pending' && (
+                  <span className="animate-ping absolute -inset-1 rounded-full bg-amber-400/40" />
+                )}
+                <Cloud className={`w-5 h-5 relative ${pairingInfo?.status === 'pending' ? 'text-amber-400' : 'text-gray-400'}`} />
+              </div>
+            )}
+            <span className="text-[10px] font-mono text-gray-500 hidden sm:inline">
+              {pairingInfo?.node_id ?? '—'}
+            </span>
+          </button>
+
+          <button
             onClick={onToggleTheme}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition-colors"
             title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
