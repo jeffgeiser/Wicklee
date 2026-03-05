@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, MemoryStick, Wind } from 'lucide-react';
-import { NodeAgent } from '../types';
+import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, MemoryStick, Wind, Cloud, CloudLightning } from 'lucide-react';
+import { NodeAgent, PairingInfo } from '../types';
 import EventFeed from './EventFeed';
 
 interface OverviewProps {
   nodes: NodeAgent[];
   isPro?: boolean;
+  pairingInfo?: PairingInfo | null;
+  onOpenPairing?: () => void;
 }
 
 // ── SSE payload shape (mirrors MetricsPayload in agent/src/main.rs) ──────────
@@ -90,7 +92,7 @@ const thermalColour = (state: string | null) => {
   }
 };
 
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing }) => {
   const activeNodes = isPro ? nodes : nodes.slice(0, 1);
   const totalRPS = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
   const avgTemp = (activeNodes.reduce((acc, n) => acc + n.gpuTemp, 0) / activeNodes.length).toFixed(1);
@@ -362,6 +364,80 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro }) => {
             {nvidiaPowerStr && (
               <SentinelCard label="Board Power" value={nvidiaPowerStr} icon={Zap} accent="bg-yellow-500" />
             )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Fleet Connect card ──────────────────────────────────────────────── */}
+      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+        {(!pairingInfo || pairingInfo.status === 'unpaired') && (
+          <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
+            <div className="flex flex-col justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <Cloud className="w-5 h-5 text-gray-400" />
+                <div>
+                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Sentinel Identity</p>
+                  <p className="text-sm font-mono font-bold text-white">{pairingInfo?.node_id ?? '—'}</p>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">
+                Enter your pairing code at wicklee.dev to connect this node to your fleet.
+              </p>
+              <button
+                onClick={onOpenPairing}
+                className="self-start px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
+              >
+                Connect to Fleet →
+              </button>
+            </div>
+            <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
+              <div className="w-10 h-10 bg-gray-700 rounded-lg" />
+              <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
+            </div>
+          </div>
+        )}
+
+        {pairingInfo?.status === 'pending' && (
+          <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-amber-400 opacity-30" />
+                  <Cloud className="w-5 h-5 text-amber-400 relative" />
+                </div>
+                <p className="text-sm font-bold text-white">Pairing in Progress</p>
+              </div>
+              <p className="text-3xl font-mono font-bold text-white tracking-[0.3em]">
+                {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
+              </p>
+              {pairingInfo.expires_at && (
+                <p className="text-[11px] text-amber-400 font-mono">
+                  Expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
+                </p>
+              )}
+            </div>
+            <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
+              <div className="w-10 h-10 bg-gray-700 rounded-lg" />
+              <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
+            </div>
+          </div>
+        )}
+
+        {pairingInfo?.status === 'connected' && (
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <CloudLightning className="w-5 h-5 text-green-400" />
+              <div>
+                <p className="text-sm font-bold text-white">Connected to Fleet</p>
+                <p className="text-[11px] font-mono text-gray-500">{pairingInfo.fleet_url}</p>
+              </div>
+            </div>
+            <button
+              onClick={onOpenPairing}
+              className="px-3 py-1.5 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 text-xs font-medium rounded-xl transition-all"
+            >
+              Disconnect
+            </button>
           </div>
         )}
       </div>
