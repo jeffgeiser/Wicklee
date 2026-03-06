@@ -937,14 +937,18 @@ async fn main() {
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:7700")
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(7700);
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
-        .expect("Failed to bind port 7700 — is another process using it?");
+        .expect(&format!("Failed to bind port {port}"));
 
     println!("╔══════════════════════════════════════════════╗");
     println!("║                                              ║");
     println!("║   Wicklee Sentinel Active                    ║");
-    println!("║   http://localhost:7700                      ║");
+    println!("║   http://localhost:{port:<26}║");
     println!("║                                              ║");
     println!("╚══════════════════════════════════════════════╝");
 
