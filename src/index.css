@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/* Class-based dark mode — toggled by adding .dark to <html> */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-family-sans: 'Inter', sans-serif;
+  --font-family-mono: 'JetBrains Mono', monospace;
+  --shadow-glow: 0 0 15px -3px rgba(59, 130, 246, 0.4);
+}
