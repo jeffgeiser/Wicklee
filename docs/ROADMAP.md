@@ -49,34 +49,5 @@
 
 ---
 
-## Phase 6+ — Context Compaction Authority *(Memory Sovereignty)*
-
-**Goal:** Solve the "Inference Tax" by moving from a context *provider* to a Context *Optimizer*.
-
-> **Core insight:** Current model memory is recency-biased — recent context survives, old context compresses, regardless of actual importance. A usage-frequency + conviction signal inverts that: something referenced 50 times across 6 months should survive compaction even if it wasn't mentioned in the last 10 messages. "Use it a lot historically" should mean "never lose it."
-
-### API Concept — Context Priority Endpoint
-```
-GET /api/context/priority
-→ {
-    critical:    [...],  // queried 10+ times, HIGH conviction
-    important:   [...],  // queried 3–9 times, MEDIUM+ conviction
-    contextual:  [...],  // queried 1–2 times
-    dormant:     [...]   // never queried, low conviction
-  }
-```
-An agent or orchestration layer calls this before compaction to explicitly inject `critical` items into the preserved context window.
-
-### Research Tasks
-- [ ] **Context Priority API** — `/api/context/priority` endpoint using conviction + query frequency + ConflictSignal data to rank importance
-- [ ] **Compaction Hints** — library function for orchestrators (CrewAI/LangGraph) to call pre-compaction to identify "Hard Invariants"
-- [ ] **Memory Invariants** — UI in the Vault Editor to mark specific standards as "Never Compress"
-- [ ] **Model Hook Research** — monitor Anthropic/OpenAI for memory APIs or internal compaction hooks to register as the "Context Oracle"
-- [ ] **Semantic Deduplication** — replace redundant session context with single LogicNode Reference IDs to save tokens
-
-### Strategic Note
-Model providers only see the current window; this system sees the 6-month evolution of the developer's standards. The behavioral calibration dataset (ConflictSignal + QueryLog) is the only external signal that knows what a specific developer considers important across time — a moat that cannot be replicated without the usage history. If compaction hooks become available at the API level, this positions the system as a registerable memory authority: "before you compact, check here for what this developer considers invariant."
-
----
 
 *Wicklee is sovereign infrastructure. Your fleet data never leaves your network until you choose to connect it.*
