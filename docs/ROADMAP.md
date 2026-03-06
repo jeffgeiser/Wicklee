@@ -33,4 +33,32 @@
 
 ---
 
+## Phase 6+ — Context Compaction Authority *(Research / Placeholder)*
+
+> **Core insight:** Current model memory is recency-biased — recent context survives, old context compresses, regardless of actual importance. A usage-frequency + conviction signal inverts that: something referenced 50 times across 6 months should survive compaction even if it wasn't mentioned in the last 10 messages. "Use it a lot historically" should mean "never lose it."
+
+### API Concept — Context Priority Endpoint
+```
+GET /api/context/priority
+→ {
+    critical:    [...],  // queried 10+ times, HIGH conviction
+    important:   [...],  // queried 3–9 times, MEDIUM+ conviction
+    contextual:  [...],  // queried 1–2 times
+    dormant:     [...]   // never queried, low conviction
+  }
+```
+An agent or orchestration layer calls this before compaction to explicitly inject `critical` items into the preserved context window.
+
+### Research Tasks
+- [ ] Monitor Anthropic/OpenAI API roadmaps for compaction hooks or memory authority APIs
+- [ ] **Context Priority API** — ranked importance endpoint using conviction + query frequency + behavioral signals
+- [ ] **Compaction Hints** — library function (not MCP) for orchestrators to call pre-compaction; takes a list of context items, returns them ranked by importance signals
+- [ ] **Memory Invariants** — concept for Vault standards marked as "never-compress" by the developer explicitly
+- [ ] **Integration path research** — Claude memory system, OpenAI memory API, future compaction hooks
+
+### Strategic Note
+The behavioral calibration dataset (ConflictSignal + QueryLog) is the only external signal that knows what a specific developer considers important across time. This is a genuine moat in the memory authority space — cannot be replicated without the usage history. If compaction hooks become available at the API level, this positions the system as a registerable memory authority: "before you compact, check here for what this developer considers invariant."
+
+---
+
 *Wicklee is sovereign infrastructure. Your fleet data never leaves your network until you choose to connect it.*
