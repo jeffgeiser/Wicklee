@@ -127,3 +127,42 @@ The orchestrator is transitioning to a Rust-based core for memory safety and hig
 3.  **Resilient Connectivity:** Automatic exponential backoff and state reconciliation for disconnected nodes.
 4.  **Auditability:** 100% of request traces stored in DuckDB with a 30-day retention policy.
 5.  **Thermal Safety:** Automated load shedding triggers when any node exceeds 85°C.
+
+---
+
+## 6. Implementation Progress Log
+
+### Phase 1 — Agent (Complete)
+- Rust agent (`agent/`) embeds the React dashboard and serves it from `localhost:7700`.
+- 10 Hz WebSocket broadcast of `MetricsPayload` (CPU, RAM, Apple Silicon deep-metal, NVIDIA GPU via NVML).
+- Fleet pairing UX: `--pair` flag generates a 6-digit code; `/api/pair/claim` transitions node to `Connected`.
+- Config persistence at `~/.wicklee/config.toml` (node identity + fleet URL).
+
+### Phase 2 — Cloud Handshake Backend (Complete)
+**Location:** `cloud/` (standalone Rust crate, separate Railway service)
+
+**Endpoints implemented:**
+
+| Method | Path | Description |
+| :----- | :--- | :---------- |
+| `POST` | `/api/pair/claim` | Accepts 6-digit code + fleet URL + WK-XXXX node ID; registers node, returns session token |
+| `POST` | `/api/telemetry` | Accepts `MetricsPayload` from a paired agent; stores latest snapshot per node in memory |
+| `GET`  | `/api/fleet` | Returns all registered nodes with their latest metrics — feeds the Fleet Overview dashboard |
+
+**Design decisions:**
+- State: `Arc<RwLock<HashMap<String, NodeEntry>>>` — in-memory for Phase 2; DuckDB swap-in planned for Phase 3.
+- No auth gate yet: node identity (`WK-XXXX`) is the pairing key per spec.
+- CORS locked to `https://wicklee.com` and `https://wicklee.dev`.
+- Reads `PORT` env var (Railway injects this at runtime); defaults to `8080` for local dev.
+- Telemetry from unregistered nodes is silently dropped — no info leak.
+
+**Deployment:**
+- `cloud/Dockerfile` — multi-stage build (`rust:1.85-slim` → `debian:bookworm-slim`), produces ~10 MB image.
+- `cloud/railway.toml` — points Railway at the Dockerfile; health check on `GET /api/fleet`.
+- Deploy as a separate Railway service, root directory set to `cloud/`.
+
+### Phase 3 — Planned
+- Swap in-memory fleet map for DuckDB persistence (`duckdb-rs`).
+- Add session-token validation on `POST /api/telemetry`.
+- WebSocket push from cloud to dashboard (replace dashboard polling of `/api/fleet`).
+- mTLS client-certificate verification for agent→cloud channel.
