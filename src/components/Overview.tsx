@@ -44,8 +44,8 @@ const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
 const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon: React.ElementType; trend?: string; color: string }> = ({ title, value, icon: Icon, trend, color }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 hover:border-gray-300 dark:hover:border-gray-700 transition-all shadow-sm dark:shadow-none">
     <div className="flex items-start justify-between">
-      <div className={`p-2 rounded-xl bg-opacity-10 ${color}`}>
-        <Icon className={`w-5 h-5 ${color.replace('bg-', 'text-')}`} />
+      <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${color}/10`}>
+        <Icon size={20} className={color.replace('bg-', 'text-')} />
       </div>
       {trend && (
         <span className={`flex items-center text-xs font-medium ${trend.startsWith('+') ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
@@ -70,8 +70,8 @@ const SentinelCard: React.FC<{
   accent: string;
 }> = ({ label, value, sub, icon: Icon, accent }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-    <div className={`shrink-0 p-2 rounded-lg ${accent} bg-opacity-10`}>
-      <Icon className={`w-4 h-4 ${accent.replace('bg-', 'text-')}`} />
+    <div className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-lg ${accent}/10`}>
+      <Icon size={16} className={accent.replace('bg-', 'text-')} />
     </div>
     <div className="min-w-0">
       <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium truncate">{label}</p>
@@ -307,8 +307,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
           {/* Thermal state — shown with dynamic colour when data is available */}
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-            <div className="shrink-0 p-2 rounded-lg bg-orange-500 bg-opacity-10">
-              <Thermometer className="w-4 h-4 text-orange-400" />
+            <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-orange-500/10">
+              <Thermometer size={16} className="text-orange-400" />
             </div>
             <div className="min-w-0">
               <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">Thermal State</p>
@@ -332,8 +332,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   icon={Zap} accent="bg-amber-500" />
               ) : (
                 <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-                  <div className="shrink-0 p-2 rounded-lg bg-amber-500 bg-opacity-10">
-                    <Zap className="w-4 h-4 text-amber-500 opacity-40" />
+                  <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/10">
+                    <Zap size={16} className="text-amber-500 opacity-40" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
