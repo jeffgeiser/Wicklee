@@ -1,0 +1,8 @@
+[build]
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Railway health check — /api/fleet returns 200 with an empty node list on boot.
+healthcheckPath    = "/api/fleet"
+healthcheckTimeout = 30
+restartPolicyType  = "ON_FAILURE"
