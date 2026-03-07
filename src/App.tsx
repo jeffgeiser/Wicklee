@@ -131,7 +131,7 @@ const isLocalHost = window.location.hostname === 'localhost' || window.location.
 // Always absolute so fetch() doesn't resolve against the static host origin.
 const CLOUD_URL = (() => {
   const v = import.meta.env.VITE_CLOUD_URL ?? '';
-  if (!v) return 'https://wicklee-production.up.railway.app';
+  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
   return v.startsWith('http') ? v : `https://${v}`;
 })();
 
