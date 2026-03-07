@@ -113,7 +113,7 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
               </div>
 
               <p className="text-center text-[13px] text-indigo-400 font-medium">
-                Connect at wicklee.dev →
+                Enter this code at wicklee.dev → Fleet → Add Node
               </p>
 
               {/* QR placeholder */}

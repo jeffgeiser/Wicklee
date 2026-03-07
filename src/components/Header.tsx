@@ -74,25 +74,37 @@ const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTe
 
         <div className="flex items-center gap-4">
           {/* Fleet Connect button */}
-          <button
-            onClick={onOpenPairing}
-            className="flex items-center gap-1.5 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative"
-            title={`${pairingInfo?.node_id ?? '—'} — Connect to Fleet`}
-          >
-            {pairingInfo?.status === 'connected' ? (
-              <CloudLightning className="w-5 h-5 text-green-400" />
-            ) : (
-              <div className="relative">
-                {pairingInfo?.status === 'pending' && (
-                  <span className="animate-ping absolute -inset-1 rounded-full bg-amber-400/40" />
-                )}
-                <Cloud className={`w-5 h-5 relative ${pairingInfo?.status === 'pending' ? 'text-amber-400' : 'text-gray-400'}`} />
-              </div>
-            )}
-            <span className="text-[10px] font-mono text-gray-500 hidden sm:inline">
-              {pairingInfo?.node_id ?? '—'}
-            </span>
-          </button>
+          {pairingInfo?.status === 'connected' ? (
+            // Connected — compact pill showing node identity
+            <button
+              onClick={onOpenPairing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20 hover:bg-green-500/20 transition-colors"
+              title={`${pairingInfo.node_id} — Fleet Connected`}
+            >
+              <CloudLightning className="w-4 h-4 text-green-400" />
+              <span className="text-[11px] font-mono text-green-400 hidden sm:inline">{pairingInfo.node_id}</span>
+            </button>
+          ) : pairingInfo?.status === 'pending' ? (
+            // Pending — amber pulsing pill
+            <button
+              onClick={onOpenPairing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-colors relative"
+              title="Pairing in progress"
+            >
+              <span className="animate-ping absolute inset-0 rounded-lg bg-amber-400/10" />
+              <Cloud className="w-4 h-4 text-amber-400 relative" />
+              <span className="text-[11px] font-mono text-amber-400 relative hidden sm:inline">Pairing…</span>
+            </button>
+          ) : (
+            // Unpaired / unknown — prominent CTA button
+            <button
+              onClick={onOpenPairing}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-lg shadow-indigo-500/20"
+            >
+              <Cloud className="w-4 h-4" />
+              <span className="hidden sm:inline">Connect to Fleet</span>
+            </button>
+          )}
 
           <button
             onClick={onToggleTheme}
