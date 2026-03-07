@@ -497,6 +497,11 @@ async fn handle_fleet(State(state): State<AppState>) -> impl IntoResponse {
     Json(FleetResponse { nodes })
 }
 
+/// GET /health — trivial liveness probe, no DB dependency.
+async fn handle_health() -> StatusCode {
+    StatusCode::OK
+}
+
 // ── CORS middleware ───────────────────────────────────────────────────────────
 //
 // Injected directly into the response so Railway's proxy cannot strip the
@@ -533,6 +538,7 @@ async fn main() {
     };
 
     let app = Router::new()
+        .route("/health",            get(handle_health))
         .route("/api/auth/signup",  post(handle_signup))
         .route("/api/auth/login",   post(handle_login))
         .route("/api/auth/me",      get(handle_me))

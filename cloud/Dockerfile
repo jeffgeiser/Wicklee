@@ -4,7 +4,7 @@ FROM rust:1.85-slim AS builder
 WORKDIR /app
 
 # Cache dependency compilation separately from source changes.
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo "fn main(){}" > src/main.rs && cargo build --release
 RUN rm -f target/release/deps/wicklee_cloud*
 
