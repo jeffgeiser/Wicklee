@@ -401,8 +401,28 @@ fn save_config(cfg: &WickleeConfig) {
     }
 }
 
+const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.up.railway.app";
+
 fn generate_code() -> String {
     format!("{:06}", now_ms() % 1_000_000)
+}
+
+/// POST { code, node_id, fleet_url } to the cloud backend so that when the
+/// user enters the code at wicklee.dev the dashboard can activate the pairing.
+async fn register_pair_code(node_id: &str, code: &str) -> bool {
+    let cloud = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
+    let fleet  = std::env::var("WICKLEE_FLEET_URL").unwrap_or_else(|_| "http://localhost:7700".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .unwrap_or_default();
+    client
+        .post(format!("{cloud}/api/pair/claim"))
+        .json(&serde_json::json!({ "code": code, "node_id": node_id, "fleet_url": fleet }))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
 }
 
 fn print_pairing_box(node_id: &str, code: &str) {
@@ -907,6 +927,10 @@ async fn main() {
         let code = generate_code();
         let expires_at = now_ms() + 300_000;
         pairing_state.lock().unwrap().status = PairingStatus::Pending { code: code.clone(), expires_at };
+        let ok = register_pair_code(&config.node_id, &code).await;
+        if !ok {
+            eprintln!("[warn] Could not register code with cloud backend. Check your internet connection.");
+        }
         print_pairing_box(&config.node_id, &code);
     }
 
