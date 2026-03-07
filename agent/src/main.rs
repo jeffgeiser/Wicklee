@@ -756,11 +756,16 @@ async fn handle_pair_status(
 async fn handle_pair_generate(
     axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
 ) -> Json<PairingStatusResponse> {
-    let mut state = pairing_state.lock().unwrap();
     let code = generate_code();
     let expires_at = now_ms() + 300_000;
-    state.status = PairingStatus::Pending { code, expires_at };
-    Json(pairing_response(&state))
+    let (node_id, response) = {
+        let mut state = pairing_state.lock().unwrap();
+        state.status = PairingStatus::Pending { code: code.clone(), expires_at };
+        (state.node_id.clone(), pairing_response(&state))
+    };
+    // Register with cloud backend so wicklee.dev can activate by code.
+    tokio::spawn(async move { register_pair_code(&node_id, &code).await; });
+    Json(response)
 }
 
 #[derive(Deserialize)]
