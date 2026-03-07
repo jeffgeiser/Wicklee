@@ -4,16 +4,17 @@ import { User as UserType, UserRole } from '../types';
 
 interface TeamManagementProps {
   tenantId: string;
+  currentUser: UserType;
 }
 
-const MOCK_TEAM: UserType[] = [
-  { id: 'usr-01', email: 'sarah@wicklee.io', fullName: 'Sarah Chen', role: 'Owner' },
+const MOCK_TEAM_EXTRAS: UserType[] = [
   { id: 'usr-02', email: 'marcus@wicklee.io', fullName: 'Marcus Thorne', role: 'Collaborator' },
   { id: 'usr-03', email: 'leo@wicklee.io', fullName: 'Leo Varis', role: 'Collaborator' },
   { id: 'usr-04', email: 'audit@wicklee.io', fullName: 'External Audit', role: 'Viewer' },
 ];
 
-const TeamManagement: React.FC<TeamManagementProps> = ({ tenantId }) => {
+const TeamManagement: React.FC<TeamManagementProps> = ({ tenantId, currentUser }) => {
+  const team = [currentUser, ...MOCK_TEAM_EXTRAS];
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -39,7 +40,7 @@ const TeamManagement: React.FC<TeamManagementProps> = ({ tenantId }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-            {MOCK_TEAM.map((member) => (
+            {team.map((member) => (
               <tr key={member.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors group">
                 <td className="px-6 py-4">
                   <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-gray-400 font-bold mx-auto">

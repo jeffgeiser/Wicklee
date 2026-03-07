@@ -11,6 +11,7 @@ import ScaffoldingView from './components/ScaffoldingView';
 import AIInsights from './components/AIInsights';
 import TeamManagement from './components/TeamManagement';
 import LandingPage from './components/LandingPage';
+import AuthModal from './components/AuthModal';
 import ProfileView from './components/ProfileView';
 import SecurityView from './components/SecurityView';
 import APIKeysView from './components/APIKeysView';
@@ -125,7 +126,8 @@ const MOCK_CURRENT_USER: UserType = {
 };
 
 const App: React.FC = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(MOCK_NODES_INITIAL);
   const [isConnected, setIsConnected] = useState(false);
@@ -140,6 +142,34 @@ const App: React.FC = () => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
   const socketRef = useRef<WebSocket | null>(null);
+
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const token = localStorage.getItem('wk_auth_token');
+    if (!token) return;
+
+    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (r) => {
+        if (!r.ok) { localStorage.removeItem('wk_auth_token'); return; }
+        const data = await r.json();
+        setCurrentUser({ id: data.id, email: data.email, fullName: data.fullName, role: data.role, isPro: data.isPro ?? false });
+        setIsLoggedIn(true);
+      })
+      .catch(() => localStorage.removeItem('wk_auth_token'));
+  }, []);
+
+  const handleAuthSuccess = (user: UserType, token: string) => {
+    localStorage.setItem('wk_auth_token', token);
+    setCurrentUser(user);
+    setAuthModalMode(null);
+    setIsLoggedIn(true);
+  };
+
+  const handleLocalMode = () => {
+    setCurrentUser(MOCK_CURRENT_USER);
+    setAuthModalMode(null);
+    setIsLoggedIn(true);
+  };
 
   const permissions = usePermissions(currentUser);
   const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
@@ -235,6 +265,8 @@ const App: React.FC = () => {
   }, [currentTenant.id, currentUser.id, isLoggedIn]);
 
   const handleLogout = () => {
+    localStorage.removeItem('wk_auth_token');
+    setCurrentUser(MOCK_CURRENT_USER);
     setIsLoggedIn(false);
   };
 
@@ -258,7 +290,23 @@ const App: React.FC = () => {
   };
 
   if (!isLoggedIn) {
-    return <LandingPage onLogin={() => setIsLoggedIn(true)} />;
+    return (
+      <>
+        <LandingPage
+          onSignIn={() => setAuthModalMode('signin')}
+          onSignUp={() => setAuthModalMode('signup')}
+          onLocalMode={handleLocalMode}
+        />
+        {authModalMode && (
+          <AuthModal
+            mode={authModalMode}
+            onSuccess={handleAuthSuccess}
+            onClose={() => setAuthModalMode(null)}
+            onLocalMode={handleLocalMode}
+          />
+        )}
+      </>
+    );
   }
 
   const renderContent = () => {
@@ -289,7 +337,7 @@ const App: React.FC = () => {
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
         );
       case DashboardTab.TEAM:
-        return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
+        return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.SUSTAINABILITY:
         return <SustainabilityView nodes={nodes} />;
       case DashboardTab.PROFILE:
