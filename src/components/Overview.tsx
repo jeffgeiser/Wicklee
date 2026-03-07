@@ -171,15 +171,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  // On hosted dashboard, connect to the paired node's fleet_url (stored as node.ip).
-  // On localhost, connect to window.location.host (the embedded agent).
-  // Stored in a ref so URL changes don't restart the effect unnecessarily.
-  const agentOriginRef = useRef<string>('');
-  if (!isLocalHost && nodes.length > 0) {
-    try { agentOriginRef.current = new URL(nodes[0].ip).origin; }
-    catch { agentOriginRef.current = 'http://localhost:7700'; }
-  }
-
   const handleMetrics = useCallback((data: SentinelMetrics) => {
     setSentinel(data);
     setConnected(true);
@@ -192,68 +183,85 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     });
   }, []);
 
-  useEffect(() => {
-    // On hosted with no nodes yet, nothing to connect to.
-    if (!isLocalHost && !agentOriginRef.current) return;
+  // Cloud SSE URL — used on hosted (wicklee.dev) so the browser never touches localhost.
+  const CLOUD_SSE_URL = (() => {
+    const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
+    const base = !v ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
+      : v.startsWith('http') ? v : `https://${v}`;
+    return `${base}/api/fleet/stream`;
+  })();
 
+  useEffect(() => {
     let retryWs:  ReturnType<typeof setTimeout>;
     let retrySse: ReturnType<typeof setTimeout>;
     let wsFailed  = false;
 
-    // Derive SSE and WS URLs: use agentOrigin on hosted, relative paths on localhost.
-    const agentOrigin = agentOriginRef.current; // e.g. "http://localhost:7700"
-    const sseUrl = agentOrigin ? `${agentOrigin}/api/metrics` : '/api/metrics';
-    const wsUrl  = agentOrigin
-      ? agentOrigin.replace(/^http/, 'ws') + '/ws'
-      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
-
-    const connectSSE = () => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) return; // WS recovered
-      const es = new EventSource(sseUrl);
-      esRef.current = es;
-      es.onopen    = () => setTransport('sse');
-      es.onmessage = (ev) => {
-        try { handleMetrics(JSON.parse(ev.data) as SentinelMetrics); setTransport('sse'); }
-        catch { /* malformed frame */ }
-      };
-      es.onerror = () => {
-        setConnected(false);
-        es.close();
-        esRef.current = null;
-        retrySse = setTimeout(connectSSE, 3000);
-      };
-    };
-
-    const connectWS = () => {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onmessage = (ev) => {
-        try {
-          handleMetrics(JSON.parse(ev.data as string) as SentinelMetrics);
-          setTransport('ws');
-          // WS is healthy — close the SSE fallback if it was running
-          if (esRef.current) { esRef.current.close(); esRef.current = null; }
-        } catch { /* malformed frame */ }
+    if (isLocalHost) {
+      // ── Localhost: WS primary → SSE fallback, both pointing to the local agent ──
+      const connectSSE = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+        const es = new EventSource('/api/metrics');
+        esRef.current = es;
+        es.onopen    = () => setTransport('sse');
+        es.onmessage = (ev) => {
+          try { handleMetrics(JSON.parse(ev.data) as SentinelMetrics); setTransport('sse'); }
+          catch { /* malformed frame */ }
+        };
+        es.onerror = () => {
+          setConnected(false);
+          es.close();
+          esRef.current = null;
+          retrySse = setTimeout(connectSSE, 3000);
+        };
       };
 
-      ws.onerror = () => { wsFailed = true; };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-        setConnected(false);
-        if (wsFailed) {
-          // Server doesn't support WS yet — fall back permanently to SSE
-          connectSSE();
-        } else {
-          // Transient disconnect — retry WS, SSE picks up the gap
-          if (!esRef.current) connectSSE();
-          retryWs = setTimeout(() => { wsFailed = false; connectWS(); }, 3000);
-        }
+      const connectWS = () => {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+        wsRef.current = ws;
+        ws.onmessage = (ev) => {
+          try {
+            handleMetrics(JSON.parse(ev.data as string) as SentinelMetrics);
+            setTransport('ws');
+            if (esRef.current) { esRef.current.close(); esRef.current = null; }
+          } catch { /* malformed frame */ }
+        };
+        ws.onerror = () => { wsFailed = true; };
+        ws.onclose = () => {
+          wsRef.current = null;
+          setConnected(false);
+          if (wsFailed) { connectSSE(); }
+          else {
+            if (!esRef.current) connectSSE();
+            retryWs = setTimeout(() => { wsFailed = false; connectWS(); }, 3000);
+          }
+        };
       };
-    };
 
-    connectWS();
+      connectWS();
+    } else {
+      // ── Hosted: SSE from Railway cloud backend. Agent pushes telemetry there. ──
+      const connectCloudSSE = () => {
+        const es = new EventSource(CLOUD_SSE_URL);
+        esRef.current = es;
+        es.onopen = () => setTransport('sse');
+        es.onmessage = (ev) => {
+          try {
+            const fleet = JSON.parse(ev.data) as { nodes: Array<{ metrics: SentinelMetrics | null }> };
+            const metrics = fleet.nodes[0]?.metrics;
+            if (metrics) { handleMetrics(metrics); setTransport('sse'); }
+          } catch { /* malformed frame */ }
+        };
+        es.onerror = () => {
+          setConnected(false);
+          es.close();
+          esRef.current = null;
+          retrySse = setTimeout(connectCloudSSE, 3000);
+        };
+      };
+
+      connectCloudSSE();
+    }
 
     return () => {
       clearTimeout(retryWs);
@@ -261,7 +269,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       wsRef.current?.close();
       esRef.current?.close();
     };
-  }, [handleMetrics]);
+  }, [handleMetrics, CLOUD_SSE_URL]);
 
   // ── Empty state for hosted with no paired nodes (after hooks) ──────────────
   if (!isLocalHost && nodes.length === 0) {

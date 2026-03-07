@@ -3,10 +3,13 @@ use axum::{
     extract::State,
     http::{header, HeaderMap, Method, Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use std::convert::Infallible;
+use std::time::Duration;
+use tokio_stream::StreamExt as _;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -538,6 +541,37 @@ async fn handle_activate(
     }
 }
 
+/// GET /api/fleet/stream — SSE stream pushing fleet snapshots every 2 s.
+/// The browser at wicklee.dev subscribes here instead of connecting to localhost.
+async fn handle_fleet_stream(
+    State(state): State<AppState>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let interval_stream = tokio_stream::wrappers::IntervalStream::new(
+        tokio::time::interval(Duration::from_secs(2)),
+    );
+
+    let stream = interval_stream.map(move |_| {
+        let metrics_map = state.metrics.read().unwrap();
+        // Build the same shape as FleetResponse but inline so we don't need DB here.
+        let nodes: Vec<serde_json::Value> = metrics_map
+            .iter()
+            .map(|(node_id, entry)| {
+                serde_json::json!({
+                    "node_id":      node_id,
+                    "last_seen_ms": entry.last_seen_ms,
+                    "metrics":      entry.metrics,
+                })
+            })
+            .collect();
+
+        let data = serde_json::to_string(&serde_json::json!({ "nodes": nodes }))
+            .unwrap_or_else(|_| r#"{"nodes":[]}"#.to_string());
+        Ok::<_, Infallible>(Event::default().data(data))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
 /// GET /health — trivial liveness probe, no DB dependency.
 async fn handle_health() -> StatusCode {
     StatusCode::OK
@@ -586,7 +620,8 @@ async fn main() {
         .route("/api/pair/claim",    post(handle_claim))
         .route("/api/pair/activate", post(handle_activate))
         .route("/api/telemetry",    post(handle_telemetry))
-        .route("/api/fleet",        get(handle_fleet))
+        .route("/api/fleet",         get(handle_fleet))
+        .route("/api/fleet/stream",  get(handle_fleet_stream))
         .with_state(state)
         .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
 

@@ -101,8 +101,11 @@ enum PairingStatus {
 }
 
 struct PairingState {
-    status: PairingStatus,
-    node_id: String,
+    status:               PairingStatus,
+    node_id:              String,
+    /// Session token returned by the cloud backend after a successful claim.
+    /// Present only while paired; used to authenticate telemetry pushes.
+    cloud_session_token:  Option<String>,
 }
 
 #[derive(Serialize)]
@@ -407,22 +410,72 @@ fn generate_code() -> String {
     format!("{:06}", now_ms() % 1_000_000)
 }
 
-/// POST { code, node_id, fleet_url } to the cloud backend so that when the
-/// user enters the code at wicklee.dev the dashboard can activate the pairing.
-async fn register_pair_code(node_id: &str, code: &str) -> bool {
-    let cloud = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
+/// POST { code, node_id, fleet_url } to the cloud backend.
+/// Returns the session_token to use for subsequent telemetry pushes.
+async fn register_pair_code(node_id: &str, code: &str) -> Option<String> {
+    let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
     let fleet  = std::env::var("WICKLEE_FLEET_URL").unwrap_or_else(|_| "http://localhost:7700".to_string());
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .unwrap_or_default();
-    client
+    let res = client
         .post(format!("{cloud}/api/pair/claim"))
         .json(&serde_json::json!({ "code": code, "node_id": node_id, "fleet_url": fleet }))
         .send()
         .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
+        .ok()?;
+    if !res.status().is_success() { return None; }
+    let body: serde_json::Value = res.json().await.ok()?;
+    body["session_token"].as_str().map(|s| s.to_string())
+}
+
+/// Spawn a background task that forwards live telemetry to the cloud every 2 s.
+/// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
+/// throttles pushes to 1 per 2 s so we don't hammer Railway.
+/// Stops automatically when the session_token is cleared (on disconnect).
+fn start_cloud_push(
+    pairing_state: Arc<Mutex<PairingState>>,
+    broadcast_tx:  broadcast::Sender<String>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    tokio::spawn(async move {
+        let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+
+        let mut rx         = broadcast_tx.subscribe();
+        let mut last_push  = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(10))  // push immediately on first tick
+            .unwrap_or_else(std::time::Instant::now);
+        let push_interval  = std::time::Duration::from_secs(2);
+
+        loop {
+            let frame = match rx.recv().await {
+                Ok(json)                    => json,
+                Err(RecvError::Closed)      => break,
+                Err(RecvError::Lagged(_))   => continue,
+            };
+
+            // Throttle to one push every 2 s.
+            if last_push.elapsed() < push_interval { continue; }
+
+            // Only push when paired (session_token present).
+            let has_token = pairing_state.lock().unwrap().cloud_session_token.is_some();
+            if !has_token { continue; }
+
+            last_push = std::time::Instant::now();
+            let _ = client
+                .post(format!("{cloud}/api/telemetry"))
+                .header("content-type", "application/json")
+                .body(frame)
+                .send()
+                .await;
+        }
+    });
 }
 
 fn print_pairing_box(node_id: &str, code: &str) {
@@ -763,8 +816,13 @@ async fn handle_pair_generate(
         state.status = PairingStatus::Pending { code: code.clone(), expires_at };
         (state.node_id.clone(), pairing_response(&state))
     };
-    // Register with cloud backend so wicklee.dev can activate by code.
-    tokio::spawn(async move { register_pair_code(&node_id, &code).await; });
+    // Register with cloud backend and store the returned session_token.
+    let ps = Arc::clone(&pairing_state);
+    tokio::spawn(async move {
+        if let Some(token) = register_pair_code(&node_id, &code).await {
+            ps.lock().unwrap().cloud_session_token = Some(token);
+        }
+    });
     Json(response)
 }
 
@@ -795,7 +853,8 @@ async fn handle_pair_disconnect(
     axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
 ) -> Json<PairingStatusResponse> {
     let mut state = pairing_state.lock().unwrap();
-    state.status = PairingStatus::Unpaired;
+    state.status              = PairingStatus::Unpaired;
+    state.cloud_session_token = None;
     let cfg = WickleeConfig { node_id: state.node_id.clone(), fleet_url: None };
     save_config(&cfg);
     Json(pairing_response(&state))
@@ -920,7 +979,8 @@ async fn main() {
     let config = load_or_create_config();
     let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
     let pairing_state = Arc::new(Mutex::new(PairingState {
-        node_id: config.node_id.clone(),
+        node_id:             config.node_id.clone(),
+        cloud_session_token: None,
         status: match config.fleet_url.clone() {
             Some(url) => PairingStatus::Connected { fleet_url: url },
             None      => PairingStatus::Unpaired,
@@ -932,9 +992,9 @@ async fn main() {
         let code = generate_code();
         let expires_at = now_ms() + 300_000;
         pairing_state.lock().unwrap().status = PairingStatus::Pending { code: code.clone(), expires_at };
-        let ok = register_pair_code(&config.node_id, &code).await;
-        if !ok {
-            eprintln!("[warn] Could not register code with cloud backend. Check your internet connection.");
+        match register_pair_code(&config.node_id, &code).await {
+            Some(token) => { pairing_state.lock().unwrap().cloud_session_token = Some(token); }
+            None        => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
         }
         print_pairing_box(&config.node_id, &code);
     }
@@ -945,6 +1005,9 @@ async fn main() {
     let apple_metrics  = start_metrics_harvester();
     let nvidia_metrics = start_nvidia_harvester();
     let broadcast_tx   = start_metrics_broadcaster(Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
+
+    // Start cloud telemetry push loop (2 s cadence, gated on session_token).
+    start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone());
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
