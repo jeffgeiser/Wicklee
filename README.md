@@ -1,4 +1,4 @@
-# Wicklee 🛰️
+# Wicklee 
 
 **Open-source GPU fleet monitor for teams running local AI inference.**
 
