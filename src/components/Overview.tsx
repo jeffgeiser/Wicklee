@@ -157,28 +157,8 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 );
 
 const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode }) => {
-  // On hosted (wicklee.dev), show empty state when no nodes are paired yet
-  if (!isLocalHost && nodes.length === 0) {
-    return <EmptyFleetState onAddNode={onAddNode} />;
-  }
-
-  const activeNodes = isPro ? nodes : nodes.slice(0, 1);
-  const totalRPS = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
-  const avgTemp = (activeNodes.reduce((acc, n) => acc + n.gpuTemp, 0) / activeNodes.length).toFixed(1);
-  const totalVRAM = activeNodes.reduce((acc, n) => acc + n.vramUsed, 0).toFixed(1);
-  const totalWattage = activeNodes.reduce((acc, n) => acc + n.powerUsage, 0);
-
-  const hasTDP = activeNodes.every(n => n.tdp !== undefined);
-
-  const wattagePer1kTokens = totalRPS > 0
-    ? ((totalWattage / (totalRPS * 500)) * 1000).toFixed(1)
-    : "0.0";
-
-  const costPer1kTokens = totalRPS > 0
-    ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6)
-    : "0.000000";
-
   // ── Live telemetry — WS primary (10 Hz), SSE fallback (1 Hz) ──────────────
+  // All hooks must be declared before any early returns (Rules of Hooks).
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
@@ -190,6 +170,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  // On hosted dashboard, connect to the paired node's fleet_url (stored as node.ip).
+  // On localhost, connect to window.location.host (the embedded agent).
+  // Stored in a ref so URL changes don't restart the effect unnecessarily.
+  const agentOriginRef = useRef<string>('');
+  if (!isLocalHost && nodes.length > 0) {
+    try { agentOriginRef.current = new URL(nodes[0].ip).origin; }
+    catch { agentOriginRef.current = 'http://localhost:7700'; }
+  }
 
   const handleMetrics = useCallback((data: SentinelMetrics) => {
     setSentinel(data);
@@ -204,13 +193,23 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   }, []);
 
   useEffect(() => {
+    // On hosted with no nodes yet, nothing to connect to.
+    if (!isLocalHost && !agentOriginRef.current) return;
+
     let retryWs:  ReturnType<typeof setTimeout>;
     let retrySse: ReturnType<typeof setTimeout>;
     let wsFailed  = false;
 
+    // Derive SSE and WS URLs: use agentOrigin on hosted, relative paths on localhost.
+    const agentOrigin = agentOriginRef.current; // e.g. "http://localhost:7700"
+    const sseUrl = agentOrigin ? `${agentOrigin}/api/metrics` : '/api/metrics';
+    const wsUrl  = agentOrigin
+      ? agentOrigin.replace(/^http/, 'ws') + '/ws'
+      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+
     const connectSSE = () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) return; // WS recovered
-      const es = new EventSource('/api/metrics');
+      const es = new EventSource(sseUrl);
       esRef.current = es;
       es.onopen    = () => setTransport('sse');
       es.onmessage = (ev) => {
@@ -226,8 +225,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     };
 
     const connectWS = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onmessage = (ev) => {
@@ -264,6 +262,22 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       esRef.current?.close();
     };
   }, [handleMetrics]);
+
+  // ── Empty state for hosted with no paired nodes (after hooks) ──────────────
+  if (!isLocalHost && nodes.length === 0) {
+    return <EmptyFleetState onAddNode={onAddNode} />;
+  }
+
+  const activeNodes = isPro ? nodes : nodes.slice(0, 1);
+  const totalRPS = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
+  const avgTemp = activeNodes.length > 0
+    ? (activeNodes.reduce((acc, n) => acc + n.gpuTemp, 0) / activeNodes.length).toFixed(1)
+    : '0.0';
+  const totalVRAM = activeNodes.reduce((acc, n) => acc + n.vramUsed, 0).toFixed(1);
+  const totalWattage = activeNodes.reduce((acc, n) => acc + n.powerUsage, 0);
+  const hasTDP = activeNodes.every(n => n.tdp !== undefined);
+  const wattagePer1kTokens = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 1000).toFixed(1) : '0.0';
+  const costPer1kTokens = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6) : '0.000000';
 
   // Derived display values (show "—" until first SSE frame arrives)
   const cpuPct      = sentinel ? `${sentinel.cpu_usage_percent.toFixed(1)}%`         : '—';
