@@ -121,18 +121,14 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
         {
           step: '2',
           icon: Terminal,
-          title: 'Generate a pairing code',
-          body: (
-            <code className="block mt-2 text-[11px] font-mono bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-indigo-300">
-              wicklee --pair
-            </code>
-          ),
+          title: 'Open the dashboard',
+          body: <p className="mt-2 text-xs text-gray-500">Click "Connect to Fleet" in the header to get your 6-digit pairing code.</p>,
         },
         {
           step: '3',
           icon: Plus,
           title: 'Enter the code here',
-          body: <p className="mt-2 text-xs text-gray-500">Tap "Add Node" and type the 6-digit code shown in your terminal.</p>,
+          body: <p className="mt-2 text-xs text-gray-500">Click "Add Node" below and enter the 6-digit code from your local dashboard.</p>,
         },
       ].map(({ step, icon: Icon, title, body }) => (
         <div key={step} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-1">
