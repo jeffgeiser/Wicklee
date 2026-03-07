@@ -100,10 +100,10 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-3 text-center">
                 <p className="text-[11px] text-gray-500 uppercase tracking-widest font-bold">Pairing Code</p>
                 <div className="flex items-center justify-center gap-3">
-                  <span className="text-5xl font-mono font-bold text-white tracking-[0.4em]">
+                  <span className="text-4xl font-mono font-bold text-white tracking-[0.3em] whitespace-nowrap">
                     {formatCode(pairingInfo.code ?? '')}
                   </span>
-                  <button onClick={handleCopy} className="p-2 text-gray-500 hover:text-white transition-colors">
+                  <button onClick={handleCopy} className="p-2 text-gray-500 hover:text-white transition-colors shrink-0">
                     {copied ? <CheckCheck className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
@@ -113,7 +113,11 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
               </div>
 
               <p className="text-center text-[13px] text-indigo-400 font-medium">
-                Enter this code at wicklee.dev → Fleet → Add Node
+                Enter this code at{' '}
+                <a href="https://wicklee.dev" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-indigo-300 transition-colors">
+                  wicklee.dev
+                </a>
+                {' '}→ Fleet → Add Node
               </p>
 
               {/* QR placeholder */}
