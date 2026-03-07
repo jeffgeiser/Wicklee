@@ -4,7 +4,7 @@ use axum::{
     http::{header, HeaderMap, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use rusqlite::{params, Connection};
@@ -545,10 +545,8 @@ async fn main() {
         .route("/api/pair/claim",   post(handle_claim))
         .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",        get(handle_fleet))
-        // Catch-all OPTIONS so preflight never hits a 405
-        .route("/{*path}",          any(|| async { StatusCode::OK }))
         .with_state(state)
-        .layer(middleware::from_fn(cors));
+        .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
 
     // Railway injects PORT at runtime; fall back to 8080 for local dev.
     let port: u16 = std::env::var("PORT")
