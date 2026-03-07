@@ -120,6 +120,7 @@ struct PairingStatusResponse {
 // ── Hardware Helpers ──────────────────────────────────────────────────────────
 
 /// Thermal via sysctl — Intel-only key; returns None on Apple Silicon.
+#[cfg(not(target_os = "windows"))]
 fn read_thermal_sysctl() -> Option<String> {
     use sysctl::Sysctl;
     let ctl = sysctl::Ctl::new("machdep.xcpm.cpu_thermal_level").ok()?;
@@ -130,6 +131,12 @@ fn read_thermal_sysctl() -> Option<String> {
         2 => "High",
         _ => "Critical",
     }.to_string())
+}
+
+/// Windows has no sysctl — thermal state deferred to Phase 3 (WMI).
+#[cfg(target_os = "windows")]
+fn read_thermal_sysctl() -> Option<String> {
+    None
 }
 
 /// Thermal via `pmset -g therm` — works on Apple Silicon, no sudo.
@@ -525,7 +532,8 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
     eprintln!("[diag] Wicklee Sentinel — hardware source probe");
     eprintln!("──────────────────────────────────────────────");
 
-    // 1. sysctl thermal (Intel key)
+    // 1. sysctl thermal (Intel key — not available on Windows)
+    #[cfg(not(target_os = "windows"))]
     {
         use sysctl::Sysctl;
         match sysctl::Ctl::new("machdep.xcpm.cpu_thermal_level") {
@@ -536,6 +544,8 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
             Err(e) => eprintln!("[diag] sysctl thermal          MISS → {} (expected on Apple Silicon)", e),
         }
     }
+    #[cfg(target_os = "windows")]
+    eprintln!("[diag] sysctl thermal          SKIP → not available on Windows (Phase 3: WMI)");
 
     // 2. pmset -g therm
     match tokio::process::Command::new("pmset").args(["-g", "therm"]).output().await {
