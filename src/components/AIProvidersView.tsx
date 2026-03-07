@@ -16,7 +16,7 @@ const AIProvidersView: React.FC = () => {
 
   const providers: Provider[] = [
     { id: 'on-prem', name: 'On-Prem (Ollama/vLLM)', icon: Server, status: 'connected', latency: 12, type: 'on-prem' },
-    { id: 'gemini', name: 'Google Gemini', icon: BrainCircuit, status: 'connected', latency: 240, type: 'cloud' },
+    { id: 'ollama', name: 'Ollama (Local)', icon: Cpu, status: 'connected', latency: 8, type: 'on-prem' },
     { id: 'claude', name: 'Anthropic Claude', icon: Shield, status: 'connected', latency: 310, type: 'cloud' },
     { id: 'openai', name: 'OpenAI GPT', icon: Zap, status: 'disconnected', type: 'cloud' },
     { id: 'deepseek', name: 'DeepSeek', icon: Globe, status: 'error', type: 'cloud' },
