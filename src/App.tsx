@@ -153,6 +153,10 @@ const App: React.FC = () => {
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
+  // Tracks last time cloud SSE delivered telemetry — used to show stale-node warning on hosted.
+  const [lastCloudTelemetryMs, setLastCloudTelemetryMs] = useState<number | null>(null);
+  // Tick counter — incremented every 10s on hosted so the stale-node banner appears promptly.
+  const [, setTick] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
@@ -198,6 +202,9 @@ const App: React.FC = () => {
       });
       if (r.ok) {
         const data = await r.json();
+        // Seed last telemetry time from cloud fleet response so we can detect stale nodes.
+        const maxLastSeen = (data.nodes ?? []).reduce((max: number, n: any) => Math.max(max, n.last_seen_ms ?? 0), 0);
+        if (maxLastSeen > 0) setLastCloudTelemetryMs(maxLastSeen);
         // Map cloud NodeSummary → frontend NodeAgent shape
         setNodes((data.nodes ?? []).map((n: any) => ({
           id: n.node_id,
@@ -254,6 +261,13 @@ const App: React.FC = () => {
     const id = setInterval(fetchPairingStatus, 4000);
     return () => clearInterval(id);
   }, [pairingInfo?.status, fetchPairingStatus]);
+
+  // Periodically re-render on hosted so the stale-node banner detects the 30s threshold.
+  useEffect(() => {
+    if (isLocalHost) return;
+    const id = setInterval(() => setTick(t => t + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -367,7 +381,7 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} />;
+        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} />;
       case DashboardTab.NODES:
         return (
           <NodesList
@@ -410,7 +424,7 @@ const App: React.FC = () => {
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} />;
+        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} />;
     }
   };
 
@@ -464,7 +478,8 @@ const App: React.FC = () => {
         
         <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 scroll-smooth">
           <div className="max-w-7xl mx-auto space-y-6">
-            {!isConnected && activeTab !== DashboardTab.SCAFFOLDING && (isLocalHost || nodes.length > 0) && (
+            {/* Localhost: show disconnected banner when WS/SSE to local agent is down */}
+            {isLocalHost && !isConnected && activeTab !== DashboardTab.SCAFFOLDING && (
               <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6 animate-pulse">
                 <div className="flex items-center gap-3">
                   <WifiOff className="w-5 h-5 text-amber-500" />
@@ -473,12 +488,26 @@ const App: React.FC = () => {
                     <p className="text-xs text-amber-600/80 dark:text-amber-500/80">Dashboard is showing cached/mock data. Please start the Wicklee Rust backend.</p>
                   </div>
                 </div>
-                <button 
+                <button
                   onClick={() => setActiveTab(DashboardTab.SCAFFOLDING)}
                   className="px-3 py-1 bg-amber-500/10 dark:bg-amber-500/20 hover:bg-amber-500/20 dark:hover:bg-amber-500/30 text-amber-600 dark:text-amber-200 text-xs font-bold rounded-lg transition-all"
                 >
                   View Setup Guide
                 </button>
+              </div>
+            )}
+            {/* Hosted: show stale-node warning if paired node hasn't sent telemetry in >30s */}
+            {!isLocalHost && nodes.length > 0 && lastCloudTelemetryMs !== null && (Date.now() - lastCloudTelemetryMs > 30_000) && (
+              <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center gap-3 mb-6">
+                <WifiOff className="w-5 h-5 text-amber-500 shrink-0" />
+                <div>
+                  <h3 className="text-sm font-semibold text-amber-600 dark:text-amber-200">
+                    Node {nodes[0].hostname} appears offline
+                  </h3>
+                  <p className="text-xs text-amber-600/80 dark:text-amber-500/80">
+                    Last seen {new Date(lastCloudTelemetryMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} — make sure the Wicklee agent is running on this machine.
+                  </p>
+                </div>
               </div>
             )}
             {renderContent()}

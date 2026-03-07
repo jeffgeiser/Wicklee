@@ -12,6 +12,7 @@ interface OverviewProps {
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
   onAddNode?: () => void;
+  onTelemetryUpdate?: () => void;
 }
 
 // ── SSE payload shape (mirrors MetricsPayload in agent/src/main.rs) ──────────
@@ -152,7 +153,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
   </div>
 );
 
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate }) => {
   // ── Live telemetry — WS primary (10 Hz), SSE fallback (1 Hz) ──────────────
   // All hooks must be declared before any early returns (Rules of Hooks).
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
@@ -245,7 +246,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           try {
             const fleet = JSON.parse(ev.data) as { nodes: Array<{ metrics: SentinelMetrics | null }> };
             const metrics = fleet.nodes[0]?.metrics;
-            if (metrics) { handleMetrics(metrics); setTransport('sse'); }
+            if (metrics) { handleMetrics(metrics); setTransport('sse'); onTelemetryUpdate?.(); }
           } catch { /* malformed frame */ }
         };
         es.onerror = () => {
