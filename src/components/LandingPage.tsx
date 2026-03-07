@@ -3,7 +3,9 @@ import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Databas
 import Logo from './Logo';
 
 interface LandingPageProps {
-  onLogin: () => void;
+  onSignIn: () => void;
+  onSignUp: () => void;
+  onLocalMode: () => void;
 }
 
 const FeatureCard: React.FC<{ icon: React.ElementType, title: string, description: string }> = ({ icon: Icon, title, description }) => (
@@ -18,7 +20,7 @@ const FeatureCard: React.FC<{ icon: React.ElementType, title: string, descriptio
   </div>
 );
 
-const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
+const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onLocalMode }) => {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 selection:bg-blue-600 selection:text-white">
       {/* Background Decor */}
@@ -34,10 +36,16 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
           <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
           <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">GitHub</a>
           <button
-            onClick={onLogin}
+            onClick={onSignIn}
+            className="px-4 sm:px-6 py-2 border border-gray-700 hover:border-gray-500 text-white text-sm font-bold rounded-xl transition-all"
+          >
+            Sign In
+          </button>
+          <button
+            onClick={onSignUp}
             className="px-4 sm:px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
           >
-            Launch Console
+            Get Started
           </button>
         </div>
       </nav>
@@ -55,17 +63,25 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
           <button
-            onClick={onLogin}
+            onClick={onSignUp}
             className="w-full sm:w-auto px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 text-lg"
           >
-            Install Free — 60 seconds
+            Create Account — Free
             <ChevronRight className="w-5 h-5" />
           </button>
-          <button className="w-full sm:w-auto px-8 py-4 bg-gray-900 border border-gray-800 hover:border-gray-700 text-white font-bold rounded-2xl transition-all text-lg flex items-center justify-center gap-2">
-            <Github className="w-5 h-5" />
-            View on GitHub →
+          <button
+            onClick={onSignIn}
+            className="w-full sm:w-auto px-8 py-4 bg-gray-900 border border-gray-800 hover:border-gray-700 text-white font-bold rounded-2xl transition-all text-lg flex items-center justify-center gap-2"
+          >
+            Sign In
           </button>
         </div>
+        <p className="mt-4 text-sm text-gray-600">
+          Already running the local agent?{' '}
+          <button onClick={onLocalMode} className="text-gray-500 hover:text-gray-300 underline underline-offset-2 transition-colors">
+            Continue without an account
+          </button>
+        </p>
       </section>
 
       {/* Install Command Section */}
