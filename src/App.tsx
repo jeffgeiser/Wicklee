@@ -20,6 +20,7 @@ import SustainabilityView from './components/SustainabilityView';
 import PricingPage from './components/PricingPage';
 import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
+import AddNodeModal from './components/AddNodeModal';
 import { usePermissions } from './hooks/usePermissions';
 import { X, Sparkles, Zap, Shield, Globe } from 'lucide-react';
 
@@ -139,7 +140,7 @@ const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(isLocalHost);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
-  const [nodes, setNodes] = useState<NodeAgent[]>(MOCK_NODES_INITIAL);
+  const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
   const [isConnected, setIsConnected] = useState(false);
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
   const [currentUser, setCurrentUser] = useState<UserType>(MOCK_CURRENT_USER);
@@ -148,6 +149,7 @@ const App: React.FC = () => {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
+  const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
@@ -181,6 +183,34 @@ const App: React.FC = () => {
     setAuthModalMode(null);
     setIsLoggedIn(true);
   };
+
+  // Called after a node is successfully paired via AddNodeModal; fetch updated fleet list.
+  const handleNodeAdded = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('wk_auth_token');
+      const r = await fetch(`${CLOUD_URL}/api/fleet`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (r.ok) {
+        const data = await r.json();
+        // Map cloud NodeSummary → frontend NodeAgent shape
+        setNodes((data.nodes ?? []).map((n: any) => ({
+          id: n.node_id,
+          hostname: n.node_id,
+          ip: n.fleet_url,
+          status: 'online' as const,
+          gpuTemp: n.metrics?.nvidia_gpu_temp_c ?? 0,
+          vramUsed: (n.metrics?.nvidia_vram_used_mb ?? 0) / 1024,
+          vramTotal: (n.metrics?.nvidia_vram_total_mb ?? 0) / 1024,
+          powerUsage: n.metrics?.nvidia_power_draw_w ?? 0,
+          requestsPerSecond: 0,
+          activeInterceptors: [],
+          uptime: '—',
+          sentinelActive: false,
+        })));
+      }
+    } catch {}
+  }, []);
 
   const permissions = usePermissions(currentUser);
   const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
@@ -323,7 +353,7 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} />;
+        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} />;
       case DashboardTab.NODES:
         return (
           <NodesList
@@ -366,7 +396,7 @@ const App: React.FC = () => {
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} />;
+        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} />;
     }
   };
 
@@ -383,6 +413,12 @@ const App: React.FC = () => {
         pairingInfo={pairingInfo}
         onGenerate={generatePairingCode}
         onDisconnect={disconnectFleet}
+      />
+      <AddNodeModal
+        isOpen={isAddNodeModalOpen}
+        onClose={() => setIsAddNodeModalOpen(false)}
+        onNodeAdded={handleNodeAdded}
+        cloudUrl={CLOUD_URL}
       />
       <Sidebar
         activeTab={activeTab}
@@ -409,7 +445,7 @@ const App: React.FC = () => {
           theme={theme}
           onToggleTheme={toggleTheme}
           pairingInfo={pairingInfo}
-          onOpenPairing={() => setIsPairingModalOpen(true)}
+          onOpenPairing={isLocalHost ? () => setIsPairingModalOpen(true) : () => setIsAddNodeModalOpen(true)}
         />
         
         <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 scroll-smooth">

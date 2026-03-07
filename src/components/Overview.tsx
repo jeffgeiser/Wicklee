@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, MemoryStick, Wind, Cloud, CloudLightning } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, MemoryStick, Wind, Cloud, CloudLightning, Download, Terminal, Plus } from 'lucide-react';
 import { NodeAgent, PairingInfo } from '../types';
 import EventFeed from './EventFeed';
+
+const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 interface OverviewProps {
   nodes: NodeAgent[];
   isPro?: boolean;
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
+  onAddNode?: () => void;
 }
 
 // ── SSE payload shape (mirrors MetricsPayload in agent/src/main.rs) ──────────
@@ -92,7 +95,73 @@ const thermalColour = (state: string | null) => {
   }
 };
 
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing }) => {
+const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) => (
+  <div className="flex flex-col items-center justify-center py-24 text-center space-y-10 animate-in fade-in duration-500">
+    <div className="p-5 bg-indigo-600/10 border border-indigo-500/20 rounded-3xl">
+      <CloudLightning className="w-12 h-12 text-indigo-400" />
+    </div>
+
+    <div className="space-y-3 max-w-sm">
+      <h2 className="text-2xl font-bold text-white">Add your first node</h2>
+      <p className="text-sm text-gray-500">Install the Wicklee agent on any machine, generate a pairing code, then enter it below.</p>
+    </div>
+
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl text-left">
+      {[
+        {
+          step: '1',
+          icon: Download,
+          title: 'Install the agent',
+          body: (
+            <code className="block mt-2 text-[11px] font-mono bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-indigo-300 whitespace-pre-wrap break-all">
+              curl -fsSL https://wicklee.dev/install.sh | bash
+            </code>
+          ),
+        },
+        {
+          step: '2',
+          icon: Terminal,
+          title: 'Generate a pairing code',
+          body: (
+            <code className="block mt-2 text-[11px] font-mono bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-indigo-300">
+              wicklee --pair
+            </code>
+          ),
+        },
+        {
+          step: '3',
+          icon: Plus,
+          title: 'Enter the code here',
+          body: <p className="mt-2 text-xs text-gray-500">Tap "Add Node" and type the 6-digit code shown in your terminal.</p>,
+        },
+      ].map(({ step, icon: Icon, title, body }) => (
+        <div key={step} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-1">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-600/20 border border-indigo-500/30 text-[11px] font-bold text-indigo-400">{step}</span>
+            <Icon className="w-4 h-4 text-gray-500" />
+          </div>
+          <h3 className="text-sm font-semibold text-white">{title}</h3>
+          {body}
+        </div>
+      ))}
+    </div>
+
+    <button
+      onClick={onAddNode}
+      className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
+    >
+      <Plus className="w-4 h-4" />
+      Add Node
+    </button>
+  </div>
+);
+
+const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode }) => {
+  // On hosted (wicklee.dev), show empty state when no nodes are paired yet
+  if (!isLocalHost && nodes.length === 0) {
+    return <EmptyFleetState onAddNode={onAddNode} />;
+  }
+
   const activeNodes = isPro ? nodes : nodes.slice(0, 1);
   const totalRPS = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
   const avgTemp = (activeNodes.reduce((acc, n) => acc + n.gpuTemp, 0) / activeNodes.length).toFixed(1);
