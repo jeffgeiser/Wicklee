@@ -1,8 +1,10 @@
 use axum::{
+    body::Body,
     extract::State,
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
-    routing::{get, post},
+    http::{header, HeaderMap, Method, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{any, get, post},
     Json, Router,
 };
 use rusqlite::{params, Connection};
@@ -12,7 +14,6 @@ use std::{
     sync::{Arc, Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 // ── DB type ───────────────────────────────────────────────────────────────────
@@ -496,6 +497,31 @@ async fn handle_fleet(State(state): State<AppState>) -> impl IntoResponse {
     Json(FleetResponse { nodes })
 }
 
+// ── CORS middleware ───────────────────────────────────────────────────────────
+//
+// Injected directly into the response so Railway's proxy cannot strip the
+// headers. OPTIONS preflights are short-circuited with 200 OK before they
+// reach any route handler.
+
+async fn cors(req: Request<Body>, next: Next) -> Response {
+    if req.method() == Method::OPTIONS {
+        return (
+            StatusCode::OK,
+            [
+                (header::ACCESS_CONTROL_ALLOW_ORIGIN,  "*"),
+                (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS"),
+                (header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type, authorization"),
+            ],
+        ).into_response();
+    }
+
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        header::HeaderValue::from_static("*"));
+    res
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -506,10 +532,6 @@ async fn main() {
         metrics: Arc::new(RwLock::new(HashMap::new())),
     };
 
-    // permissive() correctly handles OPTIONS preflight (returns all required
-    // ACAO/ACAM/ACAH headers). Origin restriction is handled at the auth layer.
-    let cors = CorsLayer::permissive();
-
     let app = Router::new()
         .route("/api/auth/signup",  post(handle_signup))
         .route("/api/auth/login",   post(handle_login))
@@ -517,8 +539,10 @@ async fn main() {
         .route("/api/pair/claim",   post(handle_claim))
         .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",        get(handle_fleet))
+        // Catch-all OPTIONS so preflight never hits a 405
+        .route("/{*path}",          any(|| async { StatusCode::OK }))
         .with_state(state)
-        .layer(cors);
+        .layer(middleware::from_fn(cors));
 
     // Railway injects PORT at runtime; fall back to 8080 for local dev.
     let port: u16 = std::env::var("PORT")
