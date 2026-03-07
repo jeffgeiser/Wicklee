@@ -5,14 +5,21 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
+
+// ── DB type ───────────────────────────────────────────────────────────────────
+
+/// Shared SQLite connection.  rusqlite::Connection is Send but not Sync, so we
+/// wrap it in a Mutex to allow sharing across Axum handlers.
+type Db = Arc<Mutex<Connection>>;
 
 // ── Shared payload shape — must stay in sync with the agent ──────────────────
 
@@ -40,17 +47,7 @@ struct MetricsPayload {
     nvidia_power_draw_w:            Option<f32>,
 }
 
-// ── Auth types ────────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct UserRecord {
-    id:            String,
-    email:         String,
-    full_name:     String,
-    password_hash: String,
-    role:          String,
-    is_pro:        bool,
-}
+// ── Auth request / response types ────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct SignupRequest {
@@ -68,13 +65,13 @@ struct LoginRequest {
 /// Shape that matches the frontend User interface in types.ts.
 #[derive(Serialize, Clone)]
 struct UserResponse {
-    id:       String,
-    email:    String,
+    id:        String,
+    email:     String,
     #[serde(rename = "fullName")]
     full_name: String,
-    role:     String,
+    role:      String,
     #[serde(rename = "isPro")]
-    is_pro:   bool,
+    is_pro:    bool,
 }
 
 #[derive(Serialize)]
@@ -83,19 +80,7 @@ struct AuthResponse {
     user:  UserResponse,
 }
 
-impl From<&UserRecord> for UserResponse {
-    fn from(u: &UserRecord) -> Self {
-        UserResponse {
-            id:        u.id.clone(),
-            email:     u.email.clone(),
-            full_name: u.full_name.clone(),
-            role:      u.role.clone(),
-            is_pro:    u.is_pro,
-        }
-    }
-}
-
-// ── Fleet types ───────────────────────────────────────────────────────────────
+// ── Fleet request / response types ───────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct ClaimRequest {
@@ -113,13 +98,11 @@ struct ClaimResponse {
     node_id:       String,
 }
 
+/// In-memory telemetry snapshot (not persisted — DuckDB Phase 4).
 #[derive(Clone)]
-struct NodeEntry {
-    node_id:       String,
-    fleet_url:     String,
-    session_token: String,
-    last_seen_ms:  u64,
-    metrics:       Option<MetricsPayload>,
+struct MetricsEntry {
+    last_seen_ms: u64,
+    metrics:      Option<MetricsPayload>,
 }
 
 #[derive(Serialize)]
@@ -139,9 +122,68 @@ struct FleetResponse {
 
 #[derive(Clone)]
 struct AppState {
-    fleet:    Arc<RwLock<HashMap<String, NodeEntry>>>,   // node_id  → entry
-    users:    Arc<RwLock<HashMap<String, UserRecord>>>,  // email    → record
-    sessions: Arc<RwLock<HashMap<String, String>>>,      // token    → email
+    /// Persistent store for users, sessions, and node pairing records.
+    db:      Db,
+    /// In-memory telemetry cache keyed by node_id.
+    metrics: Arc<RwLock<HashMap<String, MetricsEntry>>>,
+}
+
+// ── DB bootstrap ──────────────────────────────────────────────────────────────
+
+fn db_path() -> std::path::PathBuf {
+    // Railway: set DB_PATH=/data/wicklee.db via the volume mount env var.
+    if let Ok(p) = std::env::var("DB_PATH") {
+        return std::path::PathBuf::from(p);
+    }
+    // Local fallback: ~/.wicklee/cloud.db
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home).join(".wicklee").join("cloud.db")
+}
+
+fn open_db() -> Connection {
+    let path = db_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("Cannot create DB directory");
+    }
+    let conn = Connection::open(&path)
+        .unwrap_or_else(|e| panic!("Cannot open SQLite at {}: {e}", path.display()));
+
+    // WAL mode — better concurrent read/write performance.
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .expect("PRAGMA failed");
+
+    run_migrations(&conn);
+    println!("  DB  → {}", path.display());
+    conn
+}
+
+fn run_migrations(conn: &Connection) {
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS users (
+            id            TEXT PRIMARY KEY,
+            email         TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            full_name     TEXT NOT NULL,
+            role          TEXT NOT NULL DEFAULT 'Owner',
+            is_pro        INTEGER NOT NULL DEFAULT 0,
+            created_at    INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token      TEXT PRIMARY KEY,
+            user_id    TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS nodes (
+            wk_id         TEXT PRIMARY KEY,
+            fleet_url     TEXT NOT NULL,
+            session_token TEXT NOT NULL,
+            paired_at     INTEGER NOT NULL,
+            last_seen     INTEGER NOT NULL
+        );
+    ").expect("Migration failed");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -175,69 +217,72 @@ async fn handle_signup(
     let email = body.email.trim().to_lowercase();
 
     if email.is_empty() || !email.contains('@') {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Valid email required" })),
-        )
-        .into_response();
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Valid email required" }))).into_response();
     }
     if body.password.len() < 8 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Password must be at least 8 characters" })),
-        )
-        .into_response();
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Password must be at least 8 characters" }))).into_response();
     }
     if body.full_name.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Full name required" })),
-        )
-        .into_response();
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Full name required" }))).into_response();
     }
 
-    {
-        let users = state.users.read().unwrap();
-        if users.contains_key(&email) {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": "An account with this email already exists" })),
-            )
-            .into_response();
-        }
-    }
-
+    // Hash password off the async executor.
     let password = body.password.clone();
-    let hash_result = tokio::task::spawn_blocking(move || bcrypt::hash(password, 12))
-        .await
-        .unwrap();
-    let password_hash = match hash_result {
+    let password_hash = match tokio::task::spawn_blocking(move || bcrypt::hash(password, 12))
+        .await.unwrap()
+    {
         Ok(h) => h,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Internal error" })),
-            )
-            .into_response();
-        }
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     };
 
-    let record = UserRecord {
-        id:            Uuid::new_v4().to_string(),
-        email:         email.clone(),
-        full_name:     body.full_name.trim().to_owned(),
-        password_hash,
-        role:          "Owner".to_owned(),
-        is_pro:        false,
-    };
+    let id         = Uuid::new_v4().to_string();
+    let token      = Uuid::new_v4().to_string();
+    let full_name  = body.full_name.trim().to_owned();
+    let ts         = now_ms() as i64;
+    let db         = state.db.clone();
+    let id2        = id.clone();
+    let email2     = email.clone();
+    let full_name2 = full_name.clone();
+    let token2     = token.clone();
 
-    let token = Uuid::new_v4().to_string();
-    let user_response = UserResponse::from(&record);
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        // Check for duplicate email.
+        let exists: bool = conn.query_row(
+            "SELECT 1 FROM users WHERE email = ?1",
+            params![email2],
+            |_| Ok(true),
+        ).unwrap_or(false);
+        if exists { return Err("exists"); }
 
-    state.users.write().unwrap().insert(email.clone(), record);
-    state.sessions.write().unwrap().insert(token.clone(), email);
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, full_name, role, is_pro, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'Owner', 0, ?5)",
+            params![id2, email2, password_hash, full_name2, ts],
+        ).map_err(|_| "insert_user")?;
 
-    (StatusCode::CREATED, Json(AuthResponse { token, user: user_response })).into_response()
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, created_at) VALUES (?1, ?2, ?3)",
+            params![token2, id2, ts],
+        ).map_err(|_| "insert_session")?;
+
+        Ok(())
+    }).await.unwrap();
+
+    match result {
+        Err("exists") => (StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "An account with this email already exists" }))).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
+        Ok(()) => (StatusCode::CREATED, Json(AuthResponse {
+            token,
+            user: UserResponse { id, email, full_name, role: "Owner".into(), is_pro: false },
+        })).into_response(),
+    }
 }
 
 /// POST /api/auth/login
@@ -246,39 +291,61 @@ async fn handle_login(
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let email = body.email.trim().to_lowercase();
+    let db    = state.db.clone();
+    let email2 = email.clone();
 
-    let record = state.users.read().unwrap().get(&email).cloned();
-    let record = match record {
+    // Fetch user record from DB.
+    let row = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        conn.query_row(
+            "SELECT id, email, password_hash, full_name, role, is_pro FROM users WHERE email = ?1",
+            params![email2],
+            |r| Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i32>(5)?,
+            )),
+        ).ok()
+    }).await.unwrap();
+
+    let (id, stored_email, hash, full_name, role, is_pro_int) = match row {
         Some(r) => r,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid email or password" })),
-            )
-            .into_response();
-        }
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid email or password" }))).into_response(),
     };
 
-    let hash = record.password_hash.clone();
+    // Verify password off-thread.
     let password = body.password.clone();
     let valid = tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash))
-        .await
-        .unwrap()
-        .unwrap_or(false);
+        .await.unwrap().unwrap_or(false);
 
     if !valid {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid email or password" })),
-        )
-        .into_response();
+        return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid email or password" }))).into_response();
     }
 
     let token = Uuid::new_v4().to_string();
-    let user_response = UserResponse::from(&record);
-    state.sessions.write().unwrap().insert(token.clone(), email);
+    let ts    = now_ms() as i64;
+    let db    = state.db.clone();
+    let token2 = token.clone();
+    let id2    = id.clone();
 
-    (StatusCode::OK, Json(AuthResponse { token, user: user_response })).into_response()
+    tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, created_at) VALUES (?1, ?2, ?3)",
+            params![token2, id2, ts],
+        ).ok();
+    }).await.unwrap();
+
+    let is_pro = is_pro_int != 0;
+    (StatusCode::OK, Json(AuthResponse {
+        token,
+        user: UserResponse { id, email: stored_email, full_name, role, is_pro },
+    })).into_response()
 }
 
 /// GET /api/auth/me — validates session token from Authorization: Bearer header
@@ -288,35 +355,36 @@ async fn handle_me(
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Missing auth token" })),
-            )
-            .into_response();
-        }
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
 
-    let email = state.sessions.read().unwrap().get(&token).cloned();
-    let email = match email {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid or expired session" })),
-            )
-            .into_response();
-        }
-    };
+    let db = state.db.clone();
+    let row = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        conn.query_row(
+            "SELECT u.id, u.email, u.full_name, u.role, u.is_pro
+             FROM sessions s
+             JOIN users u ON u.id = s.user_id
+             WHERE s.token = ?1",
+            params![token],
+            |r| Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i32>(4)?,
+            )),
+        ).ok()
+    }).await.unwrap();
 
-    let record = state.users.read().unwrap().get(&email).cloned();
-    match record {
-        Some(r) => (StatusCode::OK, Json(UserResponse::from(&r))).into_response(),
-        None => (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "User not found" })),
-        )
-        .into_response(),
+    match row {
+        None => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some((id, email, full_name, role, is_pro_int)) =>
+            (StatusCode::OK, Json(UserResponse {
+                id, email, full_name, role, is_pro: is_pro_int != 0,
+            })).into_response(),
     }
 }
 
@@ -328,37 +396,41 @@ async fn handle_claim(
     Json(body): Json<ClaimRequest>,
 ) -> impl IntoResponse {
     if body.code.len() != 6 || !body.code.chars().all(|c| c.is_ascii_digit()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" })),
-        )
-        .into_response();
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
     }
     if body.node_id.is_empty() || body.fleet_url.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "node_id and fleet_url are required" })),
-        )
-        .into_response();
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "node_id and fleet_url are required" }))).into_response();
     }
 
-    let token = mint_node_token(&body.node_id);
-    state.fleet.write().unwrap().insert(
-        body.node_id.clone(),
-        NodeEntry {
-            node_id:       body.node_id.clone(),
-            fleet_url:     body.fleet_url.clone(),
-            session_token: token.clone(),
-            last_seen_ms:  now_ms(),
-            metrics:       None,
-        },
-    );
+    let token    = mint_node_token(&body.node_id);
+    let ts       = now_ms() as i64;
+    let db       = state.db.clone();
+    let node_id  = body.node_id.clone();
+    let fleet_url = body.fleet_url.clone();
+    let token2   = token.clone();
+    let node_id2 = node_id.clone();
 
-    (
-        StatusCode::OK,
-        Json(ClaimResponse { session_token: token, node_id: body.node_id }),
-    )
-    .into_response()
+    tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO nodes (wk_id, fleet_url, session_token, paired_at, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(wk_id) DO UPDATE SET
+               fleet_url     = excluded.fleet_url,
+               session_token = excluded.session_token,
+               last_seen     = excluded.last_seen",
+            params![node_id2, fleet_url, token2, ts],
+        ).ok();
+    }).await.unwrap();
+
+    // Seed the in-memory metrics entry so telemetry can flow immediately.
+    state.metrics.write().unwrap()
+        .entry(node_id.clone())
+        .or_insert(MetricsEntry { last_seen_ms: now_ms(), metrics: None });
+
+    (StatusCode::OK, Json(ClaimResponse { session_token: token, node_id })).into_response()
 }
 
 /// POST /api/telemetry
@@ -367,26 +439,60 @@ async fn handle_telemetry(
     Json(payload): Json<MetricsPayload>,
 ) -> StatusCode {
     let node_id = payload.node_id.clone();
-    let mut map = state.fleet.write().unwrap();
-    if let Some(entry) = map.get_mut(&node_id) {
-        entry.last_seen_ms = now_ms();
-        entry.metrics = Some(payload);
+    let ts      = now_ms();
+
+    // Update in-memory snapshot.
+    {
+        let mut map = state.metrics.write().unwrap();
+        if let Some(entry) = map.get_mut(&node_id) {
+            entry.last_seen_ms = ts;
+            entry.metrics      = Some(payload);
+        } else {
+            // Accept telemetry even if the node reconnects after a restart.
+            map.insert(node_id.clone(), MetricsEntry { last_seen_ms: ts, metrics: Some(payload) });
+        }
     }
+
+    // Persist last_seen to nodes table.
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "UPDATE nodes SET last_seen = ?1 WHERE wk_id = ?2",
+            params![ts as i64, node_id],
+        ).ok();
+    }).await.ok();
+
     StatusCode::NO_CONTENT
 }
 
 /// GET /api/fleet
 async fn handle_fleet(State(state): State<AppState>) -> impl IntoResponse {
-    let map = state.fleet.read().unwrap();
-    let nodes: Vec<NodeSummary> = map
-        .values()
-        .map(|e| NodeSummary {
-            node_id:      e.node_id.clone(),
-            fleet_url:    e.fleet_url.clone(),
-            last_seen_ms: e.last_seen_ms,
-            metrics:      e.metrics.clone(),
-        })
-        .collect();
+    // Load persisted node records.
+    let db = state.db.clone();
+    let persisted: Vec<(String, String, i64)> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT wk_id, fleet_url, last_seen FROM nodes ORDER BY last_seen DESC"
+        ).unwrap();
+        stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+        )))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }).await.unwrap();
+
+    let metrics_map = state.metrics.read().unwrap();
+    let nodes: Vec<NodeSummary> = persisted.into_iter().map(|(node_id, fleet_url, last_seen_db)| {
+        let (last_seen_ms, metrics) = metrics_map.get(&node_id)
+            .map(|e| (e.last_seen_ms, e.metrics.clone()))
+            .unwrap_or((last_seen_db as u64, None));
+        NodeSummary { node_id, fleet_url, last_seen_ms, metrics }
+    }).collect();
+
     Json(FleetResponse { nodes })
 }
 
@@ -394,10 +500,10 @@ async fn handle_fleet(State(state): State<AppState>) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() {
+    let conn = open_db();
     let state = AppState {
-        fleet:    Arc::new(RwLock::new(HashMap::new())),
-        users:    Arc::new(RwLock::new(HashMap::new())),
-        sessions: Arc::new(RwLock::new(HashMap::new())),
+        db:      Arc::new(Mutex::new(conn)),
+        metrics: Arc::new(RwLock::new(HashMap::new())),
     };
 
     // Allow requests from the hosted dashboard and local dev origins.
