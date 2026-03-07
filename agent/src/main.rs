@@ -91,6 +91,9 @@ struct WickleeConfig {
     node_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     fleet_url: Option<String>,
+    /// Cloud session token — persisted so telemetry push resumes after restart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_token: Option<String>,
 }
 
 #[derive(Clone)]
@@ -396,7 +399,7 @@ fn load_or_create_config() -> WickleeConfig {
             }
         }
     }
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None };
     save_config(&cfg);
     cfg
 }
@@ -826,11 +829,19 @@ async fn handle_pair_generate(
         state.status = PairingStatus::Pending { code: code.clone(), expires_at };
         (state.node_id.clone(), pairing_response(&state))
     };
-    // Register with cloud backend and store the returned session_token.
+    // Register with cloud backend. On success: transition to Connected and persist.
     let ps = Arc::clone(&pairing_state);
     tokio::spawn(async move {
         if let Some(token) = register_pair_code(&node_id, &code).await {
-            ps.lock().unwrap().cloud_session_token = Some(token);
+            let fleet_url = "https://wicklee.dev".to_string();
+            let mut state = ps.lock().unwrap();
+            state.cloud_session_token = Some(token.clone());
+            state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
+            save_config(&WickleeConfig {
+                node_id: state.node_id.clone(),
+                fleet_url: Some(fleet_url),
+                session_token: Some(token),
+            });
         }
     });
     Json(response)
@@ -851,9 +862,12 @@ async fn handle_pair_claim(
         _ => false,
     };
     if valid {
-        let fleet_url = "https://wicklee.dev/fleet/mock-token".to_string();
-        let cfg = WickleeConfig { node_id: state.node_id.clone(), fleet_url: Some(fleet_url.clone()) };
-        save_config(&cfg);
+        let fleet_url = "https://wicklee.dev".to_string();
+        save_config(&WickleeConfig {
+            node_id: state.node_id.clone(),
+            fleet_url: Some(fleet_url.clone()),
+            session_token: state.cloud_session_token.clone(),
+        });
         state.status = PairingStatus::Connected { fleet_url };
     }
     Json(pairing_response(&state))
@@ -865,8 +879,7 @@ async fn handle_pair_disconnect(
     let mut state = pairing_state.lock().unwrap();
     state.status              = PairingStatus::Unpaired;
     state.cloud_session_token = None;
-    let cfg = WickleeConfig { node_id: state.node_id.clone(), fleet_url: None };
-    save_config(&cfg);
+    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None });
     Json(pairing_response(&state))
 }
 
@@ -990,7 +1003,8 @@ async fn main() {
     let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
     let pairing_state = Arc::new(Mutex::new(PairingState {
         node_id:             config.node_id.clone(),
-        cloud_session_token: None,
+        // Restore session_token so telemetry push resumes immediately after a restart.
+        cloud_session_token: config.session_token.clone(),
         status: match config.fleet_url.clone() {
             Some(url) => PairingStatus::Connected { fleet_url: url },
             None      => PairingStatus::Unpaired,
@@ -1003,8 +1017,18 @@ async fn main() {
         let expires_at = now_ms() + 300_000;
         pairing_state.lock().unwrap().status = PairingStatus::Pending { code: code.clone(), expires_at };
         match register_pair_code(&config.node_id, &code).await {
-            Some(token) => { pairing_state.lock().unwrap().cloud_session_token = Some(token); }
-            None        => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
+            Some(token) => {
+                let fleet_url = "https://wicklee.dev".to_string();
+                let mut state = pairing_state.lock().unwrap();
+                state.cloud_session_token = Some(token.clone());
+                state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
+                save_config(&WickleeConfig {
+                    node_id: state.node_id.clone(),
+                    fleet_url: Some(fleet_url),
+                    session_token: Some(token),
+                });
+            }
+            None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
         }
         print_pairing_box(&config.node_id, &code);
     }

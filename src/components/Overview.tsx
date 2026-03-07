@@ -513,19 +513,35 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
         {pairingInfo?.status === 'connected' && (
           <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-3">
-              <CloudLightning className="w-5 h-5 text-green-400" />
+            <div className="flex items-center gap-4">
+              <div className="relative shrink-0">
+                <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-green-400 opacity-20" />
+                <CloudLightning className="w-5 h-5 text-green-400 relative" />
+              </div>
               <div>
-                <p className="text-sm font-bold text-white">Connected to Fleet</p>
-                <p className="text-[11px] font-mono text-gray-500">{pairingInfo.fleet_url}</p>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <p className="text-sm font-bold text-white">Connected to Fleet</p>
+                  <span className="text-[10px] font-mono bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">{pairingInfo.node_id}</span>
+                </div>
+                <p className="text-[11px] font-mono text-gray-500">wicklee.dev</p>
               </div>
             </div>
-            <button
-              onClick={onOpenPairing}
-              className="px-3 py-1.5 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 text-xs font-medium rounded-xl transition-all"
-            >
-              Disconnect
-            </button>
+            <div className="flex items-center gap-2">
+              <a
+                href="https://wicklee.dev"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 text-xs font-medium rounded-xl transition-all"
+              >
+                View Fleet Dashboard →
+              </a>
+              <button
+                onClick={onOpenPairing}
+                className="px-3 py-1.5 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 text-xs font-medium rounded-xl transition-all"
+              >
+                Disconnect
+              </button>
+            </div>
           </div>
         )}
       </div>
