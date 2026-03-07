@@ -22,9 +22,9 @@ tokio-stream  = "0.1"
 reqwest       = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # ── Platform-specific dependencies ────────────────────────────────────────────
-# nvml-wrapper is only available / meaningful on Linux (NVIDIA drivers).
-# Gating it here avoids the libnvidia-ml link requirement on macOS dev builds.
-[target.'cfg(target_os = "linux")'.dependencies]
+# nvml-wrapper links against libnvidia-ml which ships with NVIDIA drivers on
+# both Linux and Windows. Gating here avoids the link requirement on macOS.
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 nvml-wrapper  = "0.10"
 
 # ── Release profile: optimise for binary size ─────────────────────────────────

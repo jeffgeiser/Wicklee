@@ -8,6 +8,7 @@
 CARGO       := $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
 BINARY      := agent/target/release/wicklee-agent
 INSTALL_BIN := /usr/local/bin/wicklee
+UNAME       := $(shell uname)
 
 .PHONY: build install clean
 
@@ -27,6 +28,11 @@ install: build
 	@echo "✓  wicklee installed."
 	@echo "   Run:        wicklee"
 	@echo "   Dashboard:  http://localhost:7700"
+ifeq ($(UNAME), Darwin)
+	@echo ""
+	@echo "💡 macOS: run 'sudo wicklee' to unlock CPU power draw metrics."
+	@echo "   All other metrics (GPU, memory, thermal) work without sudo."
+endif
 
 ## clean — remove build artefacts (frontend dist + Rust target dir)
 clean:

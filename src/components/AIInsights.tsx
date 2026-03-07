@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { BrainCircuit, Loader2, Sparkles, AlertCircle } from 'lucide-react';
+import { BrainCircuit, Loader2, Sparkles, AlertCircle, MonitorSmartphone } from 'lucide-react';
 import { NodeAgent } from '../types';
 
-const AIInsights: React.FC<{ 
+const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+const AIInsights: React.FC<{
   nodes: NodeAgent[], 
   userApiKey?: string,
   onNavigateToSecurity?: () => void 
@@ -45,6 +47,31 @@ Format the output as a Markdown report with a "Strategic Optimization" header.`;
       setLoading(false);
     }
   };
+
+  // On hosted, Ollama runs on the user's node — never reachable from wicklee.dev.
+  if (!isLocalHost) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center max-w-lg mx-auto gap-6">
+        <div className="w-16 h-16 bg-gray-800/50 border border-white/5 rounded-2xl flex items-center justify-center">
+          <MonitorSmartphone className="w-8 h-8 text-gray-500" />
+        </div>
+        <div className="space-y-2">
+          <h3 className="text-lg font-bold text-white">Local Intelligence runs on your node</h3>
+          <p className="text-sm text-gray-400 leading-relaxed">
+            Fleet analysis uses your local Ollama instance — no data leaves your machine.
+            Open the local dashboard on your node to run intelligence reports.
+          </p>
+        </div>
+        <div className="w-full bg-gray-900 border border-gray-800 rounded-xl p-4 text-left space-y-1">
+          <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Open on your node</p>
+          <code className="text-sm text-indigo-400 font-mono">http://localhost:7700</code>
+        </div>
+        <p className="text-xs text-gray-600">
+          Requires the Wicklee agent and Ollama to be running on the same machine.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -1,13 +1,39 @@
 
 import React, { useState, useEffect } from 'react';
-import { Database, Clock, Zap, Search, AlertCircle, RefreshCw, Filter, Activity } from 'lucide-react';
+import { Database, Clock, Zap, Search, AlertCircle, RefreshCw, Filter, Activity, MonitorSmartphone } from 'lucide-react';
 import { NodeAgent, TraceRecord } from '../types';
+
+const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 interface TracesViewProps {
   nodes: NodeAgent[];
   tenantId: string;
 }
 
+// ── Hosted placeholder ────────────────────────────────────────────────────────
+const HostedPlaceholder: React.FC = () => (
+  <div className="flex flex-col items-center justify-center py-24 text-center max-w-lg mx-auto gap-6">
+    <div className="w-16 h-16 bg-gray-800/50 border border-white/5 rounded-2xl flex items-center justify-center">
+      <MonitorSmartphone className="w-8 h-8 text-gray-500" />
+    </div>
+    <div className="space-y-2">
+      <h3 className="text-lg font-bold text-white">Observability runs locally</h3>
+      <p className="text-sm text-gray-400 leading-relaxed">
+        Request traces, latency histograms, and DuckDB analytics are available in
+        the local dashboard on each node — your inference data never leaves your machine.
+      </p>
+    </div>
+    <div className="w-full bg-gray-900 border border-gray-800 rounded-xl p-4 text-left space-y-1">
+      <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Open on your node</p>
+      <code className="text-sm text-indigo-400 font-mono">http://localhost:7700</code>
+    </div>
+    <p className="text-xs text-gray-600">
+      The Wicklee agent must be running on the node you want to inspect.
+    </p>
+  </div>
+);
+
+// ── Local trace table (localhost only) ───────────────────────────────────────
 const TracesView: React.FC<TracesViewProps> = ({ nodes, tenantId }) => {
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -16,8 +42,10 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes, tenantId }) => {
   const fetchTraces = async () => {
     setLoading(true);
     try {
-      // Adding X-Tenant-ID header for multi-tenant backend resolver
-      const response = await fetch('http://localhost:3000/api/traces');
+      // Relative URL — resolves against the local agent's origin (port 7700).
+      const response = await fetch('/api/traces', {
+        headers: { 'X-Tenant-ID': tenantId },
+      });
       if (!response.ok) throw new Error('Failed to reach local Wicklee agent');
       const data = await response.json();
       setTraces(data);
@@ -31,16 +59,19 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes, tenantId }) => {
   };
 
   useEffect(() => {
+    if (!isLocalHost) return;
     fetchTraces();
     const interval = setInterval(fetchTraces, 5000);
     return () => clearInterval(interval);
-  }, [tenantId]); // Re-fetch when tenant changes
+  }, [tenantId]);
+
+  if (!isLocalHost) return <HostedPlaceholder />;
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center mb-2">
         <div className="flex gap-2">
-          <button 
+          <button
             onClick={fetchTraces}
             className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
           >
@@ -60,8 +91,6 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes, tenantId }) => {
           <div className={`w-2 h-2 rounded-full ${error ? 'bg-red-500' : 'bg-blue-600'} animate-pulse`}></div>
         </div>
       </div>
-
-      {/* Removed error banner */}
 
       <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
         <table className="w-full text-left">
