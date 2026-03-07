@@ -22,9 +22,11 @@ const AuthModal: React.FC<AuthModalProps> = ({ mode: initialMode, onSuccess, onC
     setError('');
     setLoading(true);
 
-    // VITE_CLOUD_URL is set to the Railway cloud service URL in production.
-    // Empty string falls back to same-origin (handled by Vite proxy in dev).
-    const cloudBase = import.meta.env.VITE_CLOUD_URL ?? '';
+    const cloudBase = (() => {
+      const v = import.meta.env.VITE_CLOUD_URL ?? '';
+      if (!v) return 'https://wicklee-production.up.railway.app';
+      return v.startsWith('http') ? v : `https://${v}`;
+    })();
 
     try {
       const endpoint = `${cloudBase}${activeMode === 'signup' ? '/api/auth/signup' : '/api/auth/login'}`;
