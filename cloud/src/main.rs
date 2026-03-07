@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -506,17 +506,9 @@ async fn main() {
         metrics: Arc::new(RwLock::new(HashMap::new())),
     };
 
-    // Allow requests from the hosted dashboard and local dev origins.
-    let origins: [HeaderValue; 4] = [
-        "https://wicklee.com".parse().unwrap(),
-        "https://wicklee.dev".parse().unwrap(),
-        "http://localhost:7700".parse().unwrap(),
-        "http://localhost:5173".parse().unwrap(),
-    ];
-    let cors = CorsLayer::new()
-        .allow_origin(origins)
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any);
+    // permissive() correctly handles OPTIONS preflight (returns all required
+    // ACAO/ACAM/ACAH headers). Origin restriction is handled at the auth layer.
+    let cors = CorsLayer::permissive();
 
     let app = Router::new()
         .route("/api/auth/signup",  post(handle_signup))
