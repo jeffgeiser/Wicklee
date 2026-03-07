@@ -171,6 +171,7 @@ const App: React.FC = () => {
       .catch(() => localStorage.removeItem('wk_auth_token'));
   }, []);
 
+
   const handleAuthSuccess = (user: UserType, token: string) => {
     localStorage.setItem('wk_auth_token', token);
     setCurrentUser(user);
@@ -211,6 +212,13 @@ const App: React.FC = () => {
       }
     } catch {}
   }, []);
+
+  // Fetch paired nodes from cloud on login (hosted only). Runs after session restore
+  // and after a fresh sign-in so the node list survives page refresh.
+  useEffect(() => {
+    if (isLocalHost || !isLoggedIn) return;
+    handleNodeAdded();
+  }, [isLoggedIn, handleNodeAdded]);
 
   const permissions = usePermissions(currentUser);
   const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
