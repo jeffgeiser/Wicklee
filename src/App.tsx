@@ -138,6 +138,9 @@ const CLOUD_URL = (() => {
 
 const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(isLocalHost);
+  // True while we're checking localStorage for a saved session — prevents the
+  // landing page from flashing before the /api/auth/me response arrives.
+  const [sessionChecked, setSessionChecked] = useState(isLocalHost);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
@@ -159,7 +162,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (isLocalHost) return;
     const token = localStorage.getItem('wk_auth_token');
-    if (!token) return;
+    if (!token) { setSessionChecked(true); return; }
 
     fetch(`${CLOUD_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (r) => {
@@ -168,7 +171,8 @@ const App: React.FC = () => {
         setCurrentUser({ id: data.id, email: data.email, fullName: data.fullName, role: data.role, isPro: data.isPro ?? false });
         setIsLoggedIn(true);
       })
-      .catch(() => localStorage.removeItem('wk_auth_token'));
+      .catch(() => localStorage.removeItem('wk_auth_token'))
+      .finally(() => setSessionChecked(true));
   }, []);
 
 
@@ -337,6 +341,8 @@ const App: React.FC = () => {
   const toggleTheme = () => {
     setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   };
+
+  if (!sessionChecked) return null;
 
   if (!isLoggedIn) {
     return (
