@@ -125,8 +125,10 @@ const MOCK_CURRENT_USER: UserType = {
   isPro: false
 };
 
+const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
 const App: React.FC = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(isLocalHost);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(MOCK_NODES_INITIAL);
@@ -143,8 +145,9 @@ const App: React.FC = () => {
   });
   const socketRef = useRef<WebSocket | null>(null);
 
-  // Restore session from localStorage on mount
+  // Restore session from localStorage on mount (hosted only — localhost skips auth entirely)
   useEffect(() => {
+    if (isLocalHost) return;
     const token = localStorage.getItem('wk_auth_token');
     if (!token) return;
 
