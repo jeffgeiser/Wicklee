@@ -11,6 +11,9 @@ export default defineConfig(() => {
         // Dev-mode proxy: forwards /api and /ws to the local Sentinel on 7700
         // so `npm run dev` works alongside `cargo run` without CORS issues.
         proxy: {
+          // Auth routes go to the cloud backend (port 8080 locally).
+          // Must be listed before the generic /api rule so Vite matches it first.
+          '/api/auth': { target: 'http://localhost:8080', changeOrigin: true },
           '/api': 'http://localhost:7700',
           '/ws':  { target: 'ws://localhost:7700', ws: true },
         },
