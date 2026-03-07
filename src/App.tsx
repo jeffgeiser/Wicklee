@@ -148,7 +148,8 @@ const App: React.FC = () => {
     const token = localStorage.getItem('wk_auth_token');
     if (!token) return;
 
-    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+    const cloudBase = import.meta.env.VITE_CLOUD_URL ?? '';
+    fetch(`${cloudBase}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (r) => {
         if (!r.ok) { localStorage.removeItem('wk_auth_token'); return; }
         const data = await r.json();

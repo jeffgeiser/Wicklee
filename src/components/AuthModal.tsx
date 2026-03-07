@@ -22,8 +22,12 @@ const AuthModal: React.FC<AuthModalProps> = ({ mode: initialMode, onSuccess, onC
     setError('');
     setLoading(true);
 
+    // VITE_CLOUD_URL is set to the Railway cloud service URL in production.
+    // Empty string falls back to same-origin (handled by Vite proxy in dev).
+    const cloudBase = import.meta.env.VITE_CLOUD_URL ?? '';
+
     try {
-      const endpoint = activeMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+      const endpoint = `${cloudBase}${activeMode === 'signup' ? '/api/auth/signup' : '/api/auth/login'}`;
       const body = activeMode === 'signup'
         ? { email, password, full_name: fullName }
         : { email, password };
