@@ -181,10 +181,14 @@ fn run_migrations(conn: &Connection) {
             wk_id         TEXT PRIMARY KEY,
             fleet_url     TEXT NOT NULL,
             session_token TEXT NOT NULL,
+            code          TEXT,
             paired_at     INTEGER NOT NULL,
             last_seen     INTEGER NOT NULL
         );
+
     ").expect("Migration failed");
+    // Add code column if upgrading from an older schema — ignored on fresh DBs.
+    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN code TEXT;");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -410,19 +414,21 @@ async fn handle_claim(
     let db       = state.db.clone();
     let node_id  = body.node_id.clone();
     let fleet_url = body.fleet_url.clone();
+    let code     = body.code.clone();
     let token2   = token.clone();
     let node_id2 = node_id.clone();
 
     tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
         conn.execute(
-            "INSERT INTO nodes (wk_id, fleet_url, session_token, paired_at, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?4)
+            "INSERT INTO nodes (wk_id, fleet_url, session_token, code, paired_at, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
              ON CONFLICT(wk_id) DO UPDATE SET
                fleet_url     = excluded.fleet_url,
                session_token = excluded.session_token,
+               code          = excluded.code,
                last_seen     = excluded.last_seen",
-            params![node_id2, fleet_url, token2, ts],
+            params![node_id2, fleet_url, token2, code, ts],
         ).ok();
     }).await.unwrap();
 
@@ -497,6 +503,41 @@ async fn handle_fleet(State(state): State<AppState>) -> impl IntoResponse {
     Json(FleetResponse { nodes })
 }
 
+/// POST /api/pair/activate — user enters 6-digit code from their terminal to link the node.
+#[derive(Deserialize)]
+struct ActivateRequest {
+    code: String,
+}
+
+async fn handle_activate(
+    State(state): State<AppState>,
+    Json(body): Json<ActivateRequest>,
+) -> impl IntoResponse {
+    if body.code.len() != 6 || !body.code.chars().all(|c| c.is_ascii_digit()) {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
+    }
+
+    let db   = state.db.clone();
+    let code = body.code.clone();
+
+    let row: Option<(String, String)> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        conn.query_row(
+            "SELECT wk_id, fleet_url FROM nodes WHERE code = ?1",
+            params![code],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        ).ok()
+    }).await.unwrap();
+
+    match row {
+        None => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Code not found or already used. Make sure the agent is running and try again." }))).into_response(),
+        Some((node_id, fleet_url)) =>
+            (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response(),
+    }
+}
+
 /// GET /health — trivial liveness probe, no DB dependency.
 async fn handle_health() -> StatusCode {
     StatusCode::OK
@@ -542,7 +583,8 @@ async fn main() {
         .route("/api/auth/signup",  post(handle_signup))
         .route("/api/auth/login",   post(handle_login))
         .route("/api/auth/me",      get(handle_me))
-        .route("/api/pair/claim",   post(handle_claim))
+        .route("/api/pair/claim",    post(handle_claim))
+        .route("/api/pair/activate", post(handle_activate))
         .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",        get(handle_fleet))
         .with_state(state)
