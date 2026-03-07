@@ -127,6 +127,14 @@ const MOCK_CURRENT_USER: UserType = {
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
+// Cloud backend URL — env var takes precedence; falls back to the known Railway service.
+// Always absolute so fetch() doesn't resolve against the static host origin.
+const CLOUD_URL = (() => {
+  const v = import.meta.env.VITE_CLOUD_URL ?? '';
+  if (!v) return 'https://wicklee-production.up.railway.app';
+  return v.startsWith('http') ? v : `https://${v}`;
+})();
+
 const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(isLocalHost);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | null>(null);
@@ -151,8 +159,7 @@ const App: React.FC = () => {
     const token = localStorage.getItem('wk_auth_token');
     if (!token) return;
 
-    const cloudBase = import.meta.env.VITE_CLOUD_URL ?? '';
-    fetch(`${cloudBase}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${CLOUD_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (r) => {
         if (!r.ok) { localStorage.removeItem('wk_auth_token'); return; }
         const data = await r.json();
