@@ -241,7 +241,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       const connectCloudSSE = () => {
         const es = new EventSource(CLOUD_SSE_URL);
         esRef.current = es;
-        es.onopen = () => setTransport('sse');
+        es.onopen = () => { setTransport('sse'); setConnected(true); };
         es.onmessage = (ev) => {
           try {
             const fleet = JSON.parse(ev.data) as { nodes: Array<{ metrics: SentinelMetrics | null }> };
