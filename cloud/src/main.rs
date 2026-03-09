@@ -64,6 +64,8 @@ struct MetricsPayload {
     ollama_model_size_gb: Option<f32>,
     #[serde(default)]
     ollama_quantization:  Option<String>,
+    #[serde(default)]
+    ollama_tokens_per_second: Option<f32>,
 }
 
 // ── Auth request / response types ────────────────────────────────────────────

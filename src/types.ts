@@ -43,11 +43,12 @@ export interface SentinelMetrics {
   nvidia_gpu_temp_c:              number | null;
   nvidia_power_draw_w:            number | null;
   // Ollama runtime (absent/false when not running)
-  ollama_running?:       boolean;
-  ollama_active_model?:  string | null;
-  ollama_model_size_gb?: number | null;
-  ollama_quantization?:  string | null;
-  // tok/s not available — Ollama /metrics endpoint not in current releases (≤ v0.17.7)
+  ollama_running?:           boolean;
+  ollama_active_model?:      string | null;
+  ollama_model_size_gb?:     number | null;
+  ollama_quantization?:      string | null;
+  /** Sampled tok/s from 1-token /api/generate probe every 30s. Null until first probe completes. */
+  ollama_tokens_per_second?: number | null;
 }
 
 export interface FleetEvent {
