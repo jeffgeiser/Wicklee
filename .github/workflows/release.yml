@@ -1,10 +1,11 @@
 name: Release
 
-# Runs on every push to main, producing a rolling "nightly" release.
+# Runs on version tag pushes (v*) to produce a tagged release.
 # Also available via manual dispatch for ad-hoc builds.
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
