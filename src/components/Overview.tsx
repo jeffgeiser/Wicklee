@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, MemoryStick, Wind, Cloud, CloudLightning, Download, Terminal, Plus } from 'lucide-react';
-import { NodeAgent, PairingInfo } from '../types';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown } from 'lucide-react';
+import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
+import { SentinelCard, HardwareDetailPanel, thermalColour } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -13,30 +14,6 @@ interface OverviewProps {
   onOpenPairing?: () => void;
   onAddNode?: () => void;
   onTelemetryUpdate?: () => void;
-}
-
-// ── SSE payload shape (mirrors MetricsPayload in agent/src/main.rs) ──────────
-interface SentinelMetrics {
-  node_id: string;
-  cpu_usage_percent: number;
-  total_memory_mb: number;
-  used_memory_mb: number;
-  available_memory_mb: number;
-  cpu_core_count: number;
-  timestamp_ms: number;
-  // Apple Silicon deep-metal (null on non-Apple / no-sudo)
-  cpu_power_w:             number | null;
-  ecpu_power_w:            number | null;
-  pcpu_power_w:            number | null;
-  gpu_utilization_percent: number | null;
-  memory_pressure_percent: number | null;
-  thermal_state:           string | null;
-  // NVIDIA GPU fields (null on non-NVIDIA platforms)
-  nvidia_gpu_utilization_percent: number | null;
-  nvidia_vram_used_mb:            number | null;
-  nvidia_vram_total_mb:           number | null;
-  nvidia_gpu_temp_c:              number | null;
-  nvidia_power_draw_w:            number | null;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -65,54 +42,87 @@ const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon:
   </div>
 );
 
-// Compact card used in the Sentinel hardware row
-const SentinelCard: React.FC<{
-  label: string;
-  value: string;
-  sub?: string;
-  icon: React.ElementType;
-  accent: string;
-}> = ({ label, value, sub, icon: Icon, accent }) => (
-  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-    <div className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-lg ${accent}/10`}>
-      <Icon size={16} className={accent.replace('bg-', 'text-')} />
-    </div>
-    <div className="min-w-0">
-      <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium truncate">{label}</p>
-      <p className="text-base font-bold text-gray-900 dark:text-white leading-tight truncate">{value}</p>
-      {sub && <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{sub}</p>}
-    </div>
-  </div>
-);
+// ── Collapsible node row used in the All Nodes accordion ─────────────────────
+interface NodeRowProps {
+  nodeId: string;
+  hostname: string;
+  metrics: SentinelMetrics | null;
+  defaultOpen?: boolean;
+}
 
-// Thermal state → badge colours
-const thermalColour = (state: string | null) => {
-  switch (state?.toLowerCase()) {
-    case 'normal':   return 'text-green-400';
-    case 'elevated': return 'text-yellow-400';
-    case 'high':     return 'text-orange-400';
-    case 'critical': return 'text-red-400';
-    default:         return 'text-gray-400';
-  }
+const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
+
+  const isOnline = m !== null;
+  const cpuStr = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
+  const gpuStr = m?.nvidia_gpu_utilization_percent != null
+    ? `${m.nvidia_gpu_utilization_percent.toFixed(0)}%`
+    : m?.gpu_utilization_percent != null
+    ? `${m.gpu_utilization_percent.toFixed(0)}%`
+    : '—';
+  const memPressStr = m?.memory_pressure_percent != null
+    ? `${m.memory_pressure_percent.toFixed(0)}%`
+    : '—';
+  const thermalStr = m?.thermal_state ?? '—';
+
+  return (
+    <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+      >
+        {/* Status dot */}
+        <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
+
+        {/* Node identity */}
+        <span className="font-mono text-xs font-bold text-gray-900 dark:text-white shrink-0">{nodeId}</span>
+        {hostname !== nodeId && (
+          <span className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[140px]">{hostname}</span>
+        )}
+        <span className={`text-[10px] font-semibold ${isOnline ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
+          {isOnline ? 'online' : 'offline'}
+        </span>
+
+        {/* Quick stats */}
+        <div className="flex-1 flex items-center gap-4 justify-end text-[11px] text-gray-500 dark:text-gray-400 font-mono">
+          <span>CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
+          <span className="hidden sm:inline">GPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{gpuStr}</span></span>
+          <span className="hidden sm:inline">Mem: <span className="text-gray-700 dark:text-gray-300 font-semibold">{memPressStr}</span></span>
+          <span className="hidden md:inline">
+            Thermal: <span className={`font-semibold ${thermalColour(m?.thermal_state ?? null)}`}>{thermalStr}</span>
+          </span>
+        </div>
+
+        <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 pt-3 border-t border-gray-200 dark:border-gray-800">
+          {m ? (
+            <HardwareDetailPanel metrics={m} />
+          ) : (
+            <p className="text-sm text-gray-500 text-center py-6">No telemetry received yet — make sure the agent is running.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 };
 
+// ── Empty state for hosted with no paired nodes ───────────────────────────────
 const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) => (
   <div className="flex flex-col items-center justify-center py-24 text-center space-y-10 animate-in fade-in duration-500">
     <div className="p-5 bg-indigo-600/10 border border-indigo-500/20 rounded-3xl">
       <CloudLightning className="w-12 h-12 text-indigo-400" />
     </div>
-
     <div className="space-y-3 max-w-sm">
       <h2 className="text-2xl font-bold text-white">Add your first node</h2>
       <p className="text-sm text-gray-500">Install the Wicklee agent on any machine, generate a pairing code, then enter it below.</p>
     </div>
-
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl text-left">
       {[
         {
-          step: '1',
-          icon: Download,
-          title: 'Install the agent',
+          step: '1', icon: Download, title: 'Install the agent',
           body: (
             <code className="block mt-2 text-[11px] font-mono bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-indigo-300 whitespace-pre-wrap break-all">
               curl -fsSL https://wicklee.dev/install.sh | bash
@@ -120,15 +130,11 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
           ),
         },
         {
-          step: '2',
-          icon: Terminal,
-          title: 'Open the dashboard',
+          step: '2', icon: Terminal, title: 'Open the dashboard',
           body: <p className="mt-2 text-xs text-gray-500">Click "Connect to Fleet" in the header to get your 6-digit pairing code.</p>,
         },
         {
-          step: '3',
-          icon: Plus,
-          title: 'Enter the code here',
+          step: '3', icon: Plus, title: 'Enter the code here',
           body: <p className="mt-2 text-xs text-gray-500">Click "Add Node" below and enter the 6-digit code from your local dashboard.</p>,
         },
       ].map(({ step, icon: Icon, title, body }) => (
@@ -142,7 +148,6 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
         </div>
       ))}
     </div>
-
     <button
       onClick={onAddNode}
       className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
@@ -153,23 +158,26 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
   </div>
 );
 
+// ── Main component ─────────────────────────────────────────────────────────────
 const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate }) => {
-  // ── Live telemetry — WS primary (10 Hz), SSE fallback (1 Hz) ──────────────
-  // All hooks must be declared before any early returns (Rules of Hooks).
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
-  // Multi-node selector — only used on hosted where multiple nodes may be paired.
   const [allNodeMetrics, setAllNodeMetrics] = useState<Record<string, SentinelMetrics>>({});
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  // Ring-buffer for the live performance chart (max 60 points = 6 s at 10 Hz)
   interface CpuPoint { time: string; cpu: number; mem: number; }
   const [cpuHistory, setCpuHistory] = useState<CpuPoint[]>([]);
   const MAX_HISTORY = 60;
 
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  const CLOUD_SSE_URL = (() => {
+    const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
+    const base = !v ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
+      : v.startsWith('http') ? v : `https://${v}`;
+    return `${base}/api/fleet/stream`;
+  })();
 
   const handleMetrics = useCallback((data: SentinelMetrics) => {
     setSentinel(data);
@@ -183,21 +191,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     });
   }, []);
 
-  // Cloud SSE URL — used on hosted (wicklee.dev) so the browser never touches localhost.
-  const CLOUD_SSE_URL = (() => {
-    const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-    const base = !v ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
-      : v.startsWith('http') ? v : `https://${v}`;
-    return `${base}/api/fleet/stream`;
-  })();
-
   useEffect(() => {
     let retryWs:  ReturnType<typeof setTimeout>;
     let retrySse: ReturnType<typeof setTimeout>;
-    let wsFailed  = false;
+    let wsFailed = false;
 
     if (isLocalHost) {
-      // ── Localhost: WS primary → SSE fallback, both pointing to the local agent ──
       const connectSSE = () => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
         const es = new EventSource('/api/metrics');
@@ -240,7 +239,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
       connectWS();
     } else {
-      // ── Hosted: SSE from Railway cloud backend. Agent pushes telemetry there. ──
       const connectCloudSSE = () => {
         const es = new EventSource(CLOUD_SSE_URL);
         esRef.current = es;
@@ -248,20 +246,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         es.onmessage = (ev) => {
           try {
             const fleet = JSON.parse(ev.data) as { nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }> };
-            // Update the per-node metrics map.
             const updated: Record<string, SentinelMetrics> = {};
-            let latestNodeId = '';
-            let latestTs = 0;
             for (const n of fleet.nodes) {
-              if (n.metrics) {
-                updated[n.node_id] = n.metrics;
-                if (n.last_seen_ms > latestTs) { latestTs = n.last_seen_ms; latestNodeId = n.node_id; }
-              }
+              if (n.metrics) updated[n.node_id] = n.metrics;
             }
             if (Object.keys(updated).length > 0) {
               setAllNodeMetrics(prev => ({ ...prev, ...updated }));
-              // Default selection to most-recently-active node (only set once).
-              setSelectedNodeId(prev => prev ?? latestNodeId);
               onTelemetryUpdate?.();
               setTransport('sse');
             }
@@ -274,7 +264,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           retrySse = setTimeout(connectCloudSSE, 3000);
         };
       };
-
       connectCloudSSE();
     }
 
@@ -286,53 +275,29 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     };
   }, [handleMetrics, CLOUD_SSE_URL]);
 
-  // On hosted: override sentinel with the selected node's metrics from allNodeMetrics.
-  const displaySentinel = isLocalHost
-    ? sentinel
-    : (selectedNodeId ? allNodeMetrics[selectedNodeId] ?? null : null);
-
-  // ── Empty state for hosted with no paired nodes (after hooks) ──────────────
   if (!isLocalHost && nodes.length === 0) {
     return <EmptyFleetState onAddNode={onAddNode} />;
   }
 
   const activeNodes = isPro ? nodes : nodes.slice(0, 1);
-  const totalRPS = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
-  const avgTemp = activeNodes.length > 0
+  const totalRPS   = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
+  const avgTemp    = activeNodes.length > 0
     ? (activeNodes.reduce((acc, n) => acc + (n.gpuTemp ?? 0), 0) / activeNodes.length).toFixed(1)
     : '—';
-  const totalVRAM = activeNodes.reduce((acc, n) => acc + (n.vramUsed ?? 0), 0).toFixed(1);
-  const totalWattage = activeNodes.reduce((acc, n) => acc + (n.powerUsage ?? 0), 0);
-  const hasTDP = activeNodes.every(n => n.tdp !== undefined);
+  const totalVRAM      = activeNodes.reduce((acc, n) => acc + (n.vramUsed ?? 0), 0).toFixed(1);
+  const totalWattage   = activeNodes.reduce((acc, n) => acc + (n.powerUsage ?? 0), 0);
+  const hasTDP         = activeNodes.every(n => n.tdp !== undefined);
   const wattagePer1kTokens = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 1000).toFixed(1) : '0.0';
-  const costPer1kTokens = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6) : '0.000000';
+  const costPer1kTokens    = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6) : '0.000000';
 
-  // Derived display values — use displaySentinel (hosted: selected node; localhost: live WS/SSE)
-  const s = displaySentinel;
-  const cpuPct      = s ? `${s.cpu_usage_percent.toFixed(1)}%`         : '—';
-  const memUsed     = s ? `${(s.used_memory_mb / 1024).toFixed(1)} GB`  : '—';
-  const memTotal    = s ? `${(s.total_memory_mb / 1024).toFixed(0)} GB` : '';
-  const memAvail    = s ? `${(s.available_memory_mb / 1024).toFixed(1)} GB` : '—';
-  const coreCount   = s ? `${s.cpu_core_count} cores`                   : '—';
-  const cpuPowerStr = s?.cpu_power_w    != null ? `${s.cpu_power_w.toFixed(1)} W`    : null;
-  const gpuUtilStr  = s?.gpu_utilization_percent != null ? `${s.gpu_utilization_percent.toFixed(0)}%` : null;
-  const memPressStr = s?.memory_pressure_percent != null ? `${s.memory_pressure_percent.toFixed(0)}%` : null;
-  const nvidiaGpuUtilStr = s?.nvidia_gpu_utilization_percent != null
-    ? `${s.nvidia_gpu_utilization_percent.toFixed(0)}%` : null;
-  const nvidiaVramStr = s?.nvidia_vram_used_mb != null && s?.nvidia_vram_total_mb != null
-    ? `${(s.nvidia_vram_used_mb / 1024).toFixed(1)} GB` : null;
-  const nvidiaVramTotalStr = s?.nvidia_vram_total_mb != null
-    ? `${(s.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
-  const nvidiaTempStr  = s?.nvidia_gpu_temp_c   != null ? `${s.nvidia_gpu_temp_c}°C`            : null;
-  const nvidiaPowerStr = s?.nvidia_power_draw_w != null ? `${s.nvidia_power_draw_w.toFixed(1)} W` : null;
-  const hasHardwareRow = gpuUtilStr !== null || memPressStr !== null
-    || nvidiaGpuUtilStr !== null || nvidiaVramStr !== null;
-  // Node list for the selector (hosted only, >1 node with metrics).
-  const selectableNodes = Object.keys(allNodeMetrics);
+  // Build the accordion row data
+  const nodeRows: NodeRowProps[] = isLocalHost
+    ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel, defaultOpen: true }] : [])
+    : nodes.map((n, idx) => ({ nodeId: n.id, hostname: n.hostname, metrics: allNodeMetrics[n.id] ?? null, defaultOpen: idx === 0 }));
 
   return (
     <div className="space-y-6">
-      {/* ── Fleet stat cards ────────────────────────────────────────────────── */}
+      {/* ── Fleet stat cards ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 [&>*]:min-w-0">
         <StatCard title="Throughput" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalRPS.toFixed(1)} req/s</p>} icon={Zap} trend="+12.4%" color="bg-amber-500" />
         <StatCard title="Avg Temperature" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTemp}°C</p>} icon={Thermometer} trend="-2.1%" color="bg-red-500" />
@@ -344,7 +309,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               <div className="group relative">
                 <Info className="w-3 h-3 text-gray-400 cursor-help" />
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-gray-900 text-[10px] text-gray-300 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 shadow-xl border border-white/10">
-                  Calculated from GPU TDP × utilization ÷ tokens generated. Set your GPU TDP in Settings to calibrate this number.
+                  Calculated from GPU TDP × utilization ÷ tokens generated.
                 </div>
               </div>
             </div>
@@ -363,9 +328,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               </button>
             )
           }
-          icon={Zap}
-          trend="-3.2%"
-          color="bg-emerald-500"
+          icon={Zap} trend="-3.2%" color="bg-emerald-500"
         />
         <StatCard
           title="Cost per 1k Tokens"
@@ -375,52 +338,24 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               <p className="text-[10px] text-gray-500 font-medium">per 1k tokens</p>
             </div>
           }
-          icon={Zap}
-          trend="-8.2%"
-          color="bg-cyan-400"
+          icon={Zap} trend="-8.2%" color="bg-cyan-400"
         />
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Cpu} color="bg-green-500" />
       </div>
 
-      {/* ── Sentinel live hardware telemetry ────────────────────────────────── */}
+      {/* ── All Nodes accordion ──────────────────────────────────────────────── */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm dark:shadow-none">
-        {/* Node selector — shown on hosted when >1 node has live metrics */}
-        {!isLocalHost && selectableNodes.length > 1 && (
-          <div className="flex items-center gap-2 mb-4 flex-wrap">
-            {selectableNodes.map(nodeId => (
-              <button
-                key={nodeId}
-                onClick={() => setSelectedNodeId(nodeId)}
-                className={`px-3 py-1 rounded-full text-xs font-mono font-semibold transition-all border ${
-                  selectedNodeId === nodeId
-                    ? 'bg-indigo-600 border-indigo-500 text-white'
-                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-indigo-500/50 hover:text-gray-200'
-                }`}
-              >
-                {nodeId}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Header with SSE connection dot */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-gray-400" />
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-              Sentinel Node — Live Hardware
-            </h3>
-            {s?.node_id && (
-              <span className="text-[10px] font-mono text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded">
-                {s.node_id}
-              </span>
-            )}
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">All Nodes</h3>
+            <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
+              {isLocalHost ? (sentinel ? '1' : '0') : nodes.length} node{(isLocalHost ? (sentinel ? 1 : 0) : nodes.length) !== 1 ? 's' : ''}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
-              {connected && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-              )}
+              {connected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />}
               <span className={`relative inline-flex rounded-full h-2 w-2 ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
             </span>
             <span className={`text-[10px] font-medium ${connected ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
@@ -429,167 +364,112 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           </div>
         </div>
 
-        {/* Core metrics row */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <SentinelCard label="CPU Usage"      value={cpuPct}   icon={Cpu}         accent="bg-indigo-500" />
-          <SentinelCard label="Memory Used"    value={memUsed}  sub={memTotal ? `of ${memTotal}` : undefined} icon={MemoryStick} accent="bg-blue-500" />
-          <SentinelCard label="Mem Available"  value={memAvail} icon={Database}    accent="bg-sky-500" />
-          <SentinelCard label="CPU Cores"      value={coreCount} icon={Cpu}        accent="bg-violet-500" />
-
-          {/* Thermal state — shown with dynamic colour when data is available */}
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-            <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-orange-500/10">
-              <Thermometer size={16} className="text-orange-400" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">Thermal State</p>
-              <p className={`text-base font-bold leading-tight ${thermalColour(s?.thermal_state ?? null)}`}>
-                {s?.thermal_state ?? '—'}
-              </p>
-            </div>
+        {nodeRows.length > 0 ? (
+          <div className="space-y-2">
+            {nodeRows.map((row) => (
+              <NodeRow key={row.nodeId} {...row} />
+            ))}
           </div>
-        </div>
-
-        {/* Hardware deep-metal row — rendered when any platform-specific metrics are live */}
-        {hasHardwareRow && (
-          <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {/* ── Apple Silicon ── */}
-            {(gpuUtilStr !== null || memPressStr !== null) && (
-              cpuPowerStr ? (
-                <SentinelCard label="CPU Power" value={cpuPowerStr}
-                  sub={s!.ecpu_power_w != null && s!.pcpu_power_w != null
-                    ? `E ${s!.ecpu_power_w!.toFixed(1)}W  P ${s!.pcpu_power_w!.toFixed(1)}W`
-                    : undefined}
-                  icon={Zap} accent="bg-amber-500" />
-              ) : (
-                <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-                  <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/10">
-                    <Zap size={16} className="text-amber-500 opacity-40" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
-                    <p className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 leading-tight">—</p>
-                    <p className="text-[9px] text-gray-500 dark:text-gray-600 font-mono leading-tight mt-0.5">requires elevated permissions</p>
-                  </div>
-                </div>
-              )
-            )}
-            {gpuUtilStr && (
-              <SentinelCard label="GPU Utilization" value={gpuUtilStr} icon={Activity} accent="bg-purple-500" />
-            )}
-            {memPressStr && (
-              <SentinelCard label="Mem Pressure" value={memPressStr} icon={Wind} accent="bg-rose-500" />
-            )}
-            {/* ── NVIDIA ── */}
-            {nvidiaGpuUtilStr && (
-              <SentinelCard label="NVIDIA GPU" value={nvidiaGpuUtilStr} icon={Activity} accent="bg-green-500" />
-            )}
-            {nvidiaVramStr && (
-              <SentinelCard label="VRAM Used" value={nvidiaVramStr}
-                sub={nvidiaVramTotalStr ? `of ${nvidiaVramTotalStr}` : undefined}
-                icon={Database} accent="bg-emerald-500" />
-            )}
-            {nvidiaTempStr && (
-              <SentinelCard label="GPU Temp" value={nvidiaTempStr} icon={Thermometer} accent="bg-orange-500" />
-            )}
-            {nvidiaPowerStr && (
-              <SentinelCard label="Board Power" value={nvidiaPowerStr} icon={Zap} accent="bg-yellow-500" />
-            )}
+        ) : (
+          <div className="py-10 text-center text-sm text-gray-500">
+            {isLocalHost ? 'Connecting to local agent…' : 'No nodes paired yet.'}
           </div>
         )}
       </div>
 
-      {/* ── Fleet Connect card — localhost only ─────────────────────────────── */}
-      {isLocalHost && <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-        {(!pairingInfo || pairingInfo.status === 'unpaired') && (
-          <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
-            <div className="flex flex-col justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Cloud className="w-5 h-5 text-gray-400" />
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Sentinel Identity</p>
-                  <p className="text-sm font-mono font-bold text-white">{pairingInfo?.node_id ?? '—'}</p>
+      {/* ── Fleet Connect card — localhost only ───────────────────────────────── */}
+      {isLocalHost && (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+          {(!pairingInfo || pairingInfo.status === 'unpaired') && (
+            <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
+              <div className="flex flex-col justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <Cloud className="w-5 h-5 text-gray-400" />
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Sentinel Identity</p>
+                    <p className="text-sm font-mono font-bold text-white">{pairingInfo?.node_id ?? '—'}</p>
+                  </div>
                 </div>
-              </div>
-              <p className="text-xs text-gray-500">
-                Enter your pairing code at wicklee.dev to connect this node to your fleet.
-              </p>
-              <button
-                onClick={onOpenPairing}
-                className="self-start px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
-              >
-                Connect to Fleet →
-              </button>
-            </div>
-            <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
-              <div className="w-10 h-10 bg-gray-700 rounded-lg" />
-              <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
-            </div>
-          </div>
-        )}
-
-        {pairingInfo?.status === 'pending' && (
-          <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-amber-400 opacity-30" />
-                  <Cloud className="w-5 h-5 text-amber-400 relative" />
-                </div>
-                <p className="text-sm font-bold text-white">Pairing in Progress</p>
-              </div>
-              <p className="text-3xl font-mono font-bold text-white tracking-[0.3em]">
-                {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
-              </p>
-              {pairingInfo.expires_at && (
-                <p className="text-[11px] text-amber-400 font-mono">
-                  Expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
+                <p className="text-xs text-gray-500">
+                  Enter your pairing code at wicklee.dev to connect this node to your fleet.
                 </p>
-              )}
-            </div>
-            <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
-              <div className="w-10 h-10 bg-gray-700 rounded-lg" />
-              <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
-            </div>
-          </div>
-        )}
-
-        {pairingInfo?.status === 'connected' && (
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-4">
-              <div className="relative shrink-0">
-                <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-green-400 opacity-20" />
-                <CloudLightning className="w-5 h-5 text-green-400 relative" />
+                <button
+                  onClick={onOpenPairing}
+                  className="self-start px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
+                >
+                  Connect to Fleet →
+                </button>
               </div>
-              <div>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <p className="text-sm font-bold text-white">Connected to Fleet</p>
-                  <span className="text-[10px] font-mono bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">{pairingInfo.node_id}</span>
+              <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
+                <div className="w-10 h-10 bg-gray-700 rounded-lg" />
+                <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
+              </div>
+            </div>
+          )}
+
+          {pairingInfo?.status === 'pending' && (
+            <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-amber-400 opacity-30" />
+                    <Cloud className="w-5 h-5 text-amber-400 relative" />
+                  </div>
+                  <p className="text-sm font-bold text-white">Pairing in Progress</p>
                 </div>
-                <p className="text-[11px] font-mono text-gray-500">wicklee.dev</p>
+                <p className="text-3xl font-mono font-bold text-white tracking-[0.3em]">
+                  {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
+                </p>
+                {pairingInfo.expires_at && (
+                  <p className="text-[11px] text-amber-400 font-mono">
+                    Expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
+                  </p>
+                )}
+              </div>
+              <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
+                <div className="w-10 h-10 bg-gray-700 rounded-lg" />
+                <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <a
-                href="https://wicklee.dev"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 text-xs font-medium rounded-xl transition-all"
-              >
-                View Fleet Dashboard →
-              </a>
-              <button
-                onClick={onOpenPairing}
-                className="px-3 py-1.5 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 text-xs font-medium rounded-xl transition-all"
-              >
-                Disconnect
-              </button>
-            </div>
-          </div>
-        )}
-      </div>}
+          )}
 
-      {/* ── Charts + event feed ─────────────────────────────────────────────── */}
+          {pairingInfo?.status === 'connected' && (
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-4">
+                <div className="relative shrink-0">
+                  <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-green-400 opacity-20" />
+                  <CloudLightning className="w-5 h-5 text-green-400 relative" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <p className="text-sm font-bold text-white">Connected to Fleet</p>
+                    <span className="text-[10px] font-mono bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">{pairingInfo.node_id}</span>
+                  </div>
+                  <p className="text-[11px] font-mono text-gray-500">wicklee.dev</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href="https://wicklee.dev"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 text-xs font-medium rounded-xl transition-all"
+                >
+                  View Fleet Dashboard →
+                </a>
+                <button
+                  onClick={onOpenPairing}
+                  className="px-3 py-1.5 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 text-xs font-medium rounded-xl transition-all"
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Charts + event feed ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
@@ -616,27 +496,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-gray-200 dark:text-gray-800" vertical={false} />
-                <XAxis
-                  dataKey="time"
-                  stroke="#9ca3af"
-                  fontSize={10}
-                  axisLine={false}
-                  tickLine={false}
-                  interval="preserveStartEnd"
-                />
-                <YAxis
-                  stroke="#9ca3af"
-                  fontSize={10}
-                  axisLine={false}
-                  tickLine={false}
-                  domain={[0, 100]}
-                  tickFormatter={(v: number) => `${v}%`}
-                />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                <YAxis stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
                 <Tooltip
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg, #1f2937)', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
                   formatter={(value: number, name: string) => [`${value.toFixed(1)}%`, name === 'cpu' ? 'CPU' : 'Memory']}
                 />
-                <Area type="monotone" dataKey={cpuHistory.length > 0 ? 'cpu'      : 'requests'} name="cpu" stroke="#6366f1" fillOpacity={1} fill="url(#colorCpu)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                <Area type="monotone" dataKey={cpuHistory.length > 0 ? 'cpu' : 'requests'} name="cpu" stroke="#6366f1" fillOpacity={1} fill="url(#colorCpu)" strokeWidth={2} dot={false} isAnimationActive={false} />
                 {cpuHistory.length > 0 && (
                   <Area type="monotone" dataKey="mem" name="mem" stroke="#22d3ee" fillOpacity={1} fill="url(#colorMem)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                 )}

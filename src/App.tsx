@@ -420,14 +420,7 @@ const App: React.FC = () => {
       case DashboardTab.OVERVIEW:
         return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} />;
       case DashboardTab.NODES:
-        return (
-          <NodesList
-            nodes={nodes}
-            isPro={currentUser.isPro}
-            onUpgradeClick={isLocalMode ? undefined : () => setIsUpgradeModalOpen(true)}
-            onToggleSentinel={handleToggleSentinel}
-          />
-        );
+        return <NodesList nodes={nodes} />;
       case DashboardTab.TRACES:
         return <TracesView nodes={nodes} tenantId={currentTenant.id} />;
       case DashboardTab.SCAFFOLDING:
