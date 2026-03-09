@@ -34,6 +34,8 @@ struct MetricsPayload {
     hostname:                       Option<String>,
     #[serde(default)]
     gpu_name:                       Option<String>,
+    #[serde(default)]
+    chip_name:                      Option<String>,
     cpu_usage_percent:              f32,
     total_memory_mb:                u64,
     used_memory_mb:                 u64,
