@@ -6,10 +6,9 @@ interface AuthModalProps {
   mode: 'signin' | 'signup';
   onSuccess: (user: User, token: string) => void;
   onClose: () => void;
-  onLocalMode: () => void;
 }
 
-const AuthModal: React.FC<AuthModalProps> = ({ mode: initialMode, onSuccess, onClose, onLocalMode }) => {
+const AuthModal: React.FC<AuthModalProps> = ({ mode: initialMode, onSuccess, onClose }) => {
   const [activeMode, setActiveMode] = useState<'signin' | 'signup'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -172,24 +171,14 @@ const AuthModal: React.FC<AuthModalProps> = ({ mode: initialMode, onSuccess, onC
           </form>
 
           <div className="text-center">
-            {(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? (
-              <button
-                type="button"
-                onClick={onLocalMode}
-                className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
-              >
-                Running the local agent? Continue without an account →
-              </button>
-            ) : (
-              <a
-                href="https://github.com/jeffgeiser/Wicklee#readme"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
-              >
-                Don't have an agent yet? See the install guide →
-              </a>
-            )}
+            <a
+              href="https://github.com/jeffgeiser/Wicklee#readme"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+            >
+              Don't have an agent yet? See the install guide →
+            </a>
           </div>
         </div>
       </div>

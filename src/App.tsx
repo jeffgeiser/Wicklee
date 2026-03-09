@@ -118,12 +118,13 @@ const MOCK_TENANTS: Tenant[] = [
   { id: 'tnt-02', name: 'Acme AI Research' }
 ];
 
-const MOCK_CURRENT_USER: UserType = {
-  id: 'usr-01',
-  email: 'admin@wicklee.io',
-  fullName: 'Sarah Chen',
+// Localhost uses an anonymous user — no account required.
+const LOCAL_USER: UserType = {
+  id: 'local',
+  email: '',
+  fullName: '',
   role: 'Owner',
-  isPro: false
+  isPro: false,
 };
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -146,7 +147,7 @@ const App: React.FC = () => {
   const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
   const [isConnected, setIsConnected] = useState(false);
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
-  const [currentUser, setCurrentUser] = useState<UserType>(MOCK_CURRENT_USER);
+  const [currentUser, setCurrentUser] = useState<UserType>(LOCAL_USER);
   const [byokMode, setByokMode] = useState(false);
   const [userApiKey, setUserApiKey] = useState('');
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
@@ -183,12 +184,6 @@ const App: React.FC = () => {
   const handleAuthSuccess = (user: UserType, token: string) => {
     localStorage.setItem('wk_auth_token', token);
     setCurrentUser(user);
-    setAuthModalMode(null);
-    setIsLoggedIn(true);
-  };
-
-  const handleLocalMode = () => {
-    setCurrentUser(MOCK_CURRENT_USER);
     setAuthModalMode(null);
     setIsLoggedIn(true);
   };
@@ -370,7 +365,7 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     localStorage.removeItem('wk_auth_token');
-    setCurrentUser(MOCK_CURRENT_USER);
+    setCurrentUser(LOCAL_USER);
     setIsLoggedIn(false);
   };
 
@@ -401,14 +396,12 @@ const App: React.FC = () => {
         <LandingPage
           onSignIn={() => setAuthModalMode('signin')}
           onSignUp={() => setAuthModalMode('signup')}
-          onLocalMode={handleLocalMode}
         />
         {authModalMode && (
           <AuthModal
             mode={authModalMode}
             onSuccess={handleAuthSuccess}
             onClose={() => setAuthModalMode(null)}
-            onLocalMode={handleLocalMode}
           />
         )}
       </>

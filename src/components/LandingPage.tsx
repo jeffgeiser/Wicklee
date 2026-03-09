@@ -5,7 +5,6 @@ import Logo from './Logo';
 interface LandingPageProps {
   onSignIn: () => void;
   onSignUp: () => void;
-  onLocalMode: () => void;
 }
 
 const FeatureCard: React.FC<{ icon: React.ElementType, title: string, description: string }> = ({ icon: Icon, title, description }) => (
@@ -104,7 +103,7 @@ const metricCards = [
   },
 ];
 
-const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onLocalMode }) => {
+const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp }) => {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 selection:bg-blue-600 selection:text-white">
       {/* Background Decor */}
@@ -162,9 +161,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onLocalMo
         </div>
         <p className="mt-4 text-sm text-gray-600">
           Already running the local agent?{' '}
-          <button onClick={onLocalMode} className="text-gray-500 hover:text-gray-300 underline underline-offset-2 transition-colors">
-            Continue without an account
-          </button>
+          <a
+            href="http://localhost:7700"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-gray-500 hover:text-gray-300 underline underline-offset-2 transition-colors"
+          >
+            Open local dashboard →
+          </a>
         </p>
       </section>
 
