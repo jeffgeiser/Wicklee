@@ -55,6 +55,21 @@ struct MetricsPayload {
     nvidia_vram_total_mb:           Option<u64>,
     nvidia_gpu_temp_c:              Option<u32>,
     nvidia_power_draw_w:            Option<f32>,
+    // Ollama runtime
+    #[serde(default)]
+    ollama_running:           bool,
+    #[serde(default)]
+    ollama_active_model:      Option<String>,
+    #[serde(default)]
+    ollama_model_size_gb:     Option<f32>,
+    #[serde(default)]
+    ollama_quantization:      Option<String>,
+    #[serde(default)]
+    ollama_tokens_per_second: Option<f32>,
+    #[serde(default)]
+    ollama_request_count:     Option<u64>,
+    #[serde(default)]
+    wattage_per_1k_tokens:    Option<f32>,
 }
 
 // ── Auth request / response types ────────────────────────────────────────────
