@@ -198,6 +198,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const [metricOpen, setMetricOpen] = useState(false);
   const metricDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Tick every 5s so stale-node detection re-evaluates even when no SSE arrives.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 5_000);
+    return () => clearInterval(id);
+  }, []);
+
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
