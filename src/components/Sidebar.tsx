@@ -45,6 +45,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
         <p className="mt-1 text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold px-0.5">
           Community Edition
         </p>
+        <p className="mt-0.5 text-[10px] text-gray-400 dark:text-gray-600 px-0.5">
+          Free · up to 3 nodes
+        </p>
       </div>
 
       <nav className="flex-1 px-3 space-y-1">

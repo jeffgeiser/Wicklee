@@ -159,7 +159,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp }) => {
             Sign In
           </button>
         </div>
-        <p className="mt-4 text-sm text-gray-600">
+        <p className="mt-3 text-xs text-gray-600">
+          Free forever · up to 3 nodes · no credit card required
+        </p>
+        <p className="mt-3 text-sm text-gray-600">
           Already running the local agent?{' '}
           <a
             href="http://localhost:7700"
