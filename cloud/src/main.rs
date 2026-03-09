@@ -607,9 +607,26 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
 #[tokio::main]
 async fn main() {
     let conn = open_db();
+
+    // Pre-load known nodes from the DB so they survive Railway redeploys.
+    // Nodes with recent telemetry will repopulate metrics on the next push;
+    // until then they show as present but with null metrics (stale indicator).
+    let seed_metrics: HashMap<String, MetricsEntry> = {
+        let rows: Vec<(String, i64)> = conn
+            .prepare("SELECT wk_id, last_seen FROM nodes")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        rows.into_iter()
+            .map(|(node_id, last_seen)| (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics: None }))
+            .collect()
+    };
+
     let state = AppState {
         db:      Arc::new(Mutex::new(conn)),
-        metrics: Arc::new(RwLock::new(HashMap::new())),
+        metrics: Arc::new(RwLock::new(seed_metrics)),
     };
 
     let app = Router::new()
