@@ -27,7 +27,9 @@ sysctl        = "0.5"
 
 # nvml-wrapper links against libnvidia-ml which ships with NVIDIA drivers on
 # both Linux and Windows. Gating here avoids the link requirement on macOS.
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+# musl targets can't link or dlopen glibc-based NVIDIA libraries, so we
+# exclude nvml-wrapper for musl. GPU metrics fall back gracefully at runtime.
+[target.'cfg(all(any(target_os = "linux", target_os = "windows"), not(target_env = "musl")))'.dependencies]
 nvml-wrapper  = "0.10"
 
 # ── Release profile: optimise for binary size ─────────────────────────────────

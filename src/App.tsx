@@ -562,7 +562,7 @@ const App: React.FC = () => {
             )}
           </div>
           <div className="flex items-center gap-4">
-            <span className="mono">v0.4.1-alpha</span>
+            <span className="mono">v0.4.2</span>
             {isLocalHost && (
               <span className="flex items-center gap-1">
                 <Activity className="w-3 h-3" />
