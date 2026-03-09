@@ -656,6 +656,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
+              <p className="text-[10px] text-gray-600 dark:text-gray-700 mt-2 text-right">
+                Live window only — historical data coming in Team Edition
+              </p>
             </div>
 
             <div className="lg:col-span-1 h-full min-h-[400px]">
