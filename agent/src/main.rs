@@ -20,7 +20,7 @@ use std::{
 };
 use sysinfo::System;
 use tokio::sync::broadcast;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
@@ -640,7 +640,7 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
     }
 
     // 5. NVML / NVIDIA GPU
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
     match Nvml::init() {
         Ok(nvml) => {
             let count = nvml.device_count().unwrap_or(0);
@@ -648,8 +648,8 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
         }
         Err(e) => eprintln!("[diag] NVML                    MISS → {} (nvidia_* fields will be null)", e),
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    eprintln!("[diag] NVML                    MISS → not Linux/Windows (nvidia_* fields will be null)");
+    #[cfg(not(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows")))]
+    eprintln!("[diag] NVML                    MISS → not supported on this platform (nvidia_* fields will be null)");
 
     // 6. Node identity + pairing state
     eprintln!("[diag] Node identity           OK  → {}", node_id);
@@ -668,7 +668,7 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
 fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
     let shared = Arc::new(Mutex::new(NvidiaMetrics::default()));
 
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
     {
         let shared_clone = Arc::clone(&shared);
         tokio::spawn(async move {
