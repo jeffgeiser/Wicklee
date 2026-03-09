@@ -12,11 +12,12 @@ interface SidebarProps {
   onLogout: () => void;
   isConnected?: boolean;
   isLocalMode?: boolean;
+  isLocalHost?: boolean;
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, isConnected = false, isLocalMode = true, pairingInfo, onOpenPairing }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, isConnected = false, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
   const permissions = usePermissions(currentUser);
 
   const items = [
@@ -100,13 +101,15 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
             </button>
           );
         })()}
-        <button
-          onClick={onLogout}
-          className="w-full flex items-center gap-3 px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/5 rounded-lg transition-all border border-transparent hover:border-red-200 dark:hover:border-red-500/20"
-        >
-          <LogOut className="w-4 h-4" />
-          Sign Out
-        </button>
+        {!isLocalHost && (
+          <button
+            onClick={onLogout}
+            className="w-full flex items-center gap-3 px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/5 rounded-lg transition-all border border-transparent hover:border-red-200 dark:hover:border-red-500/20"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign Out
+          </button>
+        )}
       </div>
     </aside>
   );
