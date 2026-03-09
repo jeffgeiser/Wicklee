@@ -15,6 +15,31 @@ export interface NodeAgent {
   sentinelActive?: boolean;
 }
 
+// Live telemetry payload — mirrors MetricsPayload in agent/src/main.rs
+export interface SentinelMetrics {
+  node_id: string;
+  hostname?: string;
+  cpu_usage_percent: number;
+  total_memory_mb: number;
+  used_memory_mb: number;
+  available_memory_mb: number;
+  cpu_core_count: number;
+  timestamp_ms: number;
+  // Apple Silicon deep-metal (null when unavailable)
+  cpu_power_w:             number | null;
+  ecpu_power_w:            number | null;
+  pcpu_power_w:            number | null;
+  gpu_utilization_percent: number | null;
+  memory_pressure_percent: number | null;
+  thermal_state:           string | null;
+  // NVIDIA GPU fields (null on non-NVIDIA)
+  nvidia_gpu_utilization_percent: number | null;
+  nvidia_vram_used_mb:            number | null;
+  nvidia_vram_total_mb:           number | null;
+  nvidia_gpu_temp_c:              number | null;
+  nvidia_power_draw_w:            number | null;
+}
+
 export interface TraceRecord {
   id: string;
   timestamp: string;
