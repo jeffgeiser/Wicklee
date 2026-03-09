@@ -150,7 +150,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
         },
         {
           step: '2', icon: Terminal, title: 'Open the dashboard',
-          body: <p className="mt-2 text-xs text-gray-500">Click "Connect to Fleet" in the header to get your 6-digit pairing code.</p>,
+          body: <p className="mt-2 text-xs text-gray-500">Click "Pair a Node" in the header to get your 6-digit pairing code.</p>,
         },
         {
           step: '3', icon: Plus, title: 'Enter the code here',
@@ -462,7 +462,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   onClick={onOpenPairing}
                   className="self-start px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
                 >
-                  Connect to Fleet →
+                  Pair a Node →
                 </button>
               </div>
               <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
