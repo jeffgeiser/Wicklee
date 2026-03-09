@@ -623,8 +623,8 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
     eprintln!("[diag] Wicklee Sentinel — hardware source probe");
     eprintln!("──────────────────────────────────────────────");
 
-    // 1. sysctl thermal (Intel key — not available on Windows)
-    #[cfg(not(target_os = "windows"))]
+    // 1. sysctl thermal (Intel macOS key)
+    #[cfg(target_os = "macos")]
     {
         use sysctl::Sysctl;
         match sysctl::Ctl::new("machdep.xcpm.cpu_thermal_level") {
@@ -635,10 +635,13 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
             Err(e) => eprintln!("[diag] sysctl thermal          MISS → {} (expected on Apple Silicon)", e),
         }
     }
+    #[cfg(target_os = "linux")]
+    eprintln!("[diag] sysctl thermal          SKIP → macOS only (thermal via /sys/class/thermal)");
     #[cfg(target_os = "windows")]
     eprintln!("[diag] sysctl thermal          SKIP → not available on Windows (Phase 3: WMI)");
 
-    // 2. pmset -g therm
+    // 2. pmset -g therm (macOS only)
+    #[cfg(target_os = "macos")]
     match tokio::process::Command::new("pmset").args(["-g", "therm"]).output().await {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
@@ -649,8 +652,11 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
         }
         Err(e) => eprintln!("[diag] pmset thermal           ERR → {}", e),
     }
+    #[cfg(not(target_os = "macos"))]
+    eprintln!("[diag] pmset thermal           SKIP → macOS only");
 
-    // 3. ioreg IOAccelerator GPU utilization
+    // 3. ioreg IOAccelerator GPU utilization (macOS only)
+    #[cfg(target_os = "macos")]
     match tokio::process::Command::new("ioreg").args(["-r", "-c", "IOAccelerator"]).output().await {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
@@ -661,8 +667,11 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
         }
         Err(e) => eprintln!("[diag] ioreg GPU util          ERR → {}", e),
     }
+    #[cfg(not(target_os = "macos"))]
+    eprintln!("[diag] ioreg GPU util          SKIP → macOS only");
 
-    // 4. powermetrics without sudo
+    // 4. powermetrics without sudo (macOS only)
+    #[cfg(target_os = "macos")]
     match tokio::process::Command::new("powermetrics")
         .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
         .output()
@@ -677,6 +686,8 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
         }
         Err(e) => eprintln!("[diag] powermetrics            ERR → {}", e),
     }
+    #[cfg(not(target_os = "macos"))]
+    eprintln!("[diag] powermetrics            SKIP → macOS only");
 
     // 5. NVML / NVIDIA GPU
     #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
