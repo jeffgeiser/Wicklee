@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer } from 'lucide-react';
+import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare } from 'lucide-react';
 import { SentinelMetrics } from '../types';
 
 export const thermalColour = (state: string | null) => {
@@ -150,6 +150,50 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
         {nvidiaTempStr  && <SentinelCard label="GPU Temp"    value={nvidiaTempStr}  icon={Thermometer} accent="bg-orange-500" />}
         {nvidiaPowerStr && <SentinelCard label="Board Power" value={nvidiaPowerStr} icon={Zap}         accent="bg-yellow-500" />}
       </div>
+
+      {/* Ollama section */}
+      {m.ollama_running ? (
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <BotMessageSquare size={14} className="text-indigo-400 shrink-0" />
+            <span className="text-xs font-bold text-white">Ollama</span>
+            {m.ollama_active_model && (
+              <span className="text-xs font-mono text-indigo-300">{m.ollama_active_model}</span>
+            )}
+            {m.ollama_quantization && (
+              <span className="text-[10px] font-mono bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded px-1.5 py-0.5">{m.ollama_quantization}</span>
+            )}
+            {m.ollama_model_size_gb != null && (
+              <span className="text-[10px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <SentinelCard
+              label="Tokens / Sec"
+              value={m.ollama_tokens_per_second != null ? `${m.ollama_tokens_per_second.toFixed(1)} tok/s` : '—'}
+              icon={Zap}
+              accent="bg-indigo-500"
+            />
+            <SentinelCard
+              label="Wattage / 1k tkn"
+              value={m.wattage_per_1k_tokens != null ? `${m.wattage_per_1k_tokens.toFixed(1)} W` : '—'}
+              icon={Activity}
+              accent="bg-emerald-500"
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-1">
+          <BotMessageSquare size={13} className="text-gray-600 shrink-0" />
+          <p className="text-[11px] text-gray-600">
+            Ollama not detected —{' '}
+            <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer"
+              className="text-gray-500 hover:text-indigo-400 underline underline-offset-2 transition-colors">
+              ollama.ai
+            </a>
+          </p>
+        </div>
+      )}
     </div>
   );
 };

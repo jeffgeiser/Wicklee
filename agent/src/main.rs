@@ -39,6 +39,18 @@ struct TagsResponse { models: Vec<ModelInfo> }
 #[derive(Serialize)]
 struct ModelInfo { name: String, size: u64 }
 
+// Ollama runtime metrics — populated when Ollama is detected on localhost:11434.
+// All fields are Option/bool-default so the payload serialises cleanly when absent.
+#[derive(Serialize, Clone, Default)]
+struct OllamaMetrics {
+    ollama_running:           bool,
+    ollama_active_model:      Option<String>,
+    ollama_model_size_gb:     Option<f32>,
+    ollama_quantization:      Option<String>,
+    ollama_tokens_per_second: Option<f32>,
+    ollama_request_count:     Option<u64>,
+}
+
 // NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
 // All fields are Option so the payload serialises cleanly as null on other platforms.
 #[derive(Serialize, Clone, Default)]
@@ -95,6 +107,22 @@ struct MetricsPayload {
     nvidia_vram_total_mb:           Option<u64>,
     nvidia_gpu_temp_c:              Option<u32>,
     nvidia_power_draw_w:            Option<f32>,
+    // Ollama runtime (null/false when Ollama not running)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    ollama_running:                 bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_active_model:            Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_model_size_gb:           Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_quantization:            Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_tokens_per_second:       Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_request_count:           Option<u64>,
+    /// Watt-hours per 1000 tokens: (power_w / tok_s) * 1000
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wattage_per_1k_tokens:          Option<f32>,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -701,7 +729,30 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
     #[cfg(not(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows")))]
     eprintln!("[diag] NVML                    MISS → not supported on this platform (nvidia_* fields will be null)");
 
-    // 6. Node identity + pairing state
+    // 6. Ollama runtime
+    {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap_or_default();
+        let running = client.get("http://localhost:11434/api/version")
+            .send().await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        if running {
+            let model_hint = async {
+                let resp = client.get("http://localhost:11434/api/ps").send().await.ok()?;
+                let json: serde_json::Value = resp.json().await.ok()?;
+                let name = json["models"].as_array()?.first()?["name"].as_str()?.to_string();
+                Some(format!("{} loaded", name))
+            }.await.unwrap_or_else(|| "no model loaded".to_string());
+            eprintln!("[diag] Ollama runtime          OK  → {}", model_hint);
+        } else {
+            eprintln!("[diag] Ollama runtime          MISS → not running on localhost:11434");
+        }
+    }
+
+    // 7. Node identity + pairing state
     eprintln!("[diag] Node identity           OK  → {}", node_id);
     eprintln!("[diag] Pairing state           OK  → {}", pairing_status);
 
@@ -764,6 +815,135 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
     shared
 }
 
+// ── Ollama Harvester ──────────────────────────────────────────────────────────
+//
+// Auto-detects Ollama on localhost:11434. No configuration required.
+// Polls /api/version every 10s until found, then switches to 2s telemetry.
+// Derives tok/s from the delta of ollama_tokens_generated_total across ticks,
+// smoothed with a 5-sample rolling average.
+
+fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
+    let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
+    let shared_clone = Arc::clone(&shared);
+
+    tokio::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap_or_default();
+
+        // Probe loop: retry every 10s until Ollama responds.
+        loop {
+            let version_ok = client
+                .get("http://localhost:11434/api/version")
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+
+            if version_ok { break; }
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+
+        // Harvest loop: 2s cadence.
+        let mut prev_tokens:    u64   = 0;
+        let mut prev_tick_ms:   u64   = 0;
+        let mut tps_window:     Vec<f32> = Vec::with_capacity(5);
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+
+        loop {
+            interval.tick().await;
+
+            let mut m = OllamaMetrics { ollama_running: true, ..Default::default() };
+
+            // A) /api/ps — active models
+            if let Ok(resp) = client.get("http://localhost:11434/api/ps").send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(first) = json["models"].as_array().and_then(|a| a.first()) {
+                        m.ollama_active_model = first["name"]
+                            .as_str().map(|s| s.to_string());
+                        m.ollama_model_size_gb = first["size"]
+                            .as_u64().map(|b| b as f32 / 1_073_741_824.0);
+                        m.ollama_quantization = first["details"]["quantization_level"]
+                            .as_str().map(|s| s.to_string());
+                    }
+                }
+            }
+
+            // B) /metrics — Prometheus text format
+            if let Ok(resp) = client.get("http://localhost:11434/metrics").send().await {
+                if let Ok(text) = resp.text().await {
+                    // ollama_tokens_generated_total
+                    let tokens_now: u64 = text.lines()
+                        .find(|l| l.starts_with("ollama_tokens_generated_total") && !l.starts_with('#'))
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .map(|v| v as u64)
+                        .unwrap_or(prev_tokens);
+
+                    // ollama_requests_total (sum over all labels)
+                    let req_total: u64 = text.lines()
+                        .filter(|l| l.starts_with("ollama_requests_total{") && !l.starts_with('#'))
+                        .filter_map(|l| l.split_whitespace().nth(1))
+                        .filter_map(|v| v.parse::<f64>().ok())
+                        .map(|v| v as u64)
+                        .sum();
+                    if req_total > 0 { m.ollama_request_count = Some(req_total); }
+
+                    // tok/s delta
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
+                    if prev_tick_ms > 0 && tokens_now >= prev_tokens {
+                        let elapsed = (now_ms - prev_tick_ms) as f32 / 1000.0;
+                        if elapsed > 0.1 {
+                            let raw_tps = (tokens_now - prev_tokens) as f32 / elapsed;
+                            tps_window.push(raw_tps);
+                            if tps_window.len() > 5 { tps_window.remove(0); }
+                            let avg = tps_window.iter().sum::<f32>() / tps_window.len() as f32;
+                            if avg > 0.0 { m.ollama_tokens_per_second = Some(avg); }
+                        }
+                    }
+                    prev_tokens   = tokens_now;
+                    prev_tick_ms  = now_ms;
+                }
+            }
+
+            if let Ok(mut guard) = shared_clone.lock() {
+                *guard = m;
+            }
+
+            // If Ollama disappeared, back off and re-probe.
+            let still_up = client
+                .get("http://localhost:11434/api/version")
+                .send().await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if !still_up {
+                if let Ok(mut guard) = shared_clone.lock() {
+                    *guard = OllamaMetrics::default();
+                }
+                tps_window.clear();
+                prev_tokens   = 0;
+                prev_tick_ms  = 0;
+                loop {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    let up = client.get("http://localhost:11434/api/version")
+                        .send().await
+                        .map(|r| r.status().is_success())
+                        .unwrap_or(false);
+                    if up { break; }
+                }
+                interval = tokio::time::interval(Duration::from_secs(2));
+            }
+        }
+    });
+
+    shared
+}
+
 // ── Background Harvester ──────────────────────────────────────────────────────
 
 fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
@@ -822,6 +1002,7 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
 fn start_metrics_broadcaster(
     apple_metrics:  Arc<Mutex<AppleSiliconMetrics>>,
     nvidia_metrics: Arc<Mutex<NvidiaMetrics>>,
+    ollama_metrics: Arc<Mutex<OllamaMetrics>>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -855,6 +1036,15 @@ fn start_metrics_broadcaster(
 
             let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let nvidia = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let ollama = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+
+            // Wattage per 1k tokens: use best available power source.
+            let power_w = nvidia.nvidia_power_draw_w
+                .or(apple.cpu_power_w)
+                .or(apple.pcpu_power_w);
+            let wattage_per_1k = power_w.zip(ollama.ollama_tokens_per_second)
+                .filter(|(_, tps)| *tps > 0.1)
+                .map(|(w, tps)| w / tps * 1000.0);
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
@@ -878,6 +1068,13 @@ fn start_metrics_broadcaster(
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
                 nvidia_gpu_temp_c:              nvidia.nvidia_gpu_temp_c,
                 nvidia_power_draw_w:            nvidia.nvidia_power_draw_w,
+                ollama_running:                 ollama.ollama_running,
+                ollama_active_model:            ollama.ollama_active_model,
+                ollama_model_size_gb:           ollama.ollama_model_size_gb,
+                ollama_quantization:            ollama.ollama_quantization,
+                ollama_tokens_per_second:       ollama.ollama_tokens_per_second,
+                ollama_request_count:           ollama.ollama_request_count,
+                wattage_per_1k_tokens:          wattage_per_1k,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -1007,6 +1204,7 @@ async fn handle_tags() -> Json<TagsResponse> {
 async fn handle_metrics(
     axum::extract::Extension(apple_metrics):  axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
     axum::extract::Extension(nvidia_metrics): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
+    axum::extract::Extension(ollama_metrics): axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -1038,6 +1236,14 @@ async fn handle_metrics(
 
             let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let nvidia = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let ollama = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+
+            let power_w = nvidia.nvidia_power_draw_w
+                .or(apple.cpu_power_w)
+                .or(apple.pcpu_power_w);
+            let wattage_per_1k = power_w.zip(ollama.ollama_tokens_per_second)
+                .filter(|(_, tps)| *tps > 0.1)
+                .map(|(w, tps)| w / tps * 1000.0);
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -1061,6 +1267,13 @@ async fn handle_metrics(
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
                 nvidia_gpu_temp_c:              nvidia.nvidia_gpu_temp_c,
                 nvidia_power_draw_w:            nvidia.nvidia_power_draw_w,
+                ollama_running:                 ollama.ollama_running,
+                ollama_active_model:            ollama.ollama_active_model,
+                ollama_model_size_gb:           ollama.ollama_model_size_gb,
+                ollama_quantization:            ollama.ollama_quantization,
+                ollama_tokens_per_second:       ollama.ollama_tokens_per_second,
+                ollama_request_count:           ollama.ollama_request_count,
+                wattage_per_1k_tokens:          wattage_per_1k,
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -1152,7 +1365,12 @@ async fn main() {
 
     let apple_metrics  = start_metrics_harvester();
     let nvidia_metrics = start_nvidia_harvester();
-    let broadcast_tx   = start_metrics_broadcaster(Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
+    let ollama_metrics = start_ollama_harvester();
+    let broadcast_tx   = start_metrics_broadcaster(
+        Arc::clone(&apple_metrics),
+        Arc::clone(&nvidia_metrics),
+        Arc::clone(&ollama_metrics),
+    );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
     start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone());
@@ -1174,6 +1392,7 @@ async fn main() {
         .layer(axum::extract::Extension(pairing_state))
         .layer(axum::extract::Extension(apple_metrics))
         .layer(axum::extract::Extension(nvidia_metrics))
+        .layer(axum::extract::Extension(ollama_metrics))
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
