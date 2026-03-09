@@ -26,7 +26,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, isPro, onUpgradeClick, onT
       <div className="grid grid-cols-1 gap-4">
         {nodes.map((node) => {
           const redline = redlines[node.id] || 85;
-          const isOverRedline = node.gpuTemp >= redline;
+          const isOverRedline = node.gpuTemp != null && node.gpuTemp >= redline;
           const isRerouting = isOverRedline && node.sentinelActive;
 
           return (
@@ -48,8 +48,10 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, isPro, onUpgradeClick, onT
                     <Server className={`w-6 h-6 ${isRerouting ? 'text-red-500' : 'text-gray-500'}`} />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-white">{node.hostname}</h3>
-                    <p className="text-[10px] text-gray-500 font-mono tracking-tight">{node.ip}</p>
+                    <h3 className="text-lg font-bold text-white">{node.id}</h3>
+                    {node.hostname !== node.id && (
+                      <p className="text-[10px] text-gray-500 font-mono tracking-tight">{node.hostname}</p>
+                    )}
                   </div>
                 </div>
 
@@ -75,12 +77,14 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, isPro, onUpgradeClick, onT
                     <div className="flex items-center gap-4">
                       <div className="text-xs">
                         <span className="text-gray-500">VRAM: </span>
-                        <span className="text-white font-mono">{node.vramUsed.toFixed(1)}GB</span>
+                        <span className="text-white font-mono">
+                          {node.vramUsed != null ? `${node.vramUsed.toFixed(1)}GB` : '—'}
+                        </span>
                       </div>
                       <div className="text-xs flex items-center gap-1">
                         <span className="text-gray-500">Temp: </span>
                         <span className={`font-mono font-bold ${isOverRedline ? 'text-red-500 animate-bounce' : 'text-gray-200'}`}>
-                          {node.gpuTemp.toFixed(1)}°C
+                          {node.gpuTemp != null ? `${node.gpuTemp.toFixed(1)}°C` : '—'}
                         </span>
                       </div>
                     </div>

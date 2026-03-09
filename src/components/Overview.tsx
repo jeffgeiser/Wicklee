@@ -159,6 +159,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
+  // Multi-node selector — only used on hosted where multiple nodes may be paired.
+  const [allNodeMetrics, setAllNodeMetrics] = useState<Record<string, SentinelMetrics>>({});
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   // Ring-buffer for the live performance chart (max 60 points = 6 s at 10 Hz)
   interface CpuPoint { time: string; cpu: number; mem: number; }
@@ -244,9 +247,24 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         es.onopen = () => { setTransport('sse'); setConnected(true); };
         es.onmessage = (ev) => {
           try {
-            const fleet = JSON.parse(ev.data) as { nodes: Array<{ metrics: SentinelMetrics | null }> };
-            const metrics = fleet.nodes[0]?.metrics;
-            if (metrics) { handleMetrics(metrics); setTransport('sse'); onTelemetryUpdate?.(); }
+            const fleet = JSON.parse(ev.data) as { nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }> };
+            // Update the per-node metrics map.
+            const updated: Record<string, SentinelMetrics> = {};
+            let latestNodeId = '';
+            let latestTs = 0;
+            for (const n of fleet.nodes) {
+              if (n.metrics) {
+                updated[n.node_id] = n.metrics;
+                if (n.last_seen_ms > latestTs) { latestTs = n.last_seen_ms; latestNodeId = n.node_id; }
+              }
+            }
+            if (Object.keys(updated).length > 0) {
+              setAllNodeMetrics(prev => ({ ...prev, ...updated }));
+              // Default selection to most-recently-active node (only set once).
+              setSelectedNodeId(prev => prev ?? latestNodeId);
+              onTelemetryUpdate?.();
+              setTransport('sse');
+            }
           } catch { /* malformed frame */ }
         };
         es.onerror = () => {
@@ -268,6 +286,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     };
   }, [handleMetrics, CLOUD_SSE_URL]);
 
+  // On hosted: override sentinel with the selected node's metrics from allNodeMetrics.
+  const displaySentinel = isLocalHost
+    ? sentinel
+    : (selectedNodeId ? allNodeMetrics[selectedNodeId] ?? null : null);
+
   // ── Empty state for hosted with no paired nodes (after hooks) ──────────────
   if (!isLocalHost && nodes.length === 0) {
     return <EmptyFleetState onAddNode={onAddNode} />;
@@ -276,35 +299,36 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const activeNodes = isPro ? nodes : nodes.slice(0, 1);
   const totalRPS = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
   const avgTemp = activeNodes.length > 0
-    ? (activeNodes.reduce((acc, n) => acc + n.gpuTemp, 0) / activeNodes.length).toFixed(1)
-    : '0.0';
-  const totalVRAM = activeNodes.reduce((acc, n) => acc + n.vramUsed, 0).toFixed(1);
-  const totalWattage = activeNodes.reduce((acc, n) => acc + n.powerUsage, 0);
+    ? (activeNodes.reduce((acc, n) => acc + (n.gpuTemp ?? 0), 0) / activeNodes.length).toFixed(1)
+    : '—';
+  const totalVRAM = activeNodes.reduce((acc, n) => acc + (n.vramUsed ?? 0), 0).toFixed(1);
+  const totalWattage = activeNodes.reduce((acc, n) => acc + (n.powerUsage ?? 0), 0);
   const hasTDP = activeNodes.every(n => n.tdp !== undefined);
   const wattagePer1kTokens = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 1000).toFixed(1) : '0.0';
   const costPer1kTokens = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6) : '0.000000';
 
-  // Derived display values (show "—" until first SSE frame arrives)
-  const cpuPct      = sentinel ? `${sentinel.cpu_usage_percent.toFixed(1)}%`         : '—';
-  const memUsed     = sentinel ? `${(sentinel.used_memory_mb / 1024).toFixed(1)} GB`  : '—';
-  const memTotal    = sentinel ? `${(sentinel.total_memory_mb / 1024).toFixed(0)} GB` : '';
-  const memAvail    = sentinel ? `${(sentinel.available_memory_mb / 1024).toFixed(1)} GB` : '—';
-  const coreCount   = sentinel ? `${sentinel.cpu_core_count} cores`                   : '—';
-  const cpuPowerStr = sentinel?.cpu_power_w    != null ? `${sentinel.cpu_power_w.toFixed(1)} W`    : null;
-  const gpuUtilStr  = sentinel?.gpu_utilization_percent != null ? `${sentinel.gpu_utilization_percent.toFixed(0)}%` : null;
-  const memPressStr = sentinel?.memory_pressure_percent != null ? `${sentinel.memory_pressure_percent.toFixed(0)}%` : null;
-  // NVIDIA display strings
-  const nvidiaGpuUtilStr = sentinel?.nvidia_gpu_utilization_percent != null
-    ? `${sentinel.nvidia_gpu_utilization_percent.toFixed(0)}%` : null;
-  const nvidiaVramStr = sentinel?.nvidia_vram_used_mb != null && sentinel?.nvidia_vram_total_mb != null
-    ? `${(sentinel.nvidia_vram_used_mb / 1024).toFixed(1)} GB` : null;
-  const nvidiaVramTotalStr = sentinel?.nvidia_vram_total_mb != null
-    ? `${(sentinel.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
-  const nvidiaTempStr  = sentinel?.nvidia_gpu_temp_c   != null ? `${sentinel.nvidia_gpu_temp_c}°C`            : null;
-  const nvidiaPowerStr = sentinel?.nvidia_power_draw_w != null ? `${sentinel.nvidia_power_draw_w.toFixed(1)} W` : null;
-  // Show the hardware row when any platform-specific metrics are live.
+  // Derived display values — use displaySentinel (hosted: selected node; localhost: live WS/SSE)
+  const s = displaySentinel;
+  const cpuPct      = s ? `${s.cpu_usage_percent.toFixed(1)}%`         : '—';
+  const memUsed     = s ? `${(s.used_memory_mb / 1024).toFixed(1)} GB`  : '—';
+  const memTotal    = s ? `${(s.total_memory_mb / 1024).toFixed(0)} GB` : '';
+  const memAvail    = s ? `${(s.available_memory_mb / 1024).toFixed(1)} GB` : '—';
+  const coreCount   = s ? `${s.cpu_core_count} cores`                   : '—';
+  const cpuPowerStr = s?.cpu_power_w    != null ? `${s.cpu_power_w.toFixed(1)} W`    : null;
+  const gpuUtilStr  = s?.gpu_utilization_percent != null ? `${s.gpu_utilization_percent.toFixed(0)}%` : null;
+  const memPressStr = s?.memory_pressure_percent != null ? `${s.memory_pressure_percent.toFixed(0)}%` : null;
+  const nvidiaGpuUtilStr = s?.nvidia_gpu_utilization_percent != null
+    ? `${s.nvidia_gpu_utilization_percent.toFixed(0)}%` : null;
+  const nvidiaVramStr = s?.nvidia_vram_used_mb != null && s?.nvidia_vram_total_mb != null
+    ? `${(s.nvidia_vram_used_mb / 1024).toFixed(1)} GB` : null;
+  const nvidiaVramTotalStr = s?.nvidia_vram_total_mb != null
+    ? `${(s.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
+  const nvidiaTempStr  = s?.nvidia_gpu_temp_c   != null ? `${s.nvidia_gpu_temp_c}°C`            : null;
+  const nvidiaPowerStr = s?.nvidia_power_draw_w != null ? `${s.nvidia_power_draw_w.toFixed(1)} W` : null;
   const hasHardwareRow = gpuUtilStr !== null || memPressStr !== null
     || nvidiaGpuUtilStr !== null || nvidiaVramStr !== null;
+  // Node list for the selector (hosted only, >1 node with metrics).
+  const selectableNodes = Object.keys(allNodeMetrics);
 
   return (
     <div className="space-y-6">
@@ -360,6 +384,25 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
       {/* ── Sentinel live hardware telemetry ────────────────────────────────── */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm dark:shadow-none">
+        {/* Node selector — shown on hosted when >1 node has live metrics */}
+        {!isLocalHost && selectableNodes.length > 1 && (
+          <div className="flex items-center gap-2 mb-4 flex-wrap">
+            {selectableNodes.map(nodeId => (
+              <button
+                key={nodeId}
+                onClick={() => setSelectedNodeId(nodeId)}
+                className={`px-3 py-1 rounded-full text-xs font-mono font-semibold transition-all border ${
+                  selectedNodeId === nodeId
+                    ? 'bg-indigo-600 border-indigo-500 text-white'
+                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-indigo-500/50 hover:text-gray-200'
+                }`}
+              >
+                {nodeId}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Header with SSE connection dot */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -367,9 +410,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
               Sentinel Node — Live Hardware
             </h3>
-            {sentinel?.node_id && (
+            {s?.node_id && (
               <span className="text-[10px] font-mono text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded">
-                {sentinel.node_id}
+                {s.node_id}
               </span>
             )}
           </div>
@@ -400,8 +443,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             </div>
             <div className="min-w-0">
               <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">Thermal State</p>
-              <p className={`text-base font-bold leading-tight ${thermalColour(sentinel?.thermal_state ?? null)}`}>
-                {sentinel?.thermal_state ?? '—'}
+              <p className={`text-base font-bold leading-tight ${thermalColour(s?.thermal_state ?? null)}`}>
+                {s?.thermal_state ?? '—'}
               </p>
             </div>
           </div>
@@ -414,8 +457,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             {(gpuUtilStr !== null || memPressStr !== null) && (
               cpuPowerStr ? (
                 <SentinelCard label="CPU Power" value={cpuPowerStr}
-                  sub={sentinel!.ecpu_power_w != null && sentinel!.pcpu_power_w != null
-                    ? `E ${sentinel!.ecpu_power_w!.toFixed(1)}W  P ${sentinel!.pcpu_power_w!.toFixed(1)}W`
+                  sub={s!.ecpu_power_w != null && s!.pcpu_power_w != null
+                    ? `E ${s!.ecpu_power_w!.toFixed(1)}W  P ${s!.pcpu_power_w!.toFixed(1)}W`
                     : undefined}
                   icon={Zap} accent="bg-amber-500" />
               ) : (
@@ -458,7 +501,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
       {/* ── Fleet Connect card ──────────────────────────────────────────────── */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-        {(!pairingInfo || pairingInfo.status === 'unpaired') && (
+        {!isLocalHost && (!pairingInfo || pairingInfo.status === 'unpaired') && (
           <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
             <div className="flex flex-col justify-between gap-4">
               <div className="flex items-center gap-3">

@@ -14,8 +14,8 @@ const MOCK_CARBON_DATA = Array.from({ length: 12 }).map((_, i) => ({
 }));
 
 const SustainabilityView: React.FC<SustainabilityViewProps> = ({ nodes }) => {
-  const totalWattage = nodes.reduce((acc, n) => acc + n.powerUsage, 0);
-  const idleWattage = nodes.reduce((acc, n) => acc + (n.requestsPerSecond < 0.1 ? n.powerUsage : n.powerUsage * 0.2), 0);
+  const totalWattage = nodes.reduce((acc, n) => acc + (n.powerUsage ?? 0), 0);
+  const idleWattage = nodes.reduce((acc, n) => acc + (n.requestsPerSecond < 0.1 ? (n.powerUsage ?? 0) : (n.powerUsage ?? 0) * 0.2), 0);
   const carbonImpact = (totalWattage * 0.0004).toFixed(2); // Mock kg CO2 per hour
 
   return (
