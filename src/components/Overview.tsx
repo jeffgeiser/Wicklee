@@ -499,9 +499,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         )}
       </div>
 
-      {/* ── Fleet Connect card ──────────────────────────────────────────────── */}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-        {!isLocalHost && (!pairingInfo || pairingInfo.status === 'unpaired') && (
+      {/* ── Fleet Connect card — localhost only ─────────────────────────────── */}
+      {isLocalHost && <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+        {(!pairingInfo || pairingInfo.status === 'unpaired') && (
           <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
             <div className="flex flex-col justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -587,7 +587,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* ── Charts + event feed ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
