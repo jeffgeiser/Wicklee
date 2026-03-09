@@ -154,32 +154,38 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
       {/* Ollama section */}
       {m.ollama_running ? (
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3">
+          {/* Header row */}
           <div className="flex items-center gap-2 flex-wrap">
             <BotMessageSquare size={14} className="text-indigo-400 shrink-0" />
-            <span className="text-xs font-bold text-white">Ollama</span>
-            {m.ollama_active_model && (
-              <span className="text-xs font-mono text-indigo-300">{m.ollama_active_model}</span>
-            )}
-            {m.ollama_quantization && (
-              <span className="text-[10px] font-mono bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded px-1.5 py-0.5">{m.ollama_quantization}</span>
-            )}
-            {m.ollama_model_size_gb != null && (
-              <span className="text-[10px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
+            <span className="text-xs font-bold text-gray-900 dark:text-white">Ollama</span>
+            {m.ollama_active_model ? (
+              <>
+                <span className="text-xs font-mono text-indigo-300">{m.ollama_active_model}</span>
+                {m.ollama_quantization && (
+                  <span className="text-[10px] font-mono bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded px-1.5 py-0.5">
+                    {m.ollama_quantization}
+                  </span>
+                )}
+                {m.ollama_model_size_gb != null && (
+                  <span className="text-[10px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
+                )}
+              </>
+            ) : (
+              <span className="text-[11px] text-gray-500">running · no model loaded</span>
             )}
           </div>
+          {/* Metric cards — tok/s unavailable in current Ollama */}
           <div className="grid grid-cols-2 gap-3">
-            <SentinelCard
-              label="Tokens / Sec"
-              value={m.ollama_tokens_per_second != null ? `${m.ollama_tokens_per_second.toFixed(1)} tok/s` : '—'}
-              icon={Zap}
-              accent="bg-indigo-500"
-            />
-            <SentinelCard
-              label="Wattage / 1k tkn"
-              value={m.wattage_per_1k_tokens != null ? `${m.wattage_per_1k_tokens.toFixed(1)} W` : '—'}
-              icon={Activity}
-              accent="bg-emerald-500"
-            />
+            <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Tokens / Sec</p>
+              <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
+              <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">requires Ollama /metrics</p>
+            </div>
+            <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Wattage / 1k tkn</p>
+              <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
+              <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">requires tok/s</p>
+            </div>
           </div>
         </div>
       ) : (
