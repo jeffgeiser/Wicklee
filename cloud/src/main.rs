@@ -30,6 +30,8 @@ type Db = Arc<Mutex<Connection>>;
 #[derive(Deserialize, Serialize, Clone)]
 struct MetricsPayload {
     node_id:                        String,
+    #[serde(default)]
+    hostname:                       Option<String>,
     cpu_usage_percent:              f32,
     total_memory_mb:                u64,
     used_memory_mb:                 u64,
