@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown } from 'lucide-react';
-import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown } from 'lucide-react';
+import { NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { SentinelCard, HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
@@ -22,18 +22,10 @@ const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
   latency: Math.floor(Math.random() * 100) + 200,
 }));
 
-const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon: React.ElementType; trend?: string; color: string }> = ({ title, value, icon: Icon, trend, color }) => (
+const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon: React.ElementType; color: string }> = ({ title, value, icon: Icon, color }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 hover:border-gray-300 dark:hover:border-gray-700 transition-all shadow-sm dark:shadow-none">
-    <div className="flex items-start justify-between">
-      <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${color}/10`}>
-        <Icon size={20} className={color.replace('bg-', 'text-')} />
-      </div>
-      {trend && (
-        <span className={`flex items-center text-xs font-medium ${trend.startsWith('+') ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-          {trend.startsWith('+') ? <ArrowUpRight className="w-3 h-3 mr-1" /> : <ArrowDownRight className="w-3 h-3 mr-1" />}
-          {trend}
-        </span>
-      )}
+    <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${color}/10`}>
+      <Icon size={20} className={color.replace('bg-', 'text-')} />
     </div>
     <div className="mt-4">
       <h4 className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{title}</h4>
@@ -42,20 +34,28 @@ const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon:
   </div>
 );
 
+const fmtAgo = (ms: number): string => {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60)   return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+};
+
 // ── Collapsible node row used in the All Nodes accordion ─────────────────────
 interface NodeRowProps {
   nodeId: string;
   hostname: string;
   metrics: SentinelMetrics | null;
+  lastSeenMs?: number;
   defaultOpen?: boolean;
 }
 
-const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, defaultOpen = false }) => {
+const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false }) => {
   const [open, setOpen] = useState(defaultOpen);
 
-  const isOnline = m !== null;
-  const cpuStr = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
-  const gpuStr = m?.nvidia_gpu_utilization_percent != null
+  const isOnline   = m !== null;
+  const cpuStr     = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
+  const gpuStr     = m?.nvidia_gpu_utilization_percent != null
     ? `${m.nvidia_gpu_utilization_percent.toFixed(0)}%`
     : m?.gpu_utilization_percent != null
     ? `${m.gpu_utilization_percent.toFixed(0)}%`
@@ -63,9 +63,10 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, default
   const memPressStr = m?.memory_pressure_percent != null
     ? `${m.memory_pressure_percent.toFixed(0)}%`
     : '—';
-  const nvThermal   = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
-  const thermalStr  = m?.thermal_state ?? nvThermal?.label ?? '—';
-  const thermalCls  = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
+  const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
+  const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
+  const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
+  const statusStr  = isOnline ? 'online' : (ls ? fmtAgo(ls) : 'offline');
 
   return (
     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
@@ -73,10 +74,8 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, default
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
       >
-        {/* Status dot */}
         <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
 
-        {/* Node identity */}
         <div className="min-w-0 flex-shrink-0 max-w-[200px]">
           <span className="font-mono text-xs font-bold text-gray-900 dark:text-white">{nodeId}</span>
           {hostname !== nodeId && (
@@ -87,10 +86,9 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, default
           )}
         </div>
         <span className={`text-[10px] font-semibold shrink-0 ${isOnline ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
-          {isOnline ? 'online' : 'offline'}
+          {statusStr}
         </span>
 
-        {/* Quick stats */}
         <div className="flex-1 flex items-center gap-4 justify-end text-[11px] text-gray-500 dark:text-gray-400 font-mono">
           <span>CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
           <span className="hidden sm:inline">GPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{gpuStr}</span></span>
@@ -108,7 +106,9 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, default
           {m ? (
             <HardwareDetailPanel metrics={m} />
           ) : (
-            <p className="text-sm text-gray-500 text-center py-6">No telemetry received yet — make sure the agent is running.</p>
+            <p className="text-sm text-gray-500 text-center py-6">
+              {ls ? `No telemetry — last seen ${fmtAgo(ls)}` : 'No telemetry received yet — make sure the agent is running.'}
+            </p>
           )}
         </div>
       )}
@@ -171,6 +171,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
   const [allNodeMetrics, setAllNodeMetrics] = useState<Record<string, SentinelMetrics>>({});
+  const [lastSeenMsMap, setLastSeenMsMap]   = useState<Record<string, number>>({});
+  const [fleetEvents, setFleetEvents]       = useState<FleetEvent[]>([]);
+  const prevLiveRef    = useRef<Record<string, boolean>>({});
+  const prevThermalRef = useRef<Record<string, string | null>>({});
 
   interface CpuPoint { time: string; cpu: number; mem: number; }
   const [cpuHistory, setCpuHistory] = useState<CpuPoint[]>([]);
@@ -254,13 +258,44 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           try {
             const fleet = JSON.parse(ev.data) as { nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }> };
             const updated: Record<string, SentinelMetrics> = {};
+            const updatedLastSeen: Record<string, number>  = {};
+            const now = Date.now();
+            const newEvents: FleetEvent[] = [];
+
             for (const n of fleet.nodes) {
-              if (n.metrics) updated[n.node_id] = n.metrics;
+              updatedLastSeen[n.node_id] = n.last_seen_ms;
+              const isNowLive = n.metrics != null && (now - n.last_seen_ms) < 30_000;
+              const wasLive   = prevLiveRef.current[n.node_id];
+
+              if (isNowLive && n.metrics) {
+                updated[n.node_id] = n.metrics;
+                if (wasLive === false) {
+                  // Node came back online
+                  newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'node_online', nodeId: n.node_id, hostname: n.metrics.hostname ?? n.node_id });
+                } else if (wasLive === true) {
+                  // Check thermal change
+                  const prevThermal = prevThermalRef.current[n.node_id];
+                  const curThermal  = n.metrics.thermal_state;
+                  if (prevThermal !== undefined && prevThermal !== curThermal && curThermal != null) {
+                    newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'thermal_change', nodeId: n.node_id, hostname: n.metrics.hostname ?? n.node_id, detail: `${prevThermal ?? '—'} → ${curThermal}` });
+                  }
+                }
+                prevThermalRef.current[n.node_id] = n.metrics.thermal_state;
+              } else if (!isNowLive && wasLive === true) {
+                // Node went offline
+                newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'node_offline', nodeId: n.node_id, hostname: n.metrics?.hostname ?? n.node_id });
+              }
+              prevLiveRef.current[n.node_id] = isNowLive;
             }
+
+            setLastSeenMsMap(prev => ({ ...prev, ...updatedLastSeen }));
             if (Object.keys(updated).length > 0) {
               setAllNodeMetrics(prev => ({ ...prev, ...updated }));
               onTelemetryUpdate?.();
               setTransport('sse');
+            }
+            if (newEvents.length > 0) {
+              setFleetEvents(prev => [...newEvents, ...prev].slice(0, 50));
             }
           } catch { /* malformed frame */ }
         };
@@ -286,66 +321,48 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return <EmptyFleetState onAddNode={onAddNode} />;
   }
 
-  const activeNodes = isPro ? nodes : nodes.slice(0, 1);
-  const totalRPS   = activeNodes.reduce((acc, n) => acc + n.requestsPerSecond, 0);
-  const avgTemp    = activeNodes.length > 0
-    ? (activeNodes.reduce((acc, n) => acc + (n.gpuTemp ?? 0), 0) / activeNodes.length).toFixed(1)
+  // Real stat values derived from live telemetry
+  const liveMetrics: SentinelMetrics[] = Object.values(allNodeMetrics);
+  const gpuTemps     = liveMetrics.map(m => m.nvidia_gpu_temp_c).filter((t): t is number => t != null);
+  const avgTempStr   = gpuTemps.length > 0
+    ? `${(gpuTemps.reduce((a, b) => a + b, 0) / gpuTemps.length).toFixed(1)}°C`
     : '—';
-  const totalVRAM      = activeNodes.reduce((acc, n) => acc + (n.vramUsed ?? 0), 0).toFixed(1);
-  const totalWattage   = activeNodes.reduce((acc, n) => acc + (n.powerUsage ?? 0), 0);
-  const hasTDP         = activeNodes.every(n => n.tdp !== undefined);
-  const wattagePer1kTokens = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 1000).toFixed(1) : '0.0';
-  const costPer1kTokens    = totalRPS > 0 ? ((totalWattage / (totalRPS * 500)) * 0.00015).toFixed(6) : '0.000000';
+  const totalVramMb  = liveMetrics.reduce((acc, m) => acc + (m.nvidia_vram_used_mb ?? 0), 0);
+  const totalVramStr = totalVramMb > 0 ? `${(totalVramMb / 1024).toFixed(1)} GB` : '—';
 
   // Build the accordion row data
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel, defaultOpen: true }] : [])
-    : nodes.map((n, idx) => ({ nodeId: n.id, hostname: n.hostname, metrics: allNodeMetrics[n.id] ?? null, defaultOpen: idx === 0 }));
+    : nodes.map((n, idx) => ({ nodeId: n.id, hostname: n.hostname, metrics: allNodeMetrics[n.id] ?? null, lastSeenMs: lastSeenMsMap[n.id], defaultOpen: idx === 0 }));
 
   return (
     <div className="space-y-6">
       {/* ── Fleet stat cards ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 [&>*]:min-w-0">
-        <StatCard title="Throughput" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalRPS.toFixed(1)} req/s</p>} icon={Zap} trend="+12.4%" color="bg-amber-500" />
-        <StatCard title="Avg Temperature" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTemp}°C</p>} icon={Thermometer} trend="-2.1%" color="bg-red-500" />
-        <StatCard title="Total VRAM Usage" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalVRAM} GB</p>} icon={Database} trend="+4.3%" color="bg-blue-600" />
         <StatCard
-          title={
-            <div className="flex items-center gap-1.5">
-              <span>Wattage / 1k tkn</span>
-              <div className="group relative">
-                <Info className="w-3 h-3 text-gray-400 cursor-help" />
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-gray-900 text-[10px] text-gray-300 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 shadow-xl border border-white/10">
-                  Calculated from GPU TDP × utilization ÷ tokens generated.
-                </div>
-              </div>
-            </div>
-          }
-          value={
-            hasTDP ? (
-              <div>
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">{wattagePer1kTokens}W</p>
-                <p className="text-[10px] text-gray-500 font-medium">per 1,000 tokens</p>
-              </div>
-            ) : (
-              <button className="text-left group">
-                <p className="text-[11px] font-bold text-blue-600 dark:text-blue-400 group-hover:underline leading-tight">
-                  Configure GPU TDP to see cost metrics →
-                </p>
-              </button>
-            )
-          }
-          icon={Zap} trend="-3.2%" color="bg-emerald-500"
+          title="Throughput"
+          value={<div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">connect inference runtime</p></div>}
+          icon={Zap} color="bg-amber-500"
         />
         <StatCard
-          title="Cost per 1k Tokens"
-          value={
-            <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">${costPer1kTokens}</p>
-              <p className="text-[10px] text-gray-500 font-medium">per 1k tokens</p>
-            </div>
-          }
-          icon={Zap} trend="-8.2%" color="bg-cyan-400"
+          title="Avg GPU Temp"
+          value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTempStr}</p>}
+          icon={Thermometer} color="bg-red-500"
+        />
+        <StatCard
+          title="Total VRAM Used"
+          value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalVramStr}</p>}
+          icon={Database} color="bg-blue-600"
+        />
+        <StatCard
+          title="Wattage / 1k tkn"
+          value={<div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">connect inference runtime</p></div>}
+          icon={Zap} color="bg-emerald-500"
+        />
+        <StatCard
+          title="Cost / 1k Tokens"
+          value={<div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">connect inference runtime</p></div>}
+          icon={Zap} color="bg-cyan-400"
         />
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Cpu} color="bg-green-500" />
       </div>
@@ -519,7 +536,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         </div>
 
         <div className="lg:col-span-1 h-full min-h-[400px]">
-          <EventFeed nodes={activeNodes} />
+          <EventFeed events={fleetEvents} />
         </div>
       </div>
     </div>
