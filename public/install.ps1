@@ -2,7 +2,7 @@
 #
 #   irm https://wicklee.dev/install.ps1 | iex
 #
-# Downloads the pre-built Windows binary from GitHub Releases,
+# Downloads the latest Windows binary from GitHub Releases,
 # installs it to %LOCALAPPDATA%\wicklee\wicklee.exe, and adds that
 # directory to the current user's PATH.
 
@@ -10,50 +10,30 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Repo       = 'jeffgeiser/Wicklee'
-$AssetName  = 'wicklee-agent-windows-x86_64.exe'
-$InstallDir = Join-Path $env:LOCALAPPDATA 'wicklee'
-$BinPath    = Join-Path $InstallDir 'wicklee.exe'
+$Repo        = 'jeffgeiser/Wicklee'
+$ReleaseTag  = 'nightly'
+$AssetName   = 'wicklee-agent-windows-x86_64.exe'
+$InstallDir  = Join-Path $env:LOCALAPPDATA 'wicklee'
+$BinPath     = Join-Path $InstallDir 'wicklee.exe'
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-function Write-Green([string]$msg) {
-    Write-Host $msg -ForegroundColor Green
-}
-function Write-Dim([string]$msg) {
-    Write-Host $msg -ForegroundColor DarkGray
-}
-function Abort([string]$msg) {
-    Write-Host "error: $msg" -ForegroundColor Red
-    exit 1
-}
-
-# ── Fetch latest release tag ──────────────────────────────────────────────────
-
-Write-Host ""
-Write-Host "  Fetching latest Wicklee release..." -ForegroundColor Cyan
-
-$releaseUrl = "https://api.github.com/repos/$Repo/releases/latest"
-try {
-    $release = Invoke-RestMethod -Uri $releaseUrl -UseBasicParsing
-} catch {
-    Abort "Could not reach GitHub API. Check your internet connection."
-}
-
-$tag = $release.tag_name
-if (-not $tag) { Abort "Could not determine latest release tag." }
-
-$downloadUrl = "https://github.com/$Repo/releases/download/$tag/$AssetName"
+function Write-Green([string]$msg) { Write-Host $msg -ForegroundColor Green }
+function Write-Dim([string]$msg)   { Write-Host $msg -ForegroundColor DarkGray }
+function Abort([string]$msg)       { Write-Host "error: $msg" -ForegroundColor Red; exit 1 }
 
 # ── Download ──────────────────────────────────────────────────────────────────
 
+$DownloadUrl = "https://github.com/$Repo/releases/download/$ReleaseTag/$AssetName"
 $tmp = Join-Path $env:TEMP "wicklee-install-$([System.IO.Path]::GetRandomFileName()).exe"
 
-Write-Host "  Downloading $AssetName ($tag)..." -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Downloading Wicklee ($ReleaseTag)..." -ForegroundColor Cyan
+
 try {
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $tmp -UseBasicParsing
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $tmp -UseBasicParsing
 } catch {
-    Abort "Download failed. Check https://github.com/$Repo/releases for available assets."
+    Abort "Download failed from $DownloadUrl`nCheck https://github.com/$Repo/releases for available assets."
 }
 
 # ── Install ───────────────────────────────────────────────────────────────────
@@ -75,7 +55,6 @@ if ($userPath -notlike "*$InstallDir*") {
         "$userPath;$InstallDir",
         'User'
     )
-    # Also update the current session so the next command works immediately.
     $env:PATH = "$env:PATH;$InstallDir"
 }
 
