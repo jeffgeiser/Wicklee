@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+
+# Guard: must run under bash (not dash/sh, which is the default on Debian/Ubuntu)
+if [ -z "${BASH_VERSION:-}" ]; then
+  if command -v bash >/dev/null 2>&1; then
+    exec bash "$0" "$@"
+  else
+    echo "Wicklee installer requires bash. Please install bash and retry."
+    exit 1
+  fi
+fi
+
 set -euo pipefail
 
 # ── Wicklee Sentinel — one-line installer ─────────────────────────────────────

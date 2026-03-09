@@ -301,7 +301,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   const prevThermal = prevThermalRef.current[n.node_id];
                   const curThermal  = n.metrics.thermal_state;
                   if (prevThermal !== undefined && prevThermal !== curThermal && curThermal != null) {
-                    newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'thermal_change', nodeId: n.node_id, hostname: n.metrics.hostname ?? n.node_id, detail: `${prevThermal ?? '—'} → ${curThermal}` });
+                    newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'thermal_change', nodeId: n.node_id, hostname: n.metrics.hostname ?? n.node_id, detail: prevThermal != null ? `${prevThermal} → ${curThermal}` : curThermal ?? '' });
                   }
                 }
                 prevThermalRef.current[n.node_id] = n.metrics.thermal_state;

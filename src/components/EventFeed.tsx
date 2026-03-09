@@ -48,7 +48,7 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => (
 
           const label = ev.type === 'node_online'  ? 'came online'
             : ev.type === 'node_offline' ? 'went offline'
-            : `thermal: ${ev.detail}`;
+            : (ev.detail?.includes(' → ') ? `thermal: ${ev.detail}` : `thermal became ${ev.detail}`);
 
           const cls = ev.type === 'node_online'  ? 'text-green-400'
             : ev.type === 'node_offline' ? 'text-red-400'
