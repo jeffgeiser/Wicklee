@@ -199,6 +199,19 @@ fn run_migrations(conn: &Connection) {
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN hostname TEXT;");
 }
 
+// ── Tier constants ────────────────────────────────────────────────────────────
+
+/// Maximum nodes a free-tier account may pair.
+const MAX_FREE_NODES: usize = 3;
+
+/// If DEV_ACCOUNT_EMAIL env var is set, that account gets isPro=true and no
+/// node limit — useful for internal testing without hitting the free wall.
+fn is_dev_account(email: &str) -> bool {
+    std::env::var("DEV_ACCOUNT_EMAIL")
+        .map(|e| e.trim().to_lowercase() == email.trim().to_lowercase())
+        .unwrap_or(false)
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn now_ms() -> u64 {
@@ -291,10 +304,13 @@ async fn handle_signup(
             Json(serde_json::json!({ "error": "An account with this email already exists" }))).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
-        Ok(()) => (StatusCode::CREATED, Json(AuthResponse {
-            token,
-            user: UserResponse { id, email, full_name, role: "Owner".into(), is_pro: false },
-        })).into_response(),
+        Ok(()) => {
+            let is_pro = is_dev_account(&email);
+            (StatusCode::CREATED, Json(AuthResponse {
+                token,
+                user: UserResponse { id, email, full_name, role: "Owner".into(), is_pro },
+            })).into_response()
+        }
     }
 }
 
@@ -354,7 +370,7 @@ async fn handle_login(
         ).ok();
     }).await.unwrap();
 
-    let is_pro = is_pro_int != 0;
+    let is_pro = is_pro_int != 0 || is_dev_account(&stored_email);
     (StatusCode::OK, Json(AuthResponse {
         token,
         user: UserResponse { id, email: stored_email, full_name, role, is_pro },
@@ -394,10 +410,12 @@ async fn handle_me(
     match row {
         None => (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some((id, email, full_name, role, is_pro_int)) =>
+        Some((id, email, full_name, role, is_pro_int)) => {
+            let is_pro = is_pro_int != 0 || is_dev_account(&email);
             (StatusCode::OK, Json(UserResponse {
-                id, email, full_name, role, is_pro: is_pro_int != 0,
-            })).into_response(),
+                id, email, full_name, role, is_pro,
+            })).into_response()
+        }
     }
 }
 
@@ -527,11 +545,48 @@ struct ActivateRequest {
 
 async fn handle_activate(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ActivateRequest>,
 ) -> impl IntoResponse {
     if body.code.len() != 6 || !body.code.chars().all(|c| c.is_ascii_digit()) {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
+    }
+
+    // Resolve the calling user (if authenticated) to check tier limits.
+    let bearer = extract_bearer(&headers);
+    let db     = state.db.clone();
+    let bearer2 = bearer.clone();
+    let user_info: Option<(String, i32)> = if let Some(tok) = bearer2 {
+        tokio::task::spawn_blocking(move || {
+            let conn = db.lock().unwrap();
+            conn.query_row(
+                "SELECT u.email, u.is_pro FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
+                params![tok],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)),
+            ).ok()
+        }).await.unwrap()
+    } else {
+        None
+    };
+
+    // Enforce free-tier node limit (skip for dev account or pro users).
+    if let Some((ref email, is_pro_db)) = user_info {
+        let is_pro = is_pro_db != 0 || is_dev_account(email);
+        if !is_pro {
+            let db2   = state.db.clone();
+            let count: usize = tokio::task::spawn_blocking(move || {
+                let conn = db2.lock().unwrap();
+                conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get::<_, i64>(0))
+                    .unwrap_or(0) as usize
+            }).await.unwrap();
+            if count >= MAX_FREE_NODES {
+                return (StatusCode::PAYMENT_REQUIRED,
+                    Json(serde_json::json!({
+                        "error": format!("Free tier limit reached ({MAX_FREE_NODES} nodes). Upgrade to add more.")
+                    }))).into_response();
+            }
+        }
     }
 
     let db   = state.db.clone();
