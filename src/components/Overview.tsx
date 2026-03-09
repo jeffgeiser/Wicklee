@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit } from 'lucide-react';
 import { NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
-import { SentinelCard, HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
+import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -188,8 +188,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const prevLiveRef    = useRef<Record<string, boolean>>({});
   const prevThermalRef = useRef<Record<string, string | null>>({});
 
-  interface CpuPoint { time: string; cpu: number; mem: number; }
-  const [cpuHistory, setCpuHistory] = useState<CpuPoint[]>([]);
+  type MetricKey = 'gpu' | 'cpu' | 'mem' | 'power';
+  interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; }
+  const [history, setHistory]           = useState<HistoryPoint[]>([]);
+  const [selectedMetric, setSelectedMetric] = useState<MetricKey>('gpu');
   const MAX_HISTORY = 60;
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -202,17 +204,27 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return `${base}/api/fleet/stream`;
   })();
 
-  const handleMetrics = useCallback((data: SentinelMetrics) => {
-    setSentinel(data);
-    setConnected(true);
-    setCpuHistory(prev => {
+  const pushHistoryPoint = useCallback((data: SentinelMetrics) => {
+    setHistory(prev => {
       const ts  = new Date(data.timestamp_ms);
       const lbl = `${ts.getMinutes().toString().padStart(2, '0')}:${ts.getSeconds().toString().padStart(2, '0')}`;
-      const pt  = { time: lbl, cpu: data.cpu_usage_percent, mem: (data.used_memory_mb / (data.total_memory_mb || 1)) * 100 };
+      const pt: HistoryPoint = {
+        time:  lbl,
+        gpu:   data.nvidia_gpu_utilization_percent ?? data.gpu_utilization_percent ?? null,
+        cpu:   data.cpu_usage_percent,
+        mem:   data.memory_pressure_percent ?? null,
+        power: data.cpu_power_w ?? data.nvidia_power_draw_w ?? null,
+      };
       const next = [...prev, pt];
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
     });
   }, []);
+
+  const handleMetrics = useCallback((data: SentinelMetrics) => {
+    setSentinel(data);
+    setConnected(true);
+    pushHistoryPoint(data);
+  }, [pushHistoryPoint]);
 
   useEffect(() => {
     let retryWs:  ReturnType<typeof setTimeout>;
@@ -303,6 +315,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             setLastSeenMsMap(prev => ({ ...prev, ...updatedLastSeen }));
             if (Object.keys(updated).length > 0) {
               setAllNodeMetrics(prev => ({ ...prev, ...updated }));
+              // Feed the first live node's metrics into the history buffer
+              // so the System Performance graph works on the hosted view too.
+              const firstLive = Object.values(updated)[0];
+              if (firstLive) pushHistoryPoint(firstLive);
               onTelemetryUpdate?.();
               setTransport('sse');
             }
@@ -327,7 +343,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       wsRef.current?.close();
       esRef.current?.close();
     };
-  }, [handleMetrics, CLOUD_SSE_URL]);
+  }, [handleMetrics, pushHistoryPoint, CLOUD_SSE_URL]);
 
   if (!isLocalHost && nodes.length === 0) {
     return <EmptyFleetState onAddNode={onAddNode} />;
@@ -506,51 +522,98 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       )}
 
       {/* ── Charts + event feed ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
-            <h3 className="font-semibold text-gray-800 dark:text-gray-200">
-              System Performance
-              {cpuHistory.length > 0 && <span className="ml-2 text-[10px] font-mono text-indigo-400 font-normal">LIVE · {transport === 'ws' ? '10 Hz' : '1 Hz'}</span>}
-            </h3>
-            <select className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs rounded-lg px-2 py-1 outline-none text-gray-600 dark:text-gray-400">
-              <option>Last 24 Hours</option>
-              <option>Last 7 Days</option>
-            </select>
-          </div>
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={cpuHistory.length > 0 ? cpuHistory : MOCK_HISTORY}>
-                <defs>
-                  <linearGradient id="colorCpu" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.35}/>
-                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#22d3ee" stopOpacity={0.25}/>
-                    <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-gray-200 dark:text-gray-800" vertical={false} />
-                <XAxis dataKey="time" stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-                <YAxis stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: 'var(--tooltip-bg, #1f2937)', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
-                  formatter={(value: number, name: string) => [`${value.toFixed(1)}%`, name === 'cpu' ? 'CPU' : 'Memory']}
-                />
-                <Area type="monotone" dataKey={cpuHistory.length > 0 ? 'cpu' : 'requests'} name="cpu" stroke="#6366f1" fillOpacity={1} fill="url(#colorCpu)" strokeWidth={2} dot={false} isAnimationActive={false} />
-                {cpuHistory.length > 0 && (
-                  <Area type="monotone" dataKey="mem" name="mem" stroke="#22d3ee" fillOpacity={1} fill="url(#colorMem)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                )}
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+      {(() => {
+        // Per-metric display config
+        const METRICS: Record<string, { label: string; color: string; gradId: string; unit: string; isPercent: boolean }> = {
+          gpu:   { label: 'GPU Utilization', color: '#6366f1', gradId: 'gradGpu',   unit: '%', isPercent: true  },
+          cpu:   { label: 'CPU Usage',       color: '#10b981', gradId: 'gradCpu',   unit: '%', isPercent: true  },
+          mem:   { label: 'Mem Pressure',    color: '#22d3ee', gradId: 'gradMem',   unit: '%', isPercent: true  },
+          power: { label: 'Board Power',     color: '#f59e0b', gradId: 'gradPower', unit: 'W', isPercent: false },
+        };
 
-        <div className="lg:col-span-1 h-full min-h-[400px]">
-          <EventFeed events={fleetEvents} />
-        </div>
-      </div>
+        // Detect which metrics have real data (after a few points)
+        const settled = history.length >= 3;
+        const hasGpu   = history.some(p => p.gpu   != null);
+        const hasMem   = history.some(p => p.mem   != null);
+        const hasPower = history.some(p => p.power != null);
+
+        // Auto-fallback: if GPU selected but no GPU data, show CPU instead
+        const effectiveKey = selectedMetric === 'gpu' && settled && !hasGpu ? 'cpu' : selectedMetric;
+        const cfg = METRICS[effectiveKey];
+        const isLive = history.length > 0;
+
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
+                <div>
+                  <h3 className="font-semibold text-gray-800 dark:text-gray-200">
+                    {cfg.label}
+                    {isLive && (
+                      <span className="ml-2 text-[10px] font-mono text-indigo-400 font-normal">
+                        LIVE · {transport === 'ws' ? '10 Hz' : '1 Hz'} · Current Session
+                      </span>
+                    )}
+                  </h3>
+                </div>
+                <select
+                  value={selectedMetric}
+                  onChange={e => setSelectedMetric(e.target.value as MetricKey)}
+                  className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs rounded-lg px-2 py-1 outline-none text-gray-600 dark:text-gray-400 cursor-pointer"
+                >
+                  <option value="gpu">GPU Util{settled && !hasGpu ? ' (N/A)' : ''}</option>
+                  <option value="cpu">CPU</option>
+                  <option value="mem"   disabled={settled && !hasMem}>Mem Pressure{settled && !hasMem ? ' (N/A)' : ''}</option>
+                  <option value="power" disabled={settled && !hasPower}>Board Power{settled && !hasPower ? ' (N/A)' : ''}</option>
+                </select>
+              </div>
+              <div className="h-64 w-full relative">
+                {!isLive && (
+                  <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                    <span className="text-xs text-gray-400 dark:text-gray-600 font-mono">Collecting data…</span>
+                  </div>
+                )}
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={isLive ? history : MOCK_HISTORY}>
+                    <defs>
+                      <linearGradient id={cfg.gradId} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor={cfg.color} stopOpacity={isLive ? 0.35 : 0.08}/>
+                        <stop offset="95%" stopColor={cfg.color} stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-gray-200 dark:text-gray-800" vertical={false} />
+                    <XAxis dataKey="time" stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                    <YAxis
+                      stroke="#9ca3af" fontSize={10} axisLine={false} tickLine={false}
+                      domain={cfg.isPercent ? [0, 100] : [0, 'auto']}
+                      tickFormatter={(v: number) => `${v}${cfg.unit}`}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: 'var(--tooltip-bg, #1f2937)', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
+                      formatter={(value: number) => [`${typeof value === 'number' ? value.toFixed(1) : '—'}${cfg.unit}`, cfg.label]}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey={isLive ? effectiveKey : 'requests'}
+                      stroke={isLive ? cfg.color : '#374151'}
+                      fillOpacity={1}
+                      fill={`url(#${cfg.gradId})`}
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={false}
+                      connectNulls
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="lg:col-span-1 h-full min-h-[400px]">
+              <EventFeed events={fleetEvents} />
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Fleet Intelligence placeholder (Phase 3) ──────────────────────────── */}
       <div className="bg-gray-900 dark:bg-gray-900 border border-gray-800 rounded-2xl p-6">
