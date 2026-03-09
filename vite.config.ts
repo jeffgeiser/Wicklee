@@ -23,6 +23,9 @@ export default defineConfig(() => {
         // compile time via #[folder = "frontend/dist"].
         outDir: 'agent/frontend/dist',
         emptyOutDir: true,
+        // Dashboard embeds Recharts + React; single-chunk is fine for a local
+        // binary where there's no CDN or HTTP/2 multiplexing benefit to splitting.
+        chunkSizeWarningLimit: 1000,
       },
       plugins: [tailwindcss(), react()],
       resolve: {
