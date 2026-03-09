@@ -194,6 +194,9 @@ fn run_migrations(conn: &Connection) {
     ").expect("Migration failed");
     // Add code column if upgrading from an older schema — ignored on fresh DBs.
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN code TEXT;");
+    // Add hostname column — stores the machine hostname from telemetry so it
+    // survives Railway redeploys even when metrics_map is empty.
+    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN hostname TEXT;");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -450,8 +453,9 @@ async fn handle_telemetry(
     State(state): State<AppState>,
     Json(payload): Json<MetricsPayload>,
 ) -> StatusCode {
-    let node_id = payload.node_id.clone();
-    let ts      = now_ms();
+    let node_id       = payload.node_id.clone();
+    let node_hostname = payload.hostname.clone();
+    let ts            = now_ms();
 
     // Update in-memory snapshot.
     {
@@ -465,14 +469,21 @@ async fn handle_telemetry(
         }
     }
 
-    // Persist last_seen to nodes table.
+    // Persist last_seen (and hostname when present) to nodes table.
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
-        conn.execute(
-            "UPDATE nodes SET last_seen = ?1 WHERE wk_id = ?2",
-            params![ts as i64, node_id],
-        ).ok();
+        if let Some(ref h) = node_hostname {
+            conn.execute(
+                "UPDATE nodes SET last_seen = ?1, hostname = ?2 WHERE wk_id = ?3",
+                params![ts as i64, h, node_id],
+            ).ok();
+        } else {
+            conn.execute(
+                "UPDATE nodes SET last_seen = ?1 WHERE wk_id = ?2",
+                params![ts as i64, node_id],
+            ).ok();
+        }
     }).await.ok();
 
     StatusCode::NO_CONTENT
@@ -614,15 +625,44 @@ async fn main() {
     // Nodes with recent telemetry will repopulate metrics on the next push;
     // until then they show as present but with null metrics (stale indicator).
     let seed_metrics: HashMap<String, MetricsEntry> = {
-        let rows: Vec<(String, i64)> = conn
-            .prepare("SELECT wk_id, last_seen FROM nodes")
+        let rows: Vec<(String, i64, Option<String>)> = conn
+            .prepare("SELECT wk_id, last_seen, hostname FROM nodes")
             .unwrap()
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .query_map([], |r| Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            )))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
         rows.into_iter()
-            .map(|(node_id, last_seen)| (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics: None }))
+            .map(|(node_id, last_seen, hostname)| {
+                // If we have a persisted hostname, seed a minimal stub MetricsPayload so
+                // the frontend can display it even before the agent re-pushes telemetry.
+                let metrics = hostname.map(|h| MetricsPayload {
+                    node_id:                        node_id.clone(),
+                    hostname:                       Some(h),
+                    cpu_usage_percent:              0.0,
+                    total_memory_mb:                0,
+                    used_memory_mb:                 0,
+                    available_memory_mb:            0,
+                    cpu_core_count:                 0,
+                    timestamp_ms:                   last_seen as u64,
+                    cpu_power_w:                    None,
+                    ecpu_power_w:                   None,
+                    pcpu_power_w:                   None,
+                    gpu_utilization_percent:        None,
+                    memory_pressure_percent:        None,
+                    thermal_state:                  None,
+                    nvidia_gpu_utilization_percent: None,
+                    nvidia_vram_used_mb:            None,
+                    nvidia_vram_total_mb:           None,
+                    nvidia_gpu_temp_c:              None,
+                    nvidia_power_draw_w:            None,
+                });
+                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics })
+            })
             .collect()
     };
 
