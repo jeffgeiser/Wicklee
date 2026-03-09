@@ -83,9 +83,9 @@ jobs:
           name: wicklee-agent-windows-x86_64.exe
           path: wicklee-agent-windows-x86_64.exe
 
-  # ── Linux x64 ─────────────────────────────────────────────────────────────────
+  # ── Linux x64 (musl — fully static, no glibc dependency) ────────────────────
   build-linux-x64:
-    name: Build · Linux (x64)
+    name: Build · Linux (x64, musl)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -100,33 +100,31 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-musl
 
-      # nvml-wrapper links against libnvidia-ml at compile time.
-      # Install just the NVML dev headers from NVIDIA's apt repo (small, ~1 MB).
-      - name: Install NVML dev headers
-        run: |
-          curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
-            -o /tmp/cuda-keyring.deb
-          sudo dpkg -i /tmp/cuda-keyring.deb
-          sudo apt-get update -qq
-          sudo apt-get install -y cuda-nvml-dev-12-4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
-      - name: Build agent
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+      # musl cannot link or dlopen glibc-based NVIDIA libraries; skip NVML.
+      # The binary runs on Ubuntu 18.04–24.04, Debian, Alpine, and any Linux.
+      - name: Build agent (musl, no NVML)
+        run: cross build --release --target x86_64-unknown-linux-musl
         working-directory: agent
+        env:
+          RUSTFLAGS: '--cfg no_nvml'
 
       - name: Stage binary
-        run: cp agent/target/x86_64-unknown-linux-gnu/release/wicklee-agent wicklee-agent-linux-x86_64
+        run: cp agent/target/x86_64-unknown-linux-musl/release/wicklee-agent wicklee-agent-linux-x86_64
 
       - uses: actions/upload-artifact@v4
         with:
           name: wicklee-agent-linux-x86_64
           path: wicklee-agent-linux-x86_64
 
-  # ── Linux arm64 ───────────────────────────────────────────────────────────────
+  # ── Linux arm64 (musl — fully static, no glibc dependency) ───────────────────
   build-linux-arm64:
-    name: Build · Linux (arm64)
+    name: Build · Linux (arm64, musl)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -141,25 +139,20 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-gnu
+          targets: aarch64-unknown-linux-musl
 
-      - name: Install cross-compilation tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
-      # ARM Linux nodes (Graviton, Pi) rarely have NVIDIA GPUs, so we build
-      # without NVML for this target to avoid cross-compilation complexity.
-      - name: Build agent (no NVML for arm64)
-        run: cargo build --release --target aarch64-unknown-linux-gnu
+      - name: Build agent (musl, no NVML)
+        run: cross build --release --target aarch64-unknown-linux-musl
         working-directory: agent
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          # Disable NVML for cross-compiled arm64 target (no NVIDIA on most ARM)
           RUSTFLAGS: '--cfg no_nvml'
 
       - name: Stage binary
-        run: cp agent/target/aarch64-unknown-linux-gnu/release/wicklee-agent wicklee-agent-linux-aarch64
+        run: cp agent/target/aarch64-unknown-linux-musl/release/wicklee-agent wicklee-agent-linux-aarch64
 
       - uses: actions/upload-artifact@v4
         with:
