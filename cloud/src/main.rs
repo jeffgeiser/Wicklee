@@ -199,6 +199,9 @@ fn run_migrations(conn: &Connection) {
     // Add hostname column — stores the machine hostname from telemetry so it
     // survives Railway redeploys even when metrics_map is empty.
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN hostname TEXT;");
+    // Add user_id column — links each node to the account that activated it.
+    // Needed for per-user node counting to enforce the free-tier limit correctly.
+    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN user_id TEXT;");
 }
 
 // ── Tier constants ────────────────────────────────────────────────────────────
@@ -559,28 +562,33 @@ async fn handle_activate(
     let bearer = extract_bearer(&headers);
     let db     = state.db.clone();
     let bearer2 = bearer.clone();
-    let user_info: Option<(String, i32)> = if let Some(tok) = bearer2 {
+    // Returns (user_id, email, is_pro)
+    let user_info: Option<(String, String, i32)> = if let Some(tok) = bearer2 {
         tokio::task::spawn_blocking(move || {
             let conn = db.lock().unwrap();
             conn.query_row(
-                "SELECT u.email, u.is_pro FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
+                "SELECT u.id, u.email, u.is_pro FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
                 params![tok],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i32>(2)?)),
             ).ok()
         }).await.unwrap()
     } else {
         None
     };
 
-    // Enforce free-tier node limit (skip for dev account or pro users).
-    if let Some((ref email, is_pro_db)) = user_info {
+    // Enforce free-tier node limit per user (skip for dev account or pro users).
+    if let Some((ref user_id, ref email, is_pro_db)) = user_info {
         let is_pro = is_pro_db != 0 || is_dev_account(email);
         if !is_pro {
-            let db2   = state.db.clone();
+            let db2     = state.db.clone();
+            let uid     = user_id.clone();
             let count: usize = tokio::task::spawn_blocking(move || {
                 let conn = db2.lock().unwrap();
-                conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get::<_, i64>(0))
-                    .unwrap_or(0) as usize
+                conn.query_row(
+                    "SELECT COUNT(*) FROM nodes WHERE user_id = ?1",
+                    params![uid],
+                    |r| r.get::<_, i64>(0),
+                ).unwrap_or(0) as usize
             }).await.unwrap();
             if count >= MAX_FREE_NODES {
                 return (StatusCode::PAYMENT_REQUIRED,
@@ -606,8 +614,23 @@ async fn handle_activate(
     match row {
         None => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Code not found or already used. Make sure the agent is running and try again." }))).into_response(),
-        Some((node_id, fleet_url)) =>
-            (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response(),
+        Some((node_id, fleet_url)) => {
+            // Stamp the node with the activating user's id so future limit checks
+            // are scoped per account rather than counting the entire nodes table.
+            if let Some((ref user_id, _, _)) = user_info {
+                let db2    = state.db.clone();
+                let uid    = user_id.clone();
+                let nid    = node_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = db2.lock().unwrap();
+                    let _ = conn.execute(
+                        "UPDATE nodes SET user_id = ?1 WHERE wk_id = ?2",
+                        params![uid, nid],
+                    );
+                }).await.unwrap();
+            }
+            (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response()
+        }
     }
 }
 
