@@ -518,22 +518,34 @@ const App: React.FC = () => {
 
         <footer className="h-8 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-4 flex items-center justify-between text-xs text-gray-500 transition-colors">
           <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1.5">
-              <span className="relative flex h-2 w-2">
-                {isConnected && (
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                )}
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+            {isLocalHost ? (
+              <span className="flex items-center gap-1.5">
+                <span className="relative flex h-2 w-2">
+                  {isConnected && (
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  )}
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                </span>
+                Orchestrator: {isConnected ? 'Active' : 'Offline'}
               </span>
-              Orchestrator: {isConnected ? 'Active' : 'Offline'}
-            </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <span className="relative flex h-2 w-2">
+                  {nodes.length > 0 && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${nodes.length > 0 ? 'bg-green-500' : 'bg-gray-500'}`}></span>
+                </span>
+                Fleet: {nodes.length} node{nodes.length !== 1 ? 's' : ''} online
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-4">
             <span className="mono">v0.4.1-alpha</span>
-            <span className="flex items-center gap-1">
-              <Activity className="w-3 h-3" />
-              Latency: {isConnected ? '12ms' : '--'}
-            </span>
+            {isLocalHost && (
+              <span className="flex items-center gap-1">
+                <Activity className="w-3 h-3" />
+                Latency: {isConnected ? '12ms' : '--'}
+              </span>
+            )}
           </div>
         </footer>
       </main>
