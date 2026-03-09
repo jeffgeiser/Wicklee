@@ -13,6 +13,22 @@ interface PairingModalProps {
 const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInfo, onGenerate, onDisconnect }) => {
   const [copied, setCopied] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
+  // Remember the code from the pending phase so we can still show it after
+  // the agent auto-transitions to Connected (happens in ~1s).
+  const [pendingCode, setPendingCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pairingInfo?.status === 'pending' && pairingInfo.code) {
+      setPendingCode(pairingInfo.code);
+    }
+  }, [pairingInfo?.status, pairingInfo?.code]);
+
+  // Clear remembered code when modal closes or user disconnects.
+  useEffect(() => {
+    if (!isOpen || pairingInfo?.status === 'unpaired') {
+      setPendingCode(null);
+    }
+  }, [isOpen, pairingInfo?.status]);
 
   useEffect(() => {
     if (pairingInfo?.status !== 'pending' || !pairingInfo.expires_at) {
@@ -152,6 +168,39 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
               <p className="text-[11px] font-mono text-gray-500 bg-zinc-900 rounded-lg py-2">
                 Node Identity: <span className="text-indigo-400">{pairingInfo.node_id}</span>
               </p>
+
+              {/* Show the pairing code if it was just generated — user needs to
+                  enter it on wicklee.dev to link this node to their account. */}
+              {pendingCode && (
+                <div className="bg-zinc-900 border border-indigo-500/20 rounded-2xl p-5 space-y-3 text-left">
+                  <p className="text-[11px] text-indigo-400 uppercase tracking-widest font-bold text-center">
+                    Enter this code at wicklee.dev
+                  </p>
+                  <div className="flex items-center justify-center gap-3">
+                    <span className="text-3xl font-mono font-bold text-white tracking-[0.3em] whitespace-nowrap">
+                      {formatCode(pendingCode)}
+                    </span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(pendingCode);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                      className="p-2 text-gray-500 hover:text-white transition-colors shrink-0"
+                    >
+                      {copied ? <CheckCheck className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-center text-[11px] text-gray-500">
+                    Go to{' '}
+                    <a href="https://wicklee.dev" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline underline-offset-2">
+                      wicklee.dev
+                    </a>
+                    {' '}→ Fleet → Add Node, then enter this code.
+                  </p>
+                </div>
+              )}
+
               <button
                 onClick={onDisconnect}
                 className="w-full py-3 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 font-medium rounded-2xl transition-all text-sm"
