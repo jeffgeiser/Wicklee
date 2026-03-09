@@ -67,7 +67,8 @@ Remove-Item -Path $tmp -Force
 
 # ── Add to PATH (current user, persistent) ────────────────────────────────────
 
-$userPath = [System.Environment]::GetEnvironmentVariable('PATH', 'User') ?? ''
+$userPath = [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+if ($null -eq $userPath) { $userPath = '' }
 if ($userPath -notlike "*$InstallDir*") {
     [System.Environment]::SetEnvironmentVariable(
         'PATH',
