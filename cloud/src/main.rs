@@ -32,6 +32,8 @@ struct MetricsPayload {
     node_id:                        String,
     #[serde(default)]
     hostname:                       Option<String>,
+    #[serde(default)]
+    gpu_name:                       Option<String>,
     cpu_usage_percent:              f32,
     total_memory_mb:                u64,
     used_memory_mb:                 u64,
@@ -698,6 +700,7 @@ async fn main() {
                 let metrics = hostname.map(|h| MetricsPayload {
                     node_id:                        node_id.clone(),
                     hostname:                       Some(h),
+                    gpu_name:                       None,
                     cpu_usage_percent:              0.0,
                     total_memory_mb:                0,
                     used_memory_mb:                 0,

@@ -19,6 +19,8 @@ export interface NodeAgent {
 export interface SentinelMetrics {
   node_id: string;
   hostname?: string;
+  /** GPU model name — NVIDIA: nvmlDeviceGetName; Apple: ioreg chip description */
+  gpu_name?: string;
   cpu_usage_percent: number;
   total_memory_mb: number;
   used_memory_mb: number;

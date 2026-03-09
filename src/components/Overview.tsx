@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Cpu, Database, Zap, ArrowUpRight, ArrowDownRight, Info, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown } from 'lucide-react';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
-import { SentinelCard, HardwareDetailPanel, thermalColour } from './NodeHardwarePanel';
+import { SentinelCard, HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -63,7 +63,9 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, default
   const memPressStr = m?.memory_pressure_percent != null
     ? `${m.memory_pressure_percent.toFixed(0)}%`
     : '—';
-  const thermalStr = m?.thermal_state ?? '—';
+  const nvThermal   = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
+  const thermalStr  = m?.thermal_state ?? nvThermal?.label ?? '—';
+  const thermalCls  = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
 
   return (
     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
@@ -75,11 +77,16 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, default
         <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
 
         {/* Node identity */}
-        <span className="font-mono text-xs font-bold text-gray-900 dark:text-white shrink-0">{nodeId}</span>
-        {hostname !== nodeId && (
-          <span className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[140px]">{hostname}</span>
-        )}
-        <span className={`text-[10px] font-semibold ${isOnline ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
+        <div className="min-w-0 flex-shrink-0 max-w-[200px]">
+          <span className="font-mono text-xs font-bold text-gray-900 dark:text-white">{nodeId}</span>
+          {hostname !== nodeId && (
+            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400 truncate">{hostname}</span>
+          )}
+          {m?.gpu_name && (
+            <p className="text-[10px] text-indigo-400/80 truncate mt-0.5">{m.gpu_name}</p>
+          )}
+        </div>
+        <span className={`text-[10px] font-semibold shrink-0 ${isOnline ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
           {isOnline ? 'online' : 'offline'}
         </span>
 
@@ -89,7 +96,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, default
           <span className="hidden sm:inline">GPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{gpuStr}</span></span>
           <span className="hidden sm:inline">Mem: <span className="text-gray-700 dark:text-gray-300 font-semibold">{memPressStr}</span></span>
           <span className="hidden md:inline">
-            Thermal: <span className={`font-semibold ${thermalColour(m?.thermal_state ?? null)}`}>{thermalStr}</span>
+            Thermal: <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span>
           </span>
         </div>
 
