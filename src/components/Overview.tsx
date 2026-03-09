@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit } from 'lucide-react';
 import { NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { SentinelCard, HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -53,16 +53,26 @@ interface NodeRowProps {
 const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false }) => {
   const [open, setOpen] = useState(defaultOpen);
 
-  const isOnline   = m !== null;
-  const cpuStr     = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
-  const gpuStr     = m?.nvidia_gpu_utilization_percent != null
+  const isOnline = m !== null;
+  const cpuStr   = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
+  const gpuStr   = m?.nvidia_gpu_utilization_percent != null
     ? `${m.nvidia_gpu_utilization_percent.toFixed(0)}%`
     : m?.gpu_utilization_percent != null
     ? `${m.gpu_utilization_percent.toFixed(0)}%`
     : '—';
-  const memPressStr = m?.memory_pressure_percent != null
-    ? `${m.memory_pressure_percent.toFixed(0)}%`
-    : '—';
+
+  // Memory: prefer pressure (macOS) → fallback to utilization (Windows/Linux).
+  // Fallback is marked with * and a muted colour to signal it's a different metric.
+  const memPressure = m?.memory_pressure_percent;
+  const memUtil     = m ? Math.round((m.used_memory_mb / (m.total_memory_mb || 1)) * 100) : null;
+  const memIsPressure = memPressure != null;
+  const memVal      = m ? (memIsPressure ? memPressure!.toFixed(0) : memUtil!.toString()) : null;
+  const memStr      = memVal != null ? `${memVal}%${memIsPressure ? '' : '*'}` : '—';
+  const memLabel    = memIsPressure ? 'Mem pressure' : 'Mem util';
+  const memCls      = memVal != null
+    ? (memIsPressure ? 'text-gray-700 dark:text-gray-300' : 'text-sky-600 dark:text-sky-400')
+    : '';
+
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
   const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
@@ -92,7 +102,9 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
         <div className="flex-1 flex items-center gap-4 justify-end text-[11px] text-gray-500 dark:text-gray-400 font-mono">
           <span>CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
           <span className="hidden sm:inline">GPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{gpuStr}</span></span>
-          <span className="hidden sm:inline">Mem: <span className="text-gray-700 dark:text-gray-300 font-semibold">{memPressStr}</span></span>
+          <span className="hidden sm:inline" title={memLabel}>
+            Mem: <span className={`font-semibold ${memCls}`}>{memStr}</span>
+          </span>
           <span className="hidden md:inline">
             Thermal: <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span>
           </span>
@@ -332,8 +344,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
   // Build the accordion row data
   const nodeRows: NodeRowProps[] = isLocalHost
-    ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel, defaultOpen: true }] : [])
-    : nodes.map((n, idx) => ({ nodeId: n.id, hostname: n.hostname, metrics: allNodeMetrics[n.id] ?? null, lastSeenMs: lastSeenMsMap[n.id], defaultOpen: idx === 0 }));
+    ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel }] : [])
+    : nodes.map(n => ({ nodeId: n.id, hostname: n.hostname, metrics: allNodeMetrics[n.id] ?? null, lastSeenMs: lastSeenMsMap[n.id] }));
 
   return (
     <div className="space-y-6">
@@ -367,7 +379,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Cpu} color="bg-green-500" />
       </div>
 
-      {/* ── All Nodes accordion ──────────────────────────────────────────────── */}
+      {/* ── All Nodes accordion (collapsed by default) ───────────────────────── */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm dark:shadow-none">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -538,6 +550,23 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         <div className="lg:col-span-1 h-full min-h-[400px]">
           <EventFeed events={fleetEvents} />
         </div>
+      </div>
+
+      {/* ── Fleet Intelligence placeholder (Phase 3) ──────────────────────────── */}
+      <div className="bg-gray-900 dark:bg-gray-900 border border-gray-800 rounded-2xl p-6">
+        <div className="flex items-center gap-2 mb-3">
+          <BrainCircuit className="w-4 h-4 text-indigo-400" />
+          <h3 className="text-sm font-semibold text-gray-200">Fleet Intelligence</h3>
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            Phase 3
+          </span>
+        </div>
+        <p className="text-sm text-gray-500">
+          Automated observations will appear here once an inference runtime is connected.
+        </p>
+        <p className="text-xs text-gray-600 mt-1">
+          Connect Ollama or vLLM to unlock thermal-aware load balancing suggestions, anomaly detection, and WASM interceptor recommendations.
+        </p>
       </div>
     </div>
   );
