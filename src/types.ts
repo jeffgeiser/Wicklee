@@ -42,6 +42,16 @@ export interface SentinelMetrics {
   nvidia_power_draw_w:            number | null;
 }
 
+export interface FleetEvent {
+  id: string;
+  ts: number; // Date.now() timestamp
+  type: 'node_online' | 'node_offline' | 'thermal_change';
+  nodeId: string;
+  hostname?: string;
+  /** For thermal_change: "Normal → Serious" */
+  detail?: string;
+}
+
 export interface TraceRecord {
   id: string;
   timestamp: string;

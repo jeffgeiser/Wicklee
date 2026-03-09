@@ -679,47 +679,22 @@ async fn main() {
     let conn = open_db();
 
     // Pre-load known nodes from the DB so they survive Railway redeploys.
-    // Nodes with recent telemetry will repopulate metrics on the next push;
-    // until then they show as present but with null metrics (stale indicator).
+    // metrics is always None here — the frontend shows "last seen X ago" until
+    // the agent re-pushes real telemetry (within its 2s push cadence).
     let seed_metrics: HashMap<String, MetricsEntry> = {
-        let rows: Vec<(String, i64, Option<String>)> = conn
-            .prepare("SELECT wk_id, last_seen, hostname FROM nodes")
+        let rows: Vec<(String, i64)> = conn
+            .prepare("SELECT wk_id, last_seen FROM nodes")
             .unwrap()
             .query_map([], |r| Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
-                r.get::<_, Option<String>>(2)?,
             )))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
         rows.into_iter()
-            .map(|(node_id, last_seen, hostname)| {
-                // If we have a persisted hostname, seed a minimal stub MetricsPayload so
-                // the frontend can display it even before the agent re-pushes telemetry.
-                let metrics = hostname.map(|h| MetricsPayload {
-                    node_id:                        node_id.clone(),
-                    hostname:                       Some(h),
-                    gpu_name:                       None,
-                    cpu_usage_percent:              0.0,
-                    total_memory_mb:                0,
-                    used_memory_mb:                 0,
-                    available_memory_mb:            0,
-                    cpu_core_count:                 0,
-                    timestamp_ms:                   last_seen as u64,
-                    cpu_power_w:                    None,
-                    ecpu_power_w:                   None,
-                    pcpu_power_w:                   None,
-                    gpu_utilization_percent:        None,
-                    memory_pressure_percent:        None,
-                    thermal_state:                  None,
-                    nvidia_gpu_utilization_percent: None,
-                    nvidia_vram_used_mb:            None,
-                    nvidia_vram_total_mb:           None,
-                    nvidia_gpu_temp_c:              None,
-                    nvidia_power_draw_w:            None,
-                });
-                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics })
+            .map(|(node_id, last_seen)| {
+                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics: None })
             })
             .collect()
     };
