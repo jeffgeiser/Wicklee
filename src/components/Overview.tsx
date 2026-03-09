@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check } from 'lucide-react';
 import { NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -194,6 +194,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const [selectedMetric, setSelectedMetric] = useState<MetricKey>('gpu');
   const MAX_HISTORY = 60;
 
+  const [metricOpen, setMetricOpen] = useState(false);
+  const metricDropdownRef = useRef<HTMLDivElement>(null);
+
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
@@ -344,6 +347,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       esRef.current?.close();
     };
   }, [handleMetrics, pushHistoryPoint, CLOUD_SSE_URL]);
+
+  // Close metric dropdown on outside click
+  useEffect(() => {
+    if (!metricOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!metricDropdownRef.current?.contains(e.target as Node)) setMetricOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [metricOpen]);
 
   if (!isLocalHost && nodes.length === 0) {
     return <EmptyFleetState onAddNode={onAddNode} />;
@@ -556,16 +569,53 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                     )}
                   </h3>
                 </div>
-                <select
-                  value={selectedMetric}
-                  onChange={e => setSelectedMetric(e.target.value as MetricKey)}
-                  className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs rounded-lg px-2 py-1 outline-none text-gray-600 dark:text-gray-400 cursor-pointer"
-                >
-                  <option value="gpu">GPU Util{settled && !hasGpu ? ' (N/A)' : ''}</option>
-                  <option value="cpu">CPU</option>
-                  <option value="mem"   disabled={settled && !hasMem}>Mem Pressure{settled && !hasMem ? ' (N/A)' : ''}</option>
-                  <option value="power" disabled={settled && !hasPower}>Board Power{settled && !hasPower ? ' (N/A)' : ''}</option>
-                </select>
+                {/* Custom metric selector */}
+                <div ref={metricDropdownRef} className="relative">
+                  <button
+                    onClick={() => setMetricOpen(o => !o)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 transition-colors select-none"
+                  >
+                    <span className="font-medium">
+                      {{ gpu: 'GPU Util', cpu: 'CPU', mem: 'Mem Pressure', power: 'Board Power' }[selectedMetric]}
+                    </span>
+                    <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform duration-150 ${metricOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {metricOpen && (
+                    <div className="absolute right-0 top-full mt-1.5 z-30 min-w-[172px] bg-gray-900 border border-gray-700/80 rounded-xl shadow-2xl shadow-black/50 py-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                      {(
+                        [
+                          { key: 'gpu'   as MetricKey, label: 'GPU Util',     na: settled && !hasGpu,   naLabel: ''          },
+                          { key: 'cpu'   as MetricKey, label: 'CPU',          na: false,                 naLabel: ''          },
+                          { key: 'mem'   as MetricKey, label: 'Mem Pressure', na: settled && !hasMem,   naLabel: 'macOS only' },
+                          { key: 'power' as MetricKey, label: 'Board Power',  na: settled && !hasPower, naLabel: ''          },
+                        ]
+                      ).map(({ key, label, na, naLabel }) => (
+                        <button
+                          key={key}
+                          disabled={na}
+                          title={na && naLabel ? naLabel : undefined}
+                          onClick={() => { setSelectedMetric(key); setMetricOpen(false); }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors ${
+                            na
+                              ? 'text-gray-600 cursor-default'
+                              : selectedMetric === key
+                              ? 'bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/25'
+                              : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <span className="w-3.5 shrink-0">
+                            {selectedMetric === key && <Check className="w-3.5 h-3.5 text-indigo-400" />}
+                          </span>
+                          <span className="flex-1">{label}</span>
+                          {na && (
+                            <span className="text-[10px] text-gray-600" title={naLabel || undefined}>(N/A)</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="h-64 w-full relative">
                 {!isLive && (
