@@ -77,7 +77,7 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
                 <Cloud className="w-8 h-8 text-indigo-400" />
               </div>
               <div className="space-y-1">
-                <h2 className="text-xl font-bold text-white">Connect to Fleet</h2>
+                <h2 className="text-xl font-bold text-white">Pair a Node</h2>
                 <p className="text-gray-400 text-sm">
                   Link this node to your Wicklee fleet at wicklee.dev.
                 </p>
