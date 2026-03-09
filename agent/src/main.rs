@@ -39,7 +39,7 @@ struct TagsResponse { models: Vec<ModelInfo> }
 #[derive(Serialize)]
 struct ModelInfo { name: String, size: u64 }
 
-// NVIDIA GPU metrics — populated only on Linux nodes with NVIDIA drivers.
+// NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
 // All fields are Option so the payload serialises cleanly as null on other platforms.
 #[derive(Serialize, Clone, Default)]
 struct NvidiaMetrics {
@@ -48,6 +48,8 @@ struct NvidiaMetrics {
     nvidia_vram_total_mb:           Option<u64>,
     nvidia_gpu_temp_c:              Option<u32>,
     nvidia_power_draw_w:            Option<f32>,
+    /// Human-readable GPU model name, e.g. "NVIDIA GeForce RTX 4080"
+    nvidia_gpu_name:                Option<String>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -58,14 +60,18 @@ struct AppleSiliconMetrics {
     gpu_utilization_percent: Option<f32>,
     memory_pressure_percent: Option<f32>,
     thermal_state:           Option<String>,
+    /// Apple Silicon chip description, e.g. "Apple M3 Max"
+    gpu_name:                Option<String>,
 }
 
 #[derive(Serialize)]
 struct MetricsPayload {
     node_id:                 String,
     /// Human-readable machine hostname (e.g. "DESKTOP-XYZ", "JEFFs-MacBook-Pro.local").
-    /// Populated by the agent; used for display in the hosted fleet dashboard.
     hostname:                String,
+    /// GPU model name — NVIDIA: nvmlDeviceGetName; Apple: ioreg chip description.
+    /// None when neither NVML nor ioreg can provide a name.
+    gpu_name:                Option<String>,
     cpu_usage_percent:       f32,
     total_memory_mb:         u64,
     used_memory_mb:          u64,
@@ -278,6 +284,51 @@ fn parse_ioreg_gpu(text: &str) -> Option<f32> {
     }
     None
 }
+
+/// Apple Silicon chip name via ioreg IOPlatformExpertDevice.
+/// Returns e.g. "Apple M3 Max" or None on non-Apple hardware.
+#[cfg(not(target_os = "windows"))]
+async fn read_apple_chip_name() -> Option<String> {
+    let out = tokio::process::Command::new("ioreg")
+        .args(["-r", "-c", "IOPlatformExpertDevice", "-d", "1"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() { return None; }
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        // e.g.: "platform-name" = <4170706c65204d3320...>  (hex-encoded)
+        // More reliably: look for a line containing the chip description in plain text.
+        // ioreg on macOS also emits:
+        //   "chip-id" = <...>
+        // and the human-readable name is in the "IOPlatformExpertDevice" properties.
+        // The simplest reliable key is the OS-visible product description exposed as:
+        //   "model" = <4170706c65204d332050726f...>  (UTF-8 hex)
+        if let Some(pos) = line.find("\"model\"") {
+            let after = &line[pos + 7..];
+            // Value is either hex <...> or a quoted string "..."
+            if let Some(start) = after.find('<') {
+                if let Some(end) = after.find('>') {
+                    let hex: String = after[start+1..end].chars().filter(|c| !c.is_whitespace()).collect();
+                    if let Ok(bytes) = (0..hex.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&hex[i..i+2], 16))
+                        .collect::<Result<Vec<u8>, _>>()
+                    {
+                        if let Ok(s) = std::str::from_utf8(&bytes) {
+                            let name = s.trim_matches('\0').trim().to_string();
+                            if !name.is_empty() { return Some(name); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+async fn read_apple_chip_name() -> Option<String> { None }
 
 /// Memory pressure via `vm_stat` — no sudo required.
 ///
@@ -671,6 +722,8 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 m.nvidia_power_draw_w =
                     device.power_usage().ok().map(|mw| mw as f32 / 1_000.0);
 
+                m.nvidia_gpu_name = device.name().ok();
+
                 if let Ok(mut guard) = shared_clone.lock() {
                     *guard = m;
                 }
@@ -688,11 +741,13 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
     let shared_clone = Arc::clone(&shared);
 
     tokio::spawn(async move {
+        let chip_name = read_apple_chip_name().await;
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
             interval.tick().await;
 
             let mut m = AppleSiliconMetrics::default();
+            m.gpu_name = chip_name.clone();
 
             // 1. Thermal: sysctl (Intel) → pmset (M-series)
             m.thermal_state = read_thermal_sysctl();
@@ -771,6 +826,7 @@ fn start_metrics_broadcaster(
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
                 hostname:                node_id.clone(),
+                gpu_name:                nvidia.nvidia_gpu_name.clone().or(apple.gpu_name.clone()),
                 cpu_usage_percent:       sys.global_cpu_info().cpu_usage(),
                 total_memory_mb:         total     / 1024 / 1024,
                 used_memory_mb:          used      / 1024 / 1024,
@@ -950,6 +1006,7 @@ async fn handle_metrics(
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
                 hostname:            node_id.clone(),
+                gpu_name:            nvidia.nvidia_gpu_name.clone().or(apple.gpu_name.clone()),
                 cpu_usage_percent:   sys.global_cpu_info().cpu_usage(),
                 total_memory_mb:     total     / 1024 / 1024,
                 used_memory_mb:      used      / 1024 / 1024,

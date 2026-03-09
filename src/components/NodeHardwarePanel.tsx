@@ -6,10 +6,21 @@ export const thermalColour = (state: string | null) => {
   switch (state?.toLowerCase()) {
     case 'normal':   return 'text-green-400';
     case 'elevated': return 'text-yellow-400';
+    case 'fair':     return 'text-yellow-400';
     case 'high':     return 'text-orange-400';
+    case 'serious':  return 'text-orange-400';
     case 'critical': return 'text-red-500';
     default:         return 'text-gray-400';
   }
+};
+
+/** Derives a thermal label from an NVIDIA GPU temp when macOS thermal_state is unavailable. */
+export const derivedNvidiaThermal = (temp: number | null): { label: string; colour: string } | null => {
+  if (temp == null) return null;
+  if (temp < 70)   return { label: 'Normal',   colour: 'text-green-400' };
+  if (temp < 83)   return { label: 'Fair',     colour: 'text-yellow-400' };
+  if (temp < 90)   return { label: 'Serious',  colour: 'text-orange-400' };
+  return               { label: 'Critical', colour: 'text-red-500' };
 };
 
 export const SentinelCard: React.FC<{
@@ -32,6 +43,12 @@ export const SentinelCard: React.FC<{
 );
 
 export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ metrics: m }) => {
+  // Thermal: use macOS thermal_state if available; fall back to NVIDIA-derived label
+  const nvThermal   = m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
+  const thermalLabel = m.thermal_state ?? nvThermal?.label ?? null;
+  const thermalClass = m.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
+  const thermalTitle = nvThermal != null ? 'GPU Thermal' : 'Thermal State';
+
   const cpuPct    = `${m.cpu_usage_percent.toFixed(1)}%`;
   const memUsed   = `${(m.used_memory_mb / 1024).toFixed(1)} GB`;
   const memTotal  = m.total_memory_mb ? `of ${(m.total_memory_mb / 1024).toFixed(0)} GB` : undefined;
@@ -62,10 +79,13 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
             <Thermometer size={16} className="text-orange-400" />
           </div>
           <div className="min-w-0">
-            <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">Thermal State</p>
-            <p className={`text-base font-bold leading-tight ${thermalColour(m.thermal_state)}`}>
-              {m.thermal_state ?? '—'}
+            <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">{thermalTitle}</p>
+            <p className={`text-base font-bold leading-tight ${thermalClass}`}>
+              {thermalLabel ?? '—'}
             </p>
+            {nvThermal && m.nvidia_gpu_temp_c != null && (
+              <p className="text-[10px] text-gray-400 font-mono">{m.nvidia_gpu_temp_c}°C</p>
+            )}
           </div>
         </div>
       </div>

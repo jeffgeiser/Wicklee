@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { NodeAgent, SentinelMetrics } from '../types';
-import { HardwareDetailPanel, thermalColour } from './NodeHardwarePanel';
+import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -94,6 +94,9 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
                     <span className="text-xs text-gray-500">{m.hostname}</span>
                   )}
                 </div>
+                {m?.gpu_name && (
+                  <p className="text-[10px] text-indigo-400/80 mt-0.5">{m.gpu_name}</p>
+                )}
               </div>
             </div>
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
@@ -166,10 +169,15 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
               }`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${m ? 'bg-green-400' : 'bg-gray-500'}`} />
-              <span className="font-mono text-xs font-bold">{n.id}</span>
-              {n.hostname !== n.id && (
-                <span className="text-xs opacity-70">{n.hostname}</span>
-              )}
+              <div className="min-w-0">
+                <span className="font-mono text-xs font-bold">{n.id}</span>
+                {n.hostname !== n.id && (
+                  <span className="ml-1.5 text-xs opacity-70">{n.hostname}</span>
+                )}
+                {m?.gpu_name && (
+                  <p className={`text-[9px] truncate max-w-[120px] mt-0.5 ${isActive ? 'text-indigo-200' : 'text-indigo-400/70'}`}>{m.gpu_name}</p>
+                )}
+              </div>
             </button>
           );
         })}
@@ -178,7 +186,14 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
       {/* Detail panel */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm dark:shadow-none">
         {/* Node identity + connection status */}
-        {displayNode && (
+        {displayNode && (() => {
+          const nvThermal = displayMetrics && displayMetrics.thermal_state == null
+            ? derivedNvidiaThermal(displayMetrics.nvidia_gpu_temp_c ?? null) : null;
+          const thermalDisplay = displayMetrics?.thermal_state ?? nvThermal?.label ?? null;
+          const thermalCls     = displayMetrics?.thermal_state != null
+            ? thermalColour(displayMetrics.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
+          const thermalTitle   = nvThermal ? 'GPU Thermal' : 'Thermal';
+          return (
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
               <span className={`w-2.5 h-2.5 rounded-full ${displayMetrics ? 'bg-green-500' : 'bg-gray-400'}`} />
@@ -189,9 +204,12 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
                     <span className="text-xs text-gray-500">{displayNode.hostname}</span>
                   )}
                 </div>
-                {displayMetrics?.thermal_state && (
-                  <p className={`text-[11px] font-semibold mt-0.5 ${thermalColour(displayMetrics.thermal_state)}`}>
-                    Thermal: {displayMetrics.thermal_state}
+                {displayMetrics?.gpu_name && (
+                  <p className="text-[10px] text-indigo-400/80 mt-0.5">{displayMetrics.gpu_name}</p>
+                )}
+                {thermalDisplay && (
+                  <p className={`text-[11px] font-semibold mt-0.5 ${thermalCls}`}>
+                    {thermalTitle}: {thermalDisplay}
                   </p>
                 )}
               </div>
@@ -204,7 +222,8 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
               {displayMetrics ? 'Online' : connected ? 'Awaiting telemetry' : 'Connecting…'}
             </span>
           </div>
-        )}
+          );
+        })()}
 
         {displayMetrics ? (
           <HardwareDetailPanel metrics={displayMetrics} />
