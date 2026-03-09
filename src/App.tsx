@@ -231,6 +231,43 @@ const App: React.FC = () => {
     handleNodeAdded();
   }, [isLoggedIn, handleNodeAdded]);
 
+  // App-level cloud SSE subscription (hosted only).
+  // Stays open regardless of the active tab so lastCloudTelemetryMs is always
+  // current — prevents false "offline" warnings when navigating away from Overview.
+  // Also patches node hostnames the first time real metrics arrive.
+  useEffect(() => {
+    if (isLocalHost || !isLoggedIn) return;
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout>;
+    const connect = () => {
+      es = new EventSource(`${CLOUD_URL}/api/fleet/stream`);
+      es.onmessage = (ev) => {
+        try {
+          const fleet = JSON.parse(ev.data) as {
+            nodes: Array<{ node_id: string; last_seen_ms: number; metrics: { hostname?: string } | null }>;
+          };
+          if (fleet.nodes.some(n => n.metrics)) {
+            setLastCloudTelemetryMs(Date.now());
+            // Patch hostnames into nodes that are still showing WK fallback ids.
+            setNodes(prev => prev.map(node => {
+              const match = fleet.nodes.find(n => n.node_id === node.id);
+              if (match?.metrics?.hostname && node.hostname === node.id) {
+                return { ...node, hostname: match.metrics.hostname };
+              }
+              return node;
+            }));
+          }
+        } catch { /* malformed frame */ }
+      };
+      es.onerror = () => {
+        es?.close();
+        retryTimer = setTimeout(connect, 5000);
+      };
+    };
+    connect();
+    return () => { es?.close(); clearTimeout(retryTimer); };
+  }, [isLoggedIn]);
+
   const permissions = usePermissions(currentUser);
   const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
 
