@@ -4,10 +4,10 @@ export interface NodeAgent {
   hostname: string;
   ip: string;
   status: 'online' | 'offline' | 'degraded';
-  gpuTemp: number;
-  vramUsed: number;
-  vramTotal: number;
-  powerUsage: number;
+  gpuTemp: number | null;
+  vramUsed: number | null;
+  vramTotal: number | null;
+  powerUsage: number | null;
   tdp?: number; // Thermal Design Power in Watts
   requestsPerSecond: number;
   activeInterceptors: string[];
