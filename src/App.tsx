@@ -208,8 +208,8 @@ const App: React.FC = () => {
         // Map cloud NodeSummary → frontend NodeAgent shape
         setNodes((data.nodes ?? []).map((n: any) => ({
           id: n.node_id,
-          hostname: n.node_id,
-          ip: n.fleet_url,
+          hostname: n.metrics?.hostname ?? n.node_id,
+          ip: n.metrics?.hostname ?? n.node_id,
           status: 'online' as const,
           gpuTemp: n.metrics?.nvidia_gpu_temp_c ?? 0,
           vramUsed: (n.metrics?.nvidia_vram_used_mb ?? 0) / 1024,

@@ -63,6 +63,9 @@ struct AppleSiliconMetrics {
 #[derive(Serialize)]
 struct MetricsPayload {
     node_id:                 String,
+    /// Human-readable machine hostname (e.g. "DESKTOP-XYZ", "JEFFs-MacBook-Pro.local").
+    /// Populated by the agent; used for display in the hosted fleet dashboard.
+    hostname:                String,
     cpu_usage_percent:       f32,
     total_memory_mb:         u64,
     used_memory_mb:          u64,
@@ -474,14 +477,29 @@ fn start_cloud_push(
             if last_push.elapsed() < push_interval { continue; }
 
             // Only push when paired (session_token present).
-            let has_token = pairing_state.lock().unwrap().cloud_session_token.is_some();
-            if !has_token { continue; }
+            let wk_id = {
+                let state = pairing_state.lock().unwrap();
+                if state.cloud_session_token.is_none() { continue; }
+                state.node_id.clone()
+            };
+
+            // Patch the JSON frame: replace node_id with the WK-XXXX identifier
+            // so it matches the nodes table key; preserve the machine hostname
+            // in a separate `hostname` field for display in the fleet dashboard.
+            let patched = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&frame) {
+                let machine_hostname = val["node_id"].as_str().unwrap_or("").to_string();
+                val["node_id"] = serde_json::json!(wk_id);
+                val["hostname"] = serde_json::json!(machine_hostname);
+                val.to_string()
+            } else {
+                frame
+            };
 
             last_push = std::time::Instant::now();
             let _ = client
                 .post(format!("{cloud}/api/telemetry"))
                 .header("content-type", "application/json")
-                .body(frame)
+                .body(patched)
                 .send()
                 .await;
         }
@@ -752,6 +770,7 @@ fn start_metrics_broadcaster(
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
+                hostname:                node_id.clone(),
                 cpu_usage_percent:       sys.global_cpu_info().cpu_usage(),
                 total_memory_mb:         total     / 1024 / 1024,
                 used_memory_mb:          used      / 1024 / 1024,
@@ -930,6 +949,7 @@ async fn handle_metrics(
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
+                hostname:            node_id.clone(),
                 cpu_usage_percent:   sys.global_cpu_info().cpu_usage(),
                 total_memory_mb:     total     / 1024 / 1024,
                 used_memory_mb:      used      / 1024 / 1024,
