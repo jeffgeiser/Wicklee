@@ -1419,6 +1419,11 @@ async fn main() {
         },
     }));
 
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("wicklee-agent {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let pair_on_start = std::env::args().any(|a| a == "--pair");
     if pair_on_start {
         let code = generate_code();
