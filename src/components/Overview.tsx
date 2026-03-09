@@ -372,24 +372,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const totalVramMb  = liveMetrics.reduce((acc, m) => acc + (m.nvidia_vram_used_mb ?? 0), 0);
   const totalVramStr = totalVramMb > 0 ? `${(totalVramMb / 1024).toFixed(1)} GB` : '—';
 
-  // Ollama-derived fleet stats
-  const ELECTRICITY_RATE_PER_KWH = 0.12; // USD, US average
-  const totalTps = liveMetrics.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0), 0);
-  const throughputStr = totalTps > 0 ? `${totalTps.toFixed(1)} tok/s` : null;
-
-  const wattageValues = liveMetrics.map(m => m.wattage_per_1k_tokens).filter((v): v is number => v != null && v > 0);
-  const avgWattage = wattageValues.length > 0
-    ? wattageValues.reduce((a, b) => a + b, 0) / wattageValues.length : null;
-  const wattageStr = avgWattage != null ? `${avgWattage.toFixed(1)} W` : null;
-
-  // Cost: watt-hours per 1k tokens → kWh → USD
-  // wattage_per_1k_tokens is W (power). If sustained at that rate for the time
-  // to generate 1k tokens: energy_Wh = W * (1000/tok_s) / 3600
-  // cost = energy_Wh * rate / 1000  (rate is $/kWh)
-  // Simplified: cost = (avgWattage / 3600 / 1000) * RATE * 1000 * 1000
-  //           = avgWattage * RATE / 3600
-  const costPer1k = avgWattage != null ? (avgWattage / 3600) * ELECTRICITY_RATE_PER_KWH : null;
-  const costStr = costPer1k != null ? `$${costPer1k.toFixed(4)}` : null;
+  // Ollama fleet stats — tok/s not available in current Ollama releases (≤ v0.17.7)
+  const hasAnyOllama = liveMetrics.some(m => m.ollama_running);
 
   // Derive ambient connection state for logo + status dot
   const STALE_THRESHOLD_MS = 30_000;
@@ -423,9 +407,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 [&>*]:min-w-0">
         <StatCard
           title="Throughput"
-          value={throughputStr
-            ? <p className="text-2xl font-bold text-gray-900 dark:text-white">{throughputStr}</p>
-            : <div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">connect inference runtime</p></div>}
+          value={
+            <div>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">— tok/s</p>
+              <p className="text-[10px] text-gray-500 font-medium" title="Tok/s measurement requires Ollama /metrics endpoint (not yet available in current Ollama release)">
+                {hasAnyOllama ? 'Ollama connected · tok/s pending' : 'connect inference runtime'}
+              </p>
+            </div>
+          }
           icon={Zap} color="bg-amber-500"
         />
         <StatCard
@@ -440,16 +429,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         />
         <StatCard
           title="Wattage / 1k tkn"
-          value={wattageStr
-            ? <p className="text-2xl font-bold text-gray-900 dark:text-white">{wattageStr}</p>
-            : <div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">connect inference runtime</p></div>}
+          value={<div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">requires tok/s</p></div>}
           icon={Zap} color="bg-emerald-500"
         />
         <StatCard
           title="Cost / 1k Tokens"
-          value={costStr
-            ? <div><p className="text-2xl font-bold text-gray-900 dark:text-white">{costStr}</p><p className="text-[10px] text-gray-500 font-medium">@ $0.12/kWh</p></div>
-            : <div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">connect inference runtime</p></div>}
+          value={<div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">requires tok/s</p></div>}
           icon={Zap} color="bg-cyan-400"
         />
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Cpu} color="bg-green-500" />
