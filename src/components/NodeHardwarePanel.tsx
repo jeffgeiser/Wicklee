@@ -64,7 +64,17 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
   const nvidiaVramTotal  = m.nvidia_vram_total_mb != null ? `${(m.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
   const nvidiaTempStr    = m.nvidia_gpu_temp_c   != null ? `${m.nvidia_gpu_temp_c}°C` : null;
   const nvidiaPowerStr   = m.nvidia_power_draw_w != null ? `${m.nvidia_power_draw_w.toFixed(1)} W` : null;
-  const hasDeepMetal     = gpuUtilStr !== null || memPressStr !== null || nvidiaGpuStr !== null || nvidiaVramStr !== null;
+
+  // GPU util: prefer NVIDIA (discrete GPU), fall back to Apple AGX
+  const effectiveGpuStr = nvidiaGpuStr ?? gpuUtilStr;
+
+  // Mem pressure (macOS) or memory utilisation fallback for Linux/Windows.
+  // Fallback shows X%* so the user knows it's utilisation, not pressure.
+  const memUtilStr = m.total_memory_mb > 0
+    ? `${Math.round((m.used_memory_mb / m.total_memory_mb) * 100)}%*`
+    : null;
+  const effectiveMemStr   = memPressStr ?? memUtilStr;
+  const effectiveMemLabel = memPressStr != null ? 'Mem Pressure' : 'Mem Util*';
 
   return (
     <div className="space-y-3">
@@ -90,46 +100,56 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
         </div>
       </div>
 
-      {/* Platform-specific deep-metal */}
-      {hasDeepMetal && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {/* Apple Silicon */}
-          {(gpuUtilStr !== null || memPressStr !== null) && (
-            cpuPowerStr ? (
-              <SentinelCard
-                label="CPU Power" value={cpuPowerStr}
-                sub={m.ecpu_power_w != null && m.pcpu_power_w != null
-                  ? `E ${m.ecpu_power_w.toFixed(1)}W  P ${m.pcpu_power_w.toFixed(1)}W`
-                  : undefined}
-                icon={Zap} accent="bg-amber-500"
-              />
-            ) : (
-              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-                <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/10">
-                  <Zap size={16} className="text-amber-500 opacity-40" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
-                  <p className="text-[11px] font-semibold text-gray-400 leading-tight">—</p>
-                  <p className="text-[9px] text-gray-500 font-mono leading-tight mt-0.5">requires elevated permissions</p>
-                </div>
-              </div>
-            )
-          )}
-          {gpuUtilStr  && <SentinelCard label="GPU Utilization" value={gpuUtilStr}   icon={Activity}    accent="bg-purple-500" />}
-          {memPressStr && <SentinelCard label="Mem Pressure"    value={memPressStr}  icon={Wind}        accent="bg-rose-500" />}
-          {/* NVIDIA */}
-          {nvidiaGpuStr  && <SentinelCard label="NVIDIA GPU"   value={nvidiaGpuStr}  icon={Activity}    accent="bg-green-500" />}
-          {nvidiaVramStr && (
-            <SentinelCard label="VRAM Used" value={nvidiaVramStr}
-              sub={nvidiaVramTotal ? `of ${nvidiaVramTotal}` : undefined}
-              icon={Database} accent="bg-emerald-500"
-            />
-          )}
-          {nvidiaTempStr  && <SentinelCard label="GPU Temp"    value={nvidiaTempStr}  icon={Thermometer} accent="bg-orange-500" />}
-          {nvidiaPowerStr && <SentinelCard label="Board Power" value={nvidiaPowerStr} icon={Zap}         accent="bg-yellow-500" />}
-        </div>
-      )}
+      {/* Platform metrics — always rendered; null values show — */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        {/* CPU Power — always shown; null means no elevated perms */}
+        {cpuPowerStr ? (
+          <SentinelCard
+            label="CPU Power" value={cpuPowerStr}
+            sub={m.ecpu_power_w != null && m.pcpu_power_w != null
+              ? `E ${m.ecpu_power_w.toFixed(1)}W  P ${m.pcpu_power_w.toFixed(1)}W`
+              : undefined}
+            icon={Zap} accent="bg-amber-500"
+          />
+        ) : (
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
+            <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/10">
+              <Zap size={16} className="text-amber-500 opacity-40" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
+              <p className="text-[11px] font-semibold text-gray-400 leading-tight">—</p>
+              <p className="text-[9px] text-gray-500 font-mono leading-tight mt-0.5">requires elevated permissions</p>
+            </div>
+          </div>
+        )}
+
+        {/* GPU Utilization — NVIDIA takes priority over Apple AGX; — if neither */}
+        <SentinelCard
+          label="GPU Utilization"
+          value={effectiveGpuStr ?? '—'}
+          icon={Activity}
+          accent="bg-purple-500"
+        />
+
+        {/* Mem Pressure (macOS) or Mem Util fallback (Linux/Windows) */}
+        <SentinelCard
+          label={effectiveMemLabel}
+          value={effectiveMemStr ?? '—'}
+          icon={Wind}
+          accent={memPressStr != null ? 'bg-rose-500' : 'bg-sky-500'}
+        />
+
+        {/* NVIDIA extras — only rendered when data is present */}
+        {nvidiaVramStr && (
+          <SentinelCard label="VRAM Used" value={nvidiaVramStr}
+            sub={nvidiaVramTotal ? `of ${nvidiaVramTotal}` : undefined}
+            icon={Database} accent="bg-emerald-500"
+          />
+        )}
+        {nvidiaTempStr  && <SentinelCard label="GPU Temp"    value={nvidiaTempStr}  icon={Thermometer} accent="bg-orange-500" />}
+        {nvidiaPowerStr && <SentinelCard label="Board Power" value={nvidiaPowerStr} icon={Zap}         accent="bg-yellow-500" />}
+      </div>
     </div>
   );
 };

@@ -69,9 +69,13 @@ struct MetricsPayload {
     node_id:                 String,
     /// Human-readable machine hostname (e.g. "DESKTOP-XYZ", "JEFFs-MacBook-Pro.local").
     hostname:                String,
-    /// GPU model name — NVIDIA: nvmlDeviceGetName; Apple: ioreg chip description.
+    /// GPU model name — NVIDIA: nvmlDeviceGetName; Apple: system_profiler chip name.
     /// None when neither NVML nor ioreg can provide a name.
     gpu_name:                Option<String>,
+    /// CPU/chip model name for non-GPU nodes — Linux: /proc/cpuinfo "model name".
+    /// Displayed as the subtitle in the fleet UI when gpu_name is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chip_name:               Option<String>,
     cpu_usage_percent:       f32,
     total_memory_mb:         u64,
     used_memory_mb:          u64,
@@ -309,6 +313,41 @@ async fn read_apple_chip_name() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 async fn read_apple_chip_name() -> Option<String> { None }
+
+/// CPU model name from `/proc/cpuinfo` on Linux.
+/// Reads the "model name" field and strips noisy suffixes so the UI gets a
+/// clean string like "AMD EPYC 7302P" or "Intel Xeon Gold 6154".
+#[cfg(target_os = "linux")]
+fn read_linux_chip_name() -> Option<String> {
+    let content = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    let raw = content.lines()
+        .find(|l| l.starts_with("model name"))?
+        .splitn(2, ':')
+        .nth(1)?
+        .trim()
+        .to_string();
+
+    // Strip " @ X.XXGHz" clock speed annotation
+    let raw = if let Some(pos) = raw.find(" @") { raw[..pos].to_string() } else { raw };
+
+    // Drop trailing words that are pure noise: "CPU", "Processor", or "N-Core"
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    let end = words.iter().position(|w| {
+        *w == "CPU" || *w == "Processor" || w.ends_with("-Core")
+    }).unwrap_or(words.len());
+    let trimmed = words[..end].join(" ");
+
+    // Strip trademark noise: (R) (TM) ® ™
+    let clean = trimmed
+        .replace("(R)", "").replace("(TM)", "")
+        .replace('\u{00ae}', "").replace('\u{2122}', "");
+
+    let result = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    if result.is_empty() { None } else { Some(result) }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_linux_chip_name() -> Option<String> { None }
 
 /// Memory pressure via `vm_stat` — no sudo required.
 ///
@@ -781,6 +820,9 @@ fn start_metrics_broadcaster(
         let node_id = System::host_name()
             .unwrap_or_else(|| "wicklee-sentinel-01".to_string());
 
+        // Cache chip_name once — CPU model never changes at runtime.
+        let linux_chip_name = read_linux_chip_name();
+
         // Warm-up: two reads separated by 200 ms gives sysinfo an accurate CPU delta.
         sys.refresh_all();
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -807,6 +849,7 @@ fn start_metrics_broadcaster(
                 node_id:                 node_id.clone(),
                 hostname:                node_id.clone(),
                 gpu_name:                nvidia.nvidia_gpu_name.clone().or(apple.gpu_name.clone()),
+                chip_name:               linux_chip_name.clone(),
                 cpu_usage_percent:       sys.global_cpu_info().cpu_usage(),
                 total_memory_mb:         total     / 1024 / 1024,
                 used_memory_mb:          used      / 1024 / 1024,
@@ -961,6 +1004,8 @@ async fn handle_metrics(
         let node_id = System::host_name()
             .unwrap_or_else(|| "wicklee-sentinel-01".to_string());
 
+        let linux_chip_name = read_linux_chip_name();
+
         sys.refresh_all();
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -987,6 +1032,7 @@ async fn handle_metrics(
                 node_id:             node_id.clone(),
                 hostname:            node_id.clone(),
                 gpu_name:            nvidia.nvidia_gpu_name.clone().or(apple.gpu_name.clone()),
+                chip_name:           linux_chip_name.clone(),
                 cpu_usage_percent:   sys.global_cpu_info().cpu_usage(),
                 total_memory_mb:     total     / 1024 / 1024,
                 used_memory_mb:      used      / 1024 / 1024,

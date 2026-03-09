@@ -91,8 +91,8 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
           {hostname !== nodeId && (
             <span className="ml-2 text-xs text-gray-500 dark:text-gray-400 truncate">{hostname}</span>
           )}
-          {m?.gpu_name && (
-            <p className="text-[10px] text-indigo-400/80 truncate mt-0.5">{m.gpu_name}</p>
+          {(m?.gpu_name ?? m?.chip_name) && (
+            <p className="text-[10px] text-indigo-400/80 truncate mt-0.5">{m?.gpu_name ?? m?.chip_name}</p>
           )}
         </div>
         <span className={`text-[10px] font-semibold shrink-0 ${isOnline ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
