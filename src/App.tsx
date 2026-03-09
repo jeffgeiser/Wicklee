@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff } from 'lucide-react';
-import { DashboardTab, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
+import { ConnectionState, DashboardTab, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -146,6 +146,7 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
   const [isConnected, setIsConnected] = useState(false);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
   const [currentUser, setCurrentUser] = useState<UserType>(LOCAL_USER);
   const [byokMode, setByokMode] = useState(false);
@@ -411,7 +412,7 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} />;
+        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} />;
       case DashboardTab.TRACES:
@@ -447,7 +448,7 @@ const App: React.FC = () => {
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} />;
+        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} />;
     }
   };
 
@@ -477,7 +478,7 @@ const App: React.FC = () => {
         currentUser={currentUser}
         onUserChange={setCurrentUser}
         onLogout={handleLogout}
-        isConnected={isConnected}
+        connectionState={connectionState}
         isLocalMode={isLocalMode}
         isLocalHost={isLocalHost}
         pairingInfo={pairingInfo}

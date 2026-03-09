@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check } from 'lucide-react';
-import { NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
+import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
@@ -14,6 +14,7 @@ interface OverviewProps {
   onOpenPairing?: () => void;
   onAddNode?: () => void;
   onTelemetryUpdate?: () => void;
+  onConnectionStateChange?: (state: ConnectionState) => void;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -178,7 +179,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 );
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate, onConnectionStateChange }) => {
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
@@ -390,6 +391,27 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const costPer1k = avgWattage != null ? (avgWattage / 3600) * ELECTRICITY_RATE_PER_KWH : null;
   const costStr = costPer1k != null ? `$${costPer1k.toFixed(4)}` : null;
 
+  // Derive ambient connection state for logo + status dot
+  const STALE_THRESHOLD_MS = 30_000;
+  const now = Date.now();
+  const hasNodes = isLocalHost ? sentinel != null : Object.keys(allNodeMetrics).length > 0;
+  const allStale = isLocalHost
+    ? (sentinel != null && now - (sentinel.timestamp_ms ?? 0) > STALE_THRESHOLD_MS)
+    : Object.keys(lastSeenMsMap).length > 0 &&
+      Object.values(lastSeenMsMap).every((t: number) => now - t > STALE_THRESHOLD_MS);
+  const connectionState: ConnectionState = !connected
+    ? 'disconnected'
+    : !hasNodes
+    ? 'idle'
+    : allStale
+    ? 'degraded'
+    : 'connected';
+
+  // Report connection state change to parent (drives logo animation in Sidebar)
+  useEffect(() => {
+    onConnectionStateChange?.(connectionState);
+  }, [connectionState, onConnectionStateChange]);
+
   // Build the accordion row data
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel }] : [])
@@ -444,12 +466,24 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              {connected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
-            </span>
-            <span className={`text-[10px] font-medium ${connected ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
-              {connected ? (transport === 'ws' ? 'Live · WS' : 'Live · SSE') : 'Reconnecting…'}
+            {{
+              connected:    <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" style={{ animationDuration: '2s' }} /><span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" /></span>,
+              degraded:     <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" style={{ animationDuration: '4s' }} /><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" /></span>,
+              idle:         <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-40" style={{ animationDuration: '6s' }} /><span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-600" /></span>,
+              disconnected: <span className="relative flex h-2 w-2"><span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500" /></span>,
+            }[connectionState]}
+            <span className={`text-[10px] font-medium ${{
+              connected:    'text-green-600 dark:text-green-400',
+              degraded:     'text-amber-500 dark:text-amber-400',
+              idle:         'text-cyan-600 dark:text-cyan-500',
+              disconnected: 'text-gray-500',
+            }[connectionState]}`}>
+              {{
+                connected:    transport === 'ws' ? 'Live · WS' : 'Live · SSE',
+                degraded:     'Stale · >30s',
+                idle:         'Idle · No Nodes',
+                disconnected: 'Reconnecting…',
+              }[connectionState]}
             </span>
           </div>
         </div>

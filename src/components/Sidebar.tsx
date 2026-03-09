@@ -1,7 +1,7 @@
 import React from 'react';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, Users, RefreshCw, LogOut, Leaf, Key, CreditCard, Cloud, CloudLightning } from 'lucide-react';
 import Logo from './Logo';
-import { DashboardTab, User, UserRole, PairingInfo } from '../types';
+import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
 interface SidebarProps {
@@ -10,14 +10,14 @@ interface SidebarProps {
   currentUser: User;
   onUserChange: (user: User) => void;
   onLogout: () => void;
-  isConnected?: boolean;
+  connectionState?: ConnectionState;
   isLocalMode?: boolean;
   isLocalHost?: boolean;
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, isConnected = false, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, connectionState = 'disconnected', isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
   const permissions = usePermissions(currentUser);
 
   const items = [
@@ -41,7 +41,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   return (
     <aside className="hidden md:flex md:w-64 border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/50 flex-col transition-colors">
       <div className="p-6">
-        <Logo className="text-xl" active={isConnected} />
+        <Logo className="text-xl" connectionState={connectionState} />
         <p className="mt-1 text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold px-0.5">
           Community Edition
         </p>

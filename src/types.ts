@@ -91,6 +91,9 @@ export interface Tenant {
 
 export type FleetPairingStatus = 'unpaired' | 'pending' | 'connected';
 
+/** Ambient status of the live telemetry connection, used to drive logo + status dot animations. */
+export type ConnectionState = 'connected' | 'degraded' | 'idle' | 'disconnected';
+
 export interface PairingInfo {
   status: FleetPairingStatus;
   node_id: string;
