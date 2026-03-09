@@ -43,11 +43,13 @@ struct ModelInfo { name: String, size: u64 }
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
 struct OllamaMetrics {
-    ollama_running:       bool,
-    ollama_active_model:  Option<String>,
-    ollama_model_size_gb: Option<f32>,
-    ollama_quantization:  Option<String>,
-    // tok/s and request_count require /metrics endpoint — not in Ollama ≤ v0.17.7
+    ollama_running:           bool,
+    ollama_active_model:      Option<String>,
+    ollama_model_size_gb:     Option<f32>,
+    ollama_quantization:      Option<String>,
+    /// Sampled tok/s: measured by a 1-token /api/generate probe every 30s.
+    /// Reflects actual node throughput under current thermal/load conditions.
+    ollama_tokens_per_second: Option<f32>,
 }
 
 // NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
@@ -108,15 +110,16 @@ struct MetricsPayload {
     nvidia_power_draw_w:            Option<f32>,
     // Ollama runtime (null/false when Ollama not running)
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    ollama_running:       bool,
+    ollama_running:           bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ollama_active_model:  Option<String>,
+    ollama_active_model:      Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ollama_model_size_gb: Option<f32>,
+    ollama_model_size_gb:     Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ollama_quantization:  Option<String>,
-    // tok/s not measurable — Ollama /metrics endpoint not available in current releases.
-    // wattage_per_1k_tokens: removed until tok/s data is available.
+    ollama_quantization:      Option<String>,
+    /// Sampled tok/s from 30s 1-token probe. None until first probe completes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_tokens_per_second: Option<f32>,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -370,6 +373,69 @@ fn read_linux_chip_name() -> Option<String> {
 
 #[cfg(not(target_os = "linux"))]
 fn read_linux_chip_name() -> Option<String> { None }
+
+// ── Linux RAPL CPU Power Harvester ────────────────────────────────────────────
+//
+// Reads the kernel powercap interface — no sudo, no extra libraries.
+// Samples the energy counter twice with a 500 ms gap; power = ΔµJ / Δµs (= Watts).
+// Handles three path variants in priority order:
+//   1. intel-rapl subdirectory layout  (most Intel, also AMD on modern kernels)
+//   2. intel-rapl flat layout          (older kernels)
+//   3. amd-core layout                 (fallback for some AMD configs)
+
+#[cfg(target_os = "linux")]
+const RAPL_PATHS: &[(&str, &str)] = &[
+    ("/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj", "intel-rapl"),
+    ("/sys/class/powercap/intel-rapl:0/energy_uj",            "intel-rapl:0"),
+    ("/sys/class/powercap/amd-core/amd-core:0/energy_uj",     "amd-core"),
+];
+
+#[cfg(target_os = "linux")]
+fn read_rapl_uj(path: &str) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+/// Returns a shared `Option<f32>` updated every ~500 ms with the package CPU power
+/// in Watts (Linux RAPL powercap).  Stays `None` on non-Linux or when no RAPL sysfs
+/// node is found (older kernels, certain VMs, or AMD pre-Zen platforms).
+fn start_rapl_harvester() -> Arc<Mutex<Option<f32>>> {
+    let shared = Arc::new(Mutex::new(None::<f32>));
+
+    #[cfg(target_os = "linux")]
+    {
+        let shared_clone = Arc::clone(&shared);
+        tokio::spawn(async move {
+            // Find the first RAPL path that is readable.
+            let found = RAPL_PATHS.iter().find(|(path, _)| read_rapl_uj(path).is_some());
+            let Some((path, _label)) = found else { return; };
+            let path = *path;
+
+            loop {
+                let Some(e1) = read_rapl_uj(path) else {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                };
+                let t1 = std::time::Instant::now();
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let Some(e2) = read_rapl_uj(path) else { continue; };
+
+                let elapsed_us = t1.elapsed().as_micros() as f64;
+                // Skip sample on counter rollover — extremely rare but guard it anyway.
+                if e2 > e1 && elapsed_us > 0.0 {
+                    let power_w = (e2 - e1) as f64 / elapsed_us; // µJ / µs = W
+                    if let Ok(mut guard) = shared_clone.lock() {
+                        *guard = Some(power_w as f32);
+                    }
+                }
+
+                // Hold ~500 ms before the next sample so the loop runs at ~1 Hz.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        });
+    }
+
+    shared
+}
 
 /// Memory pressure via `vm_stat` — no sudo required.
 ///
@@ -723,7 +789,31 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
     #[cfg(not(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows")))]
     eprintln!("[diag] NVML                    MISS → not supported on this platform (nvidia_* fields will be null)");
 
-    // 6. Ollama runtime
+    // 6. RAPL CPU power (Linux powercap interface — no sudo)
+    #[cfg(target_os = "linux")]
+    {
+        let found = RAPL_PATHS.iter().find(|(path, _)| read_rapl_uj(path).is_some());
+        if let Some((path, label)) = found {
+            // Take a live sample over 500 ms to confirm the counter is ticking.
+            if let Some(e1) = read_rapl_uj(path) {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if let Some(e2) = read_rapl_uj(path) {
+                    if e2 > e1 {
+                        let power_w = (e2 - e1) as f64 / 500_000.0; // 500 ms = 500,000 µs
+                        eprintln!("[diag] RAPL power (linux)      OK  → {:.1}W (via {})", power_w, label);
+                    } else {
+                        eprintln!("[diag] RAPL power (linux)      OK  → path found (counter stalled — VM/paravirt?)");
+                    }
+                }
+            }
+        } else {
+            eprintln!("[diag] RAPL power (linux)      MISS → /sys/class/powercap not found (cpu_power_w will be null)");
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    eprintln!("[diag] RAPL power (linux)      SKIP → Linux only");
+
+    // 7. Ollama runtime
     {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
@@ -812,75 +902,99 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 // ── Ollama Harvester ──────────────────────────────────────────────────────────
 //
 // Auto-detects Ollama on localhost:11434. No configuration required.
-// Polls /api/version every 10s until found, then polls /api/ps every 5s
-// for active model info.
 //
-// NOTE: Ollama does not expose a /metrics Prometheus endpoint in any current
-// release (confirmed ≤ v0.17.7). tok/s measurement is therefore not possible
-// and ollama_tokens_per_second remains None until Ollama adds the endpoint.
+// Two concurrent tasks share the same Arc<Mutex<OllamaMetrics>>:
+//
+//   Main task (5s):  GET /api/ps — active model name, size, quantization.
+//
+//   Probe task (30s): POST /api/generate with num_predict=1 — measures actual
+//     inference throughput on this node under current thermal/load conditions.
+//     Parses eval_count / eval_duration from the final streaming JSON line.
+//     NOTE: /metrics Prometheus endpoint does not exist in Ollama ≤ v0.17.7.
+
+/// Sends a 1-token generate request and returns tok/s from the timing stats.
+async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> {
+    let resp = client
+        .post("http://localhost:11434/api/generate")
+        .json(&serde_json::json!({
+            "model":   model,
+            "prompt":  " ",
+            "stream":  true,
+            "options": { "num_predict": 1 }
+        }))
+        .send()
+        .await.ok()?;
+
+    if !resp.status().is_success() { return None; }
+
+    let text = resp.text().await.ok()?;
+
+    // The final non-empty JSON line has done:true + eval_count + eval_duration (ns).
+    for line in text.lines().rev() {
+        if line.is_empty() { continue; }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            if json["done"].as_bool() != Some(true) { continue; }
+            let eval_count    = json["eval_count"].as_u64().unwrap_or(0);
+            let eval_dur_ns   = json["eval_duration"].as_u64().unwrap_or(0);
+            if eval_count == 0 || eval_dur_ns == 0 { return None; }
+            return Some(eval_count as f32 / (eval_dur_ns as f32 / 1_000_000_000.0));
+        }
+    }
+    None
+}
 
 fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
-    let shared_clone = Arc::clone(&shared);
 
+    // ── Main task: detect + poll /api/ps every 5s ───────────────────────────
+    let shared_main = Arc::clone(&shared);
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
             .unwrap_or_default();
 
-        // Probe loop: retry every 10s until Ollama responds.
+        // Detection loop: retry every 10s until Ollama is up.
         loop {
-            let version_ok = client
-                .get("http://localhost:11434/api/version")
-                .send()
-                .await
+            let up = client.get("http://localhost:11434/api/version")
+                .send().await
                 .map(|r| r.status().is_success())
                 .unwrap_or(false);
-
-            if version_ok { break; }
+            if up { break; }
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
 
-        // Harvest loop: 5s cadence — /api/ps only.
         let mut interval = tokio::time::interval(Duration::from_secs(5));
-
         loop {
             interval.tick().await;
 
-            let mut m = OllamaMetrics { ollama_running: true, ..Default::default() };
+            // Read tok/s from shared state — probe task updates it independently.
+            let prev_tps = shared_main.lock().ok()
+                .and_then(|g| g.ollama_tokens_per_second);
 
-            // /api/ps — currently loaded models
+            let mut m = OllamaMetrics { ollama_running: true, ollama_tokens_per_second: prev_tps, ..Default::default() };
+
             if let Ok(resp) = client.get("http://localhost:11434/api/ps").send().await {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
                     if let Some(first) = json["models"].as_array().and_then(|a| a.first()) {
-                        m.ollama_active_model = first["name"]
-                            .as_str().map(|s| s.to_string());
-                        m.ollama_model_size_gb = first["size"]
-                            .as_u64().map(|b| b as f32 / 1_073_741_824.0);
+                        m.ollama_active_model = first["name"].as_str().map(|s| s.to_string());
+                        m.ollama_model_size_gb = first["size"].as_u64()
+                            .map(|b| b as f32 / 1_073_741_824.0);
                         m.ollama_quantization = first["details"]["quantization_level"]
                             .as_str().map(|s| s.to_string());
                     }
                 }
             }
 
-            // tok/s: not measurable without /metrics endpoint (not in current Ollama).
-            // ollama_tokens_per_second stays None.
+            if let Ok(mut guard) = shared_main.lock() { *guard = m; }
 
-            if let Ok(mut guard) = shared_clone.lock() {
-                *guard = m;
-            }
-
-            // If Ollama disappeared, reset and re-probe.
-            let still_up = client
-                .get("http://localhost:11434/api/version")
+            // If Ollama stopped, reset and re-detect.
+            let still_up = client.get("http://localhost:11434/api/version")
                 .send().await
                 .map(|r| r.status().is_success())
                 .unwrap_or(false);
             if !still_up {
-                if let Ok(mut guard) = shared_clone.lock() {
-                    *guard = OllamaMetrics::default();
-                }
+                if let Ok(mut guard) = shared_main.lock() { *guard = OllamaMetrics::default(); }
                 loop {
                     tokio::time::sleep(Duration::from_secs(10)).await;
                     let up = client.get("http://localhost:11434/api/version")
@@ -890,6 +1004,33 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
                     if up { break; }
                 }
                 interval = tokio::time::interval(Duration::from_secs(5));
+            }
+        }
+    });
+
+    // ── Probe task: 1-token benchmark every 30s ─────────────────────────────
+    let shared_probe = Arc::clone(&shared);
+    tokio::spawn(async move {
+        // Generous timeout: CPU-only inference of 1 token can take several seconds.
+        let probe_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+
+            // Only probe when Ollama is running with a model loaded.
+            let model = shared_probe.lock().ok()
+                .and_then(|g| if g.ollama_running { g.ollama_active_model.clone() } else { None });
+
+            let Some(model) = model else { continue; };
+
+            if let Some(tps) = probe_ollama_tps(&probe_client, &model).await {
+                if let Ok(mut guard) = shared_probe.lock() {
+                    guard.ollama_tokens_per_second = Some(tps);
+                }
             }
         }
     });
@@ -956,6 +1097,7 @@ fn start_metrics_broadcaster(
     apple_metrics:  Arc<Mutex<AppleSiliconMetrics>>,
     nvidia_metrics: Arc<Mutex<NvidiaMetrics>>,
     ollama_metrics: Arc<Mutex<OllamaMetrics>>,
+    rapl_metrics:   Arc<Mutex<Option<f32>>>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -987,9 +1129,10 @@ fn start_metrics_broadcaster(
             let used      = sys.used_memory();
             let available = total.saturating_sub(used);
 
-            let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let nvidia = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let ollama = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let apple      = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let nvidia     = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let ollama     = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let rapl_power = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
@@ -1002,7 +1145,8 @@ fn start_metrics_broadcaster(
                 available_memory_mb:     available / 1024 / 1024,
                 cpu_core_count:          sys.cpus().len(),
                 timestamp_ms,
-                cpu_power_w:             apple.cpu_power_w,
+                // macOS: powermetrics; Linux: RAPL powercap; Windows: null
+                cpu_power_w:             apple.cpu_power_w.or(rapl_power),
                 ecpu_power_w:            apple.ecpu_power_w,
                 pcpu_power_w:            apple.pcpu_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
@@ -1013,10 +1157,11 @@ fn start_metrics_broadcaster(
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
                 nvidia_gpu_temp_c:              nvidia.nvidia_gpu_temp_c,
                 nvidia_power_draw_w:            nvidia.nvidia_power_draw_w,
-                ollama_running:       ollama.ollama_running,
-                ollama_active_model:  ollama.ollama_active_model,
-                ollama_model_size_gb: ollama.ollama_model_size_gb,
-                ollama_quantization:  ollama.ollama_quantization,
+                ollama_running:           ollama.ollama_running,
+                ollama_active_model:      ollama.ollama_active_model,
+                ollama_model_size_gb:     ollama.ollama_model_size_gb,
+                ollama_quantization:      ollama.ollama_quantization,
+                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -1147,6 +1292,7 @@ async fn handle_metrics(
     axum::extract::Extension(apple_metrics):  axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
     axum::extract::Extension(nvidia_metrics): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
     axum::extract::Extension(ollama_metrics): axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
+    axum::extract::Extension(rapl_metrics):   axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -1176,9 +1322,10 @@ async fn handle_metrics(
             let used      = sys.used_memory();
             let available = total.saturating_sub(used);
 
-            let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let nvidia = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let ollama = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let apple      = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let nvidia     = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let ollama     = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let rapl_power = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -1191,7 +1338,8 @@ async fn handle_metrics(
                 available_memory_mb: available / 1024 / 1024,
                 cpu_core_count:      sys.cpus().len(),
                 timestamp_ms,
-                cpu_power_w:             apple.cpu_power_w,
+                // macOS: powermetrics; Linux: RAPL powercap; Windows: null
+                cpu_power_w:             apple.cpu_power_w.or(rapl_power),
                 ecpu_power_w:            apple.ecpu_power_w,
                 pcpu_power_w:            apple.pcpu_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
@@ -1202,10 +1350,11 @@ async fn handle_metrics(
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
                 nvidia_gpu_temp_c:              nvidia.nvidia_gpu_temp_c,
                 nvidia_power_draw_w:            nvidia.nvidia_power_draw_w,
-                ollama_running:       ollama.ollama_running,
-                ollama_active_model:  ollama.ollama_active_model,
-                ollama_model_size_gb: ollama.ollama_model_size_gb,
-                ollama_quantization:  ollama.ollama_quantization,
+                ollama_running:           ollama.ollama_running,
+                ollama_active_model:      ollama.ollama_active_model,
+                ollama_model_size_gb:     ollama.ollama_model_size_gb,
+                ollama_quantization:      ollama.ollama_quantization,
+                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -1298,10 +1447,12 @@ async fn main() {
     let apple_metrics  = start_metrics_harvester();
     let nvidia_metrics = start_nvidia_harvester();
     let ollama_metrics = start_ollama_harvester();
+    let rapl_metrics   = start_rapl_harvester();
     let broadcast_tx   = start_metrics_broadcaster(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         Arc::clone(&ollama_metrics),
+        Arc::clone(&rapl_metrics),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -1325,6 +1476,7 @@ async fn main() {
         .layer(axum::extract::Extension(apple_metrics))
         .layer(axum::extract::Extension(nvidia_metrics))
         .layer(axum::extract::Extension(ollama_metrics))
+        .layer(axum::extract::Extension(rapl_metrics))
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 

@@ -359,6 +359,29 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return () => document.removeEventListener('mousedown', handler);
   }, [metricOpen]);
 
+  // Derive ambient connection state for logo + status dot.
+  // Must be computed BEFORE the early return — hooks (useEffect below) cannot
+  // be called after a conditional return (React rules of hooks).
+  const STALE_THRESHOLD_MS = 30_000;
+  const nowMs = Date.now();
+  const hasNodes = isLocalHost ? sentinel != null : Object.keys(allNodeMetrics).length > 0;
+  const allStale = isLocalHost
+    ? (sentinel != null && nowMs - (sentinel.timestamp_ms ?? 0) > STALE_THRESHOLD_MS)
+    : Object.keys(lastSeenMsMap).length > 0 &&
+      Object.values(lastSeenMsMap).every((t: number) => nowMs - t > STALE_THRESHOLD_MS);
+  const connectionState: ConnectionState = !connected
+    ? 'disconnected'
+    : !hasNodes
+    ? 'idle'
+    : allStale
+    ? 'degraded'
+    : 'connected';
+
+  // Report connection state change to parent (drives logo animation in Sidebar)
+  useEffect(() => {
+    onConnectionStateChange?.(connectionState);
+  }, [connectionState, onConnectionStateChange]);
+
   if (!isLocalHost && nodes.length === 0) {
     return <EmptyFleetState onAddNode={onAddNode} />;
   }
@@ -372,29 +395,23 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const totalVramMb  = liveMetrics.reduce((acc, m) => acc + (m.nvidia_vram_used_mb ?? 0), 0);
   const totalVramStr = totalVramMb > 0 ? `${(totalVramMb / 1024).toFixed(1)} GB` : '—';
 
-  // Ollama fleet stats — tok/s not available in current Ollama releases (≤ v0.17.7)
+  // Ollama fleet stats
   const hasAnyOllama = liveMetrics.some(m => m.ollama_running);
-
-  // Derive ambient connection state for logo + status dot
-  const STALE_THRESHOLD_MS = 30_000;
-  const now = Date.now();
-  const hasNodes = isLocalHost ? sentinel != null : Object.keys(allNodeMetrics).length > 0;
-  const allStale = isLocalHost
-    ? (sentinel != null && now - (sentinel.timestamp_ms ?? 0) > STALE_THRESHOLD_MS)
-    : Object.keys(lastSeenMsMap).length > 0 &&
-      Object.values(lastSeenMsMap).every((t: number) => now - t > STALE_THRESHOLD_MS);
-  const connectionState: ConnectionState = !connected
-    ? 'disconnected'
-    : !hasNodes
-    ? 'idle'
-    : allStale
-    ? 'degraded'
-    : 'connected';
-
-  // Report connection state change to parent (drives logo animation in Sidebar)
-  useEffect(() => {
-    onConnectionStateChange?.(connectionState);
-  }, [connectionState, onConnectionStateChange]);
+  // Sum tok/s across nodes that have a sampled value; null if none available yet
+  const tpsNodes = liveMetrics.filter(m => m.ollama_running && m.ollama_tokens_per_second != null);
+  const fleetTps = tpsNodes.length > 0
+    ? tpsNodes.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0), 0)
+    : null;
+  // Wattage per 1k tokens: total CPU+GPU power across Ollama nodes / fleet tok/s * 1000
+  // Uses cpu_power_w (macOS powermetrics or Linux RAPL) + nvidia_power_draw_w
+  const wattPer1k = (() => {
+    if (fleetTps == null || fleetTps <= 0) return null;
+    const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
+    if (powerNodes.length === 0) return null;
+    const totalPowerW = powerNodes.reduce((acc, m) =>
+      acc + (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0), 0);
+    return (totalPowerW / fleetTps) * 1000;
+  })();
 
   // Build the accordion row data
   const nodeRows: NodeRowProps[] = isLocalHost
@@ -409,9 +426,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           title="Throughput"
           value={
             <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">— tok/s</p>
-              <p className="text-[10px] text-gray-500 font-medium" title="Tok/s measurement requires Ollama /metrics endpoint (not yet available in current Ollama release)">
-                {hasAnyOllama ? 'Ollama connected · tok/s pending' : 'connect inference runtime'}
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                {fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '— tok/s'}
+              </p>
+              <p className="text-[10px] text-gray-500 font-medium">
+                {fleetTps != null
+                  ? `sampled · ${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''}`
+                  : hasAnyOllama
+                  ? 'Ollama connected · sampling every 30s'
+                  : 'connect inference runtime'}
               </p>
             </div>
           }
@@ -429,7 +452,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         />
         <StatCard
           title="Wattage / 1k tkn"
-          value={<div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">requires tok/s</p></div>}
+          value={
+            <div>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                {wattPer1k != null ? `${wattPer1k.toFixed(1)} W` : '—'}
+              </p>
+              <p className="text-[10px] text-gray-500 font-medium">
+                {wattPer1k != null ? 'per 1k tokens' : fleetTps != null ? 'requires cpu_power_w' : 'requires tok/s'}
+              </p>
+            </div>
+          }
           icon={Zap} color="bg-emerald-500"
         />
         <StatCard

@@ -174,17 +174,46 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
               <span className="text-[11px] text-gray-500">running · no model loaded</span>
             )}
           </div>
-          {/* Metric cards — tok/s unavailable in current Ollama */}
+          {/* Metric cards */}
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3">
               <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Tokens / Sec</p>
-              <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
-              <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">requires Ollama /metrics</p>
+              {m.ollama_tokens_per_second != null ? (
+                <>
+                  <p className="text-sm font-bold text-gray-200 mt-0.5">{m.ollama_tokens_per_second.toFixed(1)} tok/s</p>
+                  <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">sampled · 30s probe</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
+                  <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">sampling every 30s</p>
+                </>
+              )}
             </div>
             <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3">
               <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Wattage / 1k tkn</p>
-              <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
-              <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">requires tok/s</p>
+              {(() => {
+                const tps = m.ollama_tokens_per_second;
+                const powerW = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+                const hasPower = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
+                if (tps != null && tps > 0 && hasPower) {
+                  const wPer1k = (powerW / tps) * 1000;
+                  return (
+                    <>
+                      <p className="text-sm font-bold text-gray-200 mt-0.5">{wPer1k.toFixed(1)} W</p>
+                      <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">per 1k tokens</p>
+                    </>
+                  );
+                }
+                return (
+                  <>
+                    <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
+                    <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">
+                      {tps == null ? 'requires tok/s' : 'requires cpu_power_w'}
+                    </p>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
