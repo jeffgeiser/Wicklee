@@ -285,43 +285,23 @@ fn parse_ioreg_gpu(text: &str) -> Option<f32> {
     None
 }
 
-/// Apple Silicon chip name via ioreg IOPlatformExpertDevice.
-/// Returns e.g. "Apple M3 Max" or None on non-Apple hardware.
+/// Apple Silicon chip name via `system_profiler SPHardwareDataType`.
+/// Parses the "Chip:" line which reads e.g. "Apple M3 Pro" directly.
+/// Falls back to None on non-Apple hardware or if the command is unavailable.
 #[cfg(not(target_os = "windows"))]
 async fn read_apple_chip_name() -> Option<String> {
-    let out = tokio::process::Command::new("ioreg")
-        .args(["-r", "-c", "IOPlatformExpertDevice", "-d", "1"])
+    let out = tokio::process::Command::new("system_profiler")
+        .arg("SPHardwareDataType")
         .output()
         .await
         .ok()?;
     if !out.status.success() { return None; }
     let text = String::from_utf8_lossy(&out.stdout);
     for line in text.lines() {
-        // e.g.: "platform-name" = <4170706c65204d3320...>  (hex-encoded)
-        // More reliably: look for a line containing the chip description in plain text.
-        // ioreg on macOS also emits:
-        //   "chip-id" = <...>
-        // and the human-readable name is in the "IOPlatformExpertDevice" properties.
-        // The simplest reliable key is the OS-visible product description exposed as:
-        //   "model" = <4170706c65204d332050726f...>  (UTF-8 hex)
-        if let Some(pos) = line.find("\"model\"") {
-            let after = &line[pos + 7..];
-            // Value is either hex <...> or a quoted string "..."
-            if let Some(start) = after.find('<') {
-                if let Some(end) = after.find('>') {
-                    let hex: String = after[start+1..end].chars().filter(|c| !c.is_whitespace()).collect();
-                    if let Ok(bytes) = (0..hex.len())
-                        .step_by(2)
-                        .map(|i| u8::from_str_radix(&hex[i..i+2], 16))
-                        .collect::<Result<Vec<u8>, _>>()
-                    {
-                        if let Ok(s) = std::str::from_utf8(&bytes) {
-                            let name = s.trim_matches('\0').trim().to_string();
-                            if !name.is_empty() { return Some(name); }
-                        }
-                    }
-                }
-            }
+        // Output contains lines like "      Chip: Apple M3 Pro"
+        if let Some(rest) = line.trim().strip_prefix("Chip:") {
+            let name = rest.trim().to_string();
+            if !name.is_empty() { return Some(name); }
         }
     }
     None
