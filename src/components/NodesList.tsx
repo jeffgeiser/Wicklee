@@ -97,8 +97,8 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
                     <span className="text-xs text-gray-500">{m.hostname}</span>
                   )}
                 </div>
-                {m?.gpu_name && (
-                  <p className="text-[10px] text-indigo-400/80 mt-0.5">{m.gpu_name}</p>
+                {(m?.gpu_name ?? m?.chip_name) && (
+                  <p className="text-[10px] text-indigo-400/80 mt-0.5">{m?.gpu_name ?? m?.chip_name}</p>
                 )}
               </div>
             </div>
