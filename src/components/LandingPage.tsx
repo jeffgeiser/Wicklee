@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Database, Thermometer, Github, Copy } from 'lucide-react';
+import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Database, Thermometer, Github, Copy, AlertTriangle, Flame, MemoryStick, TrendingDown, Eye, ShieldCheck, BarChart3, Snowflake } from 'lucide-react';
 import Logo from './Logo';
 
 interface LandingPageProps {
@@ -19,6 +19,90 @@ const FeatureCard: React.FC<{ icon: React.ElementType, title: string, descriptio
     </p>
   </div>
 );
+
+// ── Why Wicklee — Part 1 ──────────────────────────────────────────────────────
+
+const problemCards = [
+  {
+    accent: 'border-red-500/40',
+    iconBg: 'bg-red-500/10',
+    icon: Flame,
+    iconColor: 'text-red-400',
+    title: 'GPU Throttling',
+    body: 'GPU util shows 100% but clock speed dropped 33%. Your tokens/sec silently halved. No alert fired.',
+  },
+  {
+    accent: 'border-amber-500/40',
+    iconBg: 'bg-amber-500/10',
+    icon: Database,
+    iconColor: 'text-amber-400',
+    title: 'KV Cache Saturation',
+    body: 'Queue backlog building. The runtime knows. Your dashboard doesn\'t.',
+  },
+  {
+    accent: 'border-red-500/40',
+    iconBg: 'bg-red-500/10',
+    icon: Thermometer,
+    iconColor: 'text-red-400',
+    title: 'Thermal Degradation',
+    body: 'Node-3 crossed into SERIOUS thermal state 4 minutes ago. Users are already noticing slower responses.',
+  },
+  {
+    accent: 'border-amber-500/40',
+    iconBg: 'bg-amber-500/10',
+    icon: MemoryStick,
+    iconColor: 'text-amber-400',
+    title: 'Memory Exhaustion',
+    body: 'Your 70B model needs 40GB. You have 2GB of unified memory headroom. You\'ll find out when it swaps.',
+  },
+];
+
+// ── Why Wicklee — Part 2 ──────────────────────────────────────────────────────
+
+const metricCards = [
+  {
+    iconBg: 'bg-red-500/10',
+    icon: Flame,
+    iconColor: 'text-red-400',
+    title: 'Thermal Degradation Correlation',
+    body: 'When thermal state changes, tok/s follows. Wicklee shows the causal chain — not two unrelated graphs.',
+  },
+  {
+    iconBg: 'bg-cyan-500/10',
+    icon: Zap,
+    iconColor: 'text-cyan-400',
+    title: 'Wattage / 1K Tokens',
+    body: 'M3 Max vs RTX 4090 vs Jetson Orin — which is cheapest per token for your model? Live answer across mixed hardware.',
+  },
+  {
+    iconBg: 'bg-blue-500/10',
+    icon: MemoryStick,
+    iconColor: 'text-blue-400',
+    title: 'Unified Memory Pressure %',
+    body: 'Beyond used/available. The kernel\'s own stress signal — the metric that predicts swap storms before they hit.',
+  },
+  {
+    iconBg: 'bg-amber-500/10',
+    icon: AlertTriangle,
+    iconColor: 'text-amber-400',
+    title: 'Power Anomaly Detection',
+    body: '450W draw at 30% GPU util is wrong. Wicklee flags the mismatch. Standard tools see two unrelated numbers.',
+  },
+  {
+    iconBg: 'bg-purple-500/10',
+    icon: Activity,
+    iconColor: 'text-purple-400',
+    title: 'Cold Start Detection',
+    body: 'GPU spike + memory jump + elevated TTFT on request #1 = cold start. Wicklee sees one event. Others see three blips.',
+  },
+  {
+    iconBg: 'bg-green-500/10',
+    icon: ShieldCheck,
+    iconColor: 'text-green-400',
+    title: 'Sovereignty Audit Trail',
+    body: 'The only monitor that can prove your inference data never left your network. Structural guarantee, not a privacy policy.',
+  },
+];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onLocalMode }) => {
   return (
@@ -119,21 +203,143 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onLocalMo
       {/* Feature Grid */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-32 border-t border-gray-900 relative z-10">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          <FeatureCard 
+          <FeatureCard
             icon={Cpu}
             title="See every node"
             description="Live GPU temp, VRAM usage, and inference throughput across your entire fleet — auto-detected, zero configuration."
           />
-          <FeatureCard 
+          <FeatureCard
             icon={Activity}
             title="Protect your hardware"
             description="Sentinel monitors thermal thresholds and reroutes traffic before nodes overheat — automatically, while you sleep."
           />
-          <FeatureCard 
+          <FeatureCard
             icon={Terminal}
             title="Understand your costs"
             description="Wattage-per-Token shows you the true cost of local inference. Most teams have never seen this number before."
           />
+        </div>
+      </section>
+
+      {/* ── Why Wicklee Section ─────────────────────────────────────────────────── */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-40 relative z-10 space-y-16 sm:space-y-24">
+
+        {/* Part 1 — Your monitoring tools are blind */}
+        <div>
+          <p className="text-xs font-bold text-red-400 uppercase tracking-widest mb-4">The problem</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl">
+            Your monitoring tools are blind to inference.
+          </h2>
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10">
+            Standard tools see CPU and RAM. They don't see what's actually killing your inference performance.
+          </p>
+
+          {/* Problem cards 2x2 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+            {problemCards.map((card) => (
+              <div key={card.title} className={`bg-gray-900 border border-gray-800 border-l-2 ${card.accent} rounded-2xl p-5 flex gap-4`}>
+                <div className={`shrink-0 w-9 h-9 ${card.iconBg} rounded-lg flex items-center justify-center mt-0.5`}>
+                  <card.icon className={`w-4 h-4 ${card.iconColor}`} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-white mb-1">{card.title}</p>
+                  <p className="text-xs text-gray-400 leading-relaxed">{card.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Terminal log card */}
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+            <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-800 bg-gray-950/60">
+              <div className="w-2.5 h-2.5 rounded-full bg-red-500/50" />
+              <div className="w-2.5 h-2.5 rounded-full bg-amber-500/50" />
+              <div className="w-2.5 h-2.5 rounded-full bg-green-500/50" />
+              <span className="ml-2 text-[10px] text-gray-600 font-mono">wicklee · fleet log</span>
+            </div>
+            <div className="p-5 font-mono text-xs space-y-1.5">
+              <p className="text-gray-500">[09:37] Node-3 &nbsp; GPU: 100% &nbsp; Thermal: <span className="text-green-400">NORMAL</span> &nbsp;&nbsp; tok/s: <span className="text-white">42</span></p>
+              <p className="text-gray-500">[09:41] Node-3 &nbsp; GPU: 100% &nbsp; Thermal: <span className="text-red-400">SERIOUS</span> &nbsp; tok/s: <span className="text-red-300">28 ↓</span></p>
+              <div className="pt-2 border-t border-gray-800 mt-2">
+                <p className="text-green-400">→ Wicklee correlated thermal state → throttling → 33% throughput drop</p>
+                <p className="text-green-400/70">&nbsp;&nbsp; 4 minutes before first user complaint</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Part 2 — The metrics that matter */}
+        <div>
+          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4">What Wicklee surfaces</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl">
+            The metrics that matter. The ones you can't get elsewhere.
+          </h2>
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10">
+            Purpose-built for inference. Every signal is chosen because it directly predicts performance degradation or cost.
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {metricCards.map((card) => (
+              <div key={card.title} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all">
+                <div className={`w-9 h-9 ${card.iconBg} rounded-lg flex items-center justify-center mb-4`}>
+                  <card.icon className={`w-4 h-4 ${card.iconColor}`} />
+                </div>
+                <p className="text-sm font-bold text-white mb-1.5">{card.title}</p>
+                <p className="text-xs text-gray-400 leading-relaxed">{card.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Part 3 — Sovereign by design */}
+        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+          <p className="text-xs font-bold text-green-400 uppercase tracking-widest mb-4">Architecture</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-10 tracking-tight">Sovereign by design.</h2>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-start">
+            {/* Left — paragraph */}
+            <div className="space-y-4 text-gray-400 text-sm sm:text-base leading-relaxed">
+              <p>
+                Most fleet monitors require your hardware data to leave your network by default. Wicklee is different.
+              </p>
+              <p>
+                The agent runs entirely on your machine. Nothing leaves until you explicitly pair a node to the Fleet View. For teams handling sensitive workloads, this isn't a nice-to-have — it's a requirement.
+              </p>
+              <div className="flex items-start gap-3 mt-6 p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
+                <ShieldCheck className="w-5 h-5 text-green-400 shrink-0 mt-0.5" />
+                <p className="text-sm text-green-300/80">
+                  Structural guarantee, not a privacy policy. The agent has no outbound connections by default — there's nothing to configure or accidentally misconfigure.
+                </p>
+              </div>
+            </div>
+
+            {/* Right — comparison table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-800">
+                    <th className="text-left text-xs text-gray-500 font-medium pb-3 pr-6 uppercase tracking-wider w-1/2"></th>
+                    <th className="text-center text-xs text-gray-500 font-medium pb-3 px-4 uppercase tracking-wider">Others</th>
+                    <th className="text-center text-xs text-blue-400 font-bold pb-3 pl-4 uppercase tracking-wider">Wicklee</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/60">
+                  {[
+                    ['Default mode',    'Cloud-first',   'Local-first'],
+                    ['Data residency',  'Their servers', 'Your machine'],
+                    ['Config required', 'Yes',           'Zero'],
+                    ['Purpose-built',   'General',       'Inference'],
+                    ['Audit trail',     'Trust us',      'Structural'],
+                  ].map(([label, other, us]) => (
+                    <tr key={label} className="group">
+                      <td className="py-3 pr-6 text-gray-400 text-xs font-medium">{label}</td>
+                      <td className="py-3 px-4 text-center text-xs text-gray-500">{other}</td>
+                      <td className="py-3 pl-4 text-center text-xs font-semibold text-green-400">{us}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -167,7 +373,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onLocalMo
                 </div>
               </div>
             </div>
-            
+
             <div className="relative">
               <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 font-mono text-xs text-gray-500 shadow-2xl overflow-x-auto">
                 <div className="flex items-center gap-2 mb-4">
