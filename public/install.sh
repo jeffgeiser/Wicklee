@@ -5,10 +5,11 @@ set -euo pipefail
 #
 #   curl -fsSL https://wicklee.dev/install.sh | bash
 #
-# Downloads the pre-built binary for the current OS/arch from GitHub Releases,
+# Downloads the latest binary for the current OS/arch from GitHub Releases,
 # installs it to /usr/local/bin/wicklee, and prints getting-started tips.
 
 REPO="jeffgeiser/Wicklee"
+RELEASE_TAG="nightly"
 INSTALL_DIR="/usr/local/bin"
 BIN_NAME="wicklee"
 
@@ -17,13 +18,9 @@ BIN_NAME="wicklee"
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 dim()   { printf '\033[2m%s\033[0m\n'  "$*"; }
-bold()  { printf '\033[1m%s\033[0m\n'  "$*"; }
 
-die() { red "error: $*" >&2; exit 1; }
-
-need() {
-  command -v "$1" &>/dev/null || die "'$1' is required but not installed."
-}
+die()  { red "error: $*" >&2; exit 1; }
+need() { command -v "$1" &>/dev/null || die "'$1' is required but not installed."; }
 
 # ── Platform detection ────────────────────────────────────────────────────────
 
@@ -43,28 +40,18 @@ case "$ARCH" in
 esac
 
 ASSET_NAME="wicklee-agent-${OS_TAG}-${ARCH_TAG}"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
 
-# ── Fetch latest release tag ──────────────────────────────────────────────────
+# ── Download ──────────────────────────────────────────────────────────────────
 
 need curl
 
 echo ""
-echo "  Fetching latest Wicklee release…"
-
-LATEST_TAG="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' \
-  | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
-
-[[ -n "$LATEST_TAG" ]] || die "Could not determine latest release tag."
-
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ASSET_NAME}"
-
-# ── Download ──────────────────────────────────────────────────────────────────
+echo "  Downloading Wicklee (${RELEASE_TAG} · ${OS_TAG}-${ARCH_TAG})…"
 
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-echo "  Downloading ${ASSET_NAME} (${LATEST_TAG})…"
 curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" \
   || die "Download failed. Check https://github.com/${REPO}/releases for available assets."
 
@@ -90,7 +77,7 @@ echo "     Run:        wicklee"
 echo "     Dashboard:  http://localhost:7700"
 echo ""
 
-if [[ "$(uname)" == "Darwin" ]]; then
+if [[ "$OS" == "Darwin" ]]; then
   echo "  💡 macOS tip: run \`sudo wicklee\` to unlock CPU power draw metrics."
   dim "     All other metrics (GPU, memory pressure, thermal) work without sudo."
   echo ""

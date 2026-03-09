@@ -547,12 +547,16 @@ fn start_cloud_push(
             };
 
             last_push = std::time::Instant::now();
-            let _ = client
+            match client
                 .post(format!("{cloud}/api/telemetry"))
                 .header("content-type", "application/json")
                 .body(patched)
                 .send()
-                .await;
+                .await
+            {
+                Ok(r)  => eprintln!("[cloud push] {} → HTTP {}", wk_id, r.status()),
+                Err(e) => eprintln!("[cloud push] {} → ERROR: {e}", wk_id),
+            }
         }
     });
 }
