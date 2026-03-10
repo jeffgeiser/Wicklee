@@ -53,13 +53,8 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
   const [open, setOpen] = useState(defaultOpen);
 
   const isLive     = m !== null && (ls == null || Date.now() - ls < 30_000);
-  const chipName   = m?.gpu_name ?? m?.chip_name;
+  const chipName   = m?.gpu_name ?? m?.chip_name ?? null;
   const hostname   = node.hostname && node.hostname !== node.id ? node.hostname : null;
-
-  const cpuStr     = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
-  const powerW     = (m?.cpu_power_w ?? 0) + (m?.nvidia_power_draw_w ?? 0);
-  const hasPower   = m?.cpu_power_w != null || m?.nvidia_power_draw_w != null;
-  const powerStr   = hasPower ? `${powerW.toFixed(0)}W` : '—';
 
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
@@ -73,33 +68,35 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
       >
-        <span className={`shrink-0 w-2 h-2 rounded-full ${isLive ? 'bg-green-500' : 'bg-gray-500'}`} />
+        <span className={`shrink-0 w-2 h-2 rounded-full ${isLive ? 'bg-green-500' : 'bg-gray-400'}`} />
 
-        {/* Identity */}
-        <div className="min-w-0 shrink-0 max-w-[220px]">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs font-bold text-gray-900 dark:text-white">{node.id}</span>
-            {hostname && (
-              <span className="text-xs text-gray-500 dark:text-gray-400 truncate">· {hostname}</span>
-            )}
-          </div>
+        {/* Identity — single baseline: ID · hostname · chip  [· last-seen if offline] */}
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <span className="text-xs font-bold text-gray-900 dark:text-white shrink-0">{node.id}</span>
+          {hostname && (
+            <span className="text-xs text-gray-500 shrink-0">· {hostname}</span>
+          )}
           {chipName && (
-            <p className="text-[10px] text-indigo-400/80 truncate mt-0.5">{chipName}</p>
+            <span className="text-[10px] text-indigo-400/80 truncate">· {chipName}</span>
+          )}
+          {!isLive && ls && (
+            <span className="text-[10px] text-gray-500 shrink-0">· {fmtAgo(ls)}</span>
           )}
         </div>
 
-        {/* Online / offline */}
-        <span className={`text-[10px] font-semibold shrink-0 ${isLive ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
-          {isLive ? 'Online' : ls ? fmtAgo(ls) : 'Offline'}
-        </span>
-
-        {/* Quick stats — thermal + inference throughput (CPU/Power/Mem available on expand) */}
-        <div className="flex-1 flex items-center gap-3 justify-end">
-          <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
-          {tps != null ? (
-            <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+        {/* Right: thermal + tok/s (online) or "offline" */}
+        <div className="flex items-center gap-3 shrink-0">
+          {isLive ? (
+            <>
+              <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
+              {tps != null ? (
+                <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+              ) : (
+                <span className="text-[10px] text-gray-500 hidden sm:inline">no inference</span>
+              )}
+            </>
           ) : (
-            <span className="text-[10px] text-gray-600 hidden sm:inline">no inference</span>
+            <span className="text-[10px] text-gray-500">offline</span>
           )}
         </div>
 
@@ -200,10 +197,6 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
     const m        = localMetrics;
     const chipName = m?.gpu_name ?? m?.chip_name;
 
-    const cpuStr   = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
-    const powerW   = (m?.cpu_power_w ?? 0) + (m?.nvidia_power_draw_w ?? 0);
-    const hasPower = m?.cpu_power_w != null || m?.nvidia_power_draw_w != null;
-    const powerStr = hasPower ? `${powerW.toFixed(0)}W` : '—';
     const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
     const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
     const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
@@ -217,33 +210,29 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             className="w-full flex items-center gap-3 px-5 py-4 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
           >
             <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold">Local Agent</span>
-                <span className="text-sm font-bold text-gray-900 dark:text-white">{m?.node_id ?? '—'}</span>
-                {m?.hostname && m.hostname !== m.node_id && (
-                  <span className="text-xs text-gray-500">· {m.hostname}</span>
-                )}
-              </div>
-              {chipName && (
-                <p className="text-[10px] text-indigo-400/80 mt-0.5">{chipName}</p>
+            {/* Identity — single baseline */}
+            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              <span className="text-xs font-bold text-gray-900 dark:text-white shrink-0">{m?.node_id ?? '—'}</span>
+              {m?.hostname && m.hostname !== m.node_id && (
+                <span className="text-xs text-gray-500 shrink-0">· {m.hostname}</span>
               )}
-              {!localExpanded && m && (
-                <p className="text-[11px] mt-1 flex items-center gap-3">
-                  <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span>
-                  {tps != null
-                    ? <span className="text-green-400 font-bold">{tps.toFixed(1)} tok/s</span>
-                    : <span className="text-gray-600 tracking-wide">no inference</span>}
-                </p>
+              {chipName && (
+                <span className="text-[10px] text-indigo-400/80 truncate">· {chipName}</span>
               )}
             </div>
-            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border shrink-0 ${
-              connected
-                ? 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
-                : 'bg-gray-500/10 text-gray-500 border-gray-500/20'
-            }`}>
-              {connected ? 'Online' : 'Connecting…'}
-            </span>
+            {/* Right: thermal + tok/s */}
+            <div className="flex items-center gap-3 shrink-0">
+              {connected ? (
+                <>
+                  <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
+                  {tps != null
+                    ? <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+                    : <span className="text-[10px] text-gray-500 hidden sm:inline">no inference</span>}
+                </>
+              ) : (
+                <span className="text-[10px] text-gray-500">connecting…</span>
+              )}
+            </div>
             <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${localExpanded ? 'rotate-180' : ''}`} />
           </button>
 
