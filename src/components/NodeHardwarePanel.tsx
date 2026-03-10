@@ -219,13 +219,13 @@ export const HardwareDetailPanel: React.FC<{
           {/* Inputs row — primary metric display: tok/s · Watts · Thermal */}
           <div className="px-4 py-3 grid grid-cols-3 gap-4">
             <div>
-              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">tok/s</p>
+              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-1">tok/s</p>
               <p className={`text-sm font-bold tabular-nums leading-tight ${ollamaTps != null ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
                 {ollamaTps != null ? ollamaTps.toFixed(1) : '—'}
               </p>
             </div>
             <div>
-              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">Watts</p>
+              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-1">Watts</p>
               <p className={`text-sm font-bold tabular-nums leading-tight ${wattsStr ? 'text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-600'}`}>
                 {wattsStr ?? '—'}
               </p>
@@ -234,7 +234,7 @@ export const HardwareDetailPanel: React.FC<{
               )}
             </div>
             <div>
-              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">Thermal</p>
+              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-1">Thermal</p>
               <p className={`text-sm font-bold leading-tight ${thermalClass}`}>{thermalLabel ?? '—'}</p>
               {showThermalPenalty && (
                 <p className="text-[9px] text-gray-500 tabular-nums leading-none mt-0.5">({thermalPenaltyValue}×)</p>
