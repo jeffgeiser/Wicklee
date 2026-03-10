@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Server, Star, AlertTriangle, Info } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Server, Star, AlertTriangle, Info, BotMessageSquare } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
@@ -60,6 +60,67 @@ const fmtAgo = (ms: number): string => {
   return `${Math.floor(s / 3600)}h ago`;
 };
 
+// ── Compact inference + hardware summary for Fleet Overview expansions ────────
+// Full HardwareDetailPanel belongs in Node Registry only.
+const FleetNodeSummary: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pue }) => {
+  const ollamaTps   = m.ollama_tokens_per_second;
+  const totalPowerW = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+  const hasPower    = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
+  const wPer1kStr   = ollamaTps != null && ollamaTps > 0 && hasPower
+    ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)} W/1k` : null;
+  const wes         = computeWES(ollamaTps, hasPower ? totalPowerW : null, m.thermal_state, pue);
+
+  const nvThermal    = m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
+  const thermalLabel = m.thermal_state ?? nvThermal?.label ?? null;
+  const thermalCls   = m.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-500');
+
+  const memUsedGB  = (m.used_memory_mb / 1024).toFixed(1);
+  const memTotalGB = m.total_memory_mb ? `${(m.total_memory_mb / 1024).toFixed(0)}` : null;
+
+  return (
+    <div className="space-y-1.5 py-1">
+      {/* Inference band */}
+      {m.ollama_running ? (
+        <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 rounded-lg flex-wrap gap-y-1.5">
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${wesColorClass(wes)}`}>
+            WES {formatWES(wes)}
+          </span>
+          {m.ollama_active_model ? (
+            <span className="text-xs text-gray-500 truncate max-w-[160px]">{m.ollama_active_model}</span>
+          ) : (
+            <span className="text-xs text-gray-600">no model loaded</span>
+          )}
+          {m.ollama_quantization && (
+            <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">{m.ollama_quantization}</span>
+          )}
+          <div className="flex items-center gap-2.5 ml-auto shrink-0">
+            {ollamaTps != null && (
+              <span className="text-xs font-semibold text-green-400">{ollamaTps.toFixed(1)} tok/s</span>
+            )}
+            {wPer1kStr && (
+              <span className="text-xs text-gray-500">{wPer1kStr}</span>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500 bg-gray-50 dark:bg-gray-800/30 rounded-lg">
+          <BotMessageSquare size={11} className="shrink-0 text-gray-600" />
+          No inference runtime
+        </div>
+      )}
+
+      {/* Hardware summary line */}
+      <div className="flex items-center gap-4 px-3 text-xs text-gray-500 flex-wrap">
+        <span>{m.cpu_core_count} cores</span>
+        <span>{memUsedGB}{memTotalGB ? ` / ${memTotalGB} GB` : ' GB'} RAM</span>
+        {thermalLabel && (
+          <span className={`font-medium ${thermalCls}`}>{thermalLabel}</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // ── Collapsible node row used in the All Nodes accordion ─────────────────────
 interface NodeRowProps {
   nodeId: string;
@@ -68,12 +129,9 @@ interface NodeRowProps {
   lastSeenMs?: number;
   defaultOpen?: boolean;
   pue?: number;
-  onUpdatePue?: (pue: number) => void;
-  onCopyPueToAll?: (pue: number) => void;
-  hasMultipleNodes?: boolean;
 }
 
-const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false, pue = 1.0, onUpdatePue, onCopyPueToAll, hasMultipleNodes = false }) => {
+const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false, pue = 1.0 }) => {
   const [open, setOpen] = useState(defaultOpen);
 
   const isOnline   = m !== null;
@@ -118,9 +176,9 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
       </button>
 
       {open && (
-        <div className="px-4 pb-4 pt-3 border-t border-gray-200 dark:border-gray-800">
+        <div className="px-4 pb-3 pt-2 border-t border-gray-200 dark:border-gray-800">
           {m ? (
-            <HardwareDetailPanel metrics={m} pue={pue} onUpdatePue={onUpdatePue} onCopyPueToAll={onCopyPueToAll} hasMultipleNodes={hasMultipleNodes} />
+            <FleetNodeSummary m={m} pue={pue} />
           ) : (
             <p className="text-sm text-gray-500 text-center py-6">
               {ls ? `No telemetry — last seen ${fmtAgo(ls)}` : 'No telemetry received yet — make sure the agent is running.'}
@@ -467,17 +525,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes!
     : null;
 
-  // Build the accordion row data
-  const hasMultipleNodes = isLocalHost ? false : nodes.length >= 2;
+  // Build the accordion row data — PUE is read-only in Fleet Overview (editing lives in Node Registry)
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [{
         nodeId: sentinel.node_id,
         hostname: sentinel.hostname ?? sentinel.node_id,
         metrics: sentinel,
         pue: nodePueSettings?.[sentinel.node_id] ?? 1.0,
-        onUpdatePue: (p: number) => onUpdateNodePue?.(sentinel.node_id, p),
-        onCopyPueToAll,
-        hasMultipleNodes,
       }] : [])
     : nodes.map(n => ({
         nodeId: n.id,
@@ -485,9 +539,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         metrics: allNodeMetrics[n.id] ?? null,
         lastSeenMs: lastSeenMsMap[n.id],
         pue: nodePueSettings?.[n.id] ?? 1.0,
-        onUpdatePue: (p: number) => onUpdateNodePue?.(n.id, p),
-        onCopyPueToAll,
-        hasMultipleNodes,
       }));
 
   return (
