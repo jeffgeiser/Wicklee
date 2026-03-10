@@ -22,8 +22,8 @@ const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTe
   const profileRef = useRef<HTMLDivElement>(null);
 
   const titles: Record<string, string> = {
-    [DashboardTab.OVERVIEW]: 'Fleet Dashboard',
-    [DashboardTab.NODES]: 'Connected Agents',
+    // [DashboardTab.OVERVIEW]: 'Fleet Dashboard',   // removed — redundant with sidebar label
+    // [DashboardTab.NODES]: 'Connected Agents',      // removed — redundant with sidebar label
     [DashboardTab.TRACES]: 'Inference Traces',
     [DashboardTab.SCAFFOLDING]: 'Fleet Scaffolding',
     [DashboardTab.AI_INSIGHTS]: 'Local Intelligence',

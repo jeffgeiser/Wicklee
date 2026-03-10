@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Layers, Server } from 'lucide-react';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -451,7 +451,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               </p>
             </div>
           }
-          icon={Zap} color="bg-amber-500"
+          {/* icon={Zap} — was Throughput icon, replaced with Gauge */}
+          icon={Gauge} color="bg-amber-500"
         />
         <StatCard
           title="Avg GPU Temp"
@@ -461,7 +462,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         <StatCard
           title="Total VRAM Used"
           value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalVramStr}</p>}
-          icon={Database} color="bg-blue-600"
+          {/* icon={Database} — was Total VRAM icon, replaced with Layers */}
+          icon={Layers} color="bg-blue-600"
         />
         <StatCard
           title="Wattage / 1k tkn"
@@ -489,9 +491,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               </p>
             </div>
           }
-          icon={Zap} color="bg-cyan-400"
+          {/* icon={Zap} — was Cost/1k icon, replaced with DollarSign */}
+          icon={DollarSign} color="bg-cyan-400"
         />
-        <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Cpu} color="bg-green-500" />
+        {/* icon={Cpu} — was Fleet Nodes icon, replaced with Server */}
+        <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Server} color="bg-green-500" />
       </div>
 
       {/* ── All Nodes accordion (collapsed by default) ───────────────────────── */}
