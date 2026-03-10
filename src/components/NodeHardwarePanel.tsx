@@ -117,6 +117,56 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
         <VitalStat label="Cores"        value={`${m.cpu_core_count}`} />
       </div>
 
+      {/* ── Inference Band — sits above hardware grid, aligned to column gutter ── */}
+      {m.ollama_running && (
+        <div className="grid grid-cols-3 gap-6 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3 items-start">
+
+          {/* Col 1 — model identity (secondary labels) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <BotMessageSquare size={11} className="text-indigo-400 shrink-0" />
+              <span className="text-[9px] font-semibold text-indigo-400 uppercase tracking-widest leading-none">Ollama</span>
+            </div>
+            {m.ollama_active_model ? (
+              <>
+                <p className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate leading-tight">{m.ollama_active_model}</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {m.ollama_quantization && (
+                    <span className="text-[9px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                      {m.ollama_quantization}
+                    </span>
+                  )}
+                  {m.ollama_model_size_gb != null && (
+                    <span className="text-[10px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-gray-500">no model loaded</p>
+            )}
+          </div>
+
+          {/* Col 2 — Throughput (large, aligns with MEMORY column below) */}
+          <div>
+            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1.5">Throughput</p>
+            <p className={`text-2xl font-bold leading-none ${ollamaTps != null ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
+              {ollamaTps != null ? ollamaTps.toFixed(1) : '—'}
+              <span className="text-sm font-normal text-gray-500 ml-1.5">tok/s</span>
+            </p>
+          </div>
+
+          {/* Col 3 — Efficiency (large, aligns with GRAPHICS column below) */}
+          <div>
+            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1.5">Efficiency</p>
+            <p className={`text-2xl font-bold leading-none ${wPer1kStr ? 'text-amber-400' : 'text-gray-500 dark:text-gray-600'}`}>
+              {wPer1kStr ? wPer1kStr.replace(' W/1k', '') : '—'}
+              <span className="text-sm font-normal text-gray-500 ml-1.5">W/1k</span>
+            </p>
+          </div>
+
+        </div>
+      )}
+
       {/* ── Hardware Clusters ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-6">
 
@@ -172,50 +222,8 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
 
       </div>
 
-      {/* ── Inference HUD status bar ──────────────────────────────────────── */}
-      {m.ollama_running ? (
-        <div className="flex items-center gap-2 pt-3 border-t border-gray-100 dark:border-gray-800/60 flex-wrap">
-          <BotMessageSquare size={13} className="text-indigo-400 shrink-0" />
-          <span className="text-[11px] font-bold text-indigo-400">Ollama</span>
-
-          {m.ollama_active_model ? (
-            <>
-              <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
-              <span className="text-[11px] font-mono text-gray-600 dark:text-gray-300">{m.ollama_active_model}</span>
-
-              {m.ollama_quantization && (
-                <>
-                  <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
-                  <span className="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                    {m.ollama_quantization}
-                  </span>
-                </>
-              )}
-
-              {m.ollama_model_size_gb != null && (
-                <>
-                  <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
-                  <span className="text-[11px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
-                </>
-              )}
-
-              <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
-              <span className={`text-[11px] font-mono font-bold ${ollamaTps != null ? 'text-green-400' : 'text-gray-500'}`}>
-                {ollamaTps != null ? `${ollamaTps.toFixed(1)} tok/s` : '…sampling'}
-              </span>
-
-              {wPer1kStr && (
-                <>
-                  <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
-                  <span className="text-[11px] font-mono text-amber-400">{wPer1kStr}</span>
-                </>
-              )}
-            </>
-          ) : (
-            <span className="text-[11px] text-gray-500 ml-1">no model loaded</span>
-          )}
-        </div>
-      ) : (
+      {/* ── Idle inference placeholder (replaced in change 2) ─────────────── */}
+      {!m.ollama_running && (
         <div className="flex items-center gap-2 pt-3 border-t border-gray-100 dark:border-gray-800/40">
           <BotMessageSquare size={12} className="text-gray-600 shrink-0" />
           <p className="text-[11px] text-gray-600">
