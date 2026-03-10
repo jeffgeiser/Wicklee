@@ -107,7 +107,7 @@ const IntelligenceBand: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pu
       <div className="flex flex-col min-w-0">
         <ML>Quant</ML>
         {m.ollama_quantization ? (
-          <span className="text-xs font-semibold font-mono text-indigo-400 truncate">
+          <span className="text-xs font-semibold font-telin text-indigo-400 truncate">
             {m.ollama_quantization}
           </span>
         ) : (

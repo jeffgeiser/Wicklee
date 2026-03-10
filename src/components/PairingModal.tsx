@@ -83,7 +83,7 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
                 </p>
               </div>
               {pairingInfo?.node_id && (
-                <p className="text-[11px] font-mono text-gray-500 bg-zinc-900 rounded-lg py-2">
+                <p className="text-[11px] font-telin text-gray-500 bg-zinc-900 rounded-lg py-2">
                   Node Identity: <span className="text-indigo-400">{pairingInfo.node_id}</span>
                 </p>
               )}
@@ -107,7 +107,7 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
                 </div>
                 <div>
                   <h2 className="text-lg font-bold text-white">Pairing in Progress</h2>
-                  <p className="text-[11px] font-mono text-gray-500">
+                  <p className="text-[11px] font-telin text-gray-500">
                     Node: <span className="text-indigo-400">{pairingInfo.node_id}</span>
                   </p>
                 </div>
@@ -123,7 +123,7 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
                     {copied ? <CheckCheck className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
-                <p className={`text-sm font-mono ${secondsLeft < 60 ? 'text-red-400' : 'text-gray-400'}`}>
+                <p className={`text-sm font-telin ${secondsLeft < 60 ? 'text-red-400' : 'text-gray-400'}`}>
                   Expires in {formatTime(secondsLeft)}
                 </p>
               </div>
@@ -163,9 +163,9 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
               </div>
               <div className="space-y-1">
                 <h2 className="text-xl font-bold text-white">Connected to Fleet</h2>
-                <p className="text-[11px] font-mono text-gray-500 break-all">{pairingInfo.fleet_url}</p>
+                <p className="text-[11px] font-telin text-gray-500 break-all">{pairingInfo.fleet_url}</p>
               </div>
-              <p className="text-[11px] font-mono text-gray-500 bg-zinc-900 rounded-lg py-2">
+              <p className="text-[11px] font-telin text-gray-500 bg-zinc-900 rounded-lg py-2">
                 Node Identity: <span className="text-indigo-400">{pairingInfo.node_id}</span>
               </p>
 

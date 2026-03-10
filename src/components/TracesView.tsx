@@ -104,7 +104,7 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes, tenantId }) => {
               <th className="px-6 py-4">Status</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800 font-mono text-xs">
+          <tbody className="divide-y divide-gray-800 font-telin text-xs">
             {traces.length > 0 ? (
               traces.map((trace) => (
                 <tr key={trace.id} className="hover:bg-gray-800/30 transition-colors group">

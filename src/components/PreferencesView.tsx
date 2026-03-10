@@ -64,7 +64,7 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
                 <p className="text-xs text-gray-500">The tenant loaded initially on login.</p>
               </div>
             </div>
-            <span className="text-xs font-mono text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors">
+            <span className="text-xs font-telin text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors">
               {currentTenant.name}
             </span>
           </div>

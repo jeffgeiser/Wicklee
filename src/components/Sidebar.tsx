@@ -98,7 +98,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 </span>
               </div>
               {nodeId && (
-                <p className="mt-0.5 text-[10px] font-mono text-gray-500 pl-6 truncate">{nodeId}</p>
+                <p className="mt-0.5 text-[10px] font-telin text-gray-500 pl-6 truncate">{nodeId}</p>
               )}
               {!isConnectedFleet && !isPending && (
                 <p className="mt-0.5 text-[10px] text-indigo-400 pl-6">Connect →</p>
