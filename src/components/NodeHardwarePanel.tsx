@@ -287,14 +287,24 @@ export const HardwareDetailPanel: React.FC<{
 
       {hardwareOpen && (
         <>
-          {/* ── Hardware Clusters ───────────────────────────────────────────── */}
+          {/* ── Static specs line ───────────────────────────────────────────── */}
+          <p className="text-[10px] text-gray-500 dark:text-gray-400 pb-1">
+            <span className="font-semibold text-gray-900 dark:text-gray-300">{coreCount}</span>
+            {nvidiaVramTotal && (
+              <>
+                <span className="mx-1.5">·</span>
+                <span className="font-semibold text-gray-900 dark:text-gray-300">{nvidiaVramTotal.replace('of ', '')} VRAM</span>
+              </>
+            )}
+          </p>
+
+          {/* ── Live metric clusters ─────────────────────────────────────────── */}
           <div className="grid grid-cols-3 gap-6">
 
-            {/* COMPUTE */}
+            {/* COMPUTE — live power only */}
             <div>
               <ClusterLabel label="Compute" />
               <div className="space-y-2">
-                <HudTile label="CPU Cores" value={coreCount} />
                 <HudTile
                   label="CPU Power"
                   value={cpuPowerStr ?? '—'}
@@ -308,11 +318,11 @@ export const HardwareDetailPanel: React.FC<{
               </div>
             </div>
 
-            {/* MEMORY */}
+            {/* MEMORY — live usage */}
             <div>
               <ClusterLabel label="Memory" />
               <div className="space-y-2">
-                <HudTile label="Used"      value={memUsed}  sub={memTotal} />
+                <HudTile label="Used"      value={memUsed} />
                 <HudTile label="Available" value={memAvail} />
                 {(memPressStr ?? memUtilStr) && (
                   <HudTile
@@ -323,7 +333,7 @@ export const HardwareDetailPanel: React.FC<{
               </div>
             </div>
 
-            {/* GRAPHICS */}
+            {/* GRAPHICS — live metrics */}
             <div>
               <ClusterLabel label="Graphics" />
               <div className="space-y-2">
@@ -332,9 +342,7 @@ export const HardwareDetailPanel: React.FC<{
                   value={effectiveGpuStr ?? '—'}
                   dim={!effectiveGpuStr}
                 />
-                {nvidiaVramStr && (
-                  <HudTile label="VRAM" value={nvidiaVramStr} sub={nvidiaVramTotal ?? undefined} />
-                )}
+                {nvidiaVramStr && <HudTile label="VRAM Used" value={nvidiaVramStr} />}
                 {nvidiaTempStr  && <HudTile label="GPU Temp"    value={nvidiaTempStr} />}
                 {nvidiaPowerStr && <HudTile label="Board Power" value={nvidiaPowerStr} />}
               </div>
