@@ -67,8 +67,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const [kwhDraft, setKwhDraft]  = useState(settings.fleet.kwhRate.toString());
   const [pueDraft,  setPueDraft] = useState(settings.fleet.pue.toString());
 
-  // Confirm state for "Set all to fleet default" popups
+  // Confirm + success state for "Set all to fleet default"
   const [confirmClear, setConfirmClear] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
+  const [successField, setSuccessField] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
 
   // ── Fleet defaults handlers ─────────────────────────────────────────────────
 
@@ -90,6 +91,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     if (confirmClear === field) {
       clearAllOverridesForField(field);
       setConfirmClear(null);
+      setSuccessField(field);
+      setTimeout(() => setSuccessField(f => f === field ? null : f), 1000);
     } else {
       setConfirmClear(field);
     }
@@ -201,6 +204,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       label="Set all to fleet default"
                       field="kwhRate"
                       confirmClear={confirmClear}
+                      successField={successField}
                       confirmText={confirmText('kwhRate')}
                       onConfirm={() => handleClearField('kwhRate')}
                       onCancel={() => setConfirmClear(null)}
@@ -212,6 +216,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       label="Set all to fleet default"
                       field="currency"
                       confirmClear={confirmClear}
+                      successField={successField}
                       confirmText={confirmText('currency')}
                       onConfirm={() => handleClearField('currency')}
                       onCancel={() => setConfirmClear(null)}
@@ -223,6 +228,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       label="Set all to fleet default"
                       field="pue"
                       confirmClear={confirmClear}
+                      successField={successField}
                       confirmText={confirmText('pue')}
                       onConfirm={() => handleClearField('pue')}
                       onCancel={() => setConfirmClear(null)}
@@ -268,10 +274,19 @@ const ClearColumnButton: React.FC<{
   label: string;
   field: 'kwhRate' | 'currency' | 'pue';
   confirmClear: 'kwhRate' | 'currency' | 'pue' | null;
+  successField: 'kwhRate' | 'currency' | 'pue' | null;
   confirmText: string;
   onConfirm: () => void;
   onCancel: () => void;
-}> = ({ label, field, confirmClear, confirmText, onConfirm, onCancel }) => {
+}> = ({ label, field, confirmClear, successField, confirmText, onConfirm, onCancel }) => {
+  if (successField === field) {
+    return (
+      <div className="flex items-center gap-1 mt-1">
+        <Check size={9} className="text-green-400" />
+        <span className="text-[9px] font-semibold text-green-400">Reset</span>
+      </div>
+    );
+  }
   if (confirmClear === field) {
     return (
       <div className="mt-1 space-y-1">
