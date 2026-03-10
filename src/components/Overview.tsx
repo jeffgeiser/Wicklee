@@ -420,6 +420,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return (totalPowerW / fleetTps) * 1000;
   })();
 
+  // Cost per 1k tokens derived from wattPer1k — never re-derives from raw fields.
+  // Rate: $0.13/kWh (US average; 1W sustained = 1 Wh/h = 0.001 kWh/h).
+  // Formula: (wattPer1k W / 1000) * $0.13/kWh = cost in $ per 1k tokens.
+  const ELECTRICITY_RATE = 0.13; // $/kWh
+  const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * ELECTRICITY_RATE : null;
+
   // Build the accordion row data
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel }] : [])
@@ -465,7 +471,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                 {wattPer1k != null ? `${wattPer1k.toFixed(1)} W` : '—'}
               </p>
               <p className="text-[10px] text-gray-500 font-medium">
-                {wattPer1k != null ? 'per 1k tokens' : fleetTps != null ? 'requires cpu_power_w' : 'requires tok/s'}
+                {wattPer1k != null ? 'per 1k tokens' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
               </p>
             </div>
           }
@@ -473,7 +479,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         />
         <StatCard
           title="Cost / 1k Tokens"
-          value={<div><p className="text-2xl font-bold text-gray-900 dark:text-white">—</p><p className="text-[10px] text-gray-500 font-medium">requires tok/s</p></div>}
+          value={
+            <div>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                {costPer1k != null ? `$${costPer1k.toFixed(4)}` : '—'}
+              </p>
+              <p className="text-[10px] text-gray-500 font-medium">
+                {costPer1k != null ? 'per 1k tokens · $0.13/kWh' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
+              </p>
+            </div>
+          }
           icon={Zap} color="bg-cyan-400"
         />
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Cpu} color="bg-green-500" />
