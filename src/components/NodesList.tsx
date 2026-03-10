@@ -387,7 +387,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
             <button
               key={f}
               onClick={() => setStatusFilter(f)}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider border transition-all ${
                 active
                   ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
                   : 'bg-gray-800/50 border-gray-700 text-gray-500 hover:border-gray-600 hover:text-gray-400'
