@@ -142,7 +142,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp }) => {
           </span>
         </h1>
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
-          Most teams find out a node is thermal throttling from a user complaint — not an alert. Wicklee gives you real-time GPU health, thermal-aware traffic rerouting, and fleet cost visibility in a single binary. Install in 60 seconds. No config required.
+          Inference intelligence for sovereign AI fleets. Wicklee shows you GPU health, inference cost, and thermal state — across every node, in real time. Install in 60 seconds. No config required.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
           <button
