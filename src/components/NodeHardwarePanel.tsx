@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle } from 'lucide-react';
 import { SentinelMetrics } from '../types';
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from '../utils/wes';
@@ -67,7 +67,26 @@ const ClusterLabel: React.FC<{ label: string }> = ({ label }) => (
   <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-2">{label}</p>
 );
 
-export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ metrics: m }) => {
+export const HardwareDetailPanel: React.FC<{
+  metrics: SentinelMetrics;
+  /** Per-node Power Usage Effectiveness multiplier (default 1.0 = home lab). */
+  pue?: number;
+  onUpdatePue?: (pue: number) => void;
+  onCopyPueToAll?: (pue: number) => void;
+  /** When true, shows "Copy to all nodes" button. */
+  hasMultipleNodes?: boolean;
+}> = ({ metrics: m, pue = 1.0, onUpdatePue, onCopyPueToAll, hasMultipleNodes = false }) => {
+  const [pueInput, setPueInput] = useState(pue.toFixed(1));
+  useEffect(() => { setPueInput(pue.toFixed(1)); }, [pue]);
+
+  const commitPue = () => {
+    const val = parseFloat(pueInput);
+    if (!isNaN(val) && val >= 1.0 && val <= 3.0) {
+      onUpdatePue?.(Math.round(val * 10) / 10);
+    } else {
+      setPueInput(pue.toFixed(1));
+    }
+  };
   const nvThermal    = m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalLabel = m.thermal_state ?? nvThermal?.label ?? null;
   const thermalClass = m.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
@@ -103,8 +122,8 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
     ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)} W/1k` : null;
   const wattsStr    = hasPower ? `${totalPowerW.toFixed(1)} W` : null;
 
-  // WES computation
-  const wes          = computeWES(ollamaTps, hasPower ? totalPowerW : null, m.thermal_state);
+  // WES computation — uses per-node PUE
+  const wes          = computeWES(ollamaTps, hasPower ? totalPowerW : null, m.thermal_state, pue);
   const wesFormatted = formatWES(wes);
   const wesColor     = wesColorClass(wes);
 
@@ -118,7 +137,9 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
   const thermalDataMissing = m.thermal_state == null && nvThermal == null;
   const showAsterisk       = thermalDataMissing && wes != null;
 
-  const wesLabelTooltip = 'Wicklee Efficiency Score — tok/s divided by adjusted watts and thermal penalty. Higher is better. Collapses when a node throttles even if tok/s looks stable.';
+  const wesLabelTooltip = pue > 1.0
+    ? `Wicklee Efficiency Score — tok/s divided by adjusted watts and thermal penalty. Higher is better. Collapses when a node throttles even if tok/s looks stable. PUE ${pue.toFixed(1)} applied for this node's location.`
+    : 'Wicklee Efficiency Score — tok/s divided by adjusted watts and thermal penalty. Higher is better. Collapses when a node throttles even if tok/s looks stable.';
   const thermalWarningTooltip = m.thermal_state
     ? `Thermal penalty applied: ${thermalPenaltyValue}× (${m.thermal_state}). WES is reduced because this node is thermally throttling.`
     : '';
@@ -305,6 +326,51 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
 
       </div>
 
+      {/* ── PUE Multiplier — per-node facility overhead ────────────────────── */}
+      <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none">PUE Multiplier</p>
+              {pue > 1.0 && (
+                <span className="text-[9px] font-mono text-amber-500/80 bg-amber-500/10 px-1.5 py-0.5 rounded leading-none">
+                  {pue.toFixed(1)}× on WES
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Power Usage Effectiveness — facility overhead for this node's physical location.
+            </p>
+            <p className="text-[10px] text-gray-600 leading-none mt-0.5">
+              Home lab: 1.0 · Modern datacenter: 1.2–1.4 · Standard colo: 1.4–1.6
+            </p>
+          </div>
+          <div className="shrink-0">
+            <input
+              type="number"
+              min="1.0"
+              max="3.0"
+              step="0.1"
+              value={pueInput}
+              onChange={e => setPueInput(e.target.value)}
+              onBlur={commitPue}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.currentTarget.blur(); }
+                if (e.key === 'Escape') { setPueInput(pue.toFixed(1)); e.currentTarget.blur(); }
+              }}
+              className="w-16 text-center text-sm font-mono font-bold text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 focus:outline-none focus:border-indigo-500/60 focus:ring-1 focus:ring-indigo-500/30 transition-colors"
+            />
+          </div>
+        </div>
+        {onCopyPueToAll && hasMultipleNodes && (
+          <button
+            onClick={() => onCopyPueToAll(pue)}
+            className="mt-2 text-[10px] font-semibold text-gray-500 hover:text-indigo-400 transition-colors"
+          >
+            Copy to all nodes →
+          </button>
+        )}
+      </div>
 
     </div>
   );
