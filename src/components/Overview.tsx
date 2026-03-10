@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Server, Star, AlertTriangle, Info, BotMessageSquare } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, BotMessageSquare } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateIdleFleetCostPerDay, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -27,28 +28,24 @@ const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
   latency: Math.floor(Math.random() * 100) + 200,
 }));
 
-// Primary: WES + Throughput — larger footprint, higher contrast border
-const PrimaryStatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon: React.ElementType; color: string }> = ({ title, value, icon: Icon, color }) => (
-  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 hover:border-gray-300 dark:hover:border-gray-600 transition-all shadow-sm dark:shadow-none">
-    <div className="flex items-center gap-3">
-      <div className={`flex items-center justify-center w-10 h-10 rounded-xl ${color}/10`}>
-        <Icon size={20} className={color.replace('bg-', 'text-')} />
-      </div>
-      <h4 className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{title}</h4>
+// ── Insight Engine tile — uniform across all 8 fleet-header cells ────────────
+interface InsightTileProps {
+  label: string;
+  value: string;
+  valueCls?: string;
+  sub?: string;
+  icon: React.ElementType;
+  iconCls?: string;
+}
+const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, sub, icon: Icon, iconCls }) => (
+  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between min-h-[108px]">
+    <div className="flex items-start justify-between gap-2">
+      <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">{label}</p>
+      <Icon size={13} className={iconCls ?? 'text-gray-400 dark:text-gray-600'} />
     </div>
-    <div className="mt-5">{value}</div>
-  </div>
-);
-
-// Secondary: supporting metrics — compact 4-col grid
-const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon: React.ElementType; color: string }> = ({ title, value, icon: Icon, color }) => (
-  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 hover:border-gray-300 dark:hover:border-gray-700 transition-all shadow-sm dark:shadow-none">
-    <div className={`flex items-center justify-center w-9 h-9 rounded-lg ${color}/10`}>
-      <Icon size={17} className={color.replace('bg-', 'text-')} />
-    </div>
-    <div className="mt-3">
-      <h4 className="text-gray-500 dark:text-gray-400 text-[10px] font-medium uppercase tracking-wider">{title}</h4>
-      <div className="mt-1">{value}</div>
+    <div>
+      <p className={`text-2xl font-bold tabular-nums leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
+      {sub && <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">{sub}</p>}
     </div>
   </div>
 );
@@ -462,21 +459,63 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return <EmptyFleetState onAddNode={onAddNode} />;
   }
 
-  // Real stat values derived from live telemetry
+  // ── Fleet-wide metric computations (all 8 Insight Engine tiles) ─────────────
   const liveMetrics: SentinelMetrics[] = Object.values(allNodeMetrics);
-  const gpuTemps     = liveMetrics.map(m => m.nvidia_gpu_temp_c).filter((t): t is number => t != null);
-  const avgTempStr   = gpuTemps.length > 0
-    ? `${(gpuTemps.reduce((a, b) => a + b, 0) / gpuTemps.length).toFixed(1)}°C`
-    : '—';
-  // Ollama fleet stats
-  const hasAnyOllama = liveMetrics.some(m => m.ollama_running);
-  // Sum tok/s across nodes that have a sampled value; null if none available yet
-  const tpsNodes = liveMetrics.filter(m => m.ollama_running && m.ollama_tokens_per_second != null);
-  const fleetTps = tpsNodes.length > 0
+  // effectiveMetrics: handles localhost sentinel mode + hosted fleet mode uniformly
+  const effectiveMetrics: SentinelMetrics[] = isLocalHost ? (sentinel ? [sentinel] : []) : liveMetrics;
+
+  // Tile 1 — THROUGHPUT: ∑ tok/s across actively-inferencing nodes
+  const hasAnyOllama = effectiveMetrics.some(m => m.ollama_running);
+  const tpsNodes     = effectiveMetrics.filter(m => m.ollama_running && m.ollama_tokens_per_second != null);
+  const fleetTps     = tpsNodes.length > 0
     ? tpsNodes.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0), 0)
     : null;
-  // Wattage per 1k tokens: total CPU+GPU power across Ollama nodes / fleet tok/s * 1000
-  // Uses cpu_power_w (macOS powermetrics or Linux RAPL) + nvidia_power_draw_w
+
+  // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
+  const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics);
+  const fleetHealthCls = fleetHealthPct == null        ? 'text-gray-400 dark:text-gray-600'
+    : fleetHealthPct === 100                           ? 'text-green-600 dark:text-green-400'
+    : fleetHealthPct >= 75                             ? 'text-amber-600 dark:text-amber-500'
+    :                                                    'text-red-600 dark:text-red-500';
+
+  // Tile 3 — TOTAL VRAM: NVIDIA dedicated + Apple Silicon unified memory
+  const totalVramMb    = calculateTotalVramMb(effectiveMetrics);
+  const hasNvidiaNodes = effectiveMetrics.some(m => m.nvidia_vram_used_mb != null);
+  const hasUnifiedOnly = effectiveMetrics.length > 0 && !hasNvidiaNodes;
+  const vramSubLabel   = hasNvidiaNodes && !hasUnifiedOnly ? 'GPU VRAM'
+    : hasUnifiedOnly ? 'unified memory' : 'VRAM + unified';
+
+  // Tile 4 — FLEET NODES: online / total
+  const fleetLiveCount  = effectiveMetrics.length;
+  const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : nodes.length;
+
+  // Tiles 5-7 — WES leaderboard + fleet average
+  interface WESEntry { nodeId: string; hostname: string; wes: number | null; tps: number | null; watts: number | null; thermalState: string | null; nullReason: string; }
+  const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
+    const tps      = m.ollama_tokens_per_second ?? null;
+    const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+    const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
+    const watts    = hasWatts ? totalW : null;
+    const pue      = nodePueSettings?.[m.node_id] ?? 1.0;
+    const wes      = computeWES(tps, watts, m.thermal_state, pue);
+    const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
+    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason };
+  });
+  const pueValues = effectiveMetrics.map(m => nodePueSettings?.[m.node_id] ?? 1.0);
+  const hasPerNodePueDiversity = new Set(pueValues).size > 1;
+  const sortedWES  = [...wesEntries].sort((a, b) => {
+    if (a.wes != null && b.wes != null) return b.wes - a.wes;
+    if (a.wes != null) return -1;
+    if (b.wes != null) return 1;
+    return 0;
+  });
+  const rankedWES    = sortedWES.filter(e => e.wes != null);
+  const fleetAvgWES  = rankedWES.length > 0
+    ? rankedWES.reduce((acc, e) => acc + e.wes!, 0) / rankedWES.length : null;
+  const efficiencyRatio = rankedWES.length >= 2
+    ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes! : null;
+
+  // Tile 6 — WATTAGE / 1K TKN: total power ÷ fleet throughput × 1000
   const wattPer1k = (() => {
     if (fleetTps == null || fleetTps <= 0) return null;
     const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
@@ -486,52 +525,18 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return (totalPowerW / fleetTps) * 1000;
   })();
 
-  // Cost per 1k tokens derived from wattPer1k — never re-derives from raw fields.
-  // Rate: $0.13/kWh (US average; 1W sustained = 1 Wh/h = 0.001 kWh/h).
-  // Formula: (wattPer1k W / 1000) * $0.13/kWh = cost in $ per 1k tokens.
-  const ELECTRICITY_RATE = 0.13; // $/kWh
-  const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * ELECTRICITY_RATE : null;
+  // Tile 7 — COST / 1K TOKENS: wattPer1k × kwh_rate / 1000
+  const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * ELECTRICITY_RATE_USD_PER_KWH : null;
 
-  // WES fleet computations — use sentinel in local mode, liveMetrics in hosted mode
-  const effectiveMetrics: SentinelMetrics[] = isLocalHost ? (sentinel ? [sentinel] : []) : liveMetrics;
-  interface WESEntry {
-    nodeId: string;
-    hostname: string;
-    wes: number | null;
-    tps: number | null;
-    watts: number | null;
-    thermalState: string | null;
-    nullReason: string;
-  }
-  const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
-    const tps       = m.ollama_tokens_per_second ?? null;
-    const totalW    = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
-    const hasWatts  = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
-    const watts     = hasWatts ? totalW : null;
-    const pue       = nodePueSettings?.[m.node_id] ?? 1.0;
-    const wes       = computeWES(tps, watts, m.thermal_state, pue);
-    const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
-    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason };
-  });
-
-  // Detect PUE diversity — used for the ⓘ notice on the leaderboard header
-  const pueValues = effectiveMetrics.map(m => nodePueSettings?.[m.node_id] ?? 1.0);
-  const hasPerNodePueDiversity = new Set(pueValues).size > 1;
-
-  const sortedWES = [...wesEntries].sort((a, b) => {
-    if (a.wes != null && b.wes != null) return b.wes - a.wes;
-    if (a.wes != null) return -1;
-    if (b.wes != null) return 1;
-    return 0;
-  });
-
-  const rankedWES    = sortedWES.filter(e => e.wes != null);
-  const fleetAvgWES  = rankedWES.length > 0
-    ? rankedWES.reduce((acc, e) => acc + e.wes!, 0) / rankedWES.length
-    : null;
-  const efficiencyRatio = rankedWES.length >= 2
-    ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes!
-    : null;
+  // Tile 8 — IDLE FLEET COST / DAY: ∑ idle_watts × pue × 24h × rate
+  const idleFleetCostPerDay = calculateIdleFleetCostPerDay(effectiveMetrics, nodePueSettings ?? {});
+  const idlePowerNodes = effectiveMetrics.filter(m =>
+    (m.cpu_power_w != null || m.nvidia_power_draw_w != null) &&
+    (!m.ollama_tokens_per_second || m.ollama_tokens_per_second <= 0)
+  );
+  const avgPue = effectiveMetrics.length > 0
+    ? effectiveMetrics.reduce((acc, m) => acc + (nodePueSettings?.[m.node_id] ?? 1.0), 0) / effectiveMetrics.length
+    : 1.0;
 
   // Build the accordion row data — PUE is read-only in Fleet Overview (editing lives in Node Registry)
   const nodeRows: NodeRowProps[] = isLocalHost
@@ -551,98 +556,100 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
   return (
     <div className="space-y-6">
-      {/* ── Fleet stat cards ─────────────────────────────────────────────────── */}
-      <div className="space-y-3">
-        {/* Primary tier: Throughput (hero) + Fleet Avg WES */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <PrimaryStatCard
-            title="Throughput"
-            value={
-              <div>
-                <p className="text-3xl font-bold text-gray-900 dark:text-white tabular-nums">
-                  {fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '—'}
-                </p>
-                <p className="text-[11px] text-gray-500 font-medium mt-1">
-                  {fleetTps != null
-                    ? `sampled · ${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''}`
-                    : hasAnyOllama ? 'Ollama connected · sampling every 30s' : 'connect inference runtime'}
-                </p>
-              </div>
-            }
-            icon={Gauge}
-            color="bg-indigo-500"
-          />
-          <PrimaryStatCard
-            title={<span title="Wicklee Efficiency Score — tok/s ÷ (Watts × ThermalPenalty × PUE). Higher is better.">Fleet Avg WES</span>}
-            value={
-              <div>
-                <p className={`text-3xl font-bold tabular-nums ${wesColorClass(fleetAvgWES)}`}>
-                  {formatWES(fleetAvgWES)}
-                </p>
-                <p className="text-[11px] text-gray-500 font-medium mt-1">
-                  {fleetAvgWES != null
-                    ? `avg across ${rankedWES.length} active node${rankedWES.length !== 1 ? 's' : ''}`
-                    : wesEntries.length > 0 ? 'no active inference' : 'connect inference runtime'}
-                </p>
-              </div>
-            }
-            icon={Zap}
-            color="bg-amber-500"
-          />
-        </div>
+      {/* ── 8-tile Insight Engine: 2 rows × 4 cols ───────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
 
-        {/* Secondary tier: only render tiles with real data, grid reflows */}
-        {(() => {
-          const tiles = [
-            gpuTemps.length > 0 ? (
-              <StatCard key="temp"
-                title="Avg GPU Temp"
-                value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTempStr}</p>}
-                icon={Thermometer} color="bg-red-500"
-              />
-            ) : null,
-            wattPer1k != null ? (
-              <StatCard key="watts"
-                title="Wattage / 1k tkn"
-                value={
-                  <div>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{wattPer1k.toFixed(1)} W</p>
-                    <p className="text-[10px] text-gray-500 font-medium">per 1k tokens</p>
-                  </div>
-                }
-                icon={Zap} color="bg-emerald-500"
-              />
-            ) : null,
-            costPer1k != null ? (
-              <StatCard key="cost"
-                title="Cost / 1k Tokens"
-                value={
-                  <div>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">${costPer1k.toFixed(4)}</p>
-                    <p className="text-[10px] text-gray-500 font-medium">per 1k tokens · $0.13/kWh</p>
-                  </div>
-                }
-                icon={DollarSign} color="bg-cyan-400"
-              />
-            ) : null,
-            <StatCard key="nodes"
-              title="Fleet Nodes"
-              value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>}
-              icon={Server} color="bg-green-500"
-            />,
-          ].filter((t): t is React.ReactElement => t !== null);
+        {/* ── Row 1: Performance & Health ─────────────────────────────────── */}
 
-          const cols = tiles.length === 1 ? 'grid-cols-1 max-w-xs'
-            : tiles.length === 2 ? 'grid-cols-2'
-            : tiles.length === 3 ? 'grid-cols-3'
-            : 'grid-cols-2 md:grid-cols-4';
+        {/* 1. THROUGHPUT */}
+        <InsightTile
+          label="Throughput"
+          value={fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '—'}
+          valueCls={fleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
+          sub={fleetTps != null
+            ? `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · sampled`
+            : hasAnyOllama ? 'sampling every 30s' : 'no inference runtime'}
+          icon={Activity}
+          iconCls="text-indigo-400"
+        />
 
-          return (
-            <div className={`grid gap-3 ${cols}`}>
-              {tiles}
-            </div>
-          );
-        })()}
+        {/* 2. FLEET HEALTH */}
+        <InsightTile
+          label="Fleet Health"
+          value={fleetHealthPct != null ? `${fleetHealthPct}%` : '—'}
+          valueCls={fleetHealthCls}
+          sub={fleetHealthPct != null ? 'Normal / Fair thermal' : 'no thermal data'}
+          icon={Thermometer}
+          iconCls="text-amber-400"
+        />
+
+        {/* 3. TOTAL VRAM */}
+        <InsightTile
+          label="Total VRAM"
+          value={effectiveMetrics.length > 0 ? `${(totalVramMb / 1024).toFixed(1)} GB` : '—'}
+          valueCls={effectiveMetrics.length === 0 ? 'text-gray-400 dark:text-gray-600' : undefined}
+          sub={effectiveMetrics.length > 0 ? vramSubLabel : undefined}
+          icon={Database}
+          iconCls="text-blue-400"
+        />
+
+        {/* 4. FLEET NODES */}
+        <InsightTile
+          label="Fleet Nodes"
+          value={fleetTotalCount > 0 ? `${fleetLiveCount} / ${fleetTotalCount}` : '—'}
+          sub={fleetLiveCount > 0
+            ? `${fleetLiveCount} online`
+            : fleetTotalCount > 0 ? 'no nodes live' : undefined}
+          icon={Server}
+          iconCls="text-green-400"
+        />
+
+        {/* ── Row 2: Efficiency & ROI ──────────────────────────────────────── */}
+
+        {/* 5. AVG WES */}
+        <InsightTile
+          label="Avg WES"
+          value={formatWES(fleetAvgWES)}
+          valueCls={wesColorClass(fleetAvgWES)}
+          sub={fleetAvgWES != null
+            ? `${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''} · inference MPG`
+            : wesEntries.length > 0 ? 'no active inference' : 'connect runtime'}
+          icon={Zap}
+          iconCls="text-amber-400"
+        />
+
+        {/* 6. WATTAGE / 1K TKN */}
+        <InsightTile
+          label="Wattage / 1k Tkn"
+          value={wattPer1k != null ? `${wattPer1k.toFixed(1)} W` : '—'}
+          valueCls={wattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
+          sub="per 1k tokens"
+          icon={Zap}
+          iconCls="text-emerald-400"
+        />
+
+        {/* 7. COST / 1K TOKENS */}
+        <InsightTile
+          label="Cost / 1k Tokens"
+          value={costPer1k != null ? `$${costPer1k.toFixed(4)}` : '—'}
+          valueCls={costPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
+          sub={`at $${ELECTRICITY_RATE_USD_PER_KWH}/kWh`}
+          icon={DollarSign}
+          iconCls="text-cyan-400"
+        />
+
+        {/* 8. IDLE FLEET COST */}
+        <InsightTile
+          label="Idle Fleet Cost"
+          value={idleFleetCostPerDay != null ? `$${idleFleetCostPerDay.toFixed(2)}/day` : '—'}
+          valueCls={idleFleetCostPerDay == null ? 'text-gray-400 dark:text-gray-600' : undefined}
+          sub={idleFleetCostPerDay != null
+            ? `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} idle · PUE ${avgPue.toFixed(1)}`
+            : 'no power data'}
+          icon={DollarSign}
+          iconCls="text-gray-400 dark:text-gray-500"
+        />
+
       </div>
 
       {/* ── All Nodes accordion (collapsed by default) ───────────────────────── */}
