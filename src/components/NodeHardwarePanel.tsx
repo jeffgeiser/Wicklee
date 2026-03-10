@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle } from 'lucide-react';
+import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle, ChevronDown } from 'lucide-react';
 import { SentinelMetrics } from '../types';
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from '../utils/wes';
 
@@ -77,6 +77,7 @@ export const HardwareDetailPanel: React.FC<{
   hasMultipleNodes?: boolean;
 }> = ({ metrics: m, pue = 1.0, onUpdatePue, onCopyPueToAll, hasMultipleNodes = false }) => {
   const [pueInput, setPueInput] = useState(pue.toFixed(1));
+  const [hardwareOpen, setHardwareOpen] = useState(false);
   useEffect(() => { setPueInput(pue.toFixed(1)); }, [pue]);
 
   const commitPue = () => {
@@ -158,20 +159,7 @@ export const HardwareDetailPanel: React.FC<{
   })();
 
   return (
-    <div className="space-y-4">
-
-      {/* ── Vital Rail — borderless primary metrics ───────────────────────── */}
-      <div className="flex items-start gap-8 pb-4 border-b border-gray-100 dark:border-gray-800/60 flex-wrap">
-        <VitalStat label="CPU"          value={cpuPct} />
-        <VitalStat label="GPU"          value={effectiveGpuStr ?? '—'} />
-        <VitalStat
-          label={effectiveMemLabel}
-          value={effectiveMemStr ?? '—'}
-          title={memPressStr == null && memUtilStr != null ? 'Approximate utilization ratio (used ÷ total RAM) — not true memory pressure' : undefined}
-        />
-        <VitalStat label={thermalTitle} value={thermalLabel ?? '—'} valueCls={thermalClass} />
-        <VitalStat label="Cores"        value={`${m.cpu_core_count}`} />
-      </div>
+    <div className="space-y-3">
 
       {/* ── Inference Band ─────────────────────────────────────────────────── */}
       {m.ollama_running ? (
@@ -267,63 +255,95 @@ export const HardwareDetailPanel: React.FC<{
         </div>
       )}
 
-      {/* ── Hardware Clusters ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-6">
-
-        {/* COMPUTE */}
-        <div>
-          <ClusterLabel label="Compute" />
-          <div className="space-y-2">
-            <HudTile label="CPU Cores" value={coreCount} />
-            <HudTile
-              label="CPU Power"
-              value={cpuPowerStr ?? '—'}
-              sub={
-                cpuPowerStr && m.ecpu_power_w != null && m.pcpu_power_w != null
-                  ? `E ${m.ecpu_power_w.toFixed(1)}W · P ${m.pcpu_power_w.toFixed(1)}W`
-                  : !cpuPowerStr ? 'requires elevated permissions' : undefined
-              }
-              dim={!cpuPowerStr}
-            />
-          </div>
-        </div>
-
-        {/* MEMORY */}
-        <div>
-          <ClusterLabel label="Memory" />
-          <div className="space-y-2">
-            <HudTile label="Used"      value={memUsed}  sub={memTotal} />
-            <HudTile label="Available" value={memAvail} />
-            {(memPressStr ?? memUtilStr) && (
-              <HudTile
-                label={memPressStr ? 'Pressure' : 'Util'}
-                value={(memPressStr ?? memUtilStr)!}
-              />
-            )}
-          </div>
-        </div>
-
-        {/* GRAPHICS */}
-        <div>
-          <ClusterLabel label="Graphics" />
-          <div className="space-y-2">
-            <HudTile
-              label="GPU Util"
-              value={effectiveGpuStr ?? '—'}
-              dim={!effectiveGpuStr}
-            />
-            {nvidiaVramStr && (
-              <HudTile label="VRAM" value={nvidiaVramStr} sub={nvidiaVramTotal ?? undefined} />
-            )}
-            {nvidiaTempStr  && <HudTile label="GPU Temp"    value={nvidiaTempStr} />}
-            {nvidiaPowerStr && <HudTile label="Board Power" value={nvidiaPowerStr} />}
-          </div>
-        </div>
-
+      {/* ── Hardware summary — compact inline row ──────────────────────────── */}
+      <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400 py-2 border-b border-gray-100 dark:border-gray-800">
+        <span className="shrink-0">CPU <span className="font-semibold text-gray-900 dark:text-gray-200">{cpuPct}</span></span>
+        {effectiveGpuStr && (
+          <>
+            <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
+            <span className="shrink-0">GPU <span className="font-semibold text-gray-900 dark:text-gray-200">{effectiveGpuStr}</span></span>
+          </>
+        )}
+        <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
+        <span className="shrink-0">Mem <span className="font-semibold text-gray-900 dark:text-gray-200">{memUsed}</span></span>
+        {thermalLabel && (
+          <>
+            <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
+            <span className={`font-semibold shrink-0 ${thermalClass}`}>{thermalLabel}</span>
+          </>
+        )}
+        <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
+        <span className="shrink-0"><span className="font-semibold text-gray-900 dark:text-gray-200">{coreCount}</span></span>
       </div>
 
-      {/* ── PUE Multiplier — per-node facility overhead ────────────────────── */}
-      <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+      {/* ── Expand hardware toggle ──────────────────────────────────────────── */}
+      <button
+        onClick={() => setHardwareOpen(o => !o)}
+        className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+      >
+        <ChevronDown className={`w-3 h-3 transition-transform duration-150 ${hardwareOpen ? 'rotate-180' : ''}`} />
+        {hardwareOpen ? 'hide hardware' : 'expand hardware'}
+      </button>
+
+      {hardwareOpen && (
+        <>
+          {/* ── Hardware Clusters ───────────────────────────────────────────── */}
+          <div className="grid grid-cols-3 gap-6">
+
+            {/* COMPUTE */}
+            <div>
+              <ClusterLabel label="Compute" />
+              <div className="space-y-2">
+                <HudTile label="CPU Cores" value={coreCount} />
+                <HudTile
+                  label="CPU Power"
+                  value={cpuPowerStr ?? '—'}
+                  sub={
+                    cpuPowerStr && m.ecpu_power_w != null && m.pcpu_power_w != null
+                      ? `E ${m.ecpu_power_w.toFixed(1)}W · P ${m.pcpu_power_w.toFixed(1)}W`
+                      : !cpuPowerStr ? 'requires elevated permissions' : undefined
+                  }
+                  dim={!cpuPowerStr}
+                />
+              </div>
+            </div>
+
+            {/* MEMORY */}
+            <div>
+              <ClusterLabel label="Memory" />
+              <div className="space-y-2">
+                <HudTile label="Used"      value={memUsed}  sub={memTotal} />
+                <HudTile label="Available" value={memAvail} />
+                {(memPressStr ?? memUtilStr) && (
+                  <HudTile
+                    label={memPressStr ? 'Pressure' : 'Util'}
+                    value={(memPressStr ?? memUtilStr)!}
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* GRAPHICS */}
+            <div>
+              <ClusterLabel label="Graphics" />
+              <div className="space-y-2">
+                <HudTile
+                  label="GPU Util"
+                  value={effectiveGpuStr ?? '—'}
+                  dim={!effectiveGpuStr}
+                />
+                {nvidiaVramStr && (
+                  <HudTile label="VRAM" value={nvidiaVramStr} sub={nvidiaVramTotal ?? undefined} />
+                )}
+                {nvidiaTempStr  && <HudTile label="GPU Temp"    value={nvidiaTempStr} />}
+                {nvidiaPowerStr && <HudTile label="Board Power" value={nvidiaPowerStr} />}
+              </div>
+            </div>
+
+          </div>
+
+          {/* ── PUE Multiplier — per-node facility overhead ─────────────────── */}
+          <div className="pt-4 border-t border-gray-100 dark:border-gray-800">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
@@ -358,15 +378,17 @@ export const HardwareDetailPanel: React.FC<{
             />
           </div>
         </div>
-        {onCopyPueToAll && hasMultipleNodes && (
-          <button
-            onClick={() => onCopyPueToAll(pue)}
-            className="mt-2 text-[10px] font-semibold text-gray-500 hover:text-indigo-400 transition-colors"
-          >
-            Copy to all nodes →
-          </button>
-        )}
-      </div>
+          {onCopyPueToAll && hasMultipleNodes && (
+            <button
+              onClick={() => onCopyPueToAll(pue)}
+              className="mt-2 text-[10px] font-semibold text-gray-500 hover:text-indigo-400 transition-colors"
+            >
+              Copy to all nodes →
+            </button>
+          )}
+        </div>
+        </>
+      )}
 
     </div>
   );
