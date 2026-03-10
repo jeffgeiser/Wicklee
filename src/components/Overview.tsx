@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Layers, Server, Star, AlertTriangle } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Layers, Server, Star, AlertTriangle, Info } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
@@ -16,6 +16,9 @@ interface OverviewProps {
   onAddNode?: () => void;
   onTelemetryUpdate?: () => void;
   onConnectionStateChange?: (state: ConnectionState) => void;
+  nodePueSettings?: Record<string, number>;
+  onUpdateNodePue?: (nodeId: string, pue: number) => void;
+  onCopyPueToAll?: (pue: number) => void;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -50,9 +53,13 @@ interface NodeRowProps {
   metrics: SentinelMetrics | null;
   lastSeenMs?: number;
   defaultOpen?: boolean;
+  pue?: number;
+  onUpdatePue?: (pue: number) => void;
+  onCopyPueToAll?: (pue: number) => void;
+  hasMultipleNodes?: boolean;
 }
 
-const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false }) => {
+const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false, pue = 1.0, onUpdatePue, onCopyPueToAll, hasMultipleNodes = false }) => {
   const [open, setOpen] = useState(defaultOpen);
 
   const isOnline   = m !== null;
@@ -99,7 +106,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
       {open && (
         <div className="px-4 pb-4 pt-3 border-t border-gray-200 dark:border-gray-800">
           {m ? (
-            <HardwareDetailPanel metrics={m} />
+            <HardwareDetailPanel metrics={m} pue={pue} onUpdatePue={onUpdatePue} onCopyPueToAll={onCopyPueToAll} hasMultipleNodes={hasMultipleNodes} />
           ) : (
             <p className="text-sm text-gray-500 text-center py-6">
               {ls ? `No telemetry — last seen ${fmtAgo(ls)}` : 'No telemetry received yet — make sure the agent is running.'}
@@ -161,7 +168,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 );
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate, onConnectionStateChange }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate, onConnectionStateChange, nodePueSettings, onUpdateNodePue, onCopyPueToAll }) => {
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
@@ -424,10 +431,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     const totalW    = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
     const hasWatts  = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
     const watts     = hasWatts ? totalW : null;
-    const wes       = computeWES(tps, watts, m.thermal_state);
+    const pue       = nodePueSettings?.[m.node_id] ?? 1.0;
+    const wes       = computeWES(tps, watts, m.thermal_state, pue);
     const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
     return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason };
   });
+
+  // Detect PUE diversity — used for the ⓘ notice on the leaderboard header
+  const pueValues = effectiveMetrics.map(m => nodePueSettings?.[m.node_id] ?? 1.0);
+  const hasPerNodePueDiversity = new Set(pueValues).size > 1;
 
   const sortedWES = [...wesEntries].sort((a, b) => {
     if (a.wes != null && b.wes != null) return b.wes - a.wes;
@@ -445,9 +457,27 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     : null;
 
   // Build the accordion row data
+  const hasMultipleNodes = isLocalHost ? false : nodes.length >= 2;
   const nodeRows: NodeRowProps[] = isLocalHost
-    ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel }] : [])
-    : nodes.map(n => ({ nodeId: n.id, hostname: n.hostname, metrics: allNodeMetrics[n.id] ?? null, lastSeenMs: lastSeenMsMap[n.id] }));
+    ? (sentinel ? [{
+        nodeId: sentinel.node_id,
+        hostname: sentinel.hostname ?? sentinel.node_id,
+        metrics: sentinel,
+        pue: nodePueSettings?.[sentinel.node_id] ?? 1.0,
+        onUpdatePue: (p: number) => onUpdateNodePue?.(sentinel.node_id, p),
+        onCopyPueToAll,
+        hasMultipleNodes,
+      }] : [])
+    : nodes.map(n => ({
+        nodeId: n.id,
+        hostname: n.hostname,
+        metrics: allNodeMetrics[n.id] ?? null,
+        lastSeenMs: lastSeenMsMap[n.id],
+        pue: nodePueSettings?.[n.id] ?? 1.0,
+        onUpdatePue: (p: number) => onUpdateNodePue?.(n.id, p),
+        onCopyPueToAll,
+        hasMultipleNodes,
+      }));
 
   return (
     <div className="space-y-6">
@@ -806,12 +836,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
       {/* ── Fleet Intelligence — WES Leaderboard ─────────────────────────────── */}
       <div className="bg-gray-900 dark:bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
           <BrainCircuit className="w-4 h-4 text-indigo-400" />
           <h3 className="text-sm font-semibold text-gray-200">Fleet Intelligence</h3>
           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
             WES Leaderboard
           </span>
+          {hasPerNodePueDiversity && (
+            <span
+              className="flex items-center gap-1 text-[10px] text-gray-500 cursor-default"
+              title="WES scores reflect per-node PUE settings. Nodes in different locations may have different facility overhead applied."
+            >
+              <Info size={11} className="text-gray-600 shrink-0" />
+              per-node PUE
+            </span>
+          )}
         </div>
 
         {sortedWES.length === 0 ? (

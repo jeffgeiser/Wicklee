@@ -32,6 +32,9 @@ type StatusFilter = 'all' | 'online' | 'offline';
 
 interface NodesListProps {
   nodes: NodeAgent[];
+  nodePueSettings?: Record<string, number>;
+  onUpdateNodePue?: (nodeId: string, pue: number) => void;
+  onCopyPueToAll?: (pue: number) => void;
 }
 
 // ── Collapsible node row ───────────────────────────────────────────────────────
@@ -40,9 +43,13 @@ interface CollapsibleNodeProps {
   metrics: SentinelMetrics | null;
   lastSeenMs?: number;
   defaultOpen?: boolean;
+  pue?: number;
+  onUpdatePue?: (pue: number) => void;
+  onCopyPueToAll?: (pue: number) => void;
+  hasMultipleNodes?: boolean;
 }
 
-const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, lastSeenMs: ls, defaultOpen = false }) => {
+const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, lastSeenMs: ls, defaultOpen = false, pue = 1.0, onUpdatePue, onCopyPueToAll, hasMultipleNodes = false }) => {
   const [open, setOpen] = useState(defaultOpen);
 
   const isLive     = m !== null && (ls == null || Date.now() - ls < 30_000);
@@ -102,7 +109,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
       {open && (
         <div className="px-4 pb-4 pt-3 border-t border-gray-200 dark:border-gray-800">
           {m ? (
-            <HardwareDetailPanel metrics={m} />
+            <HardwareDetailPanel metrics={m} pue={pue} onUpdatePue={onUpdatePue} onCopyPueToAll={onCopyPueToAll} hasMultipleNodes={hasMultipleNodes} />
           ) : (
             <p className="text-sm text-gray-500 text-center py-6">
               {ls ? `No telemetry — last seen ${fmtAgo(ls)}` : 'No telemetry received yet — make sure the agent is running.'}
@@ -115,7 +122,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
 };
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
+const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateNodePue, onCopyPueToAll }) => {
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
   const [allMetrics, setAllMetrics]     = useState<Record<string, SentinelMetrics>>({});
   const [lastSeenMs, setLastSeenMs]     = useState<Record<string, number>>({});
@@ -244,7 +251,12 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
             <div className="px-5 pb-5 border-t border-gray-100 dark:border-gray-800">
               {m ? (
                 <div className="pt-4">
-                  <HardwareDetailPanel metrics={m} />
+                  <HardwareDetailPanel
+                    metrics={m}
+                    pue={nodePueSettings?.[m.node_id] ?? 1.0}
+                    onUpdatePue={(p) => onUpdateNodePue?.(m.node_id, p)}
+                    hasMultipleNodes={false}
+                  />
                 </div>
               ) : (
                 <div className="py-12 text-center">
@@ -423,6 +435,10 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
               metrics={m}
               lastSeenMs={ls}
               defaultOpen={idx === 0}
+              pue={nodePueSettings?.[n.id] ?? 1.0}
+              onUpdatePue={(p) => onUpdateNodePue?.(n.id, p)}
+              onCopyPueToAll={onCopyPueToAll}
+              hasMultipleNodes={nodes.length >= 2}
             />
           ))}
         </div>
