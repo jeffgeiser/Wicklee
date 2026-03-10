@@ -188,10 +188,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 dark:border-gray-800">
-                  <th className="text-left px-4 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-32">Node ID</th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-36">Hostname</th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500">Location Label</th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-36">
+                  <th className="text-left px-4 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-24">Node ID</th>
+                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-24">Hostname</th>
+                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-[180px]">Location Label</th>
+                  <th className="text-right px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-32">
                     <div>kWh Rate</div>
                     <ClearColumnButton
                       label="Set all to fleet default"
@@ -202,7 +202,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       onCancel={() => setConfirmClear(null)}
                     />
                   </th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-36">
+                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-28">
                     <div>Currency</div>
                     <ClearColumnButton
                       label="Set all to fleet default"
@@ -213,7 +213,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       onCancel={() => setConfirmClear(null)}
                     />
                   </th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-28">
+                  <th className="text-right px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-24">
                     <div>PUE</div>
                     <ClearColumnButton
                       label="Set all to fleet default"
@@ -353,21 +353,19 @@ const NodeOverrideRow: React.FC<{
       </td>
 
       {/* kWh Rate */}
-      <td className="px-3 py-2.5">
+      <td className="px-3 py-2.5 text-right">
         <div className={eff.kwhRateOverride ? overrideCls : undefined}>
-          <div className="flex items-center gap-1">
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={kwhDraft}
-              onChange={e => setKwhDraft(e.target.value)}
-              onBlur={commitKwh}
-              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-              placeholder={`${fleetSettings.kwhRate} (fleet)`}
-              className={`${cellInput} w-20`}
-            />
-          </div>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={kwhDraft}
+            onChange={e => setKwhDraft(e.target.value)}
+            onBlur={commitKwh}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder={`${fleetSettings.kwhRate} (fleet)`}
+            className={`${cellInput} w-full text-right tabular-nums`}
+          />
         </div>
       </td>
 
@@ -388,7 +386,7 @@ const NodeOverrideRow: React.FC<{
       </td>
 
       {/* PUE */}
-      <td className="px-3 py-2.5">
+      <td className="px-3 py-2.5 text-right">
         <div className={eff.pueOverride ? overrideCls : undefined}>
           <input
             type="number"
@@ -400,7 +398,7 @@ const NodeOverrideRow: React.FC<{
             onBlur={commitPue}
             onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
             placeholder={`${fleetSettings.pue.toFixed(1)} (fleet)`}
-            className={`${cellInput} w-16`}
+            className={`${cellInput} w-full text-right tabular-nums`}
           />
         </div>
       </td>
