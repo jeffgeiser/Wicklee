@@ -65,61 +65,84 @@ const fmtAgo = (ms: number): string => {
 
 // ── Compact inference + hardware summary for Fleet Overview expansions ────────
 // Full HardwareDetailPanel belongs in Node Registry only.
-const FleetNodeSummary: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pue }) => {
+// ── Intelligence Band — expanded row aligned to 5-col NodeRow grid ───────────
+// MODEL · TELEMETRY · METRICS columns map onto the same gridTemplateColumns
+// so visual alignment is exact with the collapsed header above.
+const IntelligenceBand: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pue }) => {
   const ollamaTps   = m.ollama_tokens_per_second;
   const totalPowerW = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
   const hasPower    = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
   const wPer1kStr   = ollamaTps != null && ollamaTps > 0 && hasPower
     ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)} W/1k` : null;
-  const wes         = computeWES(ollamaTps, hasPower ? totalPowerW : null, m.thermal_state, pue);
+  const wes = computeWES(ollamaTps, hasPower ? totalPowerW : null, m.thermal_state, pue);
 
-  const nvThermal    = m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
-  const thermalLabel = m.thermal_state ?? nvThermal?.label ?? null;
-  const thermalCls   = m.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-500');
+  const gpuPct = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent;
+  const memGB  = (m.used_memory_mb / 1024).toFixed(1);
 
-  const memUsedGB  = (m.used_memory_mb / 1024).toFixed(1);
-  const memTotalGB = m.total_memory_mb ? `${(m.total_memory_mb / 1024).toFixed(0)}` : null;
+  const MicroLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none mb-1">{children}</p>
+  );
 
   return (
-    <div className="space-y-1.5 py-1">
-      {/* Inference band */}
-      {m.ollama_running ? (
-        <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 rounded-lg flex-wrap gap-y-1.5">
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${wesColorClass(wes)}`} title={WES_TOOLTIP}>
-            WES {formatWES(wes)}
-          </span>
-          {m.ollama_active_model ? (
-            <span className="text-xs text-gray-500 truncate max-w-[160px]">{m.ollama_active_model}</span>
-          ) : (
-            <span className="text-xs text-gray-600">no model loaded</span>
-          )}
-          {m.ollama_quantization && (
-            <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">{m.ollama_quantization}</span>
-          )}
-          <div className="flex items-center gap-2.5 ml-auto shrink-0">
-            {ollamaTps != null && (
-              <span className="text-xs font-semibold text-green-400">{ollamaTps.toFixed(1)} tok/s</span>
+    <div
+      className="grid items-start gap-x-3 py-2.5 border-b border-gray-100 dark:border-gray-800"
+      style={{ gridTemplateColumns: NODE_ROW_COLS }}
+    >
+      {/* Cols 1+2 — MODEL: name + quantization badge */}
+      <div className="col-span-2 flex flex-col justify-center min-w-0 pr-2">
+        <MicroLabel>Model</MicroLabel>
+        {m.ollama_running ? (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] font-medium text-gray-700 dark:text-gray-300 truncate">
+              {m.ollama_active_model ?? 'no model loaded'}
+            </span>
+            {m.ollama_quantization && (
+              <span className="text-[9px] font-semibold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded shrink-0">
+                {m.ollama_quantization}
+              </span>
             )}
-            {wPer1kStr && (
-              <span className="text-xs text-gray-500">{wPer1kStr}</span>
+            {m.ollama_model_size_gb != null && (
+              <span className="text-[10px] text-gray-500 shrink-0">{m.ollama_model_size_gb.toFixed(1)} GB</span>
             )}
           </div>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500 bg-gray-50 dark:bg-gray-800/30 rounded-lg">
-          <BotMessageSquare size={11} className="shrink-0 text-gray-600" />
-          No inference runtime
-        </div>
-      )}
-
-      {/* Hardware summary line */}
-      <div className="flex items-center gap-4 px-3 text-xs text-gray-500 flex-wrap">
-        <span>{m.cpu_core_count} cores</span>
-        <span>{memUsedGB}{memTotalGB ? ` / ${memTotalGB} GB` : ' GB'} RAM</span>
-        {thermalLabel && (
-          <span className={`font-medium ${thermalCls}`}>{thermalLabel}</span>
+        ) : (
+          <span className="text-[11px] text-gray-600">no runtime</span>
         )}
       </div>
+
+      {/* Col 3 — TELEMETRY: CPU | GPU | MEM | CORES */}
+      <div className="flex flex-col justify-center text-right">
+        <MicroLabel>Telemetry</MicroLabel>
+        <div className="flex items-center justify-end gap-1 text-[10px] font-mono flex-wrap">
+          <span className="text-gray-300 dark:text-gray-200 tabular-nums">{m.cpu_usage_percent.toFixed(0)}%</span>
+          {gpuPct != null && (
+            <><span className="text-gray-600">|</span><span className="text-gray-300 dark:text-gray-200 tabular-nums">{gpuPct.toFixed(0)}%</span></>
+          )}
+          <span className="text-gray-600">|</span>
+          <span className="text-gray-300 dark:text-gray-200 tabular-nums">{memGB}G</span>
+          <span className="text-gray-600">|</span>
+          <span className="text-gray-500 tabular-nums">{m.cpu_core_count}c</span>
+        </div>
+      </div>
+
+      {/* Cols 4+5 — METRICS: W/1k (raw) + WES (normalized) */}
+      <div className="col-span-2 flex flex-col justify-center items-end">
+        <MicroLabel>Metrics</MicroLabel>
+        <div className="flex items-center gap-2">
+          {wPer1kStr && (
+            <span className="text-[10px] text-gray-500 font-mono tabular-nums">{wPer1kStr}</span>
+          )}
+          <span
+            className={`text-[11px] font-bold font-mono tabular-nums ${wesColorClass(wes)}`}
+            title={WES_TOOLTIP}
+          >
+            WES {formatWES(wes)}
+          </span>
+        </div>
+      </div>
+
+      {/* Spacer — aligns with chevron column */}
+      <div />
     </div>
   );
 };
@@ -134,6 +157,10 @@ interface NodeRowProps {
   pue?: number;
 }
 
+// Shared column template — used by both the collapsed header and the IntelligenceBand
+// so that all columns visually align when expanded.
+const NODE_ROW_COLS = '7.5rem minmax(0,1fr) 80px 92px 68px 16px';
+
 const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false, pue = 1.0 }) => {
   const [open, setOpen] = useState(defaultOpen);
 
@@ -144,52 +171,94 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
   const chipName   = m?.gpu_name ?? m?.chip_name ?? null;
   const tps        = m?.ollama_tokens_per_second ?? null;
 
+  // Efficiency column — WES with adjusted watts (pue already in computeWES)
+  const totalPowerW = m ? (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0) : 0;
+  const hasPower    = m ? (m.cpu_power_w != null || m.nvidia_power_draw_w != null) : false;
+  const wes         = computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue);
+
   return (
     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+        className="w-full grid items-center gap-x-3 px-4 py-3 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+        style={{ gridTemplateColumns: NODE_ROW_COLS }}
       >
-        <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`} />
+        {/* Col 1 — Status dot + Node ID */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`} />
+          <span className="text-[11px] font-bold font-mono text-gray-900 dark:text-white truncate">{nodeId}</span>
+        </div>
 
-        {/* Left: identity — single baseline */}
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <span className="text-xs font-bold text-gray-900 dark:text-white shrink-0">{nodeId}</span>
+        {/* Col 2 — Hostname + chip type (identity) */}
+        <div className="flex items-center gap-1.5 min-w-0">
           {hostname !== nodeId && (
-            <span className="text-xs text-gray-500 shrink-0">· {hostname}</span>
+            <span className="text-xs text-gray-500 truncate">{hostname}</span>
           )}
           {chipName && (
-            <span className="text-[10px] text-indigo-400/80 truncate">· {chipName}</span>
+            <span className="text-[10px] text-indigo-400/80 truncate shrink-0">· {chipName}</span>
           )}
         </div>
 
-        {/* Center: thermal (online) or last-seen (offline) — fixed width, always present */}
-        <div className="w-20 text-right shrink-0">
-          {isOnline
-            ? <span className={`text-[11px] font-semibold ${thermalCls}`}>{thermalStr ?? '—'}</span>
-            : ls
-              ? <span className="text-[10px] text-gray-500">{fmtAgo(ls)}</span>
-              : <span className="text-[10px] text-gray-500">—</span>
-          }
+        {/* Col 3 — Thermal: stacked micro-label + state value */}
+        <div className="text-right">
+          {isOnline ? (
+            <>
+              <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none mb-0.5">Thermal</p>
+              <p className={`text-[11px] font-semibold leading-tight ${thermalStr ? thermalCls : 'text-gray-500 dark:text-gray-600'}`}>
+                {thermalStr ?? '—'}
+              </p>
+            </>
+          ) : ls ? (
+            <span className="text-[10px] text-gray-500">{fmtAgo(ls)}</span>
+          ) : (
+            <span className="text-[10px] text-gray-500">—</span>
+          )}
         </div>
 
-        {/* Right: tok/s or no inference (online) or offline — fixed width */}
-        <div className="w-24 text-right shrink-0">
-          {isOnline
-            ? tps != null
-              ? <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
-              : <span className="text-[10px] text-gray-500">no inference</span>
-            : <span className="text-[10px] text-gray-500">offline</span>
-          }
+        {/* Col 4 — Throughput: tok/s + 2px pulsing cyan dot when sampling */}
+        <div className="text-right">
+          {isOnline ? (
+            tps != null ? (
+              <div className="flex items-center justify-end gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shrink-0" />
+                <span className="text-xs font-bold tabular-nums font-mono text-green-400">{tps.toFixed(1)}</span>
+                <span className="text-[10px] text-gray-500">t/s</span>
+              </div>
+            ) : (
+              <span className="text-[10px] text-gray-500">no infer.</span>
+            )
+          ) : (
+            <span className="text-[10px] text-gray-500">offline</span>
+          )}
         </div>
 
+        {/* Col 5 — Efficiency: WES score + facility (PUE) indicator */}
+        <div className="text-right">
+          {isOnline && wes != null ? (
+            <div className="flex flex-col items-end gap-0.5">
+              <span
+                className={`text-xs font-bold tabular-nums font-mono ${wesColorClass(wes)}`}
+                title={WES_TOOLTIP}
+              >
+                {formatWES(wes)}
+              </span>
+              {pue > 1.0 && (
+                <span className="text-[8px] tabular-nums text-amber-500/60 leading-none">PUE {pue.toFixed(1)}</span>
+              )}
+            </div>
+          ) : isOnline ? (
+            <span className="text-[10px] text-gray-600 dark:text-gray-700">—</span>
+          ) : null}
+        </div>
+
+        {/* Chevron */}
         <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
         <div className="px-4 pb-3 pt-2 border-t border-gray-200 dark:border-gray-800">
           {m ? (
-            <FleetNodeSummary m={m} pue={pue} />
+            <IntelligenceBand m={m} pue={pue} />
           ) : (
             <p className="text-sm text-gray-500 text-center py-6">
               {ls ? `No telemetry — last seen ${fmtAgo(ls)}` : 'No telemetry received yet — make sure the agent is running.'}
