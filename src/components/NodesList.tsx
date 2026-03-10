@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, ChevronDown, Search, X } from 'lucide-react';
 import { NodeAgent, SentinelMetrics } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 
@@ -18,16 +18,111 @@ const fmtAgo = (ms: number): string => {
   return `${Math.floor(s / 3600)}h ago`;
 };
 
+type SortKey     = 'lastActive' | 'nodeId' | 'hostname' | 'cpu' | 'tps';
+type StatusFilter = 'all' | 'online' | 'offline';
+
 interface NodesListProps {
   nodes: NodeAgent[];
 }
 
+// ── Collapsible node row ───────────────────────────────────────────────────────
+interface CollapsibleNodeProps {
+  node: NodeAgent;
+  metrics: SentinelMetrics | null;
+  lastSeenMs?: number;
+  defaultOpen?: boolean;
+}
+
+const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, lastSeenMs: ls, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
+
+  const isLive     = m !== null && (ls == null || Date.now() - ls < 30_000);
+  const chipName   = m?.gpu_name ?? m?.chip_name;
+  const hostname   = node.hostname && node.hostname !== node.id ? node.hostname : null;
+
+  const cpuStr     = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
+  const powerW     = (m?.cpu_power_w ?? 0) + (m?.nvidia_power_draw_w ?? 0);
+  const hasPower   = m?.cpu_power_w != null || m?.nvidia_power_draw_w != null;
+  const powerStr   = hasPower ? `${powerW.toFixed(0)}W` : '—';
+
+  const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
+  const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
+  const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
+
+  const tps        = m?.ollama_tokens_per_second;
+
+  return (
+    <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+      >
+        <span className={`shrink-0 w-2 h-2 rounded-full ${isLive ? 'bg-green-500' : 'bg-gray-500'}`} />
+
+        {/* Identity */}
+        <div className="min-w-0 shrink-0 max-w-[220px]">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-mono text-xs font-bold text-gray-900 dark:text-white">{node.id}</span>
+            {hostname && (
+              <span className="text-xs text-gray-500 dark:text-gray-400 truncate">· {hostname}</span>
+            )}
+          </div>
+          {chipName && (
+            <p className="text-[10px] text-indigo-400/80 truncate mt-0.5">{chipName}</p>
+          )}
+        </div>
+
+        {/* Online / offline */}
+        <span className={`text-[10px] font-semibold shrink-0 ${isLive ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
+          {isLive ? 'Online' : ls ? fmtAgo(ls) : 'Offline'}
+        </span>
+
+        {/* Quick stats */}
+        <div className="flex-1 flex items-center gap-4 justify-end text-[11px] text-gray-500 dark:text-gray-400 font-mono">
+          <span>CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
+          <span className="hidden sm:inline">
+            Power: <span className="text-gray-700 dark:text-gray-300 font-semibold">{powerStr}</span>
+          </span>
+          <span className="hidden sm:inline">
+            Thermal: <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span>
+          </span>
+          {tps != null && (
+            <span className="hidden md:inline text-indigo-400 font-semibold">{tps.toFixed(1)} tok/s</span>
+          )}
+        </div>
+
+        <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 pt-3 border-t border-gray-200 dark:border-gray-800">
+          {m ? (
+            <HardwareDetailPanel metrics={m} />
+          ) : (
+            <p className="text-sm text-gray-500 text-center py-6">
+              {ls ? `No telemetry — last seen ${fmtAgo(ls)}` : 'No telemetry received yet — make sure the agent is running.'}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Main component ─────────────────────────────────────────────────────────────
 const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
   const [allMetrics, setAllMetrics]     = useState<Record<string, SentinelMetrics>>({});
   const [lastSeenMs, setLastSeenMs]     = useState<Record<string, number>>({});
   const [connected, setConnected]       = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+  const [localExpanded, setLocalExpanded] = useState(true);
+
+  const [search, setSearch]             = useState('');
+  const [sortKey, setSortKey]           = useState<SortKey>('lastActive');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+
+  const esRef     = useRef<EventSource | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let retryTimer: ReturnType<typeof setTimeout>;
@@ -80,43 +175,68 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
 
   // ── Localhost view ─────────────────────────────────────────────────────────
   if (isLocalHost) {
-    const m = localMetrics;
+    const m        = localMetrics;
+    const chipName = m?.gpu_name ?? m?.chip_name;
+
+    const cpuStr   = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
+    const powerW   = (m?.cpu_power_w ?? 0) + (m?.nvidia_power_draw_w ?? 0);
+    const hasPower = m?.cpu_power_w != null || m?.nvidia_power_draw_w != null;
+    const powerStr = hasPower ? `${powerW.toFixed(0)}W` : '—';
+    const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
+    const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
+    const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
+    const tps        = m?.ollama_tokens_per_second;
+
     return (
       <div className="space-y-6">
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm dark:shadow-none">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
-              <div>
-                <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold">Local Agent</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="font-mono text-sm font-bold text-gray-900 dark:text-white">
-                    {m?.node_id ?? '—'}
-                  </span>
-                  {m?.hostname && m.hostname !== m.node_id && (
-                    <span className="text-xs text-gray-500">{m.hostname}</span>
-                  )}
-                </div>
-                {(m?.gpu_name ?? m?.chip_name) && (
-                  <p className="text-[10px] text-indigo-400/80 mt-0.5">{m?.gpu_name ?? m?.chip_name}</p>
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+          <button
+            onClick={() => setLocalExpanded(o => !o)}
+            className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+          >
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold">Local Agent</span>
+                <span className="font-mono text-sm font-bold text-gray-900 dark:text-white">{m?.node_id ?? '—'}</span>
+                {m?.hostname && m.hostname !== m.node_id && (
+                  <span className="text-xs text-gray-500">· {m.hostname}</span>
                 )}
               </div>
+              {chipName && (
+                <p className="text-[10px] text-indigo-400/80 mt-0.5">{chipName}</p>
+              )}
+              {!localExpanded && m && (
+                <p className="text-[11px] font-mono text-gray-500 mt-1">
+                  <span className="mr-3">CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
+                  <span className="mr-3">Power: <span className="text-gray-700 dark:text-gray-300 font-semibold">{powerStr}</span></span>
+                  <span className="mr-3">Thermal: <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span></span>
+                  {tps != null && <span className="text-indigo-400 font-semibold">{tps.toFixed(1)} tok/s</span>}
+                </p>
+              )}
             </div>
-            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border shrink-0 ${
               connected
                 ? 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
                 : 'bg-gray-500/10 text-gray-500 border-gray-500/20'
             }`}>
               {connected ? 'Online' : 'Connecting…'}
             </span>
-          </div>
+            <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${localExpanded ? 'rotate-180' : ''}`} />
+          </button>
 
-          {m ? (
-            <HardwareDetailPanel metrics={m} />
-          ) : (
-            <div className="py-12 text-center">
-              <p className="text-sm text-gray-500">Waiting for local agent telemetry…</p>
-              <p className="text-xs text-gray-400 mt-1 font-mono">make sure <span className="text-indigo-400">wicklee</span> is running</p>
+          {localExpanded && (
+            <div className="px-5 pb-5 border-t border-gray-100 dark:border-gray-800">
+              {m ? (
+                <div className="pt-4">
+                  <HardwareDetailPanel metrics={m} />
+                </div>
+              ) : (
+                <div className="py-12 text-center">
+                  <p className="text-sm text-gray-500">Waiting for local agent telemetry…</p>
+                  <p className="text-xs text-gray-400 mt-1 font-mono">make sure <span className="text-indigo-400">wicklee</span> is running</p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -150,70 +270,136 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
     );
   }
 
-  // ── Hosted view — stacked node cards ───────────────────────────────────────
+  // ── Hosted view — enrich nodes with live metrics ────────────────────────────
+  const enriched = nodes.map((n, idx) => {
+    const m   = allMetrics[n.id] ?? null;
+    const ls  = lastSeenMs[n.id];
+    const isLive = m !== null && (ls == null || Date.now() - ls < 30_000);
+    return { n, m, ls, isLive, idx };
+  });
+
+  const onlineCount  = enriched.filter(e => e.isLive).length;
+  const offlineCount = enriched.filter(e => !e.isLive).length;
+
+  // Search + status filter
+  const q = search.trim().toLowerCase();
+  let filtered = enriched.filter(({ n, m, isLive }) => {
+    if (statusFilter === 'online'  && !isLive) return false;
+    if (statusFilter === 'offline' &&  isLive) return false;
+    if (!q) return true;
+    const chip   = (m?.gpu_name ?? m?.chip_name ?? '').toLowerCase();
+    const status = isLive ? 'online' : 'offline';
+    return (
+      n.id.toLowerCase().includes(q) ||
+      (n.hostname ?? '').toLowerCase().includes(q) ||
+      chip.includes(q) ||
+      status.includes(q)
+    );
+  });
+
+  // Sort
+  filtered = [...filtered].sort((a, b) => {
+    switch (sortKey) {
+      case 'nodeId':    return a.n.id.localeCompare(b.n.id);
+      case 'hostname':  return (a.n.hostname ?? '').localeCompare(b.n.hostname ?? '');
+      case 'cpu':       return (b.m?.cpu_usage_percent ?? -1) - (a.m?.cpu_usage_percent ?? -1);
+      case 'tps':       return (b.m?.ollama_tokens_per_second ?? -1) - (a.m?.ollama_tokens_per_second ?? -1);
+      case 'lastActive':
+      default:          return (b.ls ?? 0) - (a.ls ?? 0);
+    }
+  });
+
   return (
     <div className="space-y-4">
-      {nodes.map(n => {
-        const m   = allMetrics[n.id] ?? null;
-        const ls  = lastSeenMs[n.id];
-        const isLive = m !== null && (ls == null || Date.now() - ls < 30_000);
+      {/* ── Search + sort bar ────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+          <input
+            ref={searchRef}
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search nodes…"
+            className="w-full pl-8 pr-8 py-2 text-sm bg-gray-900 border border-gray-700 rounded-xl text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+          {search && (
+            <button
+              onClick={() => { setSearch(''); searchRef.current?.focus(); }}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+        <select
+          value={sortKey}
+          onChange={e => setSortKey(e.target.value as SortKey)}
+          className="text-xs bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-gray-300 focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
+        >
+          <option value="lastActive">Last active</option>
+          <option value="nodeId">Node ID</option>
+          <option value="hostname">Hostname</option>
+          <option value="cpu">CPU usage ↓</option>
+          <option value="tps">Tok/s ↓</option>
+        </select>
+      </div>
 
-        const nvThermal     = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
-        const thermalDisplay = m?.thermal_state ?? nvThermal?.label ?? null;
-        const thermalCls     = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
-        const thermalTitle   = nvThermal ? 'GPU Thermal' : 'Thermal';
+      {/* ── Status filter pills ───────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2">
+        {(['all', 'online', 'offline'] as StatusFilter[]).map(f => {
+          const count  = f === 'all' ? nodes.length : f === 'online' ? onlineCount : offlineCount;
+          const active = statusFilter === f;
+          return (
+            <button
+              key={f}
+              onClick={() => setStatusFilter(f)}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+                active
+                  ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
+                  : 'bg-gray-800/50 border-gray-700 text-gray-500 hover:border-gray-600 hover:text-gray-400'
+              }`}
+            >
+              {f !== 'all' && (
+                <span className={`w-1.5 h-1.5 rounded-full ${f === 'online' ? 'bg-green-400' : 'bg-gray-500'}`} />
+              )}
+              <span className="capitalize">{f}</span>
+              <span className={active ? 'text-indigo-400' : 'text-gray-600'}>({count})</span>
+            </button>
+          );
+        })}
+      </div>
 
-        return (
-          <div key={n.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm dark:shadow-none">
-            {/* Node identity header */}
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <span className={`w-2.5 h-2.5 rounded-full mt-1 shrink-0 ${isLive ? 'bg-green-500' : 'bg-gray-400'}`} />
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-sm font-bold text-gray-900 dark:text-white">{n.id}</span>
-                    {n.hostname && n.hostname !== n.id && (
-                      <span className="text-xs text-gray-500">{n.hostname}</span>
-                    )}
-                  </div>
-                  {(m?.gpu_name ?? m?.chip_name) && (
-                    <p className="text-[10px] text-indigo-400/80 mt-0.5">{m?.gpu_name ?? m?.chip_name}</p>
-                  )}
-                  {thermalDisplay && (
-                    <p className={`text-[11px] font-semibold mt-0.5 ${thermalCls}`}>
-                      {thermalTitle}: {thermalDisplay}
-                    </p>
-                  )}
-                </div>
-              </div>
-              <div className="flex flex-col items-end gap-1 shrink-0">
-                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
-                  isLive
-                    ? 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
-                    : 'bg-gray-500/10 text-gray-500 border-gray-500/20'
-                }`}>
-                  {isLive ? 'Online' : 'Offline'}
-                </span>
-                {!isLive && ls != null && (
-                  <p className="text-[10px] text-gray-500 font-mono">last seen {fmtAgo(ls)}</p>
-                )}
-              </div>
-            </div>
+      {/* ── Node rows ─────────────────────────────────────────────────────────── */}
+      {filtered.length === 0 ? (
+        <div className="py-16 text-center">
+          <p className="text-sm text-gray-500">No nodes match your search</p>
+          <button
+            onClick={() => { setSearch(''); setStatusFilter('all'); }}
+            className="mt-3 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+          >
+            Clear filters
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(({ n, m, ls, idx }) => (
+            <CollapsibleNode
+              key={n.id}
+              node={n}
+              metrics={m}
+              lastSeenMs={ls}
+              defaultOpen={idx === 0}
+            />
+          ))}
+        </div>
+      )}
 
-            {/* Hardware detail */}
-            {m ? (
-              <HardwareDetailPanel metrics={m} />
-            ) : (
-              <div className="py-8 text-center border-t border-gray-100 dark:border-gray-800">
-                <p className="text-sm text-gray-500">
-                  {ls != null ? `No telemetry — last seen ${fmtAgo(ls)}` : 'Awaiting telemetry…'}
-                </p>
-                <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Make sure the agent is running on this machine</p>
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {/* ── Footer ────────────────────────────────────────────────────────────── */}
+      <p className="text-[11px] text-gray-600 text-center pt-1">
+        Fleet: <span className="text-gray-400 font-semibold">{onlineCount} node{onlineCount !== 1 ? 's' : ''} online</span>
+        {' '}· {nodes.length} total
+      </p>
     </div>
   );
 };
