@@ -357,7 +357,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
         <div className="relative shrink-0" ref={sortRef}>
           <button
             onClick={() => setSortOpen(o => !o)}
-            className="flex items-center gap-2 px-3 py-2 text-xs bg-gray-900 border border-gray-700 rounded-xl text-gray-300 hover:border-indigo-500 hover:text-gray-200 transition-colors focus:outline-none"
+            className="flex items-center gap-2 px-4 py-2 text-xs font-medium bg-gray-900 border border-gray-700 rounded-xl text-gray-300 hover:border-indigo-500 hover:text-gray-200 transition-colors focus:outline-none"
           >
             <ArrowUpDown className="w-3.5 h-3.5 text-gray-500" />
             <span>{SORT_OPTIONS.find(o => o.value === sortKey)?.label ?? 'Sort'}</span>
@@ -383,8 +383,8 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
         </div>
       </div>
 
-      {/* ── Status filter pills ───────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2">
+      {/* ── Status filter tabs ────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-1">
         {(['all', 'online', 'offline'] as StatusFilter[]).map(f => {
           const count  = f === 'all' ? nodes.length : f === 'online' ? onlineCount : offlineCount;
           const active = statusFilter === f;
@@ -392,17 +392,17 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             <button
               key={f}
               onClick={() => setStatusFilter(f)}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider border transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[9px] font-semibold uppercase tracking-widest transition-all ${
                 active
-                  ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
-                  : 'bg-gray-800/50 border-gray-700 text-gray-500 hover:border-gray-600 hover:text-gray-400'
+                  ? 'text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800'
+                  : 'text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
               }`}
             >
               {f !== 'all' && (
-                <span className={`w-1.5 h-1.5 rounded-full ${f === 'online' ? 'bg-green-400' : 'bg-gray-500'}`} />
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${f === 'online' ? 'bg-green-400' : 'bg-gray-500'}`} />
               )}
               <span className="capitalize">{f}</span>
-              <span className={active ? 'text-indigo-400' : 'text-gray-600'}>({count})</span>
+              <span className={active ? 'text-gray-500 dark:text-gray-400' : 'text-gray-400 dark:text-gray-600'}>({count})</span>
             </button>
           );
         })}
