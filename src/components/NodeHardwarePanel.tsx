@@ -23,6 +23,7 @@ export const derivedNvidiaThermal = (temp: number | null): { label: string; colo
   return               { label: 'Critical', colour: 'text-red-500' };
 };
 
+// ── Kept for collapsed row summaries in Overview and NodesList ─────────────────
 export const SentinelCard: React.FC<{
   label: string;
   value: string;
@@ -42,12 +43,34 @@ export const SentinelCard: React.FC<{
   </div>
 );
 
+// ── Internal: borderless vital stat for the top rail ──────────────────────────
+const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; note?: string }> = ({ label, value, valueCls, note }) => (
+  <div className="min-w-0">
+    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">{label}</p>
+    <p className={`text-lg font-bold leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
+    {note && <p className="text-[9px] text-gray-500 mt-0.5">{note}</p>}
+  </div>
+);
+
+// ── Internal: compact tile for hardware cluster columns ────────────────────────
+const HudTile: React.FC<{ label: string; value: string; sub?: string; dim?: boolean }> = ({ label, value, sub, dim = false }) => (
+  <div className="border border-gray-100 dark:border-gray-800 rounded-lg px-3 py-2.5 bg-gray-50/50 dark:bg-gray-800/30 min-h-[52px] flex flex-col justify-center">
+    <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">{label}</p>
+    <p className={`text-sm font-bold leading-tight ${dim ? 'text-gray-400 dark:text-gray-600' : 'text-gray-900 dark:text-gray-100'}`}>{value}</p>
+    {sub && <p className="text-[9px] text-gray-400 dark:text-gray-500 font-mono mt-0.5 leading-tight">{sub}</p>}
+  </div>
+);
+
+// ── Column header label ────────────────────────────────────────────────────────
+const ClusterLabel: React.FC<{ label: string }> = ({ label }) => (
+  <p className="text-[9px] text-gray-400 dark:text-gray-600 uppercase tracking-widest font-semibold mb-2">{label}</p>
+);
+
 export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ metrics: m }) => {
-  // Thermal: use macOS thermal_state if available; fall back to NVIDIA-derived label
-  const nvThermal   = m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
+  const nvThermal    = m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalLabel = m.thermal_state ?? nvThermal?.label ?? null;
   const thermalClass = m.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
-  const thermalTitle = nvThermal != null ? 'GPU Thermal' : 'Thermal State';
+  const thermalTitle = nvThermal != null ? 'GPU Thermal' : 'Thermal';
 
   const cpuPct    = `${m.cpu_usage_percent.toFixed(1)}%`;
   const memUsed   = `${(m.used_memory_mb / 1024).toFixed(1)} GB`;
@@ -55,171 +78,146 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
   const memAvail  = `${(m.available_memory_mb / 1024).toFixed(1)} GB`;
   const coreCount = `${m.cpu_core_count} cores`;
 
-  const cpuPowerStr      = m.cpu_power_w    != null ? `${m.cpu_power_w.toFixed(1)} W` : null;
-  const gpuUtilStr       = m.gpu_utilization_percent != null ? `${m.gpu_utilization_percent.toFixed(0)}%` : null;
-  const memPressStr      = m.memory_pressure_percent != null ? `${m.memory_pressure_percent.toFixed(0)}%` : null;
-  const nvidiaGpuStr     = m.nvidia_gpu_utilization_percent != null ? `${m.nvidia_gpu_utilization_percent.toFixed(0)}%` : null;
-  const nvidiaVramStr    = m.nvidia_vram_used_mb != null && m.nvidia_vram_total_mb != null
+  const cpuPowerStr   = m.cpu_power_w != null ? `${m.cpu_power_w.toFixed(1)} W` : null;
+  const gpuUtilStr    = m.gpu_utilization_percent != null ? `${m.gpu_utilization_percent.toFixed(0)}%` : null;
+  const memPressStr   = m.memory_pressure_percent != null ? `${m.memory_pressure_percent.toFixed(0)}%` : null;
+  const nvidiaGpuStr  = m.nvidia_gpu_utilization_percent != null ? `${m.nvidia_gpu_utilization_percent.toFixed(0)}%` : null;
+  const nvidiaVramStr = m.nvidia_vram_used_mb != null && m.nvidia_vram_total_mb != null
     ? `${(m.nvidia_vram_used_mb / 1024).toFixed(1)} GB` : null;
-  const nvidiaVramTotal  = m.nvidia_vram_total_mb != null ? `${(m.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
-  const nvidiaTempStr    = m.nvidia_gpu_temp_c   != null ? `${m.nvidia_gpu_temp_c}°C` : null;
-  const nvidiaPowerStr   = m.nvidia_power_draw_w != null ? `${m.nvidia_power_draw_w.toFixed(1)} W` : null;
+  const nvidiaVramTotal = m.nvidia_vram_total_mb != null ? `of ${(m.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
+  const nvidiaTempStr   = m.nvidia_gpu_temp_c   != null ? `${m.nvidia_gpu_temp_c}°C` : null;
+  const nvidiaPowerStr  = m.nvidia_power_draw_w != null ? `${m.nvidia_power_draw_w.toFixed(1)} W` : null;
 
-  // GPU util: prefer NVIDIA (discrete GPU), fall back to Apple AGX
   const effectiveGpuStr = nvidiaGpuStr ?? gpuUtilStr;
 
-  // Mem pressure (macOS) or memory utilisation fallback for Linux/Windows.
-  // Fallback shows X%* so the user knows it's utilisation, not pressure.
-  const memUtilStr = m.total_memory_mb > 0
-    ? `${Math.round((m.used_memory_mb / m.total_memory_mb) * 100)}%*`
-    : null;
+  const memUtilStr    = m.total_memory_mb > 0 ? `${Math.round((m.used_memory_mb / m.total_memory_mb) * 100)}%*` : null;
   const effectiveMemStr   = memPressStr ?? memUtilStr;
   const effectiveMemLabel = memPressStr != null ? 'Mem Pressure' : 'Mem Util*';
 
+  // Ollama wattage
+  const ollamaTps    = m.ollama_tokens_per_second;
+  const totalPowerW  = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+  const hasPower     = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
+  const wPer1kStr    = ollamaTps != null && ollamaTps > 0 && hasPower
+    ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)} W/1k` : null;
+
   return (
-    <div className="space-y-3">
-      {/* Core metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <SentinelCard label="CPU Usage"     value={cpuPct}    icon={Cpu}         accent="bg-indigo-500" />
-        <SentinelCard label="Memory Used"   value={memUsed}   sub={memTotal}     icon={MemoryStick}    accent="bg-blue-500" />
-        <SentinelCard label="Mem Available" value={memAvail}  icon={Database}    accent="bg-sky-500" />
-        <SentinelCard label="CPU Cores"     value={coreCount} icon={Cpu}         accent="bg-violet-500" />
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-          <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-orange-500/10">
-            <Thermometer size={16} className="text-orange-400" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">{thermalTitle}</p>
-            <p className={`text-base font-bold leading-tight ${thermalClass}`}>
-              {thermalLabel ?? '—'}
-            </p>
-            {nvThermal && m.nvidia_gpu_temp_c != null && (
-              <p className="text-[10px] text-gray-400 font-mono">{m.nvidia_gpu_temp_c}°C</p>
-            )}
-          </div>
-        </div>
-      </div>
+    <div className="space-y-4">
 
-      {/* Platform metrics — always rendered; null values show — */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-        {/* CPU Power — always shown; null means no elevated perms */}
-        {cpuPowerStr ? (
-          <SentinelCard
-            label="CPU Power" value={cpuPowerStr}
-            sub={m.ecpu_power_w != null && m.pcpu_power_w != null
-              ? `E ${m.ecpu_power_w.toFixed(1)}W  P ${m.pcpu_power_w.toFixed(1)}W`
-              : undefined}
-            icon={Zap} accent="bg-amber-500"
-          />
-        ) : (
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
-            <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/10">
-              <Zap size={16} className="text-amber-500 opacity-40" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider font-medium">CPU Power</p>
-              <p className="text-[11px] font-semibold text-gray-400 leading-tight">—</p>
-              <p className="text-[9px] text-gray-500 font-mono leading-tight mt-0.5">requires elevated permissions</p>
-            </div>
-          </div>
-        )}
-
-        {/* GPU Utilization — NVIDIA takes priority over Apple AGX; — if neither */}
-        <SentinelCard
-          label="GPU Utilization"
-          value={effectiveGpuStr ?? '—'}
-          icon={Activity}
-          accent="bg-purple-500"
-        />
-
-        {/* Mem Pressure (macOS) or Mem Util fallback (Linux/Windows) */}
-        <SentinelCard
+      {/* ── Vital Rail — borderless primary metrics ───────────────────────── */}
+      <div className="flex items-start gap-8 pb-4 border-b border-gray-100 dark:border-gray-800/60 flex-wrap">
+        <VitalStat label="CPU"          value={cpuPct} />
+        <VitalStat label="GPU"          value={effectiveGpuStr ?? '—'} />
+        <VitalStat
           label={effectiveMemLabel}
           value={effectiveMemStr ?? '—'}
-          icon={Wind}
-          accent={memPressStr != null ? 'bg-rose-500' : 'bg-sky-500'}
+          note={effectiveMemStr === memUtilStr && memUtilStr ? '* util, not pressure' : undefined}
         />
-
-        {/* NVIDIA extras — only rendered when data is present */}
-        {nvidiaVramStr && (
-          <SentinelCard label="VRAM Used" value={nvidiaVramStr}
-            sub={nvidiaVramTotal ? `of ${nvidiaVramTotal}` : undefined}
-            icon={Database} accent="bg-emerald-500"
-          />
-        )}
-        {nvidiaTempStr  && <SentinelCard label="GPU Temp"    value={nvidiaTempStr}  icon={Thermometer} accent="bg-orange-500" />}
-        {nvidiaPowerStr && <SentinelCard label="Board Power" value={nvidiaPowerStr} icon={Zap}         accent="bg-yellow-500" />}
+        <VitalStat label={thermalTitle} value={thermalLabel ?? '—'} valueCls={thermalClass} />
+        <VitalStat label="Cores"        value={`${m.cpu_core_count}`} />
       </div>
 
-      {/* Ollama section */}
-      {m.ollama_running ? (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3">
-          {/* Header row */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <BotMessageSquare size={14} className="text-indigo-400 shrink-0" />
-            <span className="text-xs font-bold text-gray-900 dark:text-white">Ollama</span>
-            {m.ollama_active_model ? (
-              <>
-                <span className="text-xs font-mono text-indigo-300">{m.ollama_active_model}</span>
-                {m.ollama_quantization && (
-                  <span className="text-[10px] font-mono bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded px-1.5 py-0.5">
-                    {m.ollama_quantization}
-                  </span>
-                )}
-                {m.ollama_model_size_gb != null && (
-                  <span className="text-[10px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
-                )}
-              </>
-            ) : (
-              <span className="text-[11px] text-gray-500">running · no model loaded</span>
-            )}
-          </div>
-          {/* Metric cards */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3">
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Tokens / Sec</p>
-              {m.ollama_tokens_per_second != null ? (
-                <>
-                  <p className="text-sm font-bold text-gray-200 mt-0.5">{m.ollama_tokens_per_second.toFixed(1)} tok/s</p>
-                  <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">sampled · 30s probe</p>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
-                  <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">sampling every 30s</p>
-                </>
-              )}
-            </div>
-            <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3">
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Wattage / 1k tkn</p>
-              {(() => {
-                const tps = m.ollama_tokens_per_second;
-                const powerW = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
-                const hasPower = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
-                if (tps != null && tps > 0 && hasPower) {
-                  const wPer1k = (powerW / tps) * 1000;
-                  return (
-                    <>
-                      <p className="text-sm font-bold text-gray-200 mt-0.5">{wPer1k.toFixed(1)} W</p>
-                      <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">per 1k tokens</p>
-                    </>
-                  );
-                }
-                return (
-                  <>
-                    <p className="text-sm font-bold text-gray-400 mt-0.5">—</p>
-                    <p className="text-[9px] text-gray-600 mt-0.5 leading-tight">
-                      {tps == null ? 'requires tok/s' : 'requires cpu_power_w'}
-                    </p>
-                  </>
-                );
-              })()}
-            </div>
+      {/* ── Hardware Clusters ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-6">
+
+        {/* COMPUTE */}
+        <div>
+          <ClusterLabel label="Compute" />
+          <div className="space-y-2">
+            <HudTile label="CPU Cores" value={coreCount} />
+            <HudTile
+              label="CPU Power"
+              value={cpuPowerStr ?? '—'}
+              sub={
+                cpuPowerStr && m.ecpu_power_w != null && m.pcpu_power_w != null
+                  ? `E ${m.ecpu_power_w.toFixed(1)}W · P ${m.pcpu_power_w.toFixed(1)}W`
+                  : !cpuPowerStr ? 'requires elevated permissions' : undefined
+              }
+              dim={!cpuPowerStr}
+            />
           </div>
         </div>
+
+        {/* MEMORY */}
+        <div>
+          <ClusterLabel label="Memory" />
+          <div className="space-y-2">
+            <HudTile label="Used"      value={memUsed}  sub={memTotal} />
+            <HudTile label="Available" value={memAvail} />
+            {(memPressStr ?? memUtilStr) && (
+              <HudTile
+                label={memPressStr ? 'Pressure' : 'Util'}
+                value={(memPressStr ?? memUtilStr)!}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* GRAPHICS */}
+        <div>
+          <ClusterLabel label="Graphics" />
+          <div className="space-y-2">
+            <HudTile
+              label="GPU Util"
+              value={effectiveGpuStr ?? '—'}
+              dim={!effectiveGpuStr}
+            />
+            {nvidiaVramStr && (
+              <HudTile label="VRAM" value={nvidiaVramStr} sub={nvidiaVramTotal ?? undefined} />
+            )}
+            {nvidiaTempStr  && <HudTile label="GPU Temp"    value={nvidiaTempStr} />}
+            {nvidiaPowerStr && <HudTile label="Board Power" value={nvidiaPowerStr} />}
+          </div>
+        </div>
+
+      </div>
+
+      {/* ── Inference HUD status bar ──────────────────────────────────────── */}
+      {m.ollama_running ? (
+        <div className="flex items-center gap-2 pt-3 border-t border-gray-100 dark:border-gray-800/60 flex-wrap">
+          <BotMessageSquare size={13} className="text-indigo-400 shrink-0" />
+          <span className="text-[11px] font-bold text-indigo-400">Ollama</span>
+
+          {m.ollama_active_model ? (
+            <>
+              <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
+              <span className="text-[11px] font-mono text-gray-600 dark:text-gray-300">{m.ollama_active_model}</span>
+
+              {m.ollama_quantization && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
+                  <span className="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                    {m.ollama_quantization}
+                  </span>
+                </>
+              )}
+
+              {m.ollama_model_size_gb != null && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
+                  <span className="text-[11px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
+                </>
+              )}
+
+              <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
+              <span className={`text-[11px] font-mono font-bold ${ollamaTps != null ? 'text-green-400' : 'text-gray-500'}`}>
+                {ollamaTps != null ? `${ollamaTps.toFixed(1)} tok/s` : '…sampling'}
+              </span>
+
+              {wPer1kStr && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-700 select-none">|</span>
+                  <span className="text-[11px] font-mono text-amber-400">{wPer1kStr}</span>
+                </>
+              )}
+            </>
+          ) : (
+            <span className="text-[11px] text-gray-500 ml-1">no model loaded</span>
+          )}
+        </div>
       ) : (
-        <div className="flex items-center gap-2 px-1">
-          <BotMessageSquare size={13} className="text-gray-600 shrink-0" />
+        <div className="flex items-center gap-2 pt-3 border-t border-gray-100 dark:border-gray-800/40">
+          <BotMessageSquare size={12} className="text-gray-600 shrink-0" />
           <p className="text-[11px] text-gray-600">
             Ollama not detected —{' '}
             <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer"
@@ -229,6 +227,7 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
           </p>
         </div>
       )}
+
     </div>
   );
 };
