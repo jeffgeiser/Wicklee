@@ -54,6 +54,15 @@ export function calculateTotalVramMb(metrics: SentinelMetrics[]): number {
 }
 
 /**
+ * Total GPU / unified memory capacity across the fleet, in MB.
+ * Per node: uses nvidia_vram_total_mb when present, otherwise total_memory_mb.
+ */
+export function calculateTotalVramCapacityMb(metrics: SentinelMetrics[]): number {
+  return metrics.reduce((acc, m) =>
+    acc + (m.nvidia_vram_total_mb ?? m.total_memory_mb ?? 0), 0);
+}
+
+/**
  * Daily idle fleet cost in USD.
  * "Idle" = nodes not actively producing tokens.
  * Formula: ∑ (idle_watts_i × pue_i) × 24h × (rate_$/kWh ÷ 1000)
