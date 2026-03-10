@@ -193,6 +193,9 @@ export const HardwareDetailPanel: React.FC<{
                     WES {wesFormatted}{showAsterisk ? '*' : ''}
                     {showThermalWarning && <AlertTriangle size={8} className="inline ml-0.5 text-amber-400" title={thermalWarningTooltip} />}
                   </span>
+                  {(m.ollama_quantization || m.ollama_model_size_gb != null) && (
+                    <span className="text-[10px] text-gray-600 dark:text-gray-500">·</span>
+                  )}
                   {m.ollama_quantization && (
                     <span className="text-[9px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
                       {m.ollama_quantization}
