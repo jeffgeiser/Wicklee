@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Leaf, Key, Cloud, CloudLightning, Github } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Leaf, Key, Cloud, CloudLightning, Github, Settings } from 'lucide-react';
 import Logo from './Logo';
 import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
@@ -30,6 +30,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.AI_PROVIDERS, icon: Key, label: 'AI Key Vault', show: currentUser.isPro && !isLocalMode },
     { id: DashboardTab.TEAM, icon: Users, label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
     { id: DashboardTab.SUSTAINABILITY, icon: Leaf, label: 'Sustainability', show: true },
+    { id: DashboardTab.SETTINGS, icon: Settings, label: 'Settings', show: true },
   ];
 
   const handleRoleToggle = (role: UserRole) => {

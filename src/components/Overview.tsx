@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, BotMessageSquare } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateIdleFleetCostPerDay, ELECTRICITY_RATE_USD_PER_KWH, WES_TOOLTIP } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, WES_TOOLTIP } from '../utils/efficiency';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -17,9 +17,8 @@ interface OverviewProps {
   onAddNode?: () => void;
   onTelemetryUpdate?: () => void;
   onConnectionStateChange?: (state: ConnectionState) => void;
-  nodePueSettings?: Record<string, number>;
-  onUpdateNodePue?: (nodeId: string, pue: number) => void;
-  onCopyPueToAll?: (pue: number) => void;
+  getNodeSettings?: (nodeId: string) => { pue: number; kwhRate: number; currency: string };
+  fleetKwhRate?: number;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -328,7 +327,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 );
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate, onConnectionStateChange, nodePueSettings, onUpdateNodePue, onCopyPueToAll }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate, onConnectionStateChange, getNodeSettings, fleetKwhRate = 0.12 }) => {
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
@@ -580,12 +579,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
     const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
     const watts    = hasWatts ? totalW : null;
-    const pue      = nodePueSettings?.[m.node_id] ?? 1.0;
+    const pue      = getNodeSettings?.(m.node_id)?.pue ?? 1.0;
     const wes      = computeWES(tps, watts, m.thermal_state, pue);
     const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
     return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason };
   });
-  const pueValues = effectiveMetrics.map(m => nodePueSettings?.[m.node_id] ?? 1.0);
+  const pueValues = effectiveMetrics.map(m => getNodeSettings?.(m.node_id)?.pue ?? 1.0);
   const hasPerNodePueDiversity = new Set(pueValues).size > 1;
   const sortedWES  = [...wesEntries].sort((a, b) => {
     if (a.wes != null && b.wes != null) return b.wes - a.wes;
@@ -609,17 +608,30 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return (totalPowerW / fleetTps) * 1000;
   })();
 
-  // Tile 7 — COST / 1K TOKENS: wattPer1k × kwh_rate / 1000
-  const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * ELECTRICITY_RATE_USD_PER_KWH : null;
+  // Tile 7 — COST / 1K TOKENS: wattPer1k × fleet_kwh_rate / 1000
+  const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * fleetKwhRate : null;
 
-  // Tile 8 — IDLE FLEET COST / DAY: ∑ idle_watts × pue × 24h × rate
-  const idleFleetCostPerDay = calculateIdleFleetCostPerDay(effectiveMetrics, nodePueSettings ?? {});
+  // Tile 8 — IDLE FLEET COST / DAY: ∑ idle_watts × pue_i × 24h × rate_i
+  const idleFleetCostPerDay = (() => {
+    const idle = effectiveMetrics.filter(m =>
+      (!m.ollama_tokens_per_second || m.ollama_tokens_per_second <= 0) &&
+      (m.cpu_power_w != null || m.nvidia_power_draw_w != null)
+    );
+    if (idle.length === 0) return null;
+    return idle.reduce((acc, m) => {
+      const ns = getNodeSettings?.(m.node_id);
+      const pue = ns?.pue ?? 1.0;
+      const rate = ns?.kwhRate ?? fleetKwhRate;
+      const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+      return acc + watts * pue * 24 * (rate / 1000);
+    }, 0);
+  })();
   const idlePowerNodes = effectiveMetrics.filter(m =>
     (m.cpu_power_w != null || m.nvidia_power_draw_w != null) &&
     (!m.ollama_tokens_per_second || m.ollama_tokens_per_second <= 0)
   );
   const avgPue = effectiveMetrics.length > 0
-    ? effectiveMetrics.reduce((acc, m) => acc + (nodePueSettings?.[m.node_id] ?? 1.0), 0) / effectiveMetrics.length
+    ? effectiveMetrics.reduce((acc, m) => acc + (getNodeSettings?.(m.node_id)?.pue ?? 1.0), 0) / effectiveMetrics.length
     : 1.0;
 
   // Build the accordion row data — PUE is read-only in Fleet Overview (editing lives in Node Registry)
@@ -628,14 +640,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         nodeId: sentinel.node_id,
         hostname: sentinel.hostname ?? sentinel.node_id,
         metrics: sentinel,
-        pue: nodePueSettings?.[sentinel.node_id] ?? 1.0,
+        pue: getNodeSettings?.(sentinel.node_id)?.pue ?? 1.0,
       }] : [])
     : nodes.map(n => ({
         nodeId: n.id,
         hostname: n.hostname,
         metrics: allNodeMetrics[n.id] ?? null,
         lastSeenMs: lastSeenMsMap[n.id],
-        pue: nodePueSettings?.[n.id] ?? 1.0,
+        pue: getNodeSettings?.(n.id)?.pue ?? 1.0,
       }));
 
   return (
@@ -718,7 +730,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           label="Cost / 1k Tokens"
           value={costPer1k != null ? `$${costPer1k.toFixed(4)}` : '—'}
           valueCls={costPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={`at $${ELECTRICITY_RATE_USD_PER_KWH}/kWh`}
+          sub={`at $${fleetKwhRate}/kWh`}
           icon={DollarSign}
           iconCls="text-cyan-400"
         />

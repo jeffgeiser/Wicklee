@@ -114,5 +114,6 @@ export enum DashboardTab {
   PREFERENCES = 'preferences',
   PRICING = 'pricing',
   AI_PROVIDERS = 'ai_providers',
-  BILLING = 'billing'
+  BILLING = 'billing',
+  SETTINGS = 'settings',
 }
