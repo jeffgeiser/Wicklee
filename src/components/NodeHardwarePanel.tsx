@@ -50,7 +50,7 @@ export const SentinelCard: React.FC<{
 const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; title?: string }> = ({ label, value, valueCls, title }) => (
   <div className="min-w-0">
     <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1" title={title}>{label}</p>
-    <p className={`text-lg font-bold font-mono tabular-nums leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
+    <p className={`text-lg font-bold font-telin leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
   </div>
 );
 
@@ -58,8 +58,8 @@ const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; tit
 const HudTile: React.FC<{ label: string; value: string; sub?: string; dim?: boolean }> = ({ label, value, sub, dim = false }) => (
   <div className="border border-gray-100 dark:border-gray-800 rounded-lg px-3 py-2.5 bg-gray-100 dark:bg-gray-800 min-h-[52px] flex flex-col justify-center">
     <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">{label}</p>
-    <p className={`text-sm font-bold font-mono tabular-nums leading-tight ${dim ? 'text-gray-400 dark:text-gray-600' : 'text-gray-900 dark:text-gray-100'}`}>{value}</p>
-    {sub && <p className="text-[9px] text-gray-400 dark:text-gray-500 font-mono tabular-nums mt-0.5 leading-tight">{sub}</p>}
+    <p className={`text-sm font-bold font-telin leading-tight ${dim ? 'text-gray-400 dark:text-gray-600' : 'text-gray-900 dark:text-gray-100'}`}>{value}</p>
+    {sub && <p className="text-[9px] text-gray-400 dark:text-gray-500 font-telin mt-0.5 leading-tight">{sub}</p>}
   </div>
 );
 
@@ -176,7 +176,7 @@ export const HardwareDetailPanel: React.FC<{
                 <div className="flex items-center gap-1.5 flex-wrap ml-auto shrink-0">
                   {/* WES badge — compact secondary label */}
                   <span
-                    className={`text-[10px] font-semibold font-mono tabular-nums px-2 py-0.5 rounded cursor-default ${wesColor}`}
+                    className={`text-[10px] font-semibold font-telin px-2 py-0.5 rounded cursor-default ${wesColor}`}
                     title={wes == null ? wesNullTooltip : wesLabelTooltip}
                   >
                     WES {wesFormatted}{showAsterisk ? '*' : ''}
@@ -198,7 +198,7 @@ export const HardwareDetailPanel: React.FC<{
             ) : (
               <div className="flex items-center gap-1.5 ml-auto shrink-0">
                 <span
-                  className={`text-[10px] font-semibold font-mono tabular-nums px-2 py-0.5 rounded cursor-default ${wesColor}`}
+                  className={`text-[10px] font-semibold font-telin px-2 py-0.5 rounded cursor-default ${wesColor}`}
                   title={wesNullTooltip}
                 >
                   WES {wesFormatted}
@@ -212,24 +212,24 @@ export const HardwareDetailPanel: React.FC<{
           <div className="px-4 py-3 grid grid-cols-3 gap-4">
             <div>
               <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-1">tok/s</p>
-              <p className={`text-sm font-bold font-mono tabular-nums leading-tight ${ollamaTps != null ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
+              <p className={`text-sm font-bold font-telin leading-tight ${ollamaTps != null ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
                 {ollamaTps != null ? ollamaTps.toFixed(1) : '—'}
               </p>
             </div>
             <div>
               <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-1">Watts</p>
-              <p className={`text-sm font-bold font-mono tabular-nums leading-tight ${wattsStr ? 'text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-600'}`}>
+              <p className={`text-sm font-bold font-telin leading-tight ${wattsStr ? 'text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-600'}`}>
                 {wattsStr ?? '—'}
               </p>
               {wPer1kStr && (
-                <p className="text-[9px] text-gray-500 font-mono tabular-nums leading-none mt-0.5">{wPer1kStr}</p>
+                <p className="text-[9px] text-gray-500 font-telin leading-none mt-0.5">{wPer1kStr}</p>
               )}
             </div>
             <div>
               <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-1">Thermal</p>
               <p className={`text-sm font-bold leading-tight ${thermalClass}`}>{thermalLabel ?? '—'}</p>
               {showThermalPenalty && (
-                <p className="text-[9px] text-gray-500 font-mono tabular-nums leading-none mt-0.5">({thermalPenaltyValue}×)</p>
+                <p className="text-[9px] text-gray-500 font-telin leading-none mt-0.5">({thermalPenaltyValue}×)</p>
               )}
               {showAsterisk && (
                 <p className="text-[9px] text-gray-500 leading-none mt-0.5" title={asteriskTooltip}>pending*</p>

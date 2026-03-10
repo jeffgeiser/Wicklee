@@ -88,8 +88,8 @@ const IntelligenceBand: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pu
     ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)}` : null;
   const gpuPct = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent;
 
-  const VAL = 'text-xs font-mono tabular-nums text-gray-700 dark:text-gray-300';
-  const MUTED = 'text-xs font-mono tabular-nums text-gray-500';
+  const VAL = 'text-xs font-telin text-gray-700 dark:text-gray-300';
+  const MUTED = 'text-xs font-telin text-gray-500';
 
   return (
     <div
@@ -135,7 +135,7 @@ const IntelligenceBand: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pu
       {/* Col 5 — tok/s (aligns with throughput col) */}
       <div className="flex flex-col text-right">
         <ML>tok/s</ML>
-        <span className={ollamaTps != null ? 'text-xs font-mono tabular-nums text-green-400' : MUTED}>
+        <span className={ollamaTps != null ? 'text-xs font-telin text-green-400' : MUTED}>
           {ollamaTps != null ? ollamaTps.toFixed(1) : '—'}
         </span>
       </div>
@@ -180,7 +180,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
   const wes         = computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue);
 
   // Uniform text size for all row values (node ID, hostname, chip, thermal, tok/s, WES)
-  const ROW_VAL = 'text-xs font-mono tabular-nums';
+  const ROW_VAL = 'text-xs font-telin';
 
   return (
     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900">
@@ -1083,11 +1083,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   {/* WES */}
                   <div className="w-16 text-right">
                     {entry.wes != null ? (
-                      <p className={`text-sm font-bold font-mono tabular-nums ${wesColorClass(entry.wes)}`} title={WES_TOOLTIP}>
+                      <p className={`text-sm font-bold font-telin ${wesColorClass(entry.wes)}`} title={WES_TOOLTIP}>
                         {formatWES(entry.wes)}
                       </p>
                     ) : (
-                      <p className="text-sm text-gray-600 font-mono tabular-nums" title={entry.nullReason}>—</p>
+                      <p className="text-sm text-gray-600 font-telin" title={entry.nullReason}>—</p>
                     )}
                     {entry.wes == null && entry.nullReason && (
                       <p className="text-[9px] text-gray-600 leading-none">{entry.nullReason}</p>
@@ -1096,14 +1096,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
                   {/* tok/s */}
                   <div className="w-16 text-right hidden sm:block">
-                    <p className={`text-xs font-mono tabular-nums ${entry.tps != null ? 'text-green-400' : 'text-gray-600'}`}>
+                    <p className={`text-xs font-telin ${entry.tps != null ? 'text-green-400' : 'text-gray-600'}`}>
                       {entry.tps != null ? `${entry.tps.toFixed(1)}` : '—'}
                     </p>
                   </div>
 
                   {/* Watts */}
                   <div className="w-14 text-right hidden sm:block">
-                    <p className="text-xs font-mono tabular-nums text-gray-400">
+                    <p className="text-xs font-telin text-gray-400">
                       {entry.watts != null ? `${entry.watts.toFixed(1)}W` : '—'}
                     </p>
                   </div>

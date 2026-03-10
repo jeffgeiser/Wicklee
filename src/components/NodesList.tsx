@@ -147,21 +147,21 @@ const ComplianceBand: React.FC<{
       {/* Destination */}
       <div>
         <ML>Destination</ML>
-        <p className="text-xs font-mono text-gray-700 dark:text-gray-300 truncate" title={destination}>{destination}</p>
+        <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate" title={destination}>{destination}</p>
         <p className="text-[9px] text-gray-500 mt-0.5">{sovereign ? 'local agent' : 'fleet relay'}</p>
       </div>
 
       {/* Pairing Log */}
       <div>
         <ML>Pairing Log</ML>
-        <p className="text-xs font-mono text-gray-500">Node: {nodeId}</p>
+        <p className="text-xs font-telin text-gray-500">Node: {nodeId}</p>
         <p className="text-[9px] text-gray-600 mt-0.5">history N/A</p>
       </div>
 
       {/* Disk Usage */}
       <div>
         <ML>Disk Usage</ML>
-        <p className="text-xs font-mono tabular-nums text-gray-700 dark:text-gray-300">{modelSizeStr}</p>
+        <p className="text-xs font-telin text-gray-700 dark:text-gray-300">{modelSizeStr}</p>
         <p className="text-[9px] text-gray-500 mt-0.5">active model</p>
       </div>
 
@@ -170,7 +170,7 @@ const ComplianceBand: React.FC<{
         <ML>Mem Forecast</ML>
         <p className={`text-xs font-semibold ${forecastCls}`}>{forecastLabel}</p>
         {memPressure != null ? (
-          <p className="text-[9px] font-mono tabular-nums text-gray-500 mt-0.5">{memPressure.toFixed(0)}% pressure</p>
+          <p className="text-[9px] font-telin text-gray-500 mt-0.5">{memPressure.toFixed(0)}% pressure</p>
         ) : (
           <p className="text-[9px] text-gray-600 mt-0.5">no data</p>
         )}
@@ -179,7 +179,7 @@ const ComplianceBand: React.FC<{
       {/* Facility PUE */}
       <div>
         <ML>Facility PUE</ML>
-        <p className={`text-xs font-mono tabular-nums ${pueOverride ? overrideCls : 'text-gray-700 dark:text-gray-300'}`}>
+        <p className={`text-xs font-telin ${pueOverride ? overrideCls : 'text-gray-700 dark:text-gray-300'}`}>
           {pue.toFixed(2)}{pueOverride && ' ◆'}
         </p>
         <p className="text-[9px] text-gray-500 mt-0.5">{pueOverride ? 'custom override' : 'default'}</p>
@@ -188,7 +188,7 @@ const ComplianceBand: React.FC<{
       {/* Electricity Rate */}
       <div>
         <ML>Elec. Rate</ML>
-        <p className="text-xs font-mono tabular-nums text-gray-700 dark:text-gray-300">
+        <p className="text-xs font-telin text-gray-700 dark:text-gray-300">
           ${ELECTRICITY_RATE_USD_PER_KWH}/kWh
         </p>
         <p className="text-[9px] text-gray-500 mt-0.5">fleet default</p>
@@ -238,7 +238,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({
     pue,
   );
 
-  const ROW_VAL = 'text-xs font-mono tabular-nums';
+  const ROW_VAL = 'text-xs font-telin';
 
   return (
     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900">
@@ -547,15 +547,15 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             {/* WES */}
             <div className="text-right">
               {(() => {
-                if (!m) return <span className="text-xs font-mono text-gray-600">—</span>;
+                if (!m) return <span className="text-xs font-telin text-gray-600">—</span>;
                 const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
                 const hasPwr = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
                 const wes = computeWES(m.ollama_tokens_per_second ?? null, hasPwr ? watts : null, m.thermal_state, nodePueSettings?.[m.node_id] ?? 1.0);
                 return wes != null ? (
-                  <span className={`text-xs font-mono tabular-nums font-semibold ${wesColorClass(wes)}`} title={WES_TOOLTIP}>
+                  <span className={`text-xs font-telin font-semibold ${wesColorClass(wes)}`} title={WES_TOOLTIP}>
                     WES {formatWES(wes)}
                   </span>
-                ) : <span className="text-xs font-mono text-gray-600">—</span>;
+                ) : <span className="text-xs font-telin text-gray-600">—</span>;
               })()}
             </div>
             <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${localExpanded ? 'rotate-180' : ''}`} />
