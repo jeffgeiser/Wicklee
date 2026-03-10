@@ -54,7 +54,7 @@ const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; tit
 
 // ── Internal: compact tile for hardware cluster columns ────────────────────────
 const HudTile: React.FC<{ label: string; value: string; sub?: string; dim?: boolean }> = ({ label, value, sub, dim = false }) => (
-  <div className="border border-gray-100 dark:border-gray-800 rounded-lg px-3 py-2.5 bg-gray-100/80 dark:bg-gray-800/60 min-h-[52px] flex flex-col justify-center">
+  <div className="border border-gray-100 dark:border-gray-800 rounded-lg px-3 py-2.5 bg-gray-100 dark:bg-gray-800 min-h-[52px] flex flex-col justify-center">
     <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">{label}</p>
     <p className={`text-sm font-bold leading-tight ${dim ? 'text-gray-400 dark:text-gray-600' : 'text-gray-900 dark:text-gray-100'}`}>{value}</p>
     {sub && <p className="text-[9px] text-gray-400 dark:text-gray-500 font-mono mt-0.5 leading-tight">{sub}</p>}
