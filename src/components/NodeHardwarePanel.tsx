@@ -173,20 +173,28 @@ export const HardwareDetailPanel: React.FC<{
         <VitalStat label="Cores"        value={`${m.cpu_core_count}`} />
       </div>
 
-      {/* ── Inference Band — sits above hardware grid, aligned to column gutter ── */}
+      {/* ── Inference Band ─────────────────────────────────────────────────── */}
       {m.ollama_running ? (
         <div className="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden">
 
-          {/* Model identity row */}
+          {/* Model identity row — WES badge inline on right */}
           <div className="flex items-center gap-2 px-4 pt-3 pb-2.5 border-b border-gray-100 dark:border-gray-800 flex-wrap">
             <BotMessageSquare size={11} className="text-indigo-400 shrink-0" />
             <span className="text-[9px] font-semibold text-indigo-400 uppercase tracking-widest leading-none">Ollama</span>
             {m.ollama_active_model ? (
               <>
-                <p className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate leading-tight">{m.ollama_active_model}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 truncate leading-tight">{m.ollama_active_model}</p>
                 <div className="flex items-center gap-1.5 flex-wrap ml-auto shrink-0">
+                  {/* WES badge — compact secondary label */}
+                  <span
+                    className={`text-[10px] font-semibold px-2 py-0.5 rounded cursor-default ${wesColor}`}
+                    title={wes == null ? wesNullTooltip : wesLabelTooltip}
+                  >
+                    WES {wesFormatted}{showAsterisk ? '*' : ''}
+                    {showThermalWarning && <AlertTriangle size={8} className="inline ml-0.5 text-amber-400" title={thermalWarningTooltip} />}
+                  </span>
                   {m.ollama_quantization && (
-                    <span className="text-[9px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                    <span className="text-[9px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
                       {m.ollama_quantization}
                     </span>
                   )}
@@ -196,35 +204,20 @@ export const HardwareDetailPanel: React.FC<{
                 </div>
               </>
             ) : (
-              <p className="text-xs text-gray-500">no model loaded</p>
+              <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                <span
+                  className={`text-[10px] font-semibold px-2 py-0.5 rounded cursor-default ${wesColor}`}
+                  title={wesNullTooltip}
+                >
+                  WES {wesFormatted}
+                </span>
+                <p className="text-xs text-gray-500">no model loaded</p>
+              </div>
             )}
           </div>
 
-          {/* WES headline */}
-          <div className="px-4 pt-3 pb-3">
-            <div className="flex items-center gap-1.5 mb-1">
-              <p
-                className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none cursor-default"
-                title={wesLabelTooltip}
-              >
-                WES
-              </p>
-              {showThermalWarning && (
-                <AlertTriangle size={10} className="text-amber-400 shrink-0" title={thermalWarningTooltip} />
-              )}
-            </div>
-            <p
-              className={`text-3xl font-bold leading-none ${wesColor}`}
-              title={wes == null ? wesNullTooltip : undefined}
-            >
-              {wesFormatted}
-              {showAsterisk && <span className="text-xl ml-0.5 opacity-60">*</span>}
-            </p>
-            <p className="text-[10px] text-gray-500 mt-1 leading-none">Wicklee Efficiency Score</p>
-          </div>
-
-          {/* Inputs row */}
-          <div className="border-t border-gray-100 dark:border-gray-800 px-4 py-2.5 grid grid-cols-3 gap-4">
+          {/* Inputs row — primary metric display: tok/s · Watts · Thermal */}
+          <div className="px-4 py-3 grid grid-cols-3 gap-4">
             <div>
               <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">tok/s</p>
               <p className={`text-sm font-bold leading-tight ${ollamaTps != null ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
