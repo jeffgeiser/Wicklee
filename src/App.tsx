@@ -17,7 +17,9 @@ import ProfileView from './components/ProfileView';
 import SecurityView from './components/SecurityView';
 import APIKeysView from './components/APIKeysView';
 import PreferencesView from './components/PreferencesView';
+import SettingsView from './components/SettingsView';
 import SustainabilityView from './components/SustainabilityView';
+import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
 import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
@@ -163,12 +165,7 @@ const App: React.FC = () => {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
-  // Per-node PUE multiplier — user preference, stored in localStorage.
-  // keyed by node_id (e.g. "WK-1EFC"). Not part of the live SSE payload.
-  const [nodePueSettings, setNodePueSettings] = useState<Record<string, number>>(() => {
-    try { return JSON.parse(localStorage.getItem('wk_node_pue') ?? '{}') as Record<string, number>; }
-    catch { return {}; }
-  });
+  const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField } = useSettings();
   const socketRef = useRef<WebSocket | null>(null);
 
   // Restore session from localStorage on mount (hosted only — localhost skips auth entirely)
@@ -224,20 +221,6 @@ const App: React.FC = () => {
           sentinelActive: false,
         }));
         setNodes(mappedNodes);
-        // Pre-fill PUE for new nodes: inherit the most recently set non-1.0 value from the fleet.
-        // Always shown as editable — never silently applied without user visibility.
-        setNodePueSettings(prev => {
-          const nonDefault = Object.values(prev).filter(p => p !== 1.0);
-          const suggestedPue = nonDefault.length > 0 ? nonDefault[0] : 1.0;
-          const next = { ...prev };
-          let changed = false;
-          mappedNodes.forEach(n => {
-            if (next[n.id] == null) { next[n.id] = suggestedPue; changed = true; }
-          });
-          if (!changed) return prev;
-          localStorage.setItem('wk_node_pue', JSON.stringify(next));
-          return next;
-        });
       }
     } catch {}
   }, []);
@@ -392,24 +375,6 @@ const App: React.FC = () => {
     setIsLoggedIn(false);
   };
 
-  const updateNodePue = useCallback((nodeId: string, pue: number) => {
-    setNodePueSettings(prev => {
-      const next = { ...prev, [nodeId]: pue };
-      localStorage.setItem('wk_node_pue', JSON.stringify(next));
-      return next;
-    });
-  }, []);
-
-  const copyPueToAll = useCallback((pue: number) => {
-    setNodePueSettings(prev => {
-      const allIds = nodes.map(n => n.id);
-      const next = { ...prev };
-      allIds.forEach(id => { next[id] = pue; });
-      localStorage.setItem('wk_node_pue', JSON.stringify(next));
-      return next;
-    });
-  }, [nodes]);
-
   const handleUpgrade = () => {
     setCurrentUser(prev => ({ ...prev, isPro: true }));
     setIsUpgradeModalOpen(false);
@@ -452,9 +417,9 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} nodePueSettings={nodePueSettings} onUpdateNodePue={updateNodePue} onCopyPueToAll={copyPueToAll} />;
+        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
       case DashboardTab.NODES:
-        return <NodesList nodes={nodes} nodePueSettings={nodePueSettings} onUpdateNodePue={updateNodePue} onCopyPueToAll={copyPueToAll} />;
+        return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} />;
       case DashboardTab.TRACES:
         return <TracesView nodes={nodes} tenantId={currentTenant.id} />;
       case DashboardTab.SCAFFOLDING:
@@ -471,6 +436,8 @@ const App: React.FC = () => {
         );
       case DashboardTab.TEAM:
         return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
+      case DashboardTab.SETTINGS:
+        return <SettingsView nodes={nodes} settings={settings} savedToast={savedToast} getNodeSettings={getNodeSettings} updateFleet={updateFleet} setNodeOverride={setNodeOverride} clearAllOverridesForField={clearAllOverridesForField} />;
       case DashboardTab.SUSTAINABILITY:
         return <SustainabilityView nodes={nodes} />;
       case DashboardTab.PROFILE:
@@ -488,7 +455,7 @@ const App: React.FC = () => {
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} nodePueSettings={nodePueSettings} onUpdateNodePue={updateNodePue} onCopyPueToAll={copyPueToAll} />;
+        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
   };
 

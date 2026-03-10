@@ -7,7 +7,8 @@ import {
 import { NodeAgent, SentinelMetrics } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
-import { WES_TOOLTIP, calculateTotalVramMb, calculateTotalVramCapacityMb, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
+import { WES_TOOLTIP, calculateTotalVramMb, calculateTotalVramCapacityMb } from '../utils/efficiency';
+import type { NodeEffectiveSettings } from '../hooks/useSettings';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -36,25 +37,6 @@ const detectOS = (m: SentinelMetrics): 'macOS' | 'Linux' | 'Unknown' => {
   if (m.nvidia_vram_total_mb != null) return 'Linux';
   return 'Unknown';
 };
-
-// ── Per-node settings helper ──────────────────────────────────────────────────
-// Returns effective PUE and electricity rate for a given node, plus whether
-// either value is a custom override (drives the ◆ amber indicator in ComplianceBand).
-
-interface NodeSettings {
-  pue: number;
-  rate: number;
-  pueOverride: boolean;
-}
-
-function getNodeSettings(
-  nodeId: string,
-  nodePueSettings: Record<string, number> = {},
-): NodeSettings {
-  const pue = nodePueSettings[nodeId] ?? 1.0;
-  const pueOverride = nodeId in nodePueSettings && nodePueSettings[nodeId] !== 1.0;
-  return { pue, rate: ELECTRICITY_RATE_USD_PER_KWH, pueOverride };
-}
 
 // ── Sort / filter types ───────────────────────────────────────────────────────
 
@@ -119,9 +101,8 @@ const ComplianceBand: React.FC<{
   m: SentinelMetrics | null;
   nodeId: string;
   sovereign: boolean;
-  pue?: number;
-  pueOverride?: boolean;
-}> = ({ m, nodeId, sovereign, pue = 1.0, pueOverride = false }) => {
+  effectiveSettings?: NodeEffectiveSettings;
+}> = ({ m, nodeId, sovereign, effectiveSettings }) => {
   const destination = sovereign ? 'Local Only' : CLOUD_URL.replace(/^https?:\/\//, '');
   const memPressure = m?.memory_pressure_percent ?? null;
   const forecastLabel = memPressure == null  ? '—'
@@ -136,6 +117,10 @@ const ComplianceBand: React.FC<{
   const modelSizeStr = m?.ollama_model_size_gb != null
     ? `${m.ollama_model_size_gb.toFixed(1)} GB` : '—';
 
+  const pue         = effectiveSettings?.pue ?? 1.0;
+  const kwhRate     = effectiveSettings?.kwhRate ?? 0.12;
+  const pueOverride = effectiveSettings?.pueOverride ?? false;
+  const rateOverride = effectiveSettings?.kwhRateOverride ?? false;
   const overrideCls = 'text-amber-400 dark:text-amber-500';
 
   const ML = ({ children }: { children: React.ReactNode }) => (
@@ -187,10 +172,10 @@ const ComplianceBand: React.FC<{
       {/* Electricity Rate */}
       <div>
         <ML>Elec. Rate</ML>
-        <p className="text-xs font-telin text-gray-700 dark:text-gray-300">
-          ${ELECTRICITY_RATE_USD_PER_KWH}/kWh
+        <p className={`text-xs font-telin ${rateOverride ? overrideCls : 'text-gray-700 dark:text-gray-300'}`}>
+          ${kwhRate}/kWh{rateOverride && ' ◆'}
         </p>
-        <p className="text-[9px] text-gray-500 mt-0.5">fleet default</p>
+        <p className="text-[9px] text-gray-500 mt-0.5">{rateOverride ? 'custom override' : 'fleet default'}</p>
       </div>
     </div>
   );
@@ -207,10 +192,7 @@ interface CollapsibleNodeProps {
   metrics: SentinelMetrics | null;
   lastSeenMs?: number;
   defaultOpen?: boolean;
-  pue?: number;
-  onUpdatePue?: (pue: number) => void;
-  onCopyPueToAll?: (pue: number) => void;
-  hasMultipleNodes?: boolean;
+  effectiveSettings?: NodeEffectiveSettings;
   isSelected?: boolean;
   onToggleSelect?: () => void;
   sovereign?: boolean;
@@ -218,9 +200,9 @@ interface CollapsibleNodeProps {
 
 const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({
   node, metrics: m, lastSeenMs: ls, defaultOpen = false,
-  pue = 1.0, onUpdatePue, onCopyPueToAll, hasMultipleNodes = false,
-  isSelected = false, onToggleSelect, sovereign = false,
+  effectiveSettings, isSelected = false, onToggleSelect, sovereign = false,
 }) => {
+  const pue = effectiveSettings?.pue ?? 1.0;
   const [open, setOpen] = useState(defaultOpen);
 
   const isLive   = m !== null && (ls == null || Date.now() - ls < 30_000);
@@ -303,14 +285,8 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({
         <div className="px-4 pb-4 pt-3 border-t border-gray-200 dark:border-gray-800">
           {m ? (
             <>
-              <ComplianceBand m={m} nodeId={node.id} sovereign={sovereign} pue={pue} pueOverride={pue !== 1.0} />
-              <HardwareDetailPanel
-                metrics={m}
-                pue={pue}
-                onUpdatePue={onUpdatePue}
-                onCopyPueToAll={onCopyPueToAll}
-                hasMultipleNodes={hasMultipleNodes}
-              />
+              <ComplianceBand m={m} nodeId={node.id} sovereign={sovereign} effectiveSettings={effectiveSettings} />
+              <HardwareDetailPanel metrics={m} pue={pue} />
             </>
           ) : (
             <p className="text-sm text-gray-500 text-center py-6">
@@ -327,14 +303,12 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({
 
 interface NodesListProps {
   nodes: NodeAgent[];
-  nodePueSettings?: Record<string, number>;
-  onUpdateNodePue?: (nodeId: string, pue: number) => void;
-  onCopyPueToAll?: (pue: number) => void;
+  getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateNodePue, onCopyPueToAll }) => {
+const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
   const [allMetrics, setAllMetrics]     = useState<Record<string, SentinelMetrics>>({});
   const [lastSeenMs, setLastSeenMs]     = useState<Record<string, number>>({});
@@ -536,15 +510,8 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             <div className="px-5 pb-5 border-t border-gray-100 dark:border-gray-800">
               {m ? (
                 <div className="pt-4">
-                  {(() => { const ns = getNodeSettings(m.node_id, nodePueSettings); return (
-                  <ComplianceBand m={m} nodeId={m.node_id} sovereign={true} pue={ns.pue} pueOverride={ns.pueOverride} />
-                  ); })()}
-                  <HardwareDetailPanel
-                    metrics={m}
-                    pue={nodePueSettings?.[m.node_id] ?? 1.0}
-                    onUpdatePue={(p) => onUpdateNodePue?.(m.node_id, p)}
-                    hasMultipleNodes={false}
-                  />
+                  <ComplianceBand m={m} nodeId={m.node_id} sovereign={true} effectiveSettings={getNodeSettings?.(m.node_id)} />
+                  <HardwareDetailPanel metrics={m} pue={getNodeSettings?.(m.node_id)?.pue ?? 1.0} />
                 </div>
               ) : (
                 <div className="py-12 text-center">
@@ -810,25 +777,19 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map(({ n, m, ls, isLive, idx }) => {
-            const ns = getNodeSettings(n.id, nodePueSettings);
-            return (
+          {filtered.map(({ n, m, ls, isLive, idx }) => (
             <CollapsibleNode
               key={n.id}
               node={n}
               metrics={m}
               lastSeenMs={ls}
               defaultOpen={idx === 0}
-              pue={ns.pue}
-              onUpdatePue={(p) => onUpdateNodePue?.(n.id, p)}
-              onCopyPueToAll={onCopyPueToAll}
-              hasMultipleNodes={nodes.length >= 2}
+              effectiveSettings={getNodeSettings?.(n.id)}
               isSelected={selectedNodes.has(n.id)}
               onToggleSelect={() => toggleSelect(n.id)}
               sovereign={false}
             />
-            );
-          })}
+          ))}
         </div>
       )}
 
