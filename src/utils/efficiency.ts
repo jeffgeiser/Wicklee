@@ -8,7 +8,24 @@
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from './wes';
 import type { SentinelMetrics } from '../types';
 
-export { computeWES as calculateWES, formatWES, wesColorClass, THERMAL_PENALTY };
+export { computeWES, formatWES, wesColorClass, THERMAL_PENALTY };
+
+/** Canonical hover tooltip shown on every WES value across the UI. */
+export const WES_TOOLTIP =
+  'Wicklee Efficiency Score (WES): Intelligence per Watt normalized for thermal throttling and facility PUE. Higher is better.';
+
+/**
+ * Compute WES from pre-adjusted watts (raw power × PUE already applied by caller).
+ * Use this form when the caller pre-multiplies power by PUE before calling.
+ * Equivalent to computeWES(toks, rawWatts, thermalState, pue).
+ */
+export function calculateWES(
+  toks: number | null | undefined,
+  adjustedWatts: number | null | undefined,
+  thermalState: string | null | undefined,
+): number | null {
+  return computeWES(toks, adjustedWatts, thermalState, 1.0);
+}
 
 export const ELECTRICITY_RATE_USD_PER_KWH = 0.13;
 

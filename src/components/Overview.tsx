@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, BotMessageSquare } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateIdleFleetCostPerDay, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateIdleFleetCostPerDay, ELECTRICITY_RATE_USD_PER_KWH, WES_TOOLTIP } from '../utils/efficiency';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -33,18 +33,24 @@ interface InsightTileProps {
   label: string;
   value: string;
   valueCls?: string;
+  valueTitle?: string;
   sub?: string;
   icon: React.ElementType;
   iconCls?: string;
 }
-const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, sub, icon: Icon, iconCls }) => (
-  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between min-h-[108px]">
+const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, valueTitle, sub, icon: Icon, iconCls }) => (
+  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between h-[116px]">
     <div className="flex items-start justify-between gap-2">
       <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">{label}</p>
       <Icon size={13} className={iconCls ?? 'text-gray-400 dark:text-gray-600'} />
     </div>
     <div>
-      <p className={`text-2xl font-bold tabular-nums leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
+      <p
+        className={`text-2xl font-bold tabular-nums font-mono leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}
+        title={valueTitle}
+      >
+        {value}
+      </p>
       {sub && <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">{sub}</p>}
     </div>
   </div>
@@ -79,7 +85,7 @@ const FleetNodeSummary: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pu
       {/* Inference band */}
       {m.ollama_running ? (
         <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 rounded-lg flex-wrap gap-y-1.5">
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${wesColorClass(wes)}`}>
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${wesColorClass(wes)}`} title={WES_TOOLTIP}>
             WES {formatWES(wes)}
           </span>
           {m.ollama_active_model ? (
@@ -557,7 +563,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   return (
     <div className="space-y-6">
       {/* ── 8-tile Insight Engine: 2 rows × 4 cols ───────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
 
         {/* ── Row 1: Performance & Health ─────────────────────────────────── */}
 
@@ -611,6 +617,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           label="Avg WES"
           value={formatWES(fleetAvgWES)}
           valueCls={wesColorClass(fleetAvgWES)}
+          valueTitle={WES_TOOLTIP}
           sub={fleetAvgWES != null
             ? `${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''} · inference MPG`
             : wesEntries.length > 0 ? 'no active inference' : 'connect runtime'}

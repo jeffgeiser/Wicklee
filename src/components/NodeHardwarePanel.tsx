@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle, ChevronDown } from 'lucide-react';
 import { SentinelMetrics } from '../types';
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from '../utils/wes';
+import { WES_TOOLTIP } from '../utils/efficiency';
 
 export const thermalColour = (state: string | null) => {
   switch (state?.toLowerCase()) {
@@ -139,8 +140,8 @@ export const HardwareDetailPanel: React.FC<{
   const showAsterisk       = thermalDataMissing && wes != null;
 
   const wesLabelTooltip = pue > 1.0
-    ? `Wicklee Efficiency Score — tok/s divided by adjusted watts and thermal penalty. Higher is better. Collapses when a node throttles even if tok/s looks stable. PUE ${pue.toFixed(1)} applied for this node's location.`
-    : 'Wicklee Efficiency Score — tok/s divided by adjusted watts and thermal penalty. Higher is better. Collapses when a node throttles even if tok/s looks stable.';
+    ? `${WES_TOOLTIP} PUE ${pue.toFixed(1)} applied for this node's location.`
+    : WES_TOOLTIP;
   const thermalWarningTooltip = m.thermal_state
     ? `Thermal penalty applied: ${thermalPenaltyValue}× (${m.thermal_state}). WES is reduced because this node is thermally throttling.`
     : '';
