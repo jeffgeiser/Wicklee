@@ -167,15 +167,19 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
         </div>
       ) : (
         /* ── Idle inference band — intentional empty state, same position as active ── */
-        <div className="border border-dashed border-gray-200 dark:border-gray-700/60 rounded-xl px-4 min-h-[68px] flex items-center gap-2">
-          <BotMessageSquare size={12} className="text-gray-600 shrink-0" />
-          <p className="text-[11px] text-gray-600">
-            Ollama not detected —{' '}
-            <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer"
-              className="text-gray-500 hover:text-indigo-400 underline underline-offset-2 transition-colors">
-              ollama.ai
-            </a>
-          </p>
+        <div className="border border-dashed border-gray-200 dark:border-gray-700/60 rounded-xl px-4 min-h-[68px] flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <BotMessageSquare size={12} className="text-gray-500 shrink-0" />
+            <p className="text-[11px] text-gray-500">No inference runtime detected</p>
+          </div>
+          <a
+            href="https://ollama.ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-[10px] font-semibold text-gray-500 hover:text-indigo-400 border border-gray-300 dark:border-gray-700 hover:border-indigo-500/50 rounded-lg px-2.5 py-1 transition-colors"
+          >
+            ollama.ai ↗
+          </a>
         </div>
       )}
 
