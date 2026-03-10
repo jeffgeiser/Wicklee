@@ -149,7 +149,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
       >
         <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`} />
 
-        {/* Identity — single baseline: ID · hostname · chip  [· last-seen if offline] */}
+        {/* Left: identity — single baseline */}
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <span className="text-xs font-bold text-gray-900 dark:text-white shrink-0">{nodeId}</span>
           {hostname !== nodeId && (
@@ -158,25 +158,26 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
           {chipName && (
             <span className="text-[10px] text-indigo-400/80 truncate">· {chipName}</span>
           )}
-          {!isOnline && ls && (
-            <span className="text-[10px] text-gray-500 shrink-0">· {fmtAgo(ls)}</span>
-          )}
         </div>
 
-        {/* Right: thermal + tok/s (online) or "offline" */}
-        <div className="flex items-center gap-3 shrink-0">
-          {isOnline ? (
-            <>
-              {thermalStr && <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>}
-              {tps != null ? (
-                <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
-              ) : (
-                <span className="text-[10px] text-gray-500 hidden sm:inline">no inference</span>
-              )}
-            </>
-          ) : (
-            <span className="text-[10px] text-gray-500">offline</span>
-          )}
+        {/* Center: thermal (online) or last-seen (offline) — fixed width, always present */}
+        <div className="w-20 text-right shrink-0">
+          {isOnline
+            ? <span className={`text-[11px] font-semibold ${thermalCls}`}>{thermalStr ?? '—'}</span>
+            : ls
+              ? <span className="text-[10px] text-gray-500">{fmtAgo(ls)}</span>
+              : <span className="text-[10px] text-gray-500">—</span>
+          }
+        </div>
+
+        {/* Right: tok/s or no inference (online) or offline — fixed width */}
+        <div className="w-24 text-right shrink-0">
+          {isOnline
+            ? tps != null
+              ? <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+              : <span className="text-[10px] text-gray-500">no inference</span>
+            : <span className="text-[10px] text-gray-500">offline</span>
+          }
         </div>
 
         <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />

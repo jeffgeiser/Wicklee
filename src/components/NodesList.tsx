@@ -70,7 +70,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
       >
         <span className={`shrink-0 w-2 h-2 rounded-full ${isLive ? 'bg-green-500' : 'bg-gray-400'}`} />
 
-        {/* Identity — single baseline: ID · hostname · chip  [· last-seen if offline] */}
+        {/* Left: identity — single baseline */}
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <span className="text-xs font-bold text-gray-900 dark:text-white shrink-0">{node.id}</span>
           {hostname && (
@@ -79,25 +79,26 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
           {chipName && (
             <span className="text-[10px] text-indigo-400/80 truncate">· {chipName}</span>
           )}
-          {!isLive && ls && (
-            <span className="text-[10px] text-gray-500 shrink-0">· {fmtAgo(ls)}</span>
-          )}
         </div>
 
-        {/* Right: thermal + tok/s (online) or "offline" */}
-        <div className="flex items-center gap-3 shrink-0">
-          {isLive ? (
-            <>
-              {thermalStr && <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>}
-              {tps != null ? (
-                <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
-              ) : (
-                <span className="text-[10px] text-gray-500 hidden sm:inline">no inference</span>
-              )}
-            </>
-          ) : (
-            <span className="text-[10px] text-gray-500">offline</span>
-          )}
+        {/* Center: thermal (online) or last-seen (offline) — fixed width, always present */}
+        <div className="w-20 text-right shrink-0">
+          {isLive
+            ? <span className={`text-[11px] font-semibold ${thermalCls}`}>{thermalStr ?? '—'}</span>
+            : ls
+              ? <span className="text-[10px] text-gray-500">{fmtAgo(ls)}</span>
+              : <span className="text-[10px] text-gray-500">—</span>
+          }
+        </div>
+
+        {/* Right: tok/s or no inference (online) or offline — fixed width */}
+        <div className="w-24 text-right shrink-0">
+          {isLive
+            ? tps != null
+              ? <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+              : <span className="text-[10px] text-gray-500">no inference</span>
+            : <span className="text-[10px] text-gray-500">offline</span>
+          }
         </div>
 
         <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
@@ -210,7 +211,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             className="w-full flex items-center gap-3 px-5 py-4 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
           >
             <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
-            {/* Identity — single baseline */}
+            {/* Left: identity — single baseline */}
             <div className="flex items-center gap-1.5 min-w-0 flex-1">
               <span className="text-xs font-bold text-gray-900 dark:text-white shrink-0">{m?.node_id ?? '—'}</span>
               {m?.hostname && m.hostname !== m.node_id && (
@@ -220,18 +221,21 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
                 <span className="text-[10px] text-indigo-400/80 truncate">· {chipName}</span>
               )}
             </div>
-            {/* Right: thermal + tok/s */}
-            <div className="flex items-center gap-3 shrink-0">
-              {connected ? (
-                <>
-                  {thermalStr && <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>}
-                  {tps != null
-                    ? <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
-                    : <span className="text-[10px] text-gray-500 hidden sm:inline">no inference</span>}
-                </>
-              ) : (
-                <span className="text-[10px] text-gray-500">connecting…</span>
-              )}
+            {/* Center: thermal (connected) or — — fixed width, always present */}
+            <div className="w-20 text-right shrink-0">
+              {connected && m
+                ? <span className={`text-[11px] font-semibold ${thermalCls}`}>{thermalStr ?? '—'}</span>
+                : <span className="text-[10px] text-gray-500">—</span>
+              }
+            </div>
+            {/* Right: tok/s or no inference (connected) or connecting… — fixed width */}
+            <div className="w-24 text-right shrink-0">
+              {connected && m
+                ? tps != null
+                  ? <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+                  : <span className="text-[10px] text-gray-500">no inference</span>
+                : <span className="text-[10px] text-gray-500">connecting…</span>
+              }
             </div>
             <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${localExpanded ? 'rotate-180' : ''}`} />
           </button>
