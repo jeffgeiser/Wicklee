@@ -23,11 +23,15 @@ interface SettingsViewProps {
 const Section: React.FC<{
   title: string;
   icon: React.ElementType;
+  iconBg: string;
+  iconCls: string;
   children: React.ReactNode;
-}> = ({ title, icon: Icon, children }) => (
+}> = ({ title, icon: Icon, iconBg, iconCls, children }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
     <div className="flex items-center gap-2.5 px-6 py-4 border-b border-gray-100 dark:border-gray-800">
-      <Icon size={14} className="text-indigo-400 shrink-0" />
+      <span className={`inline-flex items-center justify-center w-5 h-5 rounded ${iconBg} shrink-0`}>
+        <Icon size={11} className={iconCls} />
+      </span>
       <h2 className="text-sm font-bold font-telin text-gray-900 dark:text-white tracking-tight">{title}</h2>
     </div>
     {children}
@@ -111,7 +115,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       </div>
 
       {/* ── Fleet Defaults ──────────────────────────────────────────────────── */}
-      <Section title="Fleet Defaults" icon={Zap}>
+      <Section title="Fleet Defaults" icon={Zap} iconBg="bg-amber-500/10" iconCls="text-amber-400">
         <div className="px-6 py-5 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
 
@@ -178,7 +182,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       </Section>
 
       {/* ── Node Overrides ──────────────────────────────────────────────────── */}
-      <Section title="Node Overrides" icon={MapPin}>
+      <Section title="Node Overrides" icon={MapPin} iconBg="bg-indigo-500/10" iconCls="text-indigo-400">
         {nodes.length === 0 ? (
           <div className="px-6 py-12 text-center">
             <p className="text-sm text-gray-500">
