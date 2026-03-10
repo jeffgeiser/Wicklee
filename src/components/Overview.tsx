@@ -162,13 +162,13 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
           {statusStr}
         </span>
 
-        {/* Quick stats — thermal + tok/s (CPU/GPU/Mem available on expand) */}
-        <div className="flex-1 flex items-center gap-3 justify-end font-mono">
+        {/* Quick stats — thermal + tok/s */}
+        <div className="flex-1 flex items-center gap-3 justify-end">
           <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
           {tps != null ? (
-            <span className="text-green-400 font-bold text-sm">{tps.toFixed(1)} tok/s</span>
+            <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
           ) : (
-            <span className="text-[10px] text-gray-600 hidden sm:inline font-sans tracking-wide">no inference</span>
+            <span className="text-[10px] text-gray-600 hidden sm:inline">no inference</span>
           )}
         </div>
 
