@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Layers, Server, Star, AlertTriangle, Info } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Server, Star, AlertTriangle, Info } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
@@ -27,13 +27,27 @@ const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
   latency: Math.floor(Math.random() * 100) + 200,
 }));
 
+// Primary: WES + Throughput — larger footprint, higher contrast border
+const PrimaryStatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon: React.ElementType; color: string }> = ({ title, value, icon: Icon, color }) => (
+  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 hover:border-gray-300 dark:hover:border-gray-600 transition-all shadow-sm dark:shadow-none">
+    <div className="flex items-center gap-3">
+      <div className={`flex items-center justify-center w-10 h-10 rounded-xl ${color}/10`}>
+        <Icon size={20} className={color.replace('bg-', 'text-')} />
+      </div>
+      <h4 className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{title}</h4>
+    </div>
+    <div className="mt-5">{value}</div>
+  </div>
+);
+
+// Secondary: supporting metrics — compact 4-col grid
 const StatCard: React.FC<{ title: React.ReactNode; value: React.ReactNode; icon: React.ElementType; color: string }> = ({ title, value, icon: Icon, color }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 hover:border-gray-300 dark:hover:border-gray-700 transition-all shadow-sm dark:shadow-none">
-    <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${color}/10`}>
-      <Icon size={20} className={color.replace('bg-', 'text-')} />
+    <div className={`flex items-center justify-center w-9 h-9 rounded-lg ${color}/10`}>
+      <Icon size={17} className={color.replace('bg-', 'text-')} />
     </div>
-    <div className="mt-4">
-      <h4 className="text-gray-500 dark:text-gray-400 text-xs font-medium uppercase tracking-wider">{title}</h4>
+    <div className="mt-3">
+      <h4 className="text-gray-500 dark:text-gray-400 text-[10px] font-medium uppercase tracking-wider">{title}</h4>
       <div className="mt-1">{value}</div>
     </div>
   </div>
@@ -388,9 +402,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const avgTempStr   = gpuTemps.length > 0
     ? `${(gpuTemps.reduce((a, b) => a + b, 0) / gpuTemps.length).toFixed(1)}°C`
     : '—';
-  const totalVramMb  = liveMetrics.reduce((acc, m) => acc + (m.nvidia_vram_used_mb ?? 0), 0);
-  const totalVramStr = totalVramMb > 0 ? `${(totalVramMb / 1024).toFixed(1)} GB` : '—';
-
   // Ollama fleet stats
   const hasAnyOllama = liveMetrics.some(m => m.ollama_running);
   // Sum tok/s across nodes that have a sampled value; null if none available yet
@@ -482,84 +493,86 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   return (
     <div className="space-y-6">
       {/* ── Fleet stat cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 [&>*]:min-w-0">
-        <StatCard
-          title="Throughput"
-          value={
-            <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '— tok/s'}
-              </p>
-              <p className="text-[10px] text-gray-500 font-medium">
-                {fleetTps != null
-                  ? `sampled · ${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''}`
-                  : hasAnyOllama
-                  ? 'Ollama connected · sampling every 30s'
-                  : 'connect inference runtime'}
-              </p>
-            </div>
-          }
-          icon={Gauge} /* revert: icon={Zap} */ color="bg-amber-500"
-        />
-        <StatCard
-          title="Avg GPU Temp"
-          value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTempStr}</p>}
-          icon={Thermometer} color="bg-red-500"
-        />
-        <StatCard
-          title="Total VRAM Used"
-          value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalVramStr}</p>}
-          icon={Layers} /* revert: icon={Database} */ color="bg-blue-600"
-        />
-        <StatCard
-          title="Wattage / 1k tkn"
-          value={
-            <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {wattPer1k != null ? `${wattPer1k.toFixed(1)} W` : '—'}
-              </p>
-              <p className="text-[10px] text-gray-500 font-medium">
-                {wattPer1k != null ? 'per 1k tokens' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
-              </p>
-            </div>
-          }
-          icon={Zap} color="bg-emerald-500"
-        />
-        <StatCard
-          title="Cost / 1k Tokens"
-          value={
-            <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {costPer1k != null ? `$${costPer1k.toFixed(4)}` : '—'}
-              </p>
-              <p className="text-[10px] text-gray-500 font-medium">
-                {costPer1k != null ? 'per 1k tokens · $0.13/kWh' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
-              </p>
-            </div>
-          }
-          icon={DollarSign} /* revert: icon={Zap} */ color="bg-cyan-400"
-        />
-        {/* icon={Cpu} — was Fleet Nodes icon, replaced with Server */}
-        <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Server} color="bg-green-500" />
-        <StatCard
-          title={<span title="Wicklee Efficiency Score — tok/s ÷ (Watts × ThermalPenalty). Higher is better.">Fleet Avg WES</span>}
-          value={
-            <div>
-              <p className={`text-2xl font-bold ${wesColorClass(fleetAvgWES)}`}>
-                {formatWES(fleetAvgWES)}
-              </p>
-              <p className="text-[10px] text-gray-500 font-medium">
-                {fleetAvgWES != null
-                  ? `avg across ${rankedWES.length} active node${rankedWES.length !== 1 ? 's' : ''}`
-                  : wesEntries.length > 0
-                  ? 'no active inference'
-                  : 'connect inference runtime'}
-              </p>
-            </div>
-          }
-          icon={Zap}
-          color="bg-amber-500"
-        />
+      <div className="space-y-3">
+        {/* Primary tier: WES + Throughput — visually dominant */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <PrimaryStatCard
+            title={<span title="Wicklee Efficiency Score — tok/s ÷ (Watts × ThermalPenalty × PUE). Higher is better.">Fleet Avg WES</span>}
+            value={
+              <div>
+                <p className={`text-3xl font-bold ${wesColorClass(fleetAvgWES)}`}>
+                  {formatWES(fleetAvgWES)}
+                </p>
+                <p className="text-[11px] text-gray-500 font-medium mt-1">
+                  {fleetAvgWES != null
+                    ? `avg across ${rankedWES.length} active node${rankedWES.length !== 1 ? 's' : ''}`
+                    : wesEntries.length > 0 ? 'no active inference' : 'connect inference runtime'}
+                </p>
+              </div>
+            }
+            icon={Zap}
+            color="bg-amber-500"
+          />
+          <PrimaryStatCard
+            title="Throughput"
+            value={
+              <div>
+                <p className="text-3xl font-bold text-gray-900 dark:text-white">
+                  {fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '—'}
+                </p>
+                <p className="text-[11px] text-gray-500 font-medium mt-1">
+                  {fleetTps != null
+                    ? `sampled · ${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''}`
+                    : hasAnyOllama ? 'Ollama connected · sampling every 30s' : 'connect inference runtime'}
+                </p>
+              </div>
+            }
+            icon={Gauge}
+            color="bg-indigo-500"
+          />
+        </div>
+
+        {/* Secondary tier: supporting metrics */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard
+            title="Avg GPU Temp"
+            value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTempStr}</p>}
+            icon={Thermometer} color="bg-red-500"
+          />
+          <StatCard
+            title="Wattage / 1k tkn"
+            value={
+              <div>
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {wattPer1k != null ? `${wattPer1k.toFixed(1)} W` : '—'}
+                </p>
+                <p className="text-[10px] text-gray-500 font-medium">
+                  {wattPer1k != null ? 'per 1k tokens' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
+                </p>
+              </div>
+            }
+            icon={Zap} color="bg-emerald-500"
+          />
+          <StatCard
+            title="Cost / 1k Tokens"
+            value={
+              <div>
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {costPer1k != null ? `$${costPer1k.toFixed(4)}` : '—'}
+                </p>
+                <p className="text-[10px] text-gray-500 font-medium">
+                  {costPer1k != null ? 'per 1k tokens · $0.13/kWh' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
+                </p>
+              </div>
+            }
+            icon={DollarSign} color="bg-cyan-400"
+          />
+          <StatCard
+            title="Fleet Nodes"
+            value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>}
+            icon={Server} color="bg-green-500"
+          />
+        </div>
       </div>
 
       {/* ── All Nodes accordion (collapsed by default) ───────────────────────── */}
