@@ -78,7 +78,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
         {/* Identity */}
         <div className="min-w-0 shrink-0 max-w-[220px]">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="font-mono text-xs font-bold text-gray-900 dark:text-white">{node.id}</span>
+            <span className="text-xs font-bold text-gray-900 dark:text-white">{node.id}</span>
             {hostname && (
               <span className="text-xs text-gray-500 dark:text-gray-400 truncate">· {hostname}</span>
             )}
@@ -94,12 +94,12 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
         </span>
 
         {/* Quick stats — thermal + inference throughput (CPU/Power/Mem available on expand) */}
-        <div className="flex-1 flex items-center gap-3 justify-end font-mono">
+        <div className="flex-1 flex items-center gap-3 justify-end">
           <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
           {tps != null ? (
-            <span className="text-green-400 font-bold text-sm">{tps.toFixed(1)} tok/s</span>
+            <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
           ) : (
-            <span className="text-[10px] text-gray-600 hidden sm:inline font-sans tracking-wide">no inference</span>
+            <span className="text-[10px] text-gray-600 hidden sm:inline">no inference</span>
           )}
         </div>
 
@@ -220,7 +220,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold">Local Agent</span>
-                <span className="font-mono text-sm font-bold text-gray-900 dark:text-white">{m?.node_id ?? '—'}</span>
+                <span className="text-sm font-bold text-gray-900 dark:text-white">{m?.node_id ?? '—'}</span>
                 {m?.hostname && m.hostname !== m.node_id && (
                   <span className="text-xs text-gray-500">· {m.hostname}</span>
                 )}
@@ -230,7 +230,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
               )}
               {!localExpanded && m && (
                 <p className="text-[11px] mt-1 flex items-center gap-3">
-                  <span className={`font-semibold font-mono ${thermalCls}`}>{thermalStr}</span>
+                  <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span>
                   {tps != null
                     ? <span className="text-green-400 font-bold">{tps.toFixed(1)} tok/s</span>
                     : <span className="text-gray-600 tracking-wide">no inference</span>}

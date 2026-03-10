@@ -150,7 +150,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
         <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
 
         <div className="min-w-0 flex-shrink-0 max-w-[200px]">
-          <span className="font-mono text-xs font-bold text-gray-900 dark:text-white">{nodeId}</span>
+          <span className="text-xs font-bold text-gray-900 dark:text-white">{nodeId}</span>
           {hostname !== nodeId && (
             <span className="ml-2 text-xs text-gray-500 dark:text-gray-400 truncate">{hostname}</span>
           )}
@@ -682,7 +682,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   <Cloud className="w-5 h-5 text-gray-400" />
                   <div>
                     <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Sentinel Identity</p>
-                    <p className="text-sm font-mono font-bold text-white">{pairingInfo?.node_id ?? '—'}</p>
+                    <p className="text-sm font-bold text-white">{pairingInfo?.node_id ?? '—'}</p>
                   </div>
                 </div>
                 <p className="text-xs text-gray-500">
@@ -712,11 +712,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   </div>
                   <p className="text-sm font-bold text-white">Pairing in Progress</p>
                 </div>
-                <p className="text-3xl font-mono font-bold text-white tracking-[0.3em]">
+                <p className="text-3xl font-bold text-white tracking-[0.3em] tabular-nums">
                   {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
                 </p>
                 {pairingInfo.expires_at && (
-                  <p className="text-[11px] text-amber-400 font-mono">
+                  <p className="text-[11px] text-amber-400 tabular-nums">
                     Expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
                   </p>
                 )}
@@ -738,9 +738,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                 <div>
                   <div className="flex items-center gap-2 mb-0.5">
                     <p className="text-sm font-bold text-white">Connected to Fleet</p>
-                    <span className="text-[10px] font-mono bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">{pairingInfo.node_id}</span>
+                    <span className="text-[10px] bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">{pairingInfo.node_id}</span>
                   </div>
-                  <p className="text-[11px] font-mono text-gray-500">wicklee.dev</p>
+                  <p className="text-[11px] text-gray-500">wicklee.dev</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -793,7 +793,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   <h3 className="font-semibold text-gray-800 dark:text-gray-200">
                     {cfg.label}
                     {isLive && (
-                      <span className="ml-2 text-[10px] font-mono text-indigo-400 font-normal">
+                      <span className="ml-2 text-[10px] text-indigo-400 font-normal tabular-nums">
                         LIVE · {transport === 'ws' ? '10 Hz' : '1 Hz'} · Current Session
                       </span>
                     )}
@@ -850,7 +850,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               <div className="h-64 w-full relative">
                 {!isLive && (
                   <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-                    <span className="text-xs text-gray-400 dark:text-gray-600 font-mono">Collecting data…</span>
+                    <span className="text-xs text-gray-400 dark:text-gray-600">Collecting data…</span>
                   </div>
                 )}
                 <ResponsiveContainer width="100%" height="100%">
@@ -958,10 +958,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                     {isTop ? (
                       <Star size={11} className="text-amber-400 shrink-0 fill-amber-400" />
                     ) : (
-                      <span className="text-[10px] text-gray-600 font-mono shrink-0 w-3">{rank ?? '—'}</span>
+                      <span className="text-[10px] text-gray-600 tabular-nums shrink-0 w-3">{rank ?? '—'}</span>
                     )}
                     <div className="min-w-0">
-                      <p className="text-xs font-mono font-bold text-gray-200 truncate">{entry.nodeId}</p>
+                      <p className="text-xs font-bold text-gray-200 truncate">{entry.nodeId}</p>
                       {entry.hostname !== entry.nodeId && (
                         <p className="text-[10px] text-gray-500 truncate leading-none">{entry.hostname}</p>
                       )}
@@ -972,11 +972,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   {/* WES */}
                   <div className="w-16 text-right">
                     {entry.wes != null ? (
-                      <p className={`text-sm font-bold font-mono ${wesColorClass(entry.wes)}`}>
+                      <p className={`text-sm font-bold tabular-nums ${wesColorClass(entry.wes)}`}>
                         {formatWES(entry.wes)}
                       </p>
                     ) : (
-                      <p className="text-sm text-gray-600 font-mono" title={entry.nullReason}>—</p>
+                      <p className="text-sm text-gray-600 tabular-nums" title={entry.nullReason}>—</p>
                     )}
                     {entry.wes == null && entry.nullReason && (
                       <p className="text-[9px] text-gray-600 leading-none">{entry.nullReason}</p>
@@ -985,14 +985,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
                   {/* tok/s */}
                   <div className="w-16 text-right hidden sm:block">
-                    <p className={`text-xs font-mono ${entry.tps != null ? 'text-green-400' : 'text-gray-600'}`}>
+                    <p className={`text-xs tabular-nums ${entry.tps != null ? 'text-green-400' : 'text-gray-600'}`}>
                       {entry.tps != null ? `${entry.tps.toFixed(1)}` : '—'}
                     </p>
                   </div>
 
                   {/* Watts */}
                   <div className="w-14 text-right hidden sm:block">
-                    <p className="text-xs font-mono text-gray-400">
+                    <p className="text-xs tabular-nums text-gray-400">
                       {entry.watts != null ? `${entry.watts.toFixed(1)}W` : '—'}
                     </p>
                   </div>
@@ -1011,9 +1011,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             {/* Efficiency ratio */}
             {efficiencyRatio != null && efficiencyRatio > 1 && (
               <p className="text-[11px] text-gray-500 pt-2 px-3">
-                <span className="font-mono text-amber-400 font-semibold">{rankedWES[0].nodeId}</span>
+                <span className="font-semibold text-amber-400">{rankedWES[0].nodeId}</span>
                 {' '}is{' '}
-                <span className="font-mono text-amber-400 font-semibold">
+                <span className="font-semibold tabular-nums text-amber-400">
                   {efficiencyRatio >= 1000
                     ? `${(efficiencyRatio / 1000).toFixed(1)}k×`
                     : efficiencyRatio >= 10
@@ -1021,7 +1021,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                     : `${efficiencyRatio.toFixed(1)}×`}
                 </span>
                 {' '}more WES-efficient than{' '}
-                <span className="font-mono text-gray-400">{rankedWES[rankedWES.length - 1].nodeId}</span>
+                <span className="text-gray-400">{rankedWES[rankedWES.length - 1].nodeId}</span>
               </p>
             )}
           </div>

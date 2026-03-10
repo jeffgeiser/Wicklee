@@ -326,7 +326,7 @@ export const HardwareDetailPanel: React.FC<{
             <div className="flex items-center gap-2 mb-1">
               <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none">PUE Multiplier</p>
               {pue > 1.0 && (
-                <span className="text-[9px] font-mono text-amber-500/80 bg-amber-500/10 px-1.5 py-0.5 rounded leading-none">
+                <span className="text-[9px] tabular-nums text-amber-500/80 bg-amber-500/10 px-1.5 py-0.5 rounded leading-none">
                   {pue.toFixed(1)}× on WES
                 </span>
               )}
