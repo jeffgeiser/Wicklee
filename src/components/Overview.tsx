@@ -591,47 +591,58 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           />
         </div>
 
-        {/* Secondary tier: supporting metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard
-            title="Avg GPU Temp"
-            value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTempStr}</p>}
-            icon={Thermometer} color="bg-red-500"
-          />
-          <StatCard
-            title="Wattage / 1k tkn"
-            value={
-              <div>
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {wattPer1k != null ? `${wattPer1k.toFixed(1)} W` : '—'}
-                </p>
-                <p className="text-[10px] text-gray-500 font-medium">
-                  {wattPer1k != null ? 'per 1k tokens' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
-                </p>
-              </div>
-            }
-            icon={Zap} color="bg-emerald-500"
-          />
-          <StatCard
-            title="Cost / 1k Tokens"
-            value={
-              <div>
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {costPer1k != null ? `$${costPer1k.toFixed(4)}` : '—'}
-                </p>
-                <p className="text-[10px] text-gray-500 font-medium">
-                  {costPer1k != null ? 'per 1k tokens · $0.13/kWh' : fleetTps != null ? 'calculating…' : 'connect inference runtime'}
-                </p>
-              </div>
-            }
-            icon={DollarSign} color="bg-cyan-400"
-          />
-          <StatCard
-            title="Fleet Nodes"
-            value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>}
-            icon={Server} color="bg-green-500"
-          />
-        </div>
+        {/* Secondary tier: only render tiles with real data, grid reflows */}
+        {(() => {
+          const tiles = [
+            gpuTemps.length > 0 ? (
+              <StatCard key="temp"
+                title="Avg GPU Temp"
+                value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{avgTempStr}</p>}
+                icon={Thermometer} color="bg-red-500"
+              />
+            ) : null,
+            wattPer1k != null ? (
+              <StatCard key="watts"
+                title="Wattage / 1k tkn"
+                value={
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{wattPer1k.toFixed(1)} W</p>
+                    <p className="text-[10px] text-gray-500 font-medium">per 1k tokens</p>
+                  </div>
+                }
+                icon={Zap} color="bg-emerald-500"
+              />
+            ) : null,
+            costPer1k != null ? (
+              <StatCard key="cost"
+                title="Cost / 1k Tokens"
+                value={
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">${costPer1k.toFixed(4)}</p>
+                    <p className="text-[10px] text-gray-500 font-medium">per 1k tokens · $0.13/kWh</p>
+                  </div>
+                }
+                icon={DollarSign} color="bg-cyan-400"
+              />
+            ) : null,
+            <StatCard key="nodes"
+              title="Fleet Nodes"
+              value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>}
+              icon={Server} color="bg-green-500"
+            />,
+          ].filter((t): t is React.ReactElement => t !== null);
+
+          const cols = tiles.length === 1 ? 'grid-cols-1 max-w-xs'
+            : tiles.length === 2 ? 'grid-cols-2'
+            : tiles.length === 3 ? 'grid-cols-3'
+            : 'grid-cols-2 md:grid-cols-4';
+
+          return (
+            <div className={`grid gap-3 ${cols}`}>
+              {tiles}
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── All Nodes accordion (collapsed by default) ───────────────────────── */}
