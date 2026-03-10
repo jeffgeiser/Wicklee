@@ -18,7 +18,7 @@ const fmtAgo = (ms: number): string => {
   return `${Math.floor(s / 3600)}h ago`;
 };
 
-type SortKey     = 'lastActive' | 'nodeId' | 'hostname' | 'cpu' | 'tps';
+type SortKey     = 'registered' | 'nodeId' | 'hostname' | 'cpu' | 'tps' | 'lastActive';
 type StatusFilter = 'all' | 'online' | 'offline';
 
 interface NodesListProps {
@@ -118,7 +118,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
   const [localExpanded, setLocalExpanded] = useState(true);
 
   const [search, setSearch]             = useState('');
-  const [sortKey, setSortKey]           = useState<SortKey>('lastActive');
+  const [sortKey, setSortKey]           = useState<SortKey>('registered');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   const esRef     = useRef<EventSource | null>(null);
@@ -297,17 +297,19 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
     );
   });
 
-  // Sort
-  filtered = [...filtered].sort((a, b) => {
-    switch (sortKey) {
-      case 'nodeId':    return a.n.id.localeCompare(b.n.id);
-      case 'hostname':  return (a.n.hostname ?? '').localeCompare(b.n.hostname ?? '');
-      case 'cpu':       return (b.m?.cpu_usage_percent ?? -1) - (a.m?.cpu_usage_percent ?? -1);
-      case 'tps':       return (b.m?.ollama_tokens_per_second ?? -1) - (a.m?.ollama_tokens_per_second ?? -1);
-      case 'lastActive':
-      default:          return (b.ls ?? 0) - (a.ls ?? 0);
-    }
-  });
+  // Sort — 'registered' preserves the stable props array order (no SSE-driven reshuffling)
+  if (sortKey !== 'registered') {
+    filtered = [...filtered].sort((a, b) => {
+      switch (sortKey) {
+        case 'nodeId':     return a.n.id.localeCompare(b.n.id);
+        case 'hostname':   return (a.n.hostname ?? '').localeCompare(b.n.hostname ?? '');
+        case 'cpu':        return (b.m?.cpu_usage_percent ?? -1) - (a.m?.cpu_usage_percent ?? -1);
+        case 'tps':        return (b.m?.ollama_tokens_per_second ?? -1) - (a.m?.ollama_tokens_per_second ?? -1);
+        case 'lastActive': return (b.ls ?? 0) - (a.ls ?? 0);
+        default:           return 0;
+      }
+    });
+  }
 
   return (
     <div className="space-y-4">
@@ -337,11 +339,12 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
           onChange={e => setSortKey(e.target.value as SortKey)}
           className="text-xs bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-gray-300 focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
         >
-          <option value="lastActive">Last active</option>
+          <option value="registered">Registration order</option>
           <option value="nodeId">Node ID</option>
           <option value="hostname">Hostname</option>
           <option value="cpu">CPU usage ↓</option>
           <option value="tps">Tok/s ↓</option>
+          <option value="lastActive">Last active</option>
         </select>
       </div>
 
