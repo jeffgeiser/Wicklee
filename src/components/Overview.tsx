@@ -138,7 +138,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
   const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
-  const statusStr  = isOnline ? 'online' : (ls ? fmtAgo(ls) : 'offline');
+  const chipName   = m?.gpu_name ?? m?.chip_name ?? null;
   const tps        = m?.ollama_tokens_per_second ?? null;
 
   return (
@@ -147,28 +147,35 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
       >
-        <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
+        <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`} />
 
-        <div className="min-w-0 flex-shrink-0 max-w-[200px]">
-          <span className="text-xs font-bold text-gray-900 dark:text-white">{nodeId}</span>
+        {/* Identity — single baseline: ID · hostname · chip  [· last-seen if offline] */}
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <span className="text-xs font-bold text-gray-900 dark:text-white shrink-0">{nodeId}</span>
           {hostname !== nodeId && (
-            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400 truncate">{hostname}</span>
+            <span className="text-xs text-gray-500 shrink-0">· {hostname}</span>
           )}
-          {(m?.gpu_name ?? m?.chip_name) && (
-            <p className="text-[10px] text-indigo-400/80 truncate mt-0.5">{m?.gpu_name ?? m?.chip_name}</p>
+          {chipName && (
+            <span className="text-[10px] text-indigo-400/80 truncate">· {chipName}</span>
+          )}
+          {!isOnline && ls && (
+            <span className="text-[10px] text-gray-500 shrink-0">· {fmtAgo(ls)}</span>
           )}
         </div>
-        <span className={`text-[10px] font-semibold shrink-0 ${isOnline ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
-          {statusStr}
-        </span>
 
-        {/* Quick stats — thermal + tok/s */}
-        <div className="flex-1 flex items-center gap-3 justify-end">
-          <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
-          {tps != null ? (
-            <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+        {/* Right: thermal + tok/s (online) or "offline" */}
+        <div className="flex items-center gap-3 shrink-0">
+          {isOnline ? (
+            <>
+              <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
+              {tps != null ? (
+                <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
+              ) : (
+                <span className="text-[10px] text-gray-500 hidden sm:inline">no inference</span>
+              )}
+            </>
           ) : (
-            <span className="text-[10px] text-gray-600 hidden sm:inline">no inference</span>
+            <span className="text-[10px] text-gray-500">offline</span>
           )}
         </div>
 
