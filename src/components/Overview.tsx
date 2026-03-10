@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Layers, Server } from 'lucide-react';
+import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, Gauge, DollarSign, Layers, Server, Star, AlertTriangle } from 'lucide-react';
+import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -407,6 +408,42 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const ELECTRICITY_RATE = 0.13; // $/kWh
   const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * ELECTRICITY_RATE : null;
 
+  // WES fleet computations — use sentinel in local mode, liveMetrics in hosted mode
+  const effectiveMetrics: SentinelMetrics[] = isLocalHost ? (sentinel ? [sentinel] : []) : liveMetrics;
+  interface WESEntry {
+    nodeId: string;
+    hostname: string;
+    wes: number | null;
+    tps: number | null;
+    watts: number | null;
+    thermalState: string | null;
+    nullReason: string;
+  }
+  const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
+    const tps       = m.ollama_tokens_per_second ?? null;
+    const totalW    = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+    const hasWatts  = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
+    const watts     = hasWatts ? totalW : null;
+    const wes       = computeWES(tps, watts, m.thermal_state);
+    const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
+    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason };
+  });
+
+  const sortedWES = [...wesEntries].sort((a, b) => {
+    if (a.wes != null && b.wes != null) return b.wes - a.wes;
+    if (a.wes != null) return -1;
+    if (b.wes != null) return 1;
+    return 0;
+  });
+
+  const rankedWES    = sortedWES.filter(e => e.wes != null);
+  const fleetAvgWES  = rankedWES.length > 0
+    ? rankedWES.reduce((acc, e) => acc + e.wes!, 0) / rankedWES.length
+    : null;
+  const efficiencyRatio = rankedWES.length >= 2
+    ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes!
+    : null;
+
   // Build the accordion row data
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [{ nodeId: sentinel.node_id, hostname: sentinel.hostname ?? sentinel.node_id, metrics: sentinel }] : [])
@@ -474,6 +511,25 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         />
         {/* icon={Cpu} — was Fleet Nodes icon, replaced with Server */}
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Server} color="bg-green-500" />
+        <StatCard
+          title={<span title="Wicklee Efficiency Score — tok/s ÷ (Watts × ThermalPenalty). Higher is better.">Fleet Avg WES</span>}
+          value={
+            <div>
+              <p className={`text-2xl font-bold ${wesColorClass(fleetAvgWES)}`}>
+                {formatWES(fleetAvgWES)}
+              </p>
+              <p className="text-[10px] text-gray-500 font-medium">
+                {fleetAvgWES != null
+                  ? `avg across ${rankedWES.length} active node${rankedWES.length !== 1 ? 's' : ''}`
+                  : wesEntries.length > 0
+                  ? 'no active inference'
+                  : 'connect inference runtime'}
+              </p>
+            </div>
+          }
+          icon={Zap}
+          color="bg-amber-500"
+        />
       </div>
 
       {/* ── All Nodes accordion (collapsed by default) ───────────────────────── */}
@@ -748,21 +804,125 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         );
       })()}
 
-      {/* ── Fleet Intelligence placeholder (Phase 3) ──────────────────────────── */}
+      {/* ── Fleet Intelligence — WES Leaderboard ─────────────────────────────── */}
       <div className="bg-gray-900 dark:bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-2 mb-4">
           <BrainCircuit className="w-4 h-4 text-indigo-400" />
           <h3 className="text-sm font-semibold text-gray-200">Fleet Intelligence</h3>
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            Phase 3
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            WES Leaderboard
           </span>
         </div>
-        <p className="text-sm text-gray-500">
-          Automated observations will appear here once an inference runtime is connected.
-        </p>
-        <p className="text-xs text-gray-600 mt-1">
-          Connect Ollama or vLLM to unlock thermal-aware load balancing suggestions, anomaly detection, and WASM interceptor recommendations.
-        </p>
+
+        {sortedWES.length === 0 ? (
+          <div>
+            <p className="text-sm text-gray-500">Automated observations will appear here once an inference runtime is connected.</p>
+            <p className="text-xs text-gray-600 mt-1">Connect Ollama or vLLM to unlock the Fleet WES Leaderboard and thermal-aware efficiency insights.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {/* Column headers */}
+            <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-3 pb-1">
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest font-semibold">Node</p>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest font-semibold text-right w-16">WES</p>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest font-semibold text-right w-16 hidden sm:block">tok/s</p>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest font-semibold text-right w-14 hidden sm:block">Watts</p>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest font-semibold text-right w-16">Thermal</p>
+            </div>
+
+            {sortedWES.map((entry, idx) => {
+              const isTop    = idx === 0 && entry.wes != null;
+              const rank     = entry.wes != null ? rankedWES.indexOf(entry) + 1 : null;
+              const thermal  = entry.thermalState;
+              const thermalWarning = thermal != null && ['fair', 'serious', 'critical'].includes(thermal.toLowerCase());
+              const thermalCls = thermal?.toLowerCase() === 'normal'  ? 'text-green-400'
+                               : thermal?.toLowerCase() === 'elevated'? 'text-yellow-400'
+                               : thermal?.toLowerCase() === 'fair'    ? 'text-yellow-400'
+                               : thermal?.toLowerCase() === 'serious' ? 'text-orange-400'
+                               : thermal?.toLowerCase() === 'critical'? 'text-red-500'
+                               : 'text-gray-500';
+              return (
+                <div
+                  key={entry.nodeId}
+                  className={`grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 items-center px-3 py-2.5 rounded-xl transition-colors ${
+                    isTop
+                      ? 'bg-amber-500/5 border border-amber-500/20'
+                      : 'bg-gray-800/50 border border-transparent hover:border-gray-700'
+                  }`}
+                >
+                  {/* Node identity */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isTop ? (
+                      <Star size={11} className="text-amber-400 shrink-0 fill-amber-400" />
+                    ) : (
+                      <span className="text-[10px] text-gray-600 font-mono shrink-0 w-3">{rank ?? '—'}</span>
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-xs font-mono font-bold text-gray-200 truncate">{entry.nodeId}</p>
+                      {entry.hostname !== entry.nodeId && (
+                        <p className="text-[10px] text-gray-500 truncate leading-none">{entry.hostname}</p>
+                      )}
+                      {isTop && <p className="text-[9px] text-amber-400/80 leading-none mt-0.5">Most Efficient</p>}
+                    </div>
+                  </div>
+
+                  {/* WES */}
+                  <div className="w-16 text-right">
+                    {entry.wes != null ? (
+                      <p className={`text-sm font-bold font-mono ${wesColorClass(entry.wes)}`}>
+                        {formatWES(entry.wes)}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-gray-600 font-mono" title={entry.nullReason}>—</p>
+                    )}
+                    {entry.wes == null && entry.nullReason && (
+                      <p className="text-[9px] text-gray-600 leading-none">{entry.nullReason}</p>
+                    )}
+                  </div>
+
+                  {/* tok/s */}
+                  <div className="w-16 text-right hidden sm:block">
+                    <p className={`text-xs font-mono ${entry.tps != null ? 'text-green-400' : 'text-gray-600'}`}>
+                      {entry.tps != null ? `${entry.tps.toFixed(1)}` : '—'}
+                    </p>
+                  </div>
+
+                  {/* Watts */}
+                  <div className="w-14 text-right hidden sm:block">
+                    <p className="text-xs font-mono text-gray-400">
+                      {entry.watts != null ? `${entry.watts.toFixed(1)}W` : '—'}
+                    </p>
+                  </div>
+
+                  {/* Thermal */}
+                  <div className="w-16 text-right flex items-center justify-end gap-1">
+                    {thermalWarning && <AlertTriangle size={9} className="text-amber-400 shrink-0" />}
+                    <p className={`text-xs font-semibold ${thermalCls}`}>
+                      {thermal ?? '—'}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Efficiency ratio */}
+            {efficiencyRatio != null && efficiencyRatio > 1 && (
+              <p className="text-[11px] text-gray-500 pt-2 px-3">
+                <span className="font-mono text-amber-400 font-semibold">{rankedWES[0].nodeId}</span>
+                {' '}is{' '}
+                <span className="font-mono text-amber-400 font-semibold">
+                  {efficiencyRatio >= 1000
+                    ? `${(efficiencyRatio / 1000).toFixed(1)}k×`
+                    : efficiencyRatio >= 10
+                    ? `${efficiencyRatio.toFixed(0)}×`
+                    : `${efficiencyRatio.toFixed(1)}×`}
+                </span>
+                {' '}more WES-efficient than{' '}
+                <span className="font-mono text-gray-400">{rankedWES[rankedWES.length - 1].nodeId}</span>
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

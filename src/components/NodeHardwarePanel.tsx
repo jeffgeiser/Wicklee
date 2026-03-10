@@ -1,6 +1,7 @@
 import React from 'react';
-import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare } from 'lucide-react';
+import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle } from 'lucide-react';
 import { SentinelMetrics } from '../types';
+import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from '../utils/wes';
 
 export const thermalColour = (state: string | null) => {
   switch (state?.toLowerCase()) {
@@ -94,12 +95,46 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
   const effectiveMemStr   = memPressStr ?? memUtilStr;
   const effectiveMemLabel = memPressStr != null ? 'Mem Pressure' : 'Mem Util';
 
-  // Ollama wattage
-  const ollamaTps    = m.ollama_tokens_per_second;
-  const totalPowerW  = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
-  const hasPower     = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
-  const wPer1kStr    = ollamaTps != null && ollamaTps > 0 && hasPower
+  // Ollama wattage + WES
+  const ollamaTps   = m.ollama_tokens_per_second;
+  const totalPowerW = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+  const hasPower    = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
+  const wPer1kStr   = ollamaTps != null && ollamaTps > 0 && hasPower
     ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)} W/1k` : null;
+  const wattsStr    = hasPower ? `${totalPowerW.toFixed(1)} W` : null;
+
+  // WES computation
+  const wes          = computeWES(ollamaTps, hasPower ? totalPowerW : null, m.thermal_state);
+  const wesFormatted = formatWES(wes);
+  const wesColor     = wesColorClass(wes);
+
+  const thermalPenaltyValue = m.thermal_state != null
+    ? (THERMAL_PENALTY[m.thermal_state.toLowerCase()] ?? 1.0)
+    : 1.0;
+  const showThermalPenalty = thermalPenaltyValue !== 1.0;
+  const showThermalWarning = m.thermal_state != null &&
+    ['fair', 'serious', 'critical'].includes(m.thermal_state.toLowerCase());
+  // Asterisk case: thermal completely unknown (Linux pre-3B), but WES is otherwise computable
+  const thermalDataMissing = m.thermal_state == null && nvThermal == null;
+  const showAsterisk       = thermalDataMissing && wes != null;
+
+  const wesLabelTooltip = 'Wicklee Efficiency Score — tok/s divided by adjusted watts and thermal penalty. Higher is better. Collapses when a node throttles even if tok/s looks stable.';
+  const thermalWarningTooltip = m.thermal_state
+    ? `Thermal penalty applied: ${thermalPenaltyValue}× (${m.thermal_state}). WES is reduced because this node is thermally throttling.`
+    : '';
+  const asteriskTooltip = '* Thermal penalty not applied — thermal state not yet available on this platform (coming Phase 3B)';
+
+  const wesNullTooltip = (() => {
+    if (ollamaTps == null || ollamaTps <= 0)
+      return 'WES unavailable — Ollama not running or not yet probed';
+    if (!hasPower) {
+      const chip = (m.chip_name ?? '').toLowerCase();
+      const isApple = chip.includes('apple') || /\bm[1-4]\b/.test(chip);
+      if (isApple) return 'WES unavailable — CPU power requires sudo. Run: sudo wicklee';
+      return 'WES unavailable — GPU power not detected';
+    }
+    return 'WES unavailable';
+  })();
 
   return (
     <div className="space-y-4">
@@ -119,18 +154,16 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
 
       {/* ── Inference Band — sits above hardware grid, aligned to column gutter ── */}
       {m.ollama_running ? (
-        <div className="grid grid-cols-3 gap-6 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3 items-start">
+        <div className="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden">
 
-          {/* Col 1 — model identity (secondary labels) */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-1.5">
-              <BotMessageSquare size={11} className="text-indigo-400 shrink-0" />
-              <span className="text-[9px] font-semibold text-indigo-400 uppercase tracking-widest leading-none">Ollama</span>
-            </div>
+          {/* Model identity row */}
+          <div className="flex items-center gap-2 px-4 pt-3 pb-2.5 border-b border-gray-100 dark:border-gray-800 flex-wrap">
+            <BotMessageSquare size={11} className="text-indigo-400 shrink-0" />
+            <span className="text-[9px] font-semibold text-indigo-400 uppercase tracking-widest leading-none">Ollama</span>
             {m.ollama_active_model ? (
               <>
                 <p className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate leading-tight">{m.ollama_active_model}</p>
-                <div className="flex items-center gap-1.5 flex-wrap">
+                <div className="flex items-center gap-1.5 flex-wrap ml-auto shrink-0">
                   {m.ollama_quantization && (
                     <span className="text-[9px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
                       {m.ollama_quantization}
@@ -146,22 +179,56 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
             )}
           </div>
 
-          {/* Col 2 — Throughput (large, aligns with MEMORY column below) */}
-          <div>
-            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1.5">Throughput</p>
-            <p className={`text-2xl font-bold leading-none ${ollamaTps != null ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
-              {ollamaTps != null ? ollamaTps.toFixed(1) : '—'}
-              <span className="text-sm font-normal text-gray-500 ml-1.5">tok/s</span>
+          {/* WES headline */}
+          <div className="px-4 pt-3 pb-3">
+            <div className="flex items-center gap-1.5 mb-1">
+              <p
+                className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none cursor-default"
+                title={wesLabelTooltip}
+              >
+                WES
+              </p>
+              {showThermalWarning && (
+                <AlertTriangle size={10} className="text-amber-400 shrink-0" title={thermalWarningTooltip} />
+              )}
+            </div>
+            <p
+              className={`text-3xl font-bold leading-none ${wesColor}`}
+              title={wes == null ? wesNullTooltip : undefined}
+            >
+              {wesFormatted}
+              {showAsterisk && <span className="text-xl ml-0.5 opacity-60">*</span>}
             </p>
+            <p className="text-[10px] text-gray-500 mt-1 leading-none">Wicklee Efficiency Score</p>
           </div>
 
-          {/* Col 3 — Efficiency (large, aligns with GRAPHICS column below) */}
-          <div>
-            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1.5">Efficiency</p>
-            <p className={`text-2xl font-bold leading-none ${wPer1kStr ? 'text-amber-400' : 'text-gray-500 dark:text-gray-600'}`}>
-              {wPer1kStr ? wPer1kStr.replace(' W/1k', '') : '—'}
-              <span className="text-sm font-normal text-gray-500 ml-1.5">W/1k</span>
-            </p>
+          {/* Inputs row */}
+          <div className="border-t border-gray-100 dark:border-gray-800 px-4 py-2.5 grid grid-cols-3 gap-4">
+            <div>
+              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">tok/s</p>
+              <p className={`text-sm font-bold leading-tight ${ollamaTps != null ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
+                {ollamaTps != null ? ollamaTps.toFixed(1) : '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">Watts</p>
+              <p className={`text-sm font-bold leading-tight ${wattsStr ? 'text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-600'}`}>
+                {wattsStr ?? '—'}
+              </p>
+              {wPer1kStr && (
+                <p className="text-[9px] text-gray-500 font-mono leading-none mt-0.5">{wPer1kStr}</p>
+              )}
+            </div>
+            <div>
+              <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">Thermal</p>
+              <p className={`text-sm font-bold leading-tight ${thermalClass}`}>{thermalLabel ?? '—'}</p>
+              {showThermalPenalty && (
+                <p className="text-[9px] text-gray-500 font-mono leading-none mt-0.5">({thermalPenaltyValue}×)</p>
+              )}
+              {showAsterisk && (
+                <p className="text-[9px] text-gray-500 font-mono leading-none mt-0.5" title={asteriskTooltip}>pending*</p>
+              )}
+            </div>
           </div>
 
         </div>
