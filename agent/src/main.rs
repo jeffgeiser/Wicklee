@@ -907,9 +907,10 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 //
 //   Main task (5s):  GET /api/ps — active model name, size, quantization.
 //
-//   Probe task (30s): POST /api/generate with num_predict=1 — measures actual
+//   Probe task (30s): POST /api/generate with num_predict=3 — measures actual
 //     inference throughput on this node under current thermal/load conditions.
 //     Parses eval_count / eval_duration from the final streaming JSON line.
+//     NOTE: num_predict=1 causes Ollama to omit eval_duration from the response.
 //     NOTE: /metrics Prometheus endpoint does not exist in Ollama ≤ v0.17.7.
 
 /// Sends a 1-token generate request and returns tok/s from the timing stats.
@@ -920,7 +921,7 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
             "model":   model,
             "prompt":  " ",
             "stream":  true,
-            "options": { "num_predict": 1 }
+            "options": { "num_predict": 3 }
         }))
         .send()
         .await.ok()?;
