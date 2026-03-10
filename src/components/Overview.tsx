@@ -54,36 +54,18 @@ interface NodeRowProps {
 const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false }) => {
   const [open, setOpen] = useState(defaultOpen);
 
-  const isOnline = m !== null;
-  const cpuStr   = m ? `${m.cpu_usage_percent.toFixed(0)}%` : '—';
-  const gpuStr   = m?.nvidia_gpu_utilization_percent != null
-    ? `${m.nvidia_gpu_utilization_percent.toFixed(0)}%`
-    : m?.gpu_utilization_percent != null
-    ? `${m.gpu_utilization_percent.toFixed(0)}%`
-    : '—';
-
-  // Memory: prefer pressure (macOS) → fallback to utilization (Windows/Linux).
-  // Fallback is marked with * and a muted colour to signal it's a different metric.
-  const memPressure = m?.memory_pressure_percent;
-  const memUtil     = m ? Math.round((m.used_memory_mb / (m.total_memory_mb || 1)) * 100) : null;
-  const memIsPressure = memPressure != null;
-  const memVal      = m ? (memIsPressure ? memPressure!.toFixed(0) : memUtil!.toString()) : null;
-  const memStr      = memVal != null ? `${memVal}%${memIsPressure ? '' : '*'}` : '—';
-  const memLabel    = memIsPressure ? 'Mem pressure' : 'Mem util';
-  const memCls      = memVal != null
-    ? (memIsPressure ? 'text-gray-700 dark:text-gray-300' : 'text-sky-600 dark:text-sky-400')
-    : '';
-
+  const isOnline   = m !== null;
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
   const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
   const statusStr  = isOnline ? 'online' : (ls ? fmtAgo(ls) : 'offline');
+  const tps        = m?.ollama_tokens_per_second ?? null;
 
   return (
-    <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
+    <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
       >
         <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
 
@@ -100,15 +82,14 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
           {statusStr}
         </span>
 
-        <div className="flex-1 flex items-center gap-4 justify-end text-[11px] text-gray-500 dark:text-gray-400 font-mono">
-          <span>CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
-          <span className="hidden sm:inline">GPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{gpuStr}</span></span>
-          <span className="hidden sm:inline" title={memLabel}>
-            Mem: <span className={`font-semibold ${memCls}`}>{memStr}</span>
-          </span>
-          <span className="hidden md:inline">
-            Thermal: <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span>
-          </span>
+        {/* Quick stats — thermal + tok/s (CPU/GPU/Mem available on expand) */}
+        <div className="flex-1 flex items-center gap-3 justify-end font-mono">
+          <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
+          {tps != null ? (
+            <span className="text-green-400 font-bold text-sm">{tps.toFixed(1)} tok/s</span>
+          ) : (
+            <span className="text-[10px] text-gray-600 hidden sm:inline font-sans tracking-wide">no inference</span>
+          )}
         </div>
 
         <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
