@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   ExternalLink, ChevronDown, Search, X, ArrowUpDown,
   Lock, Cloud, Shield, AlertTriangle, Database, HardDrive,
-  Zap, Clock, Square, CheckSquare, Activity,
+  Zap, Clock, Square, CheckSquare, Activity, MapPin,
 } from 'lucide-react';
 import { NodeAgent, SentinelMetrics } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
@@ -72,6 +72,39 @@ const RegistryTile: React.FC<RegistryTileProps> = ({ label, value, valueCls, sub
         {value}
       </p>
       {sub && <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">{sub}</p>}
+    </div>
+  </div>
+);
+
+// ── Provider Mix tile ─────────────────────────────────────────────────────────
+
+const ProviderMixTile: React.FC<{
+  providerLine: string | null;
+  onNavigateToSettings?: () => void;
+}> = ({ providerLine, onNavigateToSettings }) => (
+  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between h-[116px]">
+    <div className="flex items-start justify-between gap-2">
+      <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">Provider Mix</p>
+      <MapPin size={13} className="text-indigo-400 dark:text-indigo-500 shrink-0" />
+    </div>
+    <div>
+      {providerLine ? (
+        <p className="text-sm font-telin text-gray-900 dark:text-white leading-snug">{providerLine}</p>
+      ) : (
+        <div className="space-y-1">
+          <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-snug">
+            Set location labels in Settings to see provider mix
+          </p>
+          {onNavigateToSettings && (
+            <button
+              onClick={onNavigateToSettings}
+              className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              Go to Settings →
+            </button>
+          )}
+        </div>
+      )}
     </div>
   </div>
 );
@@ -296,11 +329,12 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({
 interface NodesListProps {
   nodes: NodeAgent[];
   getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
+  onNavigateToSettings?: () => void;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
+const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings, onNavigateToSettings }) => {
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
   const [allMetrics, setAllMetrics]     = useState<Record<string, SentinelMetrics>>({});
   const [lastSeenMs, setLastSeenMs]     = useState<Record<string, number>>({});
@@ -438,11 +472,9 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
               sub="1 node · local only"
               icon={Shield} iconCls="text-green-400"
             />
-            <RegistryTile
-              label="Architecture"
-              value={detectArch(m)}
-              sub="1 node"
-              icon={Activity} iconCls="text-gray-400"
+            <ProviderMixTile
+              providerLine={getNodeSettings?.(m.node_id)?.locationLabel || null}
+              onNavigateToSettings={onNavigateToSettings}
             />
             <RegistryTile
               label="Lifecycle Alerts"
@@ -569,16 +601,18 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
   const sovereignPct   = allLiveMetrics.length > 0
     ? Math.round(sovereignCount / allLiveMetrics.length * 100) : null;
 
-  // Architecture distribution
-  const archCounts = allLiveMetrics.reduce((acc, m) => {
-    const arch = detectArch(m);
-    acc[arch] = (acc[arch] ?? 0) + 1;
+  // Provider Mix — grouped by locationLabel from node settings
+  const providerCounts = allLiveMetrics.reduce((acc, m) => {
+    const label = getNodeSettings?.(m.node_id)?.locationLabel;
+    if (label) { acc[label] = (acc[label] ?? 0) + 1; }
     return acc;
   }, {} as Record<string, number>);
-  const archLine = (['Apple', 'NVIDIA', 'Generic'] as const)
-    .filter(k => archCounts[k])
-    .map(k => `${k}: ${archCounts[k]}`)
-    .join(' · ') || '—';
+  const providerLine = Object.keys(providerCounts).length > 0
+    ? (Object.entries(providerCounts) as [string, number][])
+        .sort((a, b) => b[1] - a[1])
+        .map(([loc, count]) => `${loc} · ${count}`)
+        .join('  ')
+    : null;
 
   // Lifecycle Alerts: thermal warnings + offline nodes
   const thermalAlerts  = allLiveMetrics.filter(m => ['serious', 'critical'].includes(m.thermal_state?.toLowerCase() ?? '')).length;
@@ -636,11 +670,9 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
           sub={sovereignCount > 0 ? `${sovereignCount} local inference` : allLiveMetrics.length > 0 ? 'all fleet-routed' : 'no live nodes'}
           icon={Shield} iconCls="text-green-400"
         />
-        <RegistryTile
-          label="Architecture"
-          value={archLine}
-          valueCls="text-base font-bold font-telin text-gray-900 dark:text-white"
-          icon={Activity} iconCls="text-gray-400"
+        <ProviderMixTile
+          providerLine={providerLine}
+          onNavigateToSettings={onNavigateToSettings}
         />
         <RegistryTile
           label="Lifecycle Alerts"
