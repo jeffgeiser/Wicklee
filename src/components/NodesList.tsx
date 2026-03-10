@@ -30,12 +30,10 @@ const fmtAgo = (ms: number): string => {
   return `${Math.floor(s / 3600)}h ago`;
 };
 
-const detectOS = (m: SentinelMetrics): 'macOS' | 'Linux' | 'Unknown' => {
-  const chip = (m.chip_name ?? m.gpu_name ?? '').toLowerCase();
-  if (chip.includes('apple') || /\bm[1-4]\b/.test(chip)) return 'macOS';
-  if (m.cpu_power_w != null && m.nvidia_vram_total_mb == null) return 'macOS';
-  if (m.nvidia_vram_total_mb != null) return 'Linux';
-  return 'Unknown';
+const detectArch = (m: SentinelMetrics): 'Apple' | 'NVIDIA' | 'Generic' => {
+  if (m.cpu_power_w != null) return 'Apple';
+  if (m.nvidia_vram_total_mb != null) return 'NVIDIA';
+  return 'Generic';
 };
 
 // ── Sort / filter types ───────────────────────────────────────────────────────
@@ -441,8 +439,8 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
               icon={Shield} iconCls="text-green-400"
             />
             <RegistryTile
-              label="OS Distribution"
-              value={detectOS(m)}
+              label="Architecture"
+              value={detectArch(m)}
               sub="1 node"
               icon={Activity} iconCls="text-gray-400"
             />
@@ -571,16 +569,16 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
   const sovereignPct   = allLiveMetrics.length > 0
     ? Math.round(sovereignCount / allLiveMetrics.length * 100) : null;
 
-  // OS Distribution
-  const osCounts = allLiveMetrics.reduce((acc, m) => {
-    const os = detectOS(m);
-    acc[os] = (acc[os] ?? 0) + 1;
+  // Architecture distribution
+  const archCounts = allLiveMetrics.reduce((acc, m) => {
+    const arch = detectArch(m);
+    acc[arch] = (acc[arch] ?? 0) + 1;
     return acc;
   }, {} as Record<string, number>);
-  const osSubParts = (Object.entries(osCounts) as [string, number][])
-    .sort((a, b) => b[1] - a[1])
-    .map(([os, count]) => `${os} ${count}`)
-    .join(' · ');
+  const archLine = (['Apple', 'NVIDIA', 'Generic'] as const)
+    .filter(k => archCounts[k])
+    .map(k => `${k}: ${archCounts[k]}`)
+    .join(' · ') || '—';
 
   // Lifecycle Alerts: thermal warnings + offline nodes
   const thermalAlerts  = allLiveMetrics.filter(m => ['serious', 'critical'].includes(m.thermal_state?.toLowerCase() ?? '')).length;
@@ -639,9 +637,9 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings }) => {
           icon={Shield} iconCls="text-green-400"
         />
         <RegistryTile
-          label="OS Distribution"
-          value={Object.keys(osCounts).length > 0 ? Object.keys(osCounts)[0] : '—'}
-          sub={osSubParts || undefined}
+          label="Architecture"
+          value={archLine}
+          valueCls="text-base font-bold font-telin text-gray-900 dark:text-white"
           icon={Activity} iconCls="text-gray-400"
         />
         <RegistryTile
