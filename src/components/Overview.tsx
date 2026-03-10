@@ -46,7 +46,7 @@ const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, value
     </div>
     <div>
       <p
-        className={`text-2xl font-bold tabular-nums font-mono leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}
+        className={`text-2xl font-bold font-telin leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}
         title={valueTitle}
       >
         {value}

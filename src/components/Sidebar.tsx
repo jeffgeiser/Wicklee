@@ -22,11 +22,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   const permissions = usePermissions(currentUser);
 
   const items = [
-    { id: DashboardTab.OVERVIEW, icon: LayoutGrid, label: 'Fleet Overview', show: true },
-    { id: DashboardTab.NODES, icon: Server, label: 'Node Registry', show: true },
+    { id: DashboardTab.OVERVIEW, icon: LayoutGrid, label: 'Intelligence', show: true },
+    { id: DashboardTab.NODES, icon: Server, label: 'Management', show: true },
     { id: DashboardTab.TRACES, icon: Activity, label: 'Observability', show: true },
     { id: DashboardTab.SCAFFOLDING, icon: Terminal, label: 'Scaffolding', show: currentUser.isPro && permissions.canViewScaffolding },
-    { id: DashboardTab.AI_INSIGHTS, icon: Cpu, label: 'Local Intelligence', show: permissions.canRunAIAnalysis },
+    { id: DashboardTab.AI_INSIGHTS, icon: Cpu, label: 'Insights', show: permissions.canRunAIAnalysis },
     { id: DashboardTab.AI_PROVIDERS, icon: Key, label: 'AI Key Vault', show: currentUser.isPro && !isLocalMode },
     { id: DashboardTab.TEAM, icon: Users, label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
     { id: DashboardTab.SUSTAINABILITY, icon: Leaf, label: 'Sustainability', show: true },

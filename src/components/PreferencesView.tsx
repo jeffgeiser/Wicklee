@@ -24,7 +24,7 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
                 {theme === 'dark' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
               </div>
               <div>
-                <h4 className="text-sm font-bold text-gray-900 dark:text-gray-200">Interface Theme</h4>
+                <h4 className="text-sm font-bold font-telin text-gray-900 dark:text-gray-200">Interface Theme</h4>
                 <p className="text-xs text-gray-500">Control how Wicklee looks on your screen.</p>
               </div>
             </div>
@@ -44,7 +44,7 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
                 <Bell className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-gray-900 dark:text-gray-200">Thermal Alerts</h4>
+                <h4 className="text-sm font-bold font-telin text-gray-900 dark:text-gray-200">Thermal Alerts</h4>
                 <p className="text-xs text-gray-500">Notify when node temperature exceeds 80°C.</p>
               </div>
             </div>
@@ -60,7 +60,7 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
                 <Layout className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-gray-900 dark:text-gray-200">Default Workspace</h4>
+                <h4 className="text-sm font-bold font-telin text-gray-900 dark:text-gray-200">Default Workspace</h4>
                 <p className="text-xs text-gray-500">The tenant loaded initially on login.</p>
               </div>
             </div>
@@ -75,7 +75,7 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
                 <Cpu className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-gray-900 dark:text-gray-200">High-Resolution Scraping</h4>
+                <h4 className="text-sm font-bold font-telin text-gray-900 dark:text-gray-200">High-Resolution Scraping</h4>
                 <p className="text-xs text-gray-500">Enable 500ms telemetry updates (Higher bandwidth).</p>
               </div>
             </div>

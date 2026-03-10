@@ -7,7 +7,7 @@ import {
 import { NodeAgent, SentinelMetrics } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
-import { WES_TOOLTIP, calculateTotalVramMb, calculateTotalVramCapacityMb } from '../utils/efficiency';
+import { WES_TOOLTIP, calculateTotalVramMb, calculateTotalVramCapacityMb, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -36,6 +36,25 @@ const detectOS = (m: SentinelMetrics): 'macOS' | 'Linux' | 'Unknown' => {
   if (m.nvidia_vram_total_mb != null) return 'Linux';
   return 'Unknown';
 };
+
+// ── Per-node settings helper ──────────────────────────────────────────────────
+// Returns effective PUE and electricity rate for a given node, plus whether
+// either value is a custom override (drives the ◆ amber indicator in ComplianceBand).
+
+interface NodeSettings {
+  pue: number;
+  rate: number;
+  pueOverride: boolean;
+}
+
+function getNodeSettings(
+  nodeId: string,
+  nodePueSettings: Record<string, number> = {},
+): NodeSettings {
+  const pue = nodePueSettings[nodeId] ?? 1.0;
+  const pueOverride = nodeId in nodePueSettings && nodePueSettings[nodeId] !== 1.0;
+  return { pue, rate: ELECTRICITY_RATE_USD_PER_KWH, pueOverride };
+}
 
 // ── Sort / filter types ───────────────────────────────────────────────────────
 
@@ -69,7 +88,7 @@ const RegistryTile: React.FC<RegistryTileProps> = ({ label, value, valueCls, sub
       <Icon size={13} className={iconCls ?? 'text-gray-400 dark:text-gray-600'} />
     </div>
     <div>
-      <p className={`text-2xl font-bold font-mono tabular-nums leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>
+      <p className={`text-2xl font-bold font-telin leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>
         {value}
       </p>
       {sub && <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">{sub}</p>}
@@ -100,7 +119,9 @@ const ComplianceBand: React.FC<{
   m: SentinelMetrics | null;
   nodeId: string;
   sovereign: boolean;
-}> = ({ m, nodeId, sovereign }) => {
+  pue?: number;
+  pueOverride?: boolean;
+}> = ({ m, nodeId, sovereign, pue = 1.0, pueOverride = false }) => {
   const destination = sovereign ? 'Local Only' : CLOUD_URL.replace(/^https?:\/\//, '');
   const memPressure = m?.memory_pressure_percent ?? null;
   const forecastLabel = memPressure == null  ? '—'
@@ -115,12 +136,14 @@ const ComplianceBand: React.FC<{
   const modelSizeStr = m?.ollama_model_size_gb != null
     ? `${m.ollama_model_size_gb.toFixed(1)} GB` : '—';
 
+  const overrideCls = 'text-amber-400 dark:text-amber-500';
+
   const ML = ({ children }: { children: React.ReactNode }) => (
     <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none mb-1">{children}</p>
   );
 
   return (
-    <div className="border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 mb-3 grid grid-cols-4 gap-4 bg-gray-50/30 dark:bg-gray-800/20">
+    <div className="border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 mb-3 grid grid-cols-6 gap-4 bg-gray-50/30 dark:bg-gray-800/20">
       {/* Destination */}
       <div>
         <ML>Destination</ML>
@@ -151,6 +174,24 @@ const ComplianceBand: React.FC<{
         ) : (
           <p className="text-[9px] text-gray-600 mt-0.5">no data</p>
         )}
+      </div>
+
+      {/* Facility PUE */}
+      <div>
+        <ML>Facility PUE</ML>
+        <p className={`text-xs font-mono tabular-nums ${pueOverride ? overrideCls : 'text-gray-700 dark:text-gray-300'}`}>
+          {pue.toFixed(2)}{pueOverride && ' ◆'}
+        </p>
+        <p className="text-[9px] text-gray-500 mt-0.5">{pueOverride ? 'custom override' : 'default'}</p>
+      </div>
+
+      {/* Electricity Rate */}
+      <div>
+        <ML>Elec. Rate</ML>
+        <p className="text-xs font-mono tabular-nums text-gray-700 dark:text-gray-300">
+          ${ELECTRICITY_RATE_USD_PER_KWH}/kWh
+        </p>
+        <p className="text-[9px] text-gray-500 mt-0.5">fleet default</p>
       </div>
     </div>
   );
@@ -277,7 +318,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({
         <div className="px-4 pb-4 pt-3 border-t border-gray-200 dark:border-gray-800">
           {m ? (
             <>
-              <ComplianceBand m={m} nodeId={node.id} sovereign={sovereign} />
+              <ComplianceBand m={m} nodeId={node.id} sovereign={sovereign} pue={pue} pueOverride={pue !== 1.0} />
               <HardwareDetailPanel
                 metrics={m}
                 pue={pue}
@@ -524,7 +565,9 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             <div className="px-5 pb-5 border-t border-gray-100 dark:border-gray-800">
               {m ? (
                 <div className="pt-4">
-                  <ComplianceBand m={m} nodeId={m.node_id} sovereign={true} />
+                  {(() => { const ns = getNodeSettings(m.node_id, nodePueSettings); return (
+                  <ComplianceBand m={m} nodeId={m.node_id} sovereign={true} pue={ns.pue} pueOverride={ns.pueOverride} />
+                  ); })()}
                   <HardwareDetailPanel
                     metrics={m}
                     pue={nodePueSettings?.[m.node_id] ?? 1.0}
@@ -797,14 +840,16 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map(({ n, m, ls, isLive, idx }) => (
+          {filtered.map(({ n, m, ls, isLive, idx }) => {
+            const ns = getNodeSettings(n.id, nodePueSettings);
+            return (
             <CollapsibleNode
               key={n.id}
               node={n}
               metrics={m}
               lastSeenMs={ls}
               defaultOpen={idx === 0}
-              pue={nodePueSettings?.[n.id] ?? 1.0}
+              pue={ns.pue}
               onUpdatePue={(p) => onUpdateNodePue?.(n.id, p)}
               onCopyPueToAll={onCopyPueToAll}
               hasMultipleNodes={nodes.length >= 2}
@@ -812,7 +857,8 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
               onToggleSelect={() => toggleSelect(n.id)}
               sovereign={false}
             />
-          ))}
+            );
+          })}
         </div>
       )}
 
