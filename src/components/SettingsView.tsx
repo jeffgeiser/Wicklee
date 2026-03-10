@@ -101,9 +101,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     return `Clear all PUE overrides? Nodes will use PUE ${settings.fleet.pue.toFixed(1)}.`;
   };
 
-  // ── Override cell helpers ───────────────────────────────────────────────────
-
-  const overrideCls = 'border-l-2 border-amber-400/60 pl-2';
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
@@ -244,7 +241,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       eff={eff}
                       ov={ov}
                       fleetSettings={settings.fleet}
-                      overrideCls={overrideCls}
                       onOverride={(patch) => setNodeOverride(node.id, patch)}
                     />
                   );
@@ -304,13 +300,11 @@ const NodeOverrideRow: React.FC<{
   eff: NodeEffectiveSettings;
   ov: NodeOverride;
   fleetSettings: FleetSettings;
-  overrideCls: string;
   onOverride: (patch: Partial<NodeOverride>) => void;
-}> = ({ node, eff, ov, fleetSettings, overrideCls, onOverride }) => {
+}> = ({ node, eff, ov, fleetSettings, onOverride }) => {
   const [kwhDraft, setKwhDraft] = useState(ov.kwhRate?.toString() ?? '');
   const [pueDraft,  setPueDraft] = useState(ov.pue?.toString()  ?? '');
 
-  // Keep local drafts in sync when external settings change
   React.useEffect(() => { setKwhDraft(ov.kwhRate?.toString() ?? ''); }, [ov.kwhRate]);
   React.useEffect(() => { setPueDraft(ov.pue?.toString()  ?? ''); }, [ov.pue]);
 
@@ -328,12 +322,16 @@ const NodeOverrideRow: React.FC<{
     else { setPueDraft(ov.pue?.toString() ?? ''); }
   };
 
-  const cellInput = 'w-full bg-transparent border-0 outline-none text-xs font-telin tabular-nums text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600';
+  // Overridden values → high-contrast white; inheriting fleet default → muted
+  const valCls  = (active: boolean) => active
+    ? 'text-gray-900 dark:text-white'
+    : 'text-gray-400 dark:text-gray-500';
+  const cellBase = 'w-full bg-transparent border-0 outline-none text-xs font-telin tabular-nums placeholder-gray-400 dark:placeholder-gray-600';
 
   return (
-    <tr className="hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors group">
+    <tr className={`hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors ${eff.hasAnyOverride ? 'border-l-2 border-amber-400/40' : 'border-l-2 border-transparent'}`}>
 
-      {/* Node ID — with ◆ if any override */}
+      {/* Node ID — ◆ indicator when any override active */}
       <td className="px-4 py-2.5">
         <div className="flex items-center gap-1.5">
           {eff.hasAnyOverride && (
@@ -355,34 +353,32 @@ const NodeOverrideRow: React.FC<{
           value={ov.locationLabel ?? ''}
           onChange={e => onOverride({ locationLabel: e.target.value || undefined })}
           placeholder="e.g. Home lab, Hetzner Frankfurt, Vast.ai US-East"
-          className={`${cellInput} w-full`}
+          className={`${cellBase} ${valCls(!!ov.locationLabel)}`}
         />
       </td>
 
       {/* kWh Rate */}
       <td className="px-3 py-2.5 text-right">
-        <div className={eff.kwhRateOverride ? overrideCls : undefined}>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={kwhDraft}
-            onChange={e => setKwhDraft(e.target.value)}
-            onBlur={commitKwh}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            placeholder={`${fleetSettings.kwhRate} (fleet)`}
-            className={`${cellInput} w-full text-right tabular-nums`}
-          />
-        </div>
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={kwhDraft}
+          onChange={e => setKwhDraft(e.target.value)}
+          onBlur={commitKwh}
+          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          placeholder={`${fleetSettings.kwhRate} (fleet)`}
+          className={`${cellBase} text-right ${valCls(eff.kwhRateOverride)}`}
+        />
       </td>
 
       {/* Currency */}
       <td className="px-3 py-2.5">
-        <div className={`relative ${eff.currencyOverride ? overrideCls : ''}`}>
+        <div className="relative">
           <select
             value={ov.currency ?? ''}
             onChange={e => onOverride({ currency: e.target.value as NodeOverride['currency'] || undefined })}
-            className={`${cellInput} appearance-none cursor-pointer pr-5`}
+            className={`${cellBase} appearance-none cursor-pointer pr-5 ${valCls(eff.currencyOverride)}`}
           >
             <option value="">{fleetSettings.currency} (fleet)</option>
             {CURRENCY_OPTIONS.map(c => (
@@ -395,20 +391,18 @@ const NodeOverrideRow: React.FC<{
 
       {/* PUE */}
       <td className="px-3 py-2.5 text-right">
-        <div className={eff.pueOverride ? overrideCls : undefined}>
-          <input
-            type="number"
-            min="1.0"
-            max="3.0"
-            step="0.1"
-            value={pueDraft}
-            onChange={e => setPueDraft(e.target.value)}
-            onBlur={commitPue}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            placeholder={`${fleetSettings.pue.toFixed(1)} (fleet)`}
-            className={`${cellInput} w-full text-right tabular-nums`}
-          />
-        </div>
+        <input
+          type="number"
+          min="1.0"
+          max="3.0"
+          step="0.1"
+          value={pueDraft}
+          onChange={e => setPueDraft(e.target.value)}
+          onBlur={commitPue}
+          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          placeholder={`${fleetSettings.pue.toFixed(1)} (fleet)`}
+          className={`${cellBase} text-right ${valCls(eff.pueOverride)}`}
+        />
       </td>
     </tr>
   );
