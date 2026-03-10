@@ -5,6 +5,8 @@ interface LogoProps {
   className?: string;
   /** Ambient connection state drives pulse colour, speed, and presence. */
   connectionState?: ConnectionState;
+  /** In light mode the wordmark renders black; orb colours are unaffected. */
+  theme?: 'light' | 'dark';
 }
 
 const STATE_CONFIG: Record<ConnectionState, {
@@ -23,14 +25,17 @@ const STATE_CONFIG: Record<ConnectionState, {
   disconnected: { color: 'bg-cyan-400',   glowColor: 'bg-cyan-400/10',   glowRgba: '34,211,238',  duration: '2s', scale: '1',   opacity: '0',   pulse: false, tooltip: 'Fleet connection lost' },
 };
 
-const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconnected' }) => {
+const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconnected', theme }) => {
   const cfg = STATE_CONFIG[connectionState];
   const active = connectionState !== 'disconnected';
+  // Wordmark text colour: black in light mode, white in dark/default.
+  // Orb dot and pulse rings are intentionally unaffected by theme.
+  const textCls = theme === 'light' ? 'text-black' : 'text-white';
 
   return (
     <div className={`flex items-center font-bold tracking-tight select-none ${className}`} title={cfg.tooltip}>
-      <span className="text-white">W</span>
-      <span className="relative inline-block text-white">
+      <span className={textCls}>W</span>
+      <span className={`relative inline-block ${textCls}`}>
         ı
         <div className="absolute top-[15%] left-1/2 -translate-x-1/2 flex items-center justify-center">
           {/* Core dot */}
@@ -63,7 +68,7 @@ const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconne
           />
         </div>
       </span>
-      <span className="text-white">cklee</span>
+      <span className={textCls}>cklee</span>
 
       <style>{`
         @keyframes wk-pulse {

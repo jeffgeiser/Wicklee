@@ -11,13 +11,14 @@ interface SidebarProps {
   onUserChange: (user: User) => void;
   onLogout: () => void;
   connectionState?: ConnectionState;
+  theme?: 'light' | 'dark';
   isLocalMode?: boolean;
   isLocalHost?: boolean;
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, connectionState = 'disconnected', isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, connectionState = 'disconnected', theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
   const permissions = usePermissions(currentUser);
 
   const items = [
@@ -41,7 +42,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   return (
     <aside className="hidden md:flex md:w-64 border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/50 flex-col transition-colors">
       <div className="p-6">
-        <Logo className="text-xl" connectionState={connectionState} />
+        <Logo className="text-xl" connectionState={connectionState} theme={theme} />
         <p className="mt-1 text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold px-0.5">
           Community Edition
         </p>
