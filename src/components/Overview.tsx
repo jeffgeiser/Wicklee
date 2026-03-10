@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Cpu, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, BotMessageSquare } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateIdleFleetCostPerDay, ELECTRICITY_RATE_USD_PER_KWH, WES_TOOLTIP } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateIdleFleetCostPerDay, ELECTRICITY_RATE_USD_PER_KWH, WES_TOOLTIP } from '../utils/efficiency';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -65,83 +65,90 @@ const fmtAgo = (ms: number): string => {
 
 // ── Compact inference + hardware summary for Fleet Overview expansions ────────
 // Full HardwareDetailPanel belongs in Node Registry only.
-// ── Intelligence Band — expanded row aligned to 5-col NodeRow grid ───────────
-// MODEL · TELEMETRY · METRICS columns map onto the same gridTemplateColumns
-// so visual alignment is exact with the collapsed header above.
+// ── Shared grid template: 7 cols — collapsed NodeRow + IntelligenceBand ───────
+// Col 1: status+ID  Col 2: hostname  Col 3: chip/identity(flex)
+// Col 4: thermal    Col 5: tok/s     Col 6: WES/efficiency  Col 7: chevron
+// Both components use this template so expanded values align to collapsed cols.
+const NODE_ROW_COLS = '7.5rem 6.5rem minmax(0,1fr) 76px 84px 68px 16px';
+
+// Shared micro-label used in both IntelligenceBand and future cells
+const ML: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none mb-0.5">
+    {children}
+  </p>
+);
+
+// ── Intelligence Band — expanded section, 7-col grid aligned to NodeRow ───────
+// Each column has a micro-label + value so data lines up with collapsed header.
 const IntelligenceBand: React.FC<{ m: SentinelMetrics; pue: number }> = ({ m, pue }) => {
   const ollamaTps   = m.ollama_tokens_per_second;
   const totalPowerW = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
   const hasPower    = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
   const wPer1kStr   = ollamaTps != null && ollamaTps > 0 && hasPower
-    ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)} W/1k` : null;
-  const wes = computeWES(ollamaTps, hasPower ? totalPowerW : null, m.thermal_state, pue);
-
+    ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)}` : null;
   const gpuPct = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent;
-  const memGB  = (m.used_memory_mb / 1024).toFixed(1);
 
-  const MicroLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none mb-1">{children}</p>
-  );
+  const VAL = 'text-xs font-mono tabular-nums text-gray-700 dark:text-gray-300';
+  const MUTED = 'text-xs font-mono tabular-nums text-gray-500';
 
   return (
     <div
       className="grid items-start gap-x-3 py-2.5 border-b border-gray-100 dark:border-gray-800"
       style={{ gridTemplateColumns: NODE_ROW_COLS }}
     >
-      {/* Cols 1+2 — MODEL: name + quantization badge */}
-      <div className="col-span-2 flex flex-col justify-center min-w-0 pr-2">
-        <MicroLabel>Model</MicroLabel>
-        {m.ollama_running ? (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] font-medium text-gray-700 dark:text-gray-300 truncate">
-              {m.ollama_active_model ?? 'no model loaded'}
-            </span>
-            {m.ollama_quantization && (
-              <span className="text-[9px] font-semibold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded shrink-0">
-                {m.ollama_quantization}
-              </span>
-            )}
-            {m.ollama_model_size_gb != null && (
-              <span className="text-[10px] text-gray-500 shrink-0">{m.ollama_model_size_gb.toFixed(1)} GB</span>
-            )}
-          </div>
+      {/* Col 1 — Model name (aligns with node ID) */}
+      <div className="flex flex-col min-w-0">
+        <ML>Model</ML>
+        <span className={`${VAL} font-medium truncate`}>
+          {m.ollama_running ? (m.ollama_active_model ?? 'no model') : 'no runtime'}
+        </span>
+      </div>
+
+      {/* Col 2 — Quantization (aligns with hostname) */}
+      <div className="flex flex-col min-w-0">
+        <ML>Quant</ML>
+        {m.ollama_quantization ? (
+          <span className="text-xs font-semibold font-mono text-indigo-400 truncate">
+            {m.ollama_quantization}
+          </span>
         ) : (
-          <span className="text-[11px] text-gray-600">no runtime</span>
+          <span className={MUTED}>—</span>
         )}
       </div>
 
-      {/* Col 3 — TELEMETRY: CPU | GPU | MEM | CORES */}
-      <div className="flex flex-col justify-center text-right">
-        <MicroLabel>Telemetry</MicroLabel>
-        <div className="flex items-center justify-end gap-1 text-[10px] font-mono flex-wrap">
-          <span className="text-gray-300 dark:text-gray-200 tabular-nums">{m.cpu_usage_percent.toFixed(0)}%</span>
-          {gpuPct != null && (
-            <><span className="text-gray-600">|</span><span className="text-gray-300 dark:text-gray-200 tabular-nums">{gpuPct.toFixed(0)}%</span></>
-          )}
-          <span className="text-gray-600">|</span>
-          <span className="text-gray-300 dark:text-gray-200 tabular-nums">{memGB}G</span>
-          <span className="text-gray-600">|</span>
-          <span className="text-gray-500 tabular-nums">{m.cpu_core_count}c</span>
-        </div>
+      {/* Col 3 — Model size GB (aligns with chip col, flex) */}
+      <div className="flex flex-col min-w-0">
+        <ML>Size</ML>
+        <span className={m.ollama_model_size_gb != null ? MUTED : `${MUTED} opacity-40`}>
+          {m.ollama_model_size_gb != null ? `${m.ollama_model_size_gb.toFixed(1)} GB` : '—'}
+        </span>
       </div>
 
-      {/* Cols 4+5 — METRICS: W/1k (raw) + WES (normalized) */}
-      <div className="col-span-2 flex flex-col justify-center items-end">
-        <MicroLabel>Metrics</MicroLabel>
-        <div className="flex items-center gap-2">
-          {wPer1kStr && (
-            <span className="text-[10px] text-gray-500 font-mono tabular-nums">{wPer1kStr}</span>
-          )}
-          <span
-            className={`text-[11px] font-bold font-mono tabular-nums ${wesColorClass(wes)}`}
-            title={WES_TOOLTIP}
-          >
-            WES {formatWES(wes)}
-          </span>
-        </div>
+      {/* Col 4 — CPU / GPU util (aligns with thermal col) */}
+      <div className="flex flex-col text-right">
+        <ML>CPU{gpuPct != null ? ' / GPU' : ''}</ML>
+        <span className={VAL}>
+          {m.cpu_usage_percent.toFixed(0)}%{gpuPct != null ? ` / ${gpuPct.toFixed(0)}%` : ''}
+        </span>
       </div>
 
-      {/* Spacer — aligns with chevron column */}
+      {/* Col 5 — tok/s (aligns with throughput col) */}
+      <div className="flex flex-col text-right">
+        <ML>tok/s</ML>
+        <span className={ollamaTps != null ? 'text-xs font-mono tabular-nums text-green-400' : MUTED}>
+          {ollamaTps != null ? ollamaTps.toFixed(1) : '—'}
+        </span>
+      </div>
+
+      {/* Col 6 — W/1k (aligns with WES/efficiency col) */}
+      <div className="flex flex-col text-right">
+        <ML>W / 1k</ML>
+        <span className={wPer1kStr != null ? MUTED : `${MUTED} opacity-40`}>
+          {wPer1kStr ?? '—'}
+        </span>
+      </div>
+
+      {/* Col 7 — spacer (aligns with chevron) */}
       <div />
     </div>
   );
@@ -157,10 +164,6 @@ interface NodeRowProps {
   pue?: number;
 }
 
-// Shared column template — used by both the collapsed header and the IntelligenceBand
-// so that all columns visually align when expanded.
-const NODE_ROW_COLS = '7.5rem minmax(0,1fr) 80px 92px 68px 16px';
-
 const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs: ls, defaultOpen = false, pue = 1.0 }) => {
   const [open, setOpen] = useState(defaultOpen);
 
@@ -171,10 +174,13 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
   const chipName   = m?.gpu_name ?? m?.chip_name ?? null;
   const tps        = m?.ollama_tokens_per_second ?? null;
 
-  // Efficiency column — WES with adjusted watts (pue already in computeWES)
+  // WES for efficiency column
   const totalPowerW = m ? (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0) : 0;
   const hasPower    = m ? (m.cpu_power_w != null || m.nvidia_power_draw_w != null) : false;
   const wes         = computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue);
+
+  // Uniform text size for all row values (node ID, hostname, chip, thermal, tok/s, WES)
+  const ROW_VAL = 'text-xs font-mono tabular-nums';
 
   return (
     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900">
@@ -186,68 +192,70 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
         {/* Col 1 — Status dot + Node ID */}
         <div className="flex items-center gap-2 min-w-0">
           <span className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`} />
-          <span className="text-[11px] font-bold font-mono text-gray-900 dark:text-white truncate">{nodeId}</span>
+          <span className={`${ROW_VAL} font-bold text-gray-900 dark:text-white truncate`}>{nodeId}</span>
         </div>
 
-        {/* Col 2 — Hostname + chip type (identity) */}
-        <div className="flex items-center gap-1.5 min-w-0">
-          {hostname !== nodeId && (
-            <span className="text-xs text-gray-500 truncate">{hostname}</span>
+        {/* Col 2 — Hostname: fixed-width so chip always starts at same x-position */}
+        <div className="min-w-0">
+          {hostname !== nodeId ? (
+            <span className={`${ROW_VAL} text-gray-500 block truncate`}>{hostname}</span>
+          ) : (
+            <span />
           )}
+        </div>
+
+        {/* Col 3 — Chip / processor type: same font size as nodeId and hostname */}
+        <div className="min-w-0">
           {chipName && (
-            <span className="text-[10px] text-indigo-400/80 truncate shrink-0">· {chipName}</span>
+            <span className={`${ROW_VAL} text-indigo-400/80 block truncate`}>{chipName}</span>
           )}
         </div>
 
-        {/* Col 3 — Thermal: stacked micro-label + state value */}
+        {/* Col 4 — Thermal state (no label, same size as other values) */}
         <div className="text-right">
           {isOnline ? (
-            <>
-              <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none mb-0.5">Thermal</p>
-              <p className={`text-[11px] font-semibold leading-tight ${thermalStr ? thermalCls : 'text-gray-500 dark:text-gray-600'}`}>
-                {thermalStr ?? '—'}
-              </p>
-            </>
+            <span className={`${ROW_VAL} font-semibold ${thermalStr ? thermalCls : 'text-gray-500 dark:text-gray-600'}`}>
+              {thermalStr ?? '—'}
+            </span>
           ) : ls ? (
-            <span className="text-[10px] text-gray-500">{fmtAgo(ls)}</span>
+            <span className={`${ROW_VAL} text-gray-500`}>{fmtAgo(ls)}</span>
           ) : (
-            <span className="text-[10px] text-gray-500">—</span>
+            <span className={`${ROW_VAL} text-gray-500`}>—</span>
           )}
         </div>
 
-        {/* Col 4 — Throughput: tok/s + 2px pulsing cyan dot when sampling */}
+        {/* Col 5 — Throughput: tok/s + pulsing cyan dot when sampling */}
         <div className="text-right">
           {isOnline ? (
             tps != null ? (
               <div className="flex items-center justify-end gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shrink-0" />
-                <span className="text-xs font-bold tabular-nums font-mono text-green-400">{tps.toFixed(1)}</span>
-                <span className="text-[10px] text-gray-500">t/s</span>
+                <span className={`${ROW_VAL} font-bold text-green-400`}>{tps.toFixed(1)} t/s</span>
               </div>
             ) : (
-              <span className="text-[10px] text-gray-500">no infer.</span>
+              <span className={`${ROW_VAL} text-gray-500`}>no infer.</span>
             )
           ) : (
-            <span className="text-[10px] text-gray-500">offline</span>
+            <span className={`${ROW_VAL} text-gray-500`}>offline</span>
           )}
         </div>
 
-        {/* Col 5 — Efficiency: WES score + facility (PUE) indicator */}
+        {/* Col 6 — WES: "WES X.X" prefix + number, no label, same size as thermal */}
         <div className="text-right">
           {isOnline && wes != null ? (
             <div className="flex flex-col items-end gap-0.5">
               <span
-                className={`text-xs font-bold tabular-nums font-mono ${wesColorClass(wes)}`}
+                className={`${ROW_VAL} font-semibold ${wesColorClass(wes)}`}
                 title={WES_TOOLTIP}
               >
-                {formatWES(wes)}
+                WES {formatWES(wes)}
               </span>
               {pue > 1.0 && (
                 <span className="text-[8px] tabular-nums text-amber-500/60 leading-none">PUE {pue.toFixed(1)}</span>
               )}
             </div>
           ) : isOnline ? (
-            <span className="text-[10px] text-gray-600 dark:text-gray-700">—</span>
+            <span className={`${ROW_VAL} text-gray-600 dark:text-gray-700`}>—</span>
           ) : null}
         </div>
 
@@ -553,12 +561,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     : fleetHealthPct >= 75                             ? 'text-amber-600 dark:text-amber-500'
     :                                                    'text-red-600 dark:text-red-500';
 
-  // Tile 3 — TOTAL VRAM: NVIDIA dedicated + Apple Silicon unified memory
-  const totalVramMb    = calculateTotalVramMb(effectiveMetrics);
-  const hasNvidiaNodes = effectiveMetrics.some(m => m.nvidia_vram_used_mb != null);
-  const hasUnifiedOnly = effectiveMetrics.length > 0 && !hasNvidiaNodes;
-  const vramSubLabel   = hasNvidiaNodes && !hasUnifiedOnly ? 'GPU VRAM'
-    : hasUnifiedOnly ? 'unified memory' : 'VRAM + unified';
+  // Tile 3 — TOTAL FLEET VRAM: utilization % + used / capacity
+  const totalVramMb         = calculateTotalVramMb(effectiveMetrics);
+  const totalVramCapacityMb = calculateTotalVramCapacityMb(effectiveMetrics);
+  const vramUtilPct         = totalVramCapacityMb > 0
+    ? Math.round((totalVramMb / totalVramCapacityMb) * 100) : null;
+  const vramUsedGB     = (totalVramMb / 1024).toFixed(1);
+  const vramCapacityGB = (totalVramCapacityMb / 1024).toFixed(1);
 
   // Tile 4 — FLEET NODES: online / total
   const fleetLiveCount  = effectiveMetrics.length;
@@ -658,12 +667,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           iconCls="text-amber-400"
         />
 
-        {/* 3. TOTAL VRAM */}
+        {/* 3. TOTAL FLEET VRAM */}
         <InsightTile
-          label="Total VRAM"
-          value={effectiveMetrics.length > 0 ? `${(totalVramMb / 1024).toFixed(1)} GB` : '—'}
-          valueCls={effectiveMetrics.length === 0 ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={effectiveMetrics.length > 0 ? vramSubLabel : undefined}
+          label="Total Fleet VRAM"
+          value={vramUtilPct != null ? `${vramUtilPct}%` : effectiveMetrics.length > 0 ? `${vramUsedGB} GB` : '—'}
+          valueCls={vramUtilPct == null && effectiveMetrics.length === 0 ? 'text-gray-400 dark:text-gray-600' : undefined}
+          sub={vramUtilPct != null ? `${vramUsedGB} / ${vramCapacityGB} GB` : vramUtilPct == null && effectiveMetrics.length > 0 ? `${vramUsedGB} GB used` : undefined}
           icon={Database}
           iconCls="text-blue-400"
         />
