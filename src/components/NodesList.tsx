@@ -102,12 +102,12 @@ const SovereigntyBadge: React.FC<{ sovereign: boolean }> = ({ sovereign }) => (
   sovereign ? (
     <div className="flex items-center gap-1" title={SOVEREIGNTY_TOOLTIP}>
       <Lock size={10} className="text-green-500 shrink-0" />
-      <span className="text-[10px] font-semibold font-mono text-green-600 dark:text-green-500">Sovereign</span>
+      <span className="text-xs font-semibold font-telin text-green-600 dark:text-green-500">Sovereign</span>
     </div>
   ) : (
     <div className="flex items-center gap-1" title="Paired to wicklee.dev fleet">
       <Cloud size={10} className="text-indigo-400 shrink-0" />
-      <span className="text-[10px] font-semibold font-mono text-indigo-400">Paired</span>
+      <span className="text-xs font-semibold font-telin text-indigo-400">Paired</span>
     </div>
   )
 );
@@ -148,7 +148,6 @@ const ComplianceBand: React.FC<{
       <div>
         <ML>Destination</ML>
         <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate" title={destination}>{destination}</p>
-        <p className="text-[9px] text-gray-500 mt-0.5">{sovereign ? 'local agent' : 'fleet relay'}</p>
       </div>
 
       {/* Pairing Log */}
@@ -199,7 +198,7 @@ const ComplianceBand: React.FC<{
 
 // ── Shared CSS grid template for registry rows + compliance band ───────────────
 // checkbox | status+ID | hostname | chip(flex) | compliance | uptime | WES | chevron
-const REGISTRY_ROW_COLS = '1.25rem 7.5rem 6.5rem minmax(0,1fr) 72px 72px 68px 16px';
+const REGISTRY_ROW_COLS = '1.25rem 7.5rem 6.5rem minmax(0,1fr) 72px 72px 16px';
 
 // ── Collapsible registry row ──────────────────────────────────────────────────
 
@@ -291,20 +290,6 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({
             </span>
           ) : ls ? (
             <span className={`${ROW_VAL} text-gray-500`}>{fmtAgo(ls)}</span>
-          ) : (
-            <span className={`${ROW_VAL} text-gray-600`}>—</span>
-          )}
-        </div>
-
-        {/* Col 7 — Efficiency: live WES (7-day avg when history available) */}
-        <div className="text-right">
-          {isLive && wes != null ? (
-            <span
-              className={`${ROW_VAL} font-semibold ${wesColorClass(wes)}`}
-              title={WES_TOOLTIP}
-            >
-              WES {formatWES(wes)}
-            </span>
           ) : (
             <span className={`${ROW_VAL} text-gray-600`}>—</span>
           )}
@@ -517,7 +502,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
           <button
             onClick={() => setLocalExpanded(o => !o)}
             className="w-full grid items-center gap-x-3 px-5 py-4 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
-            style={{ gridTemplateColumns: '7.5rem 6.5rem minmax(0,1fr) 72px 72px 68px 16px' }}
+            style={{ gridTemplateColumns: '7.5rem 6.5rem minmax(0,1fr) 72px 72px 16px' }}
           >
             {/* Status + ID */}
             <div className="flex items-center gap-2 min-w-0">
@@ -543,20 +528,6 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
             {/* Uptime */}
             <div className="text-right">
               <span className="text-xs font-mono tabular-nums text-gray-500">{connected ? 'live' : '—'}</span>
-            </div>
-            {/* WES */}
-            <div className="text-right">
-              {(() => {
-                if (!m) return <span className="text-xs font-telin text-gray-600">—</span>;
-                const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
-                const hasPwr = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
-                const wes = computeWES(m.ollama_tokens_per_second ?? null, hasPwr ? watts : null, m.thermal_state, nodePueSettings?.[m.node_id] ?? 1.0);
-                return wes != null ? (
-                  <span className={`text-xs font-telin font-semibold ${wesColorClass(wes)}`} title={WES_TOOLTIP}>
-                    WES {formatWES(wes)}
-                  </span>
-                ) : <span className="text-xs font-telin text-gray-600">—</span>;
-              })()}
             </div>
             <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${localExpanded ? 'rotate-180' : ''}`} />
           </button>
@@ -823,7 +794,6 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, nodePueSettings, onUpdateN
         <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-500">Processor</p>
         <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-500">Compliance</p>
         <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-500 text-right">Uptime</p>
-        <p className="text-[8px] font-semibold uppercase tracking-widest text-gray-500 text-right">WES (live)</p>
         <div />
       </div>
 

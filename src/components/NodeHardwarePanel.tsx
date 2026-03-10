@@ -256,27 +256,6 @@ export const HardwareDetailPanel: React.FC<{
         </div>
       )}
 
-      {/* ── Hardware summary — compact inline row ──────────────────────────── */}
-      <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400 py-2 border-b border-gray-100 dark:border-gray-800">
-        <span className="shrink-0">CPU <span className="font-semibold text-gray-900 dark:text-gray-200">{cpuPct}</span></span>
-        {effectiveGpuStr && (
-          <>
-            <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
-            <span className="shrink-0">GPU <span className="font-semibold text-gray-900 dark:text-gray-200">{effectiveGpuStr}</span></span>
-          </>
-        )}
-        <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
-        <span className="shrink-0">Mem <span className="font-semibold text-gray-900 dark:text-gray-200">{memUsed}</span></span>
-        {thermalLabel && (
-          <>
-            <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
-            <span className={`font-semibold shrink-0 ${thermalClass}`}>{thermalLabel}</span>
-          </>
-        )}
-        <span className="text-gray-300 dark:text-gray-700 shrink-0">·</span>
-        <span className="shrink-0"><span className="font-semibold text-gray-900 dark:text-gray-200">{coreCount}</span></span>
-      </div>
-
       {/* ── Expand hardware toggle ──────────────────────────────────────────── */}
       <button
         onClick={() => setHardwareOpen(o => !o)}
