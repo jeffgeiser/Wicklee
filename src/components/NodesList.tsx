@@ -86,17 +86,13 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
           {isLive ? 'Online' : ls ? fmtAgo(ls) : 'Offline'}
         </span>
 
-        {/* Quick stats */}
-        <div className="flex-1 flex items-center gap-4 justify-end text-[11px] text-gray-500 dark:text-gray-400 font-mono">
-          <span>CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
-          <span className="hidden sm:inline">
-            Power: <span className="text-gray-700 dark:text-gray-300 font-semibold">{powerStr}</span>
-          </span>
-          <span className="hidden sm:inline">
-            Thermal: <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span>
-          </span>
-          {tps != null && (
-            <span className="hidden md:inline text-indigo-400 font-semibold">{tps.toFixed(1)} tok/s</span>
+        {/* Quick stats — thermal + inference throughput (CPU/Power/Mem available on expand) */}
+        <div className="flex-1 flex items-center gap-3 justify-end font-mono">
+          <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
+          {tps != null ? (
+            <span className="text-green-400 font-bold text-sm">{tps.toFixed(1)} tok/s</span>
+          ) : (
+            <span className="text-[10px] text-gray-600 hidden sm:inline font-sans tracking-wide">no inference</span>
           )}
         </div>
 
