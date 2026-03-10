@@ -44,11 +44,11 @@ export const SentinelCard: React.FC<{
 );
 
 // ── Internal: borderless vital stat for the top rail ──────────────────────────
-const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; note?: string }> = ({ label, value, valueCls, note }) => (
+// title prop surfaces footnotes as a tooltip on the label (avoids per-card repetition)
+const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; title?: string }> = ({ label, value, valueCls, title }) => (
   <div className="min-w-0">
-    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">{label}</p>
+    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1" title={title}>{label}</p>
     <p className={`text-lg font-bold leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
-    {note && <p className="text-[9px] text-gray-500 mt-0.5">{note}</p>}
   </div>
 );
 
@@ -90,9 +90,9 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
 
   const effectiveGpuStr = nvidiaGpuStr ?? gpuUtilStr;
 
-  const memUtilStr    = m.total_memory_mb > 0 ? `${Math.round((m.used_memory_mb / m.total_memory_mb) * 100)}%*` : null;
+  const memUtilStr    = m.total_memory_mb > 0 ? `${Math.round((m.used_memory_mb / m.total_memory_mb) * 100)}%` : null;
   const effectiveMemStr   = memPressStr ?? memUtilStr;
-  const effectiveMemLabel = memPressStr != null ? 'Mem Pressure' : 'Mem Util*';
+  const effectiveMemLabel = memPressStr != null ? 'Mem Pressure' : 'Mem Util';
 
   // Ollama wattage
   const ollamaTps    = m.ollama_tokens_per_second;
@@ -111,7 +111,7 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
         <VitalStat
           label={effectiveMemLabel}
           value={effectiveMemStr ?? '—'}
-          note={effectiveMemStr === memUtilStr && memUtilStr ? '* util, not pressure' : undefined}
+          title={memPressStr == null && memUtilStr != null ? 'Approximate utilization ratio (used ÷ total RAM) — not true memory pressure' : undefined}
         />
         <VitalStat label={thermalTitle} value={thermalLabel ?? '—'} valueCls={thermalClass} />
         <VitalStat label="Cores"        value={`${m.cpu_core_count}`} />
