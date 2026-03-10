@@ -222,9 +222,9 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
 
       </div>
 
-      {/* ── Idle inference placeholder (replaced in change 2) ─────────────── */}
+      {/* ── Idle inference band — intentional empty state ─────────────────── */}
       {!m.ollama_running && (
-        <div className="flex items-center gap-2 pt-3 border-t border-gray-100 dark:border-gray-800/40">
+        <div className="border border-dashed border-gray-200 dark:border-gray-700/60 rounded-xl px-4 min-h-[68px] flex items-center gap-2">
           <BotMessageSquare size={12} className="text-gray-600 shrink-0" />
           <p className="text-[11px] text-gray-600">
             Ollama not detected —{' '}
