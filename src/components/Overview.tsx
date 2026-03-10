@@ -545,30 +545,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     <div className="space-y-6">
       {/* ── Fleet stat cards ─────────────────────────────────────────────────── */}
       <div className="space-y-3">
-        {/* Primary tier: WES + Throughput — visually dominant */}
+        {/* Primary tier: Throughput (hero) + Fleet Avg WES */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <PrimaryStatCard
-            title={<span title="Wicklee Efficiency Score — tok/s ÷ (Watts × ThermalPenalty × PUE). Higher is better.">Fleet Avg WES</span>}
-            value={
-              <div>
-                <p className={`text-3xl font-bold ${wesColorClass(fleetAvgWES)}`}>
-                  {formatWES(fleetAvgWES)}
-                </p>
-                <p className="text-[11px] text-gray-500 font-medium mt-1">
-                  {fleetAvgWES != null
-                    ? `avg across ${rankedWES.length} active node${rankedWES.length !== 1 ? 's' : ''}`
-                    : wesEntries.length > 0 ? 'no active inference' : 'connect inference runtime'}
-                </p>
-              </div>
-            }
-            icon={Zap}
-            color="bg-amber-500"
-          />
           <PrimaryStatCard
             title="Throughput"
             value={
               <div>
-                <p className="text-3xl font-bold text-gray-900 dark:text-white">
+                <p className="text-3xl font-bold text-gray-900 dark:text-white tabular-nums">
                   {fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '—'}
                 </p>
                 <p className="text-[11px] text-gray-500 font-medium mt-1">
@@ -580,6 +563,23 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
             }
             icon={Gauge}
             color="bg-indigo-500"
+          />
+          <PrimaryStatCard
+            title={<span title="Wicklee Efficiency Score — tok/s ÷ (Watts × ThermalPenalty × PUE). Higher is better.">Fleet Avg WES</span>}
+            value={
+              <div>
+                <p className={`text-3xl font-bold tabular-nums ${wesColorClass(fleetAvgWES)}`}>
+                  {formatWES(fleetAvgWES)}
+                </p>
+                <p className="text-[11px] text-gray-500 font-medium mt-1">
+                  {fleetAvgWES != null
+                    ? `avg across ${rankedWES.length} active node${rankedWES.length !== 1 ? 's' : ''}`
+                    : wesEntries.length > 0 ? 'no active inference' : 'connect inference runtime'}
+                </p>
+              </div>
+            }
+            icon={Zap}
+            color="bg-amber-500"
           />
         </div>
 
