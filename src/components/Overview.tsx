@@ -1074,11 +1074,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
                   {/* WES */}
                   <div className="w-16 text-right">
                     {entry.wes != null ? (
-                      <p className={`text-sm font-bold tabular-nums ${wesColorClass(entry.wes)}`}>
+                      <p className={`text-sm font-bold font-mono tabular-nums ${wesColorClass(entry.wes)}`} title={WES_TOOLTIP}>
                         {formatWES(entry.wes)}
                       </p>
                     ) : (
-                      <p className="text-sm text-gray-600 tabular-nums" title={entry.nullReason}>—</p>
+                      <p className="text-sm text-gray-600 font-mono tabular-nums" title={entry.nullReason}>—</p>
                     )}
                     {entry.wes == null && entry.nullReason && (
                       <p className="text-[9px] text-gray-600 leading-none">{entry.nullReason}</p>
@@ -1087,14 +1087,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
                   {/* tok/s */}
                   <div className="w-16 text-right hidden sm:block">
-                    <p className={`text-xs tabular-nums ${entry.tps != null ? 'text-green-400' : 'text-gray-600'}`}>
+                    <p className={`text-xs font-mono tabular-nums ${entry.tps != null ? 'text-green-400' : 'text-gray-600'}`}>
                       {entry.tps != null ? `${entry.tps.toFixed(1)}` : '—'}
                     </p>
                   </div>
 
                   {/* Watts */}
                   <div className="w-14 text-right hidden sm:block">
-                    <p className="text-xs tabular-nums text-gray-400">
+                    <p className="text-xs font-mono tabular-nums text-gray-400">
                       {entry.watts != null ? `${entry.watts.toFixed(1)}W` : '—'}
                     </p>
                   </div>
