@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Settings, Zap, MapPin, Check, X } from 'lucide-react';
+import { Settings, Zap, MapPin, Check, X, ChevronDown } from 'lucide-react';
 import type { NodeAgent } from '../types';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
@@ -46,7 +46,7 @@ const FieldLabel: React.FC<{ children: React.ReactNode; helper?: string }> = ({ 
 // ── Shared input classes ──────────────────────────────────────────────────────
 
 const INPUT_BASE =
-  'bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-1.5 text-sm font-telin text-gray-900 dark:text-white focus:outline-none focus:border-indigo-500/60 focus:ring-1 focus:ring-indigo-500/30 transition-colors';
+  'h-9 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 text-sm font-telin text-gray-900 dark:text-white focus:outline-none focus:border-indigo-500/60 focus:ring-1 focus:ring-indigo-500/30 transition-colors';
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
@@ -136,15 +136,18 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             {/* Currency */}
             <div className="space-y-1.5">
               <FieldLabel>Currency</FieldLabel>
-              <select
-                value={settings.fleet.currency}
-                onChange={e => updateFleet({ currency: e.target.value as FleetSettings['currency'] })}
-                className={`${INPUT_BASE} w-full`}
-              >
-                {CURRENCY_OPTIONS.map(c => (
-                  <option key={c.value} value={c.value}>{c.label}</option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  value={settings.fleet.currency}
+                  onChange={e => updateFleet({ currency: e.target.value as FleetSettings['currency'] })}
+                  className={`${INPUT_BASE} w-full appearance-none pr-7`}
+                >
+                  {CURRENCY_OPTIONS.map(c => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+                <ChevronDown size={12} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              </div>
             </div>
 
             {/* PUE */}
@@ -371,17 +374,18 @@ const NodeOverrideRow: React.FC<{
 
       {/* Currency */}
       <td className="px-3 py-2.5">
-        <div className={eff.currencyOverride ? overrideCls : undefined}>
+        <div className={`relative ${eff.currencyOverride ? overrideCls : ''}`}>
           <select
             value={ov.currency ?? ''}
             onChange={e => onOverride({ currency: e.target.value as NodeOverride['currency'] || undefined })}
-            className={`${cellInput} appearance-none cursor-pointer`}
+            className={`${cellInput} appearance-none cursor-pointer pr-5`}
           >
             <option value="">{fleetSettings.currency} (fleet)</option>
             {CURRENCY_OPTIONS.map(c => (
               <option key={c.value} value={c.value}>{c.value}</option>
             ))}
           </select>
+          <ChevronDown size={10} className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-gray-400" />
         </div>
       </td>
 
