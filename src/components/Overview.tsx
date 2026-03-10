@@ -136,7 +136,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
 
   const isOnline   = m !== null;
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
-  const thermalStr = m?.thermal_state ?? nvThermal?.label ?? '—';
+  const thermalStr = m?.thermal_state ?? nvThermal?.label ?? null;
   const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
   const chipName   = m?.gpu_name ?? m?.chip_name ?? null;
   const tps        = m?.ollama_tokens_per_second ?? null;
@@ -167,7 +167,7 @@ const NodeRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSee
         <div className="flex items-center gap-3 shrink-0">
           {isOnline ? (
             <>
-              <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>
+              {thermalStr && <span className={`text-[11px] font-semibold hidden sm:inline ${thermalCls}`}>{thermalStr}</span>}
               {tps != null ? (
                 <span className="text-green-400 font-bold text-sm tabular-nums">{tps.toFixed(1)} tok/s</span>
               ) : (
