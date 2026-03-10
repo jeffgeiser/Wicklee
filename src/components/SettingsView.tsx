@@ -195,10 +195,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 dark:border-gray-800">
-                  <th className="text-left px-4 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-24">Node ID</th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-24">Hostname</th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-[180px]">Location Label</th>
-                  <th className="text-right px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-32">
+                  <th className="text-left px-4 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Node ID</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
+                  <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Location Label</th>
+                  <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
                     <div>kWh Rate</div>
                     <ClearColumnButton
                       label="Set all to fleet default"
@@ -209,7 +209,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       onCancel={() => setConfirmClear(null)}
                     />
                   </th>
-                  <th className="text-left px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-28">
+                  <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-28">
                     <div>Currency</div>
                     <ClearColumnButton
                       label="Set all to fleet default"
@@ -220,7 +220,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       onCancel={() => setConfirmClear(null)}
                     />
                   </th>
-                  <th className="text-right px-3 py-3 text-[9px] font-semibold uppercase tracking-widest text-gray-500 w-24">
+                  <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">
                     <div>PUE</div>
                     <ClearColumnButton
                       label="Set all to fleet default"
