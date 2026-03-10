@@ -64,7 +64,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
       >
         <span className={`shrink-0 w-2 h-2 rounded-full ${isLive ? 'bg-green-500' : 'bg-gray-500'}`} />
 
@@ -207,7 +207,7 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
           <button
             onClick={() => setLocalExpanded(o => !o)}
-            className="w-full flex items-center gap-3 px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+            className="w-full flex items-center gap-3 px-5 py-4 min-h-[44px] hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
           >
             <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
             <div className="min-w-0 flex-1">
