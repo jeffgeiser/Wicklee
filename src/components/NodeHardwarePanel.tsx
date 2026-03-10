@@ -266,7 +266,7 @@ export const HardwareDetailPanel: React.FC<{
           {/* ── Live metric clusters ─────────────────────────────────────────── */}
           <div className="grid grid-cols-3 gap-6">
 
-            {/* COMPUTE — live power only */}
+            {/* COMPUTE — live power + static core count */}
             <div>
               <ClusterLabel label="Compute" />
               <div className="space-y-2">
@@ -280,6 +280,7 @@ export const HardwareDetailPanel: React.FC<{
                   }
                   dim={!cpuPowerStr}
                 />
+                <HudTile label="Core Count" value={coreCount} />
               </div>
             </div>
 

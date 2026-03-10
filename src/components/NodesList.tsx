@@ -128,13 +128,7 @@ const ComplianceBand: React.FC<{
   );
 
   return (
-    <div className="border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 mb-3 grid grid-cols-6 gap-4 bg-gray-50/30 dark:bg-gray-800/20">
-      {/* Destination */}
-      <div>
-        <ML>Destination</ML>
-        <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate" title={destination}>{destination}</p>
-      </div>
-
+    <div className="border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 mb-3 grid grid-cols-5 gap-4 bg-gray-50/30 dark:bg-gray-800/20">
       {/* Pairing Log */}
       <div>
         <ML>Pairing Log</ML>
