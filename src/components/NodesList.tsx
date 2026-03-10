@@ -222,11 +222,11 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
                 <p className="text-[10px] text-indigo-400/80 mt-0.5">{chipName}</p>
               )}
               {!localExpanded && m && (
-                <p className="text-[11px] font-mono text-gray-500 mt-1">
-                  <span className="mr-3">CPU: <span className="text-gray-700 dark:text-gray-300 font-semibold">{cpuStr}</span></span>
-                  <span className="mr-3">Power: <span className="text-gray-700 dark:text-gray-300 font-semibold">{powerStr}</span></span>
-                  <span className="mr-3">Thermal: <span className={`font-semibold ${thermalCls}`}>{thermalStr}</span></span>
-                  {tps != null && <span className="text-indigo-400 font-semibold">{tps.toFixed(1)} tok/s</span>}
+                <p className="text-[11px] mt-1 flex items-center gap-3">
+                  <span className={`font-semibold font-mono ${thermalCls}`}>{thermalStr}</span>
+                  {tps != null
+                    ? <span className="text-green-400 font-bold">{tps.toFixed(1)} tok/s</span>
+                    : <span className="text-gray-600 tracking-wide">no inference</span>}
                 </p>
               )}
             </div>
