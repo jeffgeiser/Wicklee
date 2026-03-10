@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { version } from '../package.json';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff } from 'lucide-react';
 import { ConnectionState, DashboardTab, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
 import Sidebar from './components/Sidebar';
@@ -563,7 +564,7 @@ const App: React.FC = () => {
             )}
           </div>
           <div className="flex items-center gap-4">
-            <span className="mono">v0.4.2</span>
+            <span className="mono">v{version}</span>
             {isLocalHost && (
               <span className="flex items-center gap-1">
                 <Activity className="w-3 h-3" />

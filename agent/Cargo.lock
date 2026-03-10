@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "wicklee-agent"
-version = "0.1.0"
+version = "0.4.5"
 dependencies = [
  "axum",
  "mime_guess",
