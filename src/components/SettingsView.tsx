@@ -175,9 +175,17 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          <p className="text-[11px] text-gray-500 border-t border-gray-100 dark:border-gray-800 pt-4">
-            These values apply to all nodes. Override any setting per-node below for nodes in different locations or energy markets.
-          </p>
+          <div className="flex items-center justify-between border-t border-gray-100 dark:border-gray-800 pt-4">
+            <p className="text-[11px] text-gray-500">
+              These values apply to all nodes. Override any setting per-node below for nodes in different locations or energy markets.
+            </p>
+            {savedToast && (
+              <div className="flex items-center gap-1.5 shrink-0 ml-4 animate-in fade-in duration-200">
+                <Check size={11} className="text-green-400" />
+                <span className="text-[11px] font-medium text-green-400">Saved</span>
+              </div>
+            )}
+          </div>
         </div>
       </Section>
 
