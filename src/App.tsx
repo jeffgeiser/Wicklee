@@ -480,6 +480,7 @@ const App: React.FC = () => {
         onUserChange={setCurrentUser}
         onLogout={handleLogout}
         connectionState={connectionState}
+        theme={theme}
         isLocalMode={isLocalMode}
         isLocalHost={isLocalHost}
         pairingInfo={pairingInfo}
