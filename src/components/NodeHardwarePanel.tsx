@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle, ChevronDown } from 'lucide-react';
+import React from 'react';
+import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle } from 'lucide-react';
 import { SentinelMetrics } from '../types';
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from '../utils/wes';
 import { WES_TOOLTIP } from '../utils/efficiency';
@@ -73,7 +73,6 @@ export const HardwareDetailPanel: React.FC<{
   /** Effective PUE for this node (from settings). Used in WES display only. */
   pue?: number;
 }> = ({ metrics: m, pue = 1.0 }) => {
-  const [hardwareOpen, setHardwareOpen] = useState(false);
   const nvThermal    = m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalLabel = m.thermal_state ?? nvThermal?.label ?? null;
   const thermalClass = m.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
@@ -152,43 +151,47 @@ export const HardwareDetailPanel: React.FC<{
         <div className="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden">
 
           {/* Model identity row — WES badge inline on right */}
-          <div className="flex items-center gap-2 px-4 pt-3 pb-2.5 border-b border-gray-100 dark:border-gray-800 flex-wrap">
+          <div className="flex items-center gap-3 px-4 pt-3 pb-2.5 border-b border-gray-100 dark:border-gray-800 flex-wrap">
             <BotMessageSquare size={11} className="text-indigo-400 shrink-0" />
-            <span className="text-[9px] font-semibold text-indigo-400 uppercase tracking-widest leading-none">Ollama</span>
+            <span className="text-xs font-semibold text-indigo-400 uppercase tracking-widest leading-none">Ollama</span>
             {m.ollama_active_model ? (
               <>
-                <p className="text-xs text-gray-500 dark:text-gray-400 truncate leading-tight">{m.ollama_active_model}</p>
+                <span className="text-xs text-gray-400 dark:text-gray-600 select-none">·</span>
+                <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate leading-tight">{m.ollama_active_model}</p>
                 <div className="flex items-center gap-1.5 flex-wrap ml-auto shrink-0">
-                  {/* WES badge — compact secondary label */}
                   <span
-                    className={`text-[10px] font-semibold font-telin px-2 py-0.5 rounded cursor-default ${wesColor}`}
+                    className={`text-xs font-semibold font-telin px-2 py-0.5 rounded cursor-default ${wesColor}`}
                     title={wes == null ? wesNullTooltip : wesLabelTooltip}
                   >
                     WES {wesFormatted}{showAsterisk ? '*' : ''}
                     {showThermalWarning && <AlertTriangle size={8} className="inline ml-0.5 text-amber-400" title={thermalWarningTooltip} />}
                   </span>
-                  {(m.ollama_quantization || m.ollama_model_size_gb != null) && (
-                    <span className="text-[10px] text-gray-600 dark:text-gray-500">·</span>
-                  )}
                   {m.ollama_quantization && (
-                    <span className="text-[9px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                      {m.ollama_quantization}
-                    </span>
+                    <>
+                      <span className="text-xs text-gray-600 dark:text-gray-500 select-none">·</span>
+                      <span className="text-xs font-telin text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                        {m.ollama_quantization}
+                      </span>
+                    </>
                   )}
                   {m.ollama_model_size_gb != null && (
-                    <span className="text-[10px] text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
+                    <>
+                      <span className="text-xs text-gray-600 dark:text-gray-500 select-none">·</span>
+                      <span className="text-xs font-telin text-gray-500">{m.ollama_model_size_gb.toFixed(1)} GB</span>
+                    </>
                   )}
                 </div>
               </>
             ) : (
               <div className="flex items-center gap-1.5 ml-auto shrink-0">
                 <span
-                  className={`text-[10px] font-semibold font-telin px-2 py-0.5 rounded cursor-default ${wesColor}`}
+                  className={`text-xs font-semibold font-telin px-2 py-0.5 rounded cursor-default ${wesColor}`}
                   title={wesNullTooltip}
                 >
                   WES {wesFormatted}
                 </span>
-                <p className="text-xs text-gray-500">no model loaded</p>
+                <span className="text-xs text-gray-400 dark:text-gray-600 select-none">·</span>
+                <p className="text-xs font-telin text-gray-500">no model loaded</p>
               </div>
             )}
           </div>
@@ -241,83 +244,58 @@ export const HardwareDetailPanel: React.FC<{
         </div>
       )}
 
-      {/* ── Expand hardware toggle ──────────────────────────────────────────── */}
-      <button
-        onClick={() => setHardwareOpen(o => !o)}
-        className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
-      >
-        <ChevronDown className={`w-3 h-3 transition-transform duration-150 ${hardwareOpen ? 'rotate-180' : ''}`} />
-        {hardwareOpen ? 'hide hardware' : 'expand hardware'}
-      </button>
+      {/* ── Live metric clusters ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-6">
 
-      {hardwareOpen && (
-        <>
-          {/* ── Static specs line ───────────────────────────────────────────── */}
-          <p className="text-[10px] text-gray-500 dark:text-gray-400 pb-1">
-            <span className="font-semibold text-gray-900 dark:text-gray-300">{coreCount}</span>
-            {nvidiaVramTotal && (
-              <>
-                <span className="mx-1.5">·</span>
-                <span className="font-semibold text-gray-900 dark:text-gray-300">{nvidiaVramTotal.replace('of ', '')} VRAM</span>
-              </>
-            )}
-          </p>
-
-          {/* ── Live metric clusters ─────────────────────────────────────────── */}
-          <div className="grid grid-cols-3 gap-6">
-
-            {/* COMPUTE — live power + static core count */}
-            <div>
-              <ClusterLabel label="Compute" />
-              <div className="space-y-2">
-                <HudTile
-                  label="CPU Power"
-                  value={cpuPowerStr ?? '—'}
-                  sub={
-                    cpuPowerStr && m.ecpu_power_w != null && m.pcpu_power_w != null
-                      ? `E ${m.ecpu_power_w.toFixed(1)}W · P ${m.pcpu_power_w.toFixed(1)}W`
-                      : !cpuPowerStr ? 'requires elevated permissions' : undefined
-                  }
-                  dim={!cpuPowerStr}
-                />
-                <HudTile label="Core Count" value={coreCount} />
-              </div>
-            </div>
-
-            {/* MEMORY — live usage */}
-            <div>
-              <ClusterLabel label="Memory" />
-              <div className="space-y-2">
-                <HudTile label="Used"      value={memUsed} />
-                <HudTile label="Available" value={memAvail} />
-                {(memPressStr ?? memUtilStr) && (
-                  <HudTile
-                    label={memPressStr ? 'Pressure' : 'Util'}
-                    value={(memPressStr ?? memUtilStr)!}
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* GRAPHICS — live metrics */}
-            <div>
-              <ClusterLabel label="Graphics" />
-              <div className="space-y-2">
-                <HudTile
-                  label="GPU Util"
-                  value={effectiveGpuStr ?? '—'}
-                  dim={!effectiveGpuStr}
-                />
-                {nvidiaVramStr && <HudTile label="VRAM Used" value={nvidiaVramStr} />}
-                {nvidiaTempStr  && <HudTile label="GPU Temp"    value={nvidiaTempStr} />}
-                {nvidiaPowerStr && <HudTile label="Board Power" value={nvidiaPowerStr} />}
-              </div>
-            </div>
-
+        {/* COMPUTE — live power + static core count */}
+        <div>
+          <ClusterLabel label="Compute" />
+          <div className="space-y-2">
+            <HudTile
+              label="CPU Power"
+              value={cpuPowerStr ?? '—'}
+              sub={
+                cpuPowerStr && m.ecpu_power_w != null && m.pcpu_power_w != null
+                  ? `E ${m.ecpu_power_w.toFixed(1)}W · P ${m.pcpu_power_w.toFixed(1)}W`
+                  : !cpuPowerStr ? 'requires elevated permissions' : undefined
+              }
+              dim={!cpuPowerStr}
+            />
+            <HudTile label="Core Count" value={coreCount} />
           </div>
+        </div>
 
-        </>
-      )}
+        {/* MEMORY — live usage */}
+        <div>
+          <ClusterLabel label="Memory" />
+          <div className="space-y-2">
+            <HudTile label="Used"      value={memUsed} />
+            <HudTile label="Available" value={memAvail} />
+            {(memPressStr ?? memUtilStr) && (
+              <HudTile
+                label={memPressStr ? 'Pressure' : 'Util'}
+                value={(memPressStr ?? memUtilStr)!}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* GRAPHICS — live metrics */}
+        <div>
+          <ClusterLabel label="Graphics" />
+          <div className="space-y-2">
+            <HudTile
+              label="GPU Util"
+              value={effectiveGpuStr ?? '—'}
+              dim={!effectiveGpuStr}
+            />
+            {nvidiaVramStr && <HudTile label="VRAM Used" value={nvidiaVramStr} sub={nvidiaVramTotal ?? undefined} />}
+            {nvidiaTempStr  && <HudTile label="GPU Temp"    value={nvidiaTempStr} />}
+            {nvidiaPowerStr && <HudTile label="Board Power" value={nvidiaPowerStr} />}
+          </div>
+        </div>
+
+      </div>
 
     </div>
   );
