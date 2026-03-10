@@ -6,91 +6,283 @@
 
 ## The Problem
 
-Teams running local AI inference — Ollama, vLLM, custom stacks — are flying blind. Standard monitoring tools see CPU and RAM. They do not see GPU utilization, unified memory pressure, thermal state, or wattage-per-token. When a node overheats, degrades, or falls over, the operator finds out from a user, not a dashboard.
+Teams running local AI inference — Ollama, vLLM, custom stacks — are flying blind. Standard monitoring tools see CPU and RAM as separate, unrelated metrics. They don't see GPU utilization, unified memory pressure, thermal state, or wattage-per-token. More importantly, they don't own both sides simultaneously.
 
-Wicklee fixes this. It is a single Rust binary that runs on any inference node, surfaces the metrics that matter for AI workloads, and optionally connects to a hosted fleet view for multi-node management.
+A CPU monitor doesn't know your 70B model needs 40GB of unified memory and you have 2GB of headroom. A temperature monitor doesn't know the node running at 89°C has silently dropped 35% tok/s due to throttling. A power meter doesn't know which of your three nodes is cheapest per token right now.
+
+**Wicklee's structural moat:** it owns both hardware telemetry AND inference runtime context simultaneously. Every unique insight Wicklee surfaces is impossible without both sides. No other tool has both.
 
 ---
 
 ## Core Design Principles
 
-**Sovereign by default.** The agent collects and displays data locally. Nothing leaves the machine until the operator explicitly pairs it to the Fleet View. This is not a privacy feature — it is the architecture.
+**Sovereign by default.** The agent collects and displays data locally. Nothing leaves the machine until the operator explicitly pairs it to the Fleet View. This is not a privacy feature — it is the architecture. For HIPAA, financial services, and defense-adjacent inference, this is a compliance requirement.
 
-**Zero-dependency install.** One binary. No Docker, no Python, no Node, no runtime. Copy it to a machine, run it, open a browser. Done.
+**Zero-dependency install.** One binary. No Docker, no Python, no Node, no runtime. `curl | bash` on Mac/Linux, `irm | iex` on Windows. Copy it to a machine, run it, open a browser. Done.
 
-**Honest footprint.** The agent is designed to be invisible. Target: <1MB binary, <50MB RAM, <2% CPU at idle. A monitoring tool that degrades the system it monitors is not a monitoring tool.
+**Honest footprint.** Target: <1MB binary, <50MB RAM, <2% CPU at idle. A monitoring tool that degrades the system it monitors is not a monitoring tool.
 
-**Graceful degradation.** Every metric that requires elevated permissions fails silently with a `null` value and a clear label. The dashboard never crashes, never shows an error state, never requires sudo to be useful.
+**Graceful degradation.** Every metric that requires elevated permissions fails with a `null` value and a clear human-readable label. The dashboard never crashes. Sudo is never required to be useful.
+
+**Honest data only.** No mock values, no fake percentage deltas, no placeholder numbers. Every metric shown is either real or labeled with exactly why it isn't available yet ("requires elevated permissions", "connect inference runtime", "requires kernel 5.10+").
+
+**Monitor, then act.** Wicklee observes first. When it takes action (e.g. Keep Warm ping), it is always opt-in, always logged in Live Activity with a precise timestamp, and always reversible.
 
 ---
 
 ## Delivery Model
 
-### Local — The Node View
-The agent serves a React dashboard at `http://localhost:7700`. Built for the person sitting at the machine.
+### Local — The Node View (`localhost:7700`)
+The agent serves a React dashboard at `http://localhost:7700`. Built for the person sitting at the machine or SSHed into a bare metal node.
 
-- **Latency:** 1Hz SSE stream; 10Hz WebSocket (`/ws`) for live rolling charts
+- **Latency:** 1Hz SSE stream; 10Hz WebSocket for live rolling charts
 - **Scope:** Single node — the machine the agent is running on
-- **Privacy:** Fully local — no outbound connections
-- **Access:** Free, always, with no account required
+- **Privacy:** Fully local — zero outbound connections
+- **Auth:** None required
+- **Content:** Hardware metrics + Inference Runtime panel (if Ollama/vLLM detected) + pairing CTA
 
-### Hosted — The Fleet View
+### Hosted — The Fleet View (`wicklee.dev`)
 The hosted dashboard at `wicklee.dev` aggregates all paired agents for the operator or team lead.
 
-- **Latency:** 500ms–1s polling from each agent
+- **Latency:** 500ms–1s polling from each agent to cloud, SSE to browser
 - **Scope:** All paired nodes — full fleet in one view
-- **Pairing:** 6-digit code entered in the local dashboard
-- **Model:** Community Edition (up to 5 nodes) is free. Team Edition (unlimited nodes, history, alerts) is a paid tier.
+- **Pairing:** 6-digit code entered at `wicklee.dev` — no agent config required
+- **Auth:** Email + password (bcrypt). Clerk migration planned for Phase 4B.
+- **Tiers:** Community (3 nodes, free), Team (unlimited, paid ~$29/mo), Enterprise (sovereign, paid ~$199/mo)
 
 ---
 
 ## Binary Architecture
 
 ```
-wicklee-agent (single Rust binary)
+wicklee-agent (single Rust binary, ~700KB)
 │
 ├── Axum HTTP Server (port 7700)
-│   ├── GET /                    → index.html (embedded React app)
+│   ├── GET /                    → index.html (embedded React SPA)
 │   ├── GET /assets/*            → JS/CSS (embedded, Brotli-compressed)
 │   ├── GET /nodes, /team, …     → index.html (SPA fallback for React Router)
-│   ├── GET /api/metrics         → SSE stream, 1 event/sec
-│   ├── GET /ws                  → WebSocket stream, 10 Hz (liquid pulse)
-│   └── GET /api/tags            → JSON model list
+│   ├── GET /api/metrics         → SSE stream, 1Hz telemetry
+│   ├── GET /ws                  → WebSocket, 10Hz (liquid pulse charts)
+│   └── GET /api/diagnostics     → JSON self-test output
 │
-├── Metrics Harvester (tokio async loop)
-│   ├── sysinfo crate            → CPU %, Memory used/total/available
-│   ├── ioreg -r -c IOGPUDevice  → GPU utilization % (macOS, no sudo)
-│   ├── pmset -g therm           → Thermal state (macOS, no sudo)
-│   ├── vm_stat                  → Memory pressure % (wired + active pages)
-│   └── powermetrics             → CPU cluster power in watts (requires root — graceful null)
+├── Metrics Harvester (tokio async loop, 1Hz)
+│   ├── sysinfo                  → CPU %, memory used/total/available, core count
+│   ├── ioreg (macOS)            → GPU utilization % — sudoless
+│   ├── pmset (macOS)            → Thermal state — sudoless
+│   ├── vm_stat (macOS)          → Memory pressure % (wired + active pages)
+│   ├── powermetrics (macOS)     → CPU power watts — requires root, graceful null
+│   ├── nvml-wrapper (Linux)     → GPU %, VRAM, board power, GPU temp — sudoless
+│   ├── /sys/class/powercap      → CPU RAPL power (Linux, kernel 5.10+)
+│   ├── /proc/cpuinfo            → Chip name (Linux)
+│   └── /sys/class/thermal       → Thermal state (Linux — Phase 3B)
+│
+├── Ollama Harvester (tokio async loop, 30s probe)
+│   ├── GET localhost:11434/api/ps    → active model, quantization, model size
+│   └── POST localhost:11434/api/generate → 3-token probe → tok/s measurement
+│
+├── vLLM Harvester (Phase 3B)
+│   └── GET localhost:8000/metrics    → Prometheus metrics → real tok/s
+│
+├── Cloud Relay (when paired)
+│   └── POST /api/telemetry      → push MetricsPayload to wicklee.dev cloud backend
 │
 └── Static Assets (rust-embed)
-    └── frontend/dist/           → Compiled React/Tailwind app, baked into binary at build time
+    └── frontend/dist/           → Compiled React/Tailwind SPA, baked in at build time
 ```
 
 ---
 
-## SSE Metrics Payload
+## SSE Metrics Payload (current v0.4.5)
 
 ```json
 {
-  "node_id": "hostname.local",
+  "node_id": "WK-1EFC",
+  "hostname": "Mac",
   "timestamp_ms": 1234567890000,
-  "cpu_usage_percent": 44.5,
+  "cpu_usage_percent": 19.6,
   "cpu_core_count": 8,
+  "chip_name": "Apple M2",
   "total_memory_mb": 8192,
-  "used_memory_mb": 6654,
-  "available_memory_mb": 1537,
-  "memory_pressure_percent": 68.2,
-  "gpu_utilization_percent": 29.0,
+  "used_memory_mb": 5939,
+  "available_memory_mb": 2100,
+  "memory_pressure_percent": 68.0,
+  "gpu_utilization_percent": 32.0,
   "thermal_state": "Normal",
-  "cpu_power_w": null,
-  "ecpu_power_w": null,
-  "pcpu_power_w": null
+  "cpu_power_w": 0.6,
+  "nvidia_gpu_util_percent": null,
+  "nvidia_vram_used_mb": null,
+  "nvidia_vram_total_mb": null,
+  "nvidia_gpu_temp_c": null,
+  "nvidia_board_power_w": null,
+  "ollama_running": true,
+  "ollama_active_model": "tinyllama:latest",
+  "ollama_model_size_gb": 0.7,
+  "ollama_quantization": "Q4_0",
+  "ollama_tokens_per_second": 108.9,
+  "wattage_per_1k_tokens": 5.4
 }
 ```
 
-Fields returning `null` require elevated permissions on the current platform. They are clearly labeled in the dashboard and never cause a render error.
+All fields are nullable. Null values display with honest gap labels in the UI — never as zero, never as an error.
+
+---
+
+## Derived Metrics
+
+Derived metrics are calculated at render time from the raw SSE payload fields — they do not require changes to the Rust `MetricsPayload` struct.
+
+### WES — Wicklee Efficiency Score
+
+**Formula:**
+```
+WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)
+```
+
+Where:
+- `tok/s` = `ollama_tokens_per_second`
+- `Watts_adjusted` = `cpu_power_w` (Apple Silicon) or `nvidia_board_power_w` (NVIDIA), adjusted by PUE if configured
+- `ThermalPenalty` = lookup from `thermal_state`:
+
+| thermal_state | ThermalPenalty |
+|---|---|
+| `Normal` | 1.0 |
+| `Fair` | 1.25 |
+| `Serious` | 2.0 |
+| `Critical` | 2.0+ |
+| `null` | 1.0 (assumed Normal) |
+
+**Display:** Unitless score to 1 decimal place, e.g. "WES 181.5". Displays "—" when `ollama_tokens_per_second` is null or power data is unavailable.
+
+**Academic grounding:** Conceptually aligned with the Stanford / Together AI "Intelligence per Watt" framework (arXiv:2511.07885, Nov 2025). WES applies the same lens at the operator layer — real tokens, real hardware, real thermal conditions.
+
+**Example calculations from the Wicklee fleet:**
+
+| Hardware | tok/s | Watts | ThermalPenalty | WES |
+|---|---|---|---|---|
+| Apple M2 · llama3.1:8b | 108.9 | 0.6W | 1.0 | **181.5** |
+| Ryzen 9 7950X · llama3.1:8b (idle probe) | 17.3 | 32.5W | 1.0 | **0.53** |
+| Ryzen 9 7950X · llama3.1:8b (load) | 17.1 | 121.2W | 1.0 | **0.14** |
+
+WES is the primary input to the **Fleet WES Leaderboard** (Insight #2), **Thermal Degradation Correlation** (Insight #3), and **Fleet Thermal Diversity Score** (Insight #10).
+
+---
+
+## Cloud Backend Architecture
+
+```
+wicklee-cloud (Rust + Axum, deployed on Railway)
+│
+├── Auth
+│   ├── POST /api/auth/signup      → bcrypt hash, SQLite insert
+│   ├── POST /api/auth/login       → bcrypt verify, session token
+│   └── POST /api/auth/logout      → session invalidation
+│
+├── Pairing
+│   ├── POST /api/pair/claim       → generate 6-digit code, store with account
+│   └── POST /api/pair/activate    → agent calls this on first pairing; stores node
+│
+├── Telemetry
+│   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms
+│   └── GET  /api/fleet            → SSE stream to browser, aggregated from all nodes
+│
+└── Storage
+    ├── SQLite (rusqlite, bundled)  → users, sessions, nodes (persistent via Railway volume)
+    └── DuckDB (Phase 4A)          → time-series metric history, 90-day retention
+```
+
+**Rate limits:** POST /api/auth/login (5/15min), /api/auth/signup (3/hr), /api/pair/activate (10/5min)
+
+---
+
+## Intelligence Architecture
+
+### The Unique Position
+
+Wicklee is the only tool that owns both hardware telemetry and inference runtime context simultaneously. This enables 15 classes of insight impossible to produce without both:
+
+| Insight Class | Hardware Side | Runtime Side |
+|---|---|---|
+| Unified Memory Exhaustion Warning | `memory_pressure_percent`, `available_memory_mb` | `ollama_model_size_gb` |
+| WES / Fleet WES Leaderboard | `cpu_power_w` or `nvidia_board_power_w`, `thermal_state` | `ollama_tokens_per_second` |
+| Thermal Degradation Correlation | `thermal_state` transition | `ollama_tokens_per_second` drop |
+| Model-to-Hardware Fit Score | VRAM/unified memory, thermal state | model size, quantization |
+| Power Anomaly Detection | `nvidia_board_power_w` vs `nvidia_gpu_util_percent` | inference activity context |
+| Quantization ROI | power draw, thermal state | tok/s at Q4 vs Q8 |
+| Cold Start Detection | GPU spike, memory pressure jump | TTFT on request #1 |
+
+### Insight Delivery Surfaces
+
+**Local Intelligence Tab** — per-node insights, derived from the local SSE stream:
+- Free: Model Fit Score, Thermal Degradation, Power Anomaly, Unified Memory Warning, Eviction Prediction, Idle Notice
+- Paid (Team+): Memory Pressure Forecast, Tok/s Regression, Quantization ROI, Efficiency Regression per model
+
+**Fleet Intelligence Panel** — cross-node insights, derived from fleet SSE aggregation:
+- Free: Fleet WES Leaderboard (WES-ranked across all nodes), Thermal Diversity Score, Inference Density Map, Idle Cost
+- Paid: Thermal Routing Recommendation, Fleet Degradation Trend, Power Budget Tracker
+
+**Live Activity Feed** — real-time event stream:
+- Free: node online/offline, thermal state transition, model eviction predicted, power anomaly detected, node paired
+- Paid: tok/s regression detected, fleet thermal alert, Keep Warm action taken
+
+### Keep Warm (Phase 4B)
+When Eviction Prediction fires and the user has Keep Warm enabled (Paid), the agent sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the Ollama expiry timer. Every Keep Warm action is logged in Live Activity with precise timestamp: "Wicklee sent keep-alive ping to llama3.1:8b at 10:42:33 PM." Actions are always opt-in, always logged, always reversible.
+
+---
+
+## Idle Fleet Cost Methodology
+
+Idle Fleet Cost uses a two-variable formula to surface the true facility cost of idle inference nodes:
+
+```
+idle_cost_per_day = idle_watts × pue × 24 × (kwh_rate / 1000)
+```
+
+**Variables:**
+- `idle_watts` — board power or CPU power draw when no inference is active (from NVML/RAPL live data)
+- `pue` — Power Usage Effectiveness multiplier (configurable in Settings, default 1.0)
+  - Home lab / desktop: 1.0 (no overhead)
+  - Standard datacenter: 1.4–1.6 (cooling, distribution, UPS)
+  - Hyperscale / efficient colo: 1.1–1.2
+- `kwh_rate` — electricity rate in $/kWh (configurable in Settings, default $0.13)
+
+**UI display:** `Node: $X.XX/day · Facility: $Y.YY/day (PUE 1.4)` — math always visible.
+
+---
+
+## Sovereignty Architecture
+
+### Structural Guarantee
+The agent collects hardware and inference telemetry locally. Outbound connections occur only when:
+1. The operator explicitly pairs the agent to wicklee.dev using the 6-digit pairing code
+2. After pairing, telemetry is pushed to the Wicklee cloud backend
+
+An unpaired agent has zero outbound network activity. An operator can verify this independently with `lsof -i` or `ss -tuln`.
+
+### Sovereignty Tab (Phase 3B)
+The Settings → Sovereignty tab surfaces:
+- Complete pairing event log: timestamp, destination IP, session duration
+- Telemetry destination: `wicklee.dev` or "Sovereign Mode: no outbound telemetry"
+- Outbound connection manifest: every domain the agent has ever connected to
+- Exportable audit log (CSV)
+
+### Cryptographically Signed Audit Export (Phase 5)
+Enterprise tier produces a tamper-evident PDF audit report signed by the agent's unique hardware ID (WK-XXXX). The signature uses HMAC-SHA256 with the node's private key. A CISO can verify the document independently — the signature proves the audit log has not been modified since export. This is the compliance artifact for HIPAA, financial services, and defense-adjacent inference operators.
+
+---
+
+## Platform Support
+
+| Platform | CPU/Memory | GPU | Thermal | CPU Power |
+|---|---|---|---|---|
+| macOS Apple Silicon | ✅ | ✅ ioreg | ✅ pmset | ⚠️ root only |
+| macOS Intel | ✅ | ✅ ioreg | ✅ xcpm sysctl | ⚠️ root only |
+| Linux (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 3B | ✅ RAPL (kernel 5.10+) |
+| Linux (AMD CPU-only) | ✅ | ❌ | 🔜 Phase 3B | ✅ RAPL (kernel 5.10+) |
+| Linux (AMD GPU) | ✅ | 📋 Phase 5 | 🔜 Phase 3B | ✅ RAPL |
+| Windows (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 3B | 📋 Phase 5 |
+| Linux musl (static) | ✅ | ✅ nvml-wrapper† | 🔜 | ✅ |
+
+† nvml-wrapper excluded on musl targets; NVIDIA Linux users should use gnu builds
 
 ---
 
@@ -98,63 +290,60 @@ Fields returning `null` require elevated permissions on the current platform. Th
 
 ```bash
 # 1. Build the React frontend
-cd frontend && npm run build
+npm ci && npm run build
 # Output: agent/frontend/dist/
 
-# 2. Build the Rust binary (embeds the dist/ folder)
+# 2. Build the Rust agent (embeds dist/ via rust-embed)
 cd agent && cargo build --release
 # Output: agent/target/release/wicklee-agent
 
 # 3. Run
-./agent/target/release/wicklee-agent
+wicklee
 # Dashboard: http://localhost:7700
 ```
 
-**Planned:** `make install` → copies binary to `/usr/local/bin/wicklee` for global CLI access.
+**Release pipeline:** tag push (`git tag vX.X.X && git push origin vX.X.X`) triggers 4-platform GitHub Actions build. Assets: `wicklee-agent-darwin-aarch64`, `wicklee-agent-linux-x86_64`, `wicklee-agent-linux-aarch64`, `wicklee-agent-windows-x86_64.exe`.
 
----
-
-## Platform Support
-
-| Platform | CPU/Memory | GPU | Thermal | Power |
-|---|---|---|---|---|
-| macOS Apple Silicon | ✅ | ✅ ioreg | ✅ pmset | ⚠️ root only |
-| macOS Intel | ✅ | ✅ ioreg | ✅ xcpm sysctl | ⚠️ root only |
-| Linux (NVIDIA) | ✅ | 🔜 nvml-wrapper | 🔜 | 🔜 |
-| Linux (AMD) | ✅ | 📋 Planned | 📋 Planned | 📋 Planned |
-| Windows | 📋 Planned | 📋 Planned | 📋 Planned | 📋 Planned |
+**Linux targets use musl** (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) for fully static binaries with no glibc dependency.
 
 ---
 
 ## Monetization Model
 
-Wicklee is open-core.
+Wicklee is open-core. The agent is and will remain open source. The hosted fleet infrastructure and intelligence layer are the commercial layer.
 
-**Community Edition** — free, always, no account required.
-- Single-node local dashboard with full Deep Metal metrics
-- All core metrics (CPU, GPU, Memory, Thermal)
-- Hosted Fleet View for **up to 5 nodes** — the natural threshold for a solo developer or small team
+**Community Edition — Free**
+- Up to 3 paired nodes
+- Full local dashboard (localhost:7700), all hardware metrics
+- Full Fleet Overview with live data
+- Local Intelligence free cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction)
+- Fleet Intelligence panel: Efficiency Leaderboard, Thermal Diversity Score, Density Map, Idle Cost
+- Sovereignty audit log (view only)
 
-**Team Edition** — paid subscription, triggered at 6+ nodes.
-- Unlimited nodes in the Fleet View
-- 90-day metric history
-- Sentinel Thermal Rerouting
-- Slack / PagerDuty alert integrations
-- Priority support
+**Team Edition — ~$29/mo**
+- Unlimited paired nodes
+- All free tier features
+- 90-day metric history (DuckDB)
+- Trend-based Local Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI, Efficiency Regression)
+- Slack / PagerDuty webhook alerts with per-node, per-event-type configuration
+- Keep Warm toggle (prevents model eviction)
+- Alert threshold configuration
+- CSV/JSON export
+- Signed audit log export
 
-The upgrade moment is natural: when your fleet grows past 5 nodes, you're no longer a hobbyist — you're running infrastructure. That's when Team Edition becomes the right tool.
+**Enterprise / Sovereign — ~$199/mo**
+- All Team Edition features
+- Unlimited nodes
+- Sentinel Proxy (cross-node inference routing)
+- Sovereign Mode (no cloud pairing, fully airgapped)
+- Cryptographically signed audit export (CISO-ready compliance artifact)
+- On-premise Docker/Helm deployment
+- SSO / SAML
+- HIPAA / SOC2 BAA
+- Priority support + SLA
 
-The local agent is and will remain open source. The hosted fleet infrastructure is the commercial layer.
+The upgrade moment for Community → Team is natural: when inference quality degrades and you don't know why. When tok/s drops 20% and there's no alert. When idle nodes cost $200/month and nobody knows. Team Edition is when Wicklee stops being a monitor and starts being an operator.
 
 ---
 
-## Key Technology Choices
-
-| Choice | Rationale |
-|---|---|
-| Rust | Single binary, zero runtime, cross-compile to any target, <1MB footprint |
-| rust-embed | Bakes the React build into the binary — no separate web server, no file paths |
-| Axum | Async HTTP + SSE with minimal overhead, same tokio runtime as the harvester |
-| React + Tailwind | Fast to build, dark-mode native, no build-time CSS purge needed for embedded use |
-| SSE + WebSocket | SSE for 1Hz baseline metrics; WebSocket (`/ws`) for 10Hz liquid pulse rolling charts |
-| SQLite (planned) | Local metric history without a database server — fits the sovereign model |
+*Wicklee is sovereign infrastructure. Your fleet data never leaves your network until you choose.*
