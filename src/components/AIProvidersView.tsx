@@ -75,7 +75,7 @@ const AIProvidersView: React.FC = () => {
                   )}
                 </div>
                 {provider.latency && (
-                  <span className="text-[10px] font-mono text-gray-500">{provider.latency}ms latency</span>
+                  <span className="text-[10px] font-telin text-gray-500">{provider.latency}ms latency</span>
                 )}
               </div>
             </div>

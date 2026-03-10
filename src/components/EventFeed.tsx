@@ -59,12 +59,12 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => (
               {icon}
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className="font-mono text-xs font-bold text-gray-900 dark:text-gray-200 truncate">
+                  <span className="font-telin text-xs font-bold text-gray-900 dark:text-gray-200 truncate">
                     {ev.hostname ?? ev.nodeId}
                   </span>
                   <span className={`text-xs font-medium ${cls}`}>{label}</span>
                 </div>
-                <p className="text-[10px] text-gray-400 font-mono mt-0.5">{fmtAgo(ev.ts)}</p>
+                <p className="text-[10px] text-gray-400 font-telin mt-0.5">{fmtAgo(ev.ts)}</p>
               </div>
             </div>
           );

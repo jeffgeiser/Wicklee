@@ -179,11 +179,11 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
           <div className="p-6 space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-500">Node Identity</span>
-              <span className="font-mono text-indigo-400">{pairingInfo?.node_id ?? '—'}</span>
+              <span className="font-telin text-indigo-400">{pairingInfo?.node_id ?? '—'}</span>
             </div>
             <div className="flex items-start justify-between text-sm gap-4">
               <span className="text-gray-500 shrink-0">Status</span>
-              <span className="text-gray-300 text-right font-mono text-xs">
+              <span className="text-gray-300 text-right font-telin text-xs">
                 {pairingInfo?.status === 'connected'
                   ? pairingInfo.fleet_url
                   : pairingInfo?.status === 'pending'

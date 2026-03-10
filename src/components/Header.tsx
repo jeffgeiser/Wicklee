@@ -83,7 +83,7 @@ const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTe
               title={`${pairingInfo.node_id} — Fleet Connected`}
             >
               <CloudLightning className="w-4 h-4 text-green-400" />
-              <span className="text-[11px] font-mono text-green-400 hidden sm:inline">{pairingInfo.node_id}</span>
+              <span className="text-[11px] font-telin text-green-400 hidden sm:inline">{pairingInfo.node_id}</span>
             </button>
           ) : pairingInfo?.status === 'pending' ? (
             // Pending — amber pulsing pill
@@ -94,7 +94,7 @@ const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTe
             >
               <span className="animate-ping absolute inset-0 rounded-lg bg-amber-400/10" />
               <Cloud className="w-4 h-4 text-amber-400 relative" />
-              <span className="text-[11px] font-mono text-amber-400 relative hidden sm:inline">Pairing…</span>
+              <span className="text-[11px] font-telin text-amber-400 relative hidden sm:inline">Pairing…</span>
             </button>
           ) : (
             // Unpaired / unknown — prominent CTA button

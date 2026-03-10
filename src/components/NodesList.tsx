@@ -505,27 +505,27 @@ const NodesList: React.FC<NodesListProps> = ({ nodes, getNodeSettings, onNavigat
             {/* Status + ID */}
             <div className="flex items-center gap-2 min-w-0">
               <span className={`shrink-0 w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
-              <span className="text-xs font-bold font-mono text-gray-900 dark:text-white truncate">
+              <span className="text-xs font-bold font-telin text-gray-900 dark:text-white truncate">
                 {m?.node_id ?? '—'}
               </span>
             </div>
             {/* Hostname */}
             <div className="min-w-0">
               {m?.hostname && m.hostname !== m.node_id ? (
-                <span className="text-xs font-mono text-gray-500 block truncate">{m.hostname}</span>
+                <span className="text-xs font-telin text-gray-500 block truncate">{m.hostname}</span>
               ) : <span />}
             </div>
             {/* Chip */}
             <div className="min-w-0">
               {chipName && (
-                <span className="text-xs font-mono text-indigo-400/80 block truncate">{chipName}</span>
+                <span className="text-xs font-telin text-indigo-400/80 block truncate">{chipName}</span>
               )}
             </div>
             {/* Sovereignty */}
             <div><SovereigntyBadge sovereign={true} /></div>
             {/* Uptime */}
             <div className="text-right">
-              <span className="text-xs font-mono tabular-nums text-gray-500">{connected ? 'live' : '—'}</span>
+              <span className="text-xs font-telin tabular-nums text-gray-500">{connected ? 'live' : '—'}</span>
             </div>
             <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${localExpanded ? 'rotate-180' : ''}`} />
           </button>
