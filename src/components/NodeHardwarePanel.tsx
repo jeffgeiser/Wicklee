@@ -118,7 +118,7 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
       </div>
 
       {/* ── Inference Band — sits above hardware grid, aligned to column gutter ── */}
-      {m.ollama_running && (
+      {m.ollama_running ? (
         <div className="grid grid-cols-3 gap-6 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-3 items-start">
 
           {/* Col 1 — model identity (secondary labels) */}
@@ -164,6 +164,18 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
             </p>
           </div>
 
+        </div>
+      ) : (
+        /* ── Idle inference band — intentional empty state, same position as active ── */
+        <div className="border border-dashed border-gray-200 dark:border-gray-700/60 rounded-xl px-4 min-h-[68px] flex items-center gap-2">
+          <BotMessageSquare size={12} className="text-gray-600 shrink-0" />
+          <p className="text-[11px] text-gray-600">
+            Ollama not detected —{' '}
+            <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer"
+              className="text-gray-500 hover:text-indigo-400 underline underline-offset-2 transition-colors">
+              ollama.ai
+            </a>
+          </p>
         </div>
       )}
 
@@ -222,19 +234,6 @@ export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ me
 
       </div>
 
-      {/* ── Idle inference band — intentional empty state ─────────────────── */}
-      {!m.ollama_running && (
-        <div className="border border-dashed border-gray-200 dark:border-gray-700/60 rounded-xl px-4 min-h-[68px] flex items-center gap-2">
-          <BotMessageSquare size={12} className="text-gray-600 shrink-0" />
-          <p className="text-[11px] text-gray-600">
-            Ollama not detected —{' '}
-            <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer"
-              className="text-gray-500 hover:text-indigo-400 underline underline-offset-2 transition-colors">
-              ollama.ai
-            </a>
-          </p>
-        </div>
-      )}
 
     </div>
   );
