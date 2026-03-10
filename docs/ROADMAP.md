@@ -1,128 +1,179 @@
 # Wicklee Roadmap 🛰️
 
-> *Sovereign GPU fleet monitoring. Your fleet data never leaves your network until you choose.*
+> *Sovereign GPU fleet monitoring. Your data never leaves your network until you choose.*
 
 ---
 
-## ✅ Phase 1: The Standalone Sentinel — COMPLETE
+## ✅ Shipped (v0.4.5)
 
-The single-binary local dashboard. Zero dependencies, zero cloud, zero config.
+**Agent & Platform**
+- Rust agent, single binary — zero runtime dependencies, ~700KB
+- Embedded React/Tailwind dashboard at `localhost:7700`
+- Sudoless Deep Metal on Apple Silicon: CPU, GPU, Thermal State, Memory Pressure
+- NVIDIA/NVML support: board power, VRAM used/total, GPU temp — sudoless on Linux
+- Linux musl binaries — runs on Ubuntu 18.04+ with no glibc dependency
+- Linux RAPL CPU power via `/sys/class/powercap` (kernel 5.10+)
+- AMD Ryzen chip name detection from `/proc/cpuinfo`
+- Windows support via NVML
+- Global CLI install: `curl -fsSL https://wicklee.dev/install.sh | bash`
+- PowerShell install: `irm https://wicklee.dev/install.ps1 | iex`
+- 4-platform GitHub Actions release pipeline (macOS, Windows, Linux x64/arm64)
 
-- Single Rust binary, ~672KB idle footprint — zero runtime dependencies
-- Embedded React/Tailwind dashboard served at `localhost:7700` via `rust-embed` + Axum
-- **Sudoless Deep Metal on Apple Silicon:**
-  - GPU utilization via `ioreg` (AGX accelerator, no sudo)
-  - Thermal state via `pmset` (Normal / Fair / Serious / Critical, no sudo)
-  - Memory pressure via `vm_stat` (wired + active pages only, no sudo)
-  - Available memory computed correctly (`total - used`, not `sysinfo.available_memory()`)
-- 1Hz SSE stream + 10Hz WebSocket "Liquid Pulse" for rolling live charts
-- CPU Power Draw (`cpu_power_w`, `ecpu_power_w`, `pcpu_power_w`) — requires `sudo wicklee`; renders with honest "requires elevated permissions" label without sudo
-- Global CLI install: `sudo make install` → `wicklee` from anywhere
-- ASCII startup box with port and dashboard URL printed to terminal
+**Fleet & Cloud**
+- 6-digit pairing code — zero-config fleet connection
+- Hosted fleet dashboard at `wicklee.dev` — Community Edition free up to 3 nodes
+- Railway cloud backend with SQLite persistence (survives redeployment)
+- Rate limiting: auth endpoints protected against brute force
+- SSE fleet stream — live telemetry aggregated from all paired nodes
 
----
+**Inference Runtime**
+- Ollama integration: auto-detect `localhost:11434`, model name, quantization, size
+- 30-second sampled tok/s probe via `/api/generate` (num_predict=3)
+- Wattage/1K TKN: live calculation from board power ÷ tok/s
+- Cost/1K TKN: wattage × configurable kWh rate (default $0.13)
 
-## ✅ Phase 2: The Multi-Node Fleet — COMPLETE
-
-Connect multiple nodes to a hosted fleet view. Sovereign by default — nothing leaves the network until the operator explicitly pairs a node.
-
-- **NVIDIA/NVML Support** — GPU utilization %, VRAM used/total, GPU temp, board power draw — Linux and Windows via `nvml-wrapper`, no sudo required
-- **Windows Support** — full binary for `x86_64-pc-windows-msvc`. NVML works on consumer NVIDIA cards (GTX/RTX). Thermal state returns None on Windows (Phase 3: WMI)
-- **Fleet Connect** — WK-XXXX persistent node identity, 6-digit pairing codes with 5-minute expiry, `wicklee --pair` CLI flag, PairingModal in local dashboard, AddNodeModal on hosted dashboard. Node identity stored in `~/.wicklee/config.toml`
-- **Real Authentication** — `POST /api/auth/signup`, `POST /api/auth/login`, `GET /api/auth/me`. bcrypt (cost 12), UUID session tokens, AuthModal with Sign In / Create Account tabs, localStorage session restore
-- **SQLite Persistence** — `rusqlite` (bundled, no system dep). Tables: `users`, `sessions`, `nodes`. WAL mode. Railway `/data` persistent volume. Accounts and pairings survive redeployment
-- **Localhost auth bypass** — `isLocalHost` detection. `localhost:7700` boots directly to dashboard with no auth gate — local agent is single-user by design
-- **Cloud telemetry architecture** — Agent pushes to Railway (`POST /api/telemetry`, 2Hz) after pairing. Browser reads from Railway (`GET /api/fleet/stream` SSE). Browser never connects directly to `localhost` from an HTTPS page (no mixed content)
-- **Hosted view isolation** — Views requiring local agent data (Observability, Local Intelligence) show placeholder state on `wicklee.dev` directing users to `localhost:7700`. Eliminates Chrome Local Network Access permission prompts
-- **Context-aware onboarding** — Zero-node accounts see 3-step empty state (Install → Open dashboard → Enter code) with Add Node CTA. "Disconnected from Local Agent" banner suppressed on hosted view
-- **Stale-node detection** — Hosted dashboard shows "Node `<hostname>` appears offline — last seen `HH:MM:SS`" when telemetry goes stale >30 seconds
-- **GitHub Actions release pipeline** — `.github/workflows/release.yml`. 4-platform parallel matrix. Trigger: `git tag v* && git push origin v*`. Each job builds frontend first (embeds into binary), then Rust agent. `linux-aarch64` uses `cross`
-- **curl install script** — `install.sh` served at `wicklee.dev/install.sh`. Detects OS/arch, downloads correct binary from GitHub Releases. macOS post-install tip for `sudo wicklee` CPU power metrics
-- **Domains** — `wicklee.dev` canonical (Railway). `wicklee.com` → 301 → `wicklee.dev` via Cloudflare. `www` variants redirect correctly
-- **HF Space** — [Wattage-per-Token Calculator](https://huggingface.co/spaces/Wicklee/Wattage-per-token) live with GPU presets, cloud API cost comparison
-
-**Remaining Phase 2 item:**
-- [ ] **Multi-Tenant Backend** — fleet-wide aggregation, per-node history, alert management on Railway. Currently nodes store last telemetry snapshot only
+**UI**
+- Fleet Overview: 6 real-time summary cards (all live data, no mock values)
+- Node Registry: collapsible cards, real-time search, sort, status filter pills
+- Live Activity feed: node online/offline, thermal state transitions, pairing events
+- System Performance graph: CPU/GPU/Mem/Power selector, current session
+- Version numbers synced: Cargo.toml, package.json, UI footer, GitHub Release tag
 
 ---
 
-## 🔜 Phase 3: The Intelligence Layer
+## Phase 3A — The Insight Engine *(Next)*
 
-Make the fleet self-aware. Surface the signals that predict problems before users notice them.
+> Goal: make the data speak. Nine insights can ship using data that already exists.
 
-- [ ] **Wattage-per-Token (live)** — Real-time inference ROI: power draw ÷ tokens/sec across the fleet. Requires Ollama/vLLM integration for token throughput data
-- [ ] **Ollama / vLLM / LM Studio Integration** — Read active models, requests/sec, and token throughput from local inference runtimes. Auto-detect: Ollama (`localhost:11434`), vLLM (`localhost:8000`), LM Studio (`localhost:1234`)
-- [ ] **Live Activity — clickable diagnostic events** — Each event in the `EventFeed` becomes expandable with a detail panel. Node offline events show: precise timestamp, trigger reason (SSE dropped / agent restart / no telemetry >30s), metrics snapshot at the moment of the event ("CPU 45% · GPU 32% · Thermal: Normal · last tok/s: 17.1"), and offline duration ("Was offline for 4m 12s"). Thermal events show: before → after state, which metric triggered the transition, and threshold context ("GPU temp crossed 83°C threshold"). Turns Live Activity from a log into a diagnostic tool.
-- [ ] **Thermal Rerouting (Sentinel)** — When a node crosses thermal threshold, dashboard surfaces one-click rerouting card: "Node X is throttling (89°C). Shift workload to Node Y (67°C)?" Phase 3 is observe + suggest. Phase 4 is automatic
-- [ ] **Thermal Webhooks** — Nodes in `Serious` or `Critical` thermal state fire a configurable webhook (node ID, state, timestamp, current metrics). Targets: Slack, PagerDuty, custom HTTP
-- [ ] **Alert Rules UI** — Define thresholds per node (thermal state, GPU %, memory pressure) and map each rule to webhook targets. Alert history log visible in Fleet View
-- [ ] **Apple Neural Engine (ANE)** — Utilization and wattage for M-series ANE inference workloads — the metric Activity Monitor doesn't show
-- [ ] **Unified Memory Deep-Dive** — Distinguish Model Weights from OS Overhead in the memory pressure breakdown on Apple Silicon
-- [ ] **DuckDB Trace Visualization** — Wire `TracesView` to real DuckDB query results from the agent. TTFT, TPOT, latency per request per model
-- [ ] **Thermal state on NVIDIA Linux** — Implement via NVML temperature thresholds
-- [ ] **Thermal state on Windows** — Implement via WMI thermal zone API
-- [ ] **Memory pressure on Linux** — Implement via `/proc/meminfo` pressure metrics
+**WES — Wicklee Efficiency Score**
+- [ ] **Coin and ship WES as the live fleet efficiency standard:** `WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)` — the MPG for local AI inference. Calculated at render time from existing SSE payload fields; no Rust changes required. Display as unitless score to 1 decimal ("WES 181.5") on every node card and in the Fleet WES Leaderboard. Thermal penalty (Normal=1.0, Fair=1.25, Serious=2.0) ensures a throttled node's WES reflects its true efficiency, not just its current output.
 
----
+**Local Intelligence Tab — Free Tier Insight Cards**
+- [ ] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded.
+- [ ] **Thermal Degradation Correlation:** Named insight card when thermal state transition + tok/s drop detected simultaneously. Shows before/after tok/s, causal chain, recommendation.
+- [ ] **Power Anomaly Detection:** Fires when board power exceeds 2× session baseline or when power/GPU utilization ratio is anomalous. Flags runaway processes invisible to standard monitoring.
+- [ ] **Unified Memory Exhaustion Warning (Apple Silicon):** Correlates Ollama model size + available unified memory + vm_stat pressure. Warns before swap storm — not after.
+- [ ] **Model Eviction Prediction:** Fires 2 minutes before predicted Ollama model unload based on `/api/ps` inactivity. Free: warning. Paid: "Keep Warm" toggle sends silent ping to reset `keep_alive` timer.
+- [ ] **Idle Resource Notice:** Node online >1hr with zero inference activity. Shows estimated electricity cost of idle time.
 
-## 📋 Phase 4: The Commercial Layer
+**Fleet Intelligence Panel (Fleet Overview page)**
+- [ ] **Fleet WES Leaderboard:** WES-ranked across all nodes. Cross-node efficiency comparison that accounts for thermal state — the question "which node is most efficient per token right now?" answered live with thermal penalty applied.
+- [ ] **Fleet Thermal Diversity Score:** Distribution of thermal states across the fleet. "3/4 nodes thermally stressed — fleet is one spike from cascade failure." Free: score. Paid: Slack alert.
+- [ ] **Fleet Inference Density Map:** Heatmap/hive plot visualization — glowing pulse on active inference nodes, cold dim on idle. Visual utilization map, not a grid of numbers. Demo-video-ready.
+- [ ] **Idle Fleet Cost Card (8th summary card):** Daily electricity cost of idle nodes with PUE multiplier support. Formula: `idle_watts × pue × hours × kwh_rate`. Shows "Node: $X/day · Facility: $Y/day (PUE 1.4)" so math is transparent.
 
-Turn the open-core into a sustainable business.
+**Settings**
+- [ ] **Electricity Rate field:** kWh rate input (default $0.13). Affects Cost/1K TKN and Idle Fleet Cost.
+- [ ] **PUE Multiplier field:** Default 1.0 (home lab). Standard datacenter: 1.4–1.6. Makes idle cost accurate for colo users.
 
-- [ ] **Team Edition gate** — Hard 5-node limit on Community Edition. Upgrade prompt at node 6. Stripe integration for Team Edition subscription
-- [ ] **Real OAuth / Clerk** — Replace bcrypt DIY auth with Clerk. Email/password + Google + GitHub OAuth. Persistent sessions, forgot password, email verification
-- [ ] **Sentinel Proxy (opt-in)** — Wicklee exposes a local OpenAI-compatible proxy endpoint. Clients point at Wicklee; Wicklee forwards to the healthiest node. Routing strategies: `lowest-thermal`, `lowest-load`, `round-robin`, `pinned`
-- [ ] **Proxy Observability** — Per-request latency, reroute events, token throughput visible in dashboard alongside hardware metrics
-- [ ] **Slack / PagerDuty alert integrations** — Production-grade alert delivery with retry, dedup, and escalation policies
-- [ ] **90-day metric history** — DuckDB on Railway with time-series retention. Fleet trend analysis, capacity planning views
-- [ ] **Show HN launch** — `install.sh` and GitHub Releases pipeline already exist. Launch when Phase 3 core features land
-
----
-
-## 📋 Phase 5: Enterprise
-
-- [ ] **On-premise deployment** — Docker Compose + Helm chart for teams that can't use Railway
-- [ ] **SSO / SAML** — Enterprise identity provider integration
-- [ ] **HIPAA / SOC 2 posture** — Audit logging, data residency controls, encryption at rest
-- [ ] **WASM Interceptor Marketplace** — Users upload WASM modules to nodes for PII redaction, prompt safety, request transformation via Wasmtime runtime
-- [ ] **mTLS secure fabric** — Node-to-node mutual TLS for zero-trust fleet communication
-- [ ] **AMD GPU support** — ROCm-based GPU metrics for AMD inference hardware
+**Live Activity — New Event Types**
+- [ ] Power anomaly detected/resolved
+- [ ] Model eviction predicted / Keep Warm action taken
+- [ ] Thermal degradation confirmed (causal chain, not just state change)
+- [ ] Fit score changed (model loaded/unloaded)
 
 ---
 
-## Platform Support Matrix
+## Phase 3B — Platform Completeness + Show HN
 
-| Metric | Apple Silicon | NVIDIA Linux | NVIDIA Windows | AMD Linux |
-|---|---|---|---|---|
-| CPU usage % | ✅ | ✅ | ✅ | ✅ |
-| Memory used/available | ✅ | ✅ | ✅ | ✅ |
-| Memory pressure % | ✅ sudoless | 🔜 Phase 3 | — | 🔜 Phase 3 |
-| GPU utilization % | ✅ sudoless | ✅ NVML sudoless | ✅ NVML sudoless | 📋 Phase 5 |
-| GPU temp | — | ✅ NVML sudoless | ✅ NVML sudoless | 📋 Phase 5 |
-| VRAM used/total | — | ✅ NVML sudoless | ✅ NVML sudoless | 📋 Phase 5 |
-| GPU power draw | — | ✅ NVML sudoless | ✅ NVML sudoless | 📋 Phase 5 |
-| Thermal state | ✅ sudoless | 🔜 Phase 3 | 🔜 Phase 3 | 📋 Phase 5 |
-| CPU power draw | ⚠️ sudo only | ⚠️ sudo only | ⚠️ sudo only | ⚠️ sudo only |
-| ANE utilization | 🔜 Phase 3 | — | — | — |
+> Goal: close hardware gaps, launch publicly.
 
----
+**Platform**
+- [ ] **vLLM Integration:** Prometheus `/metrics` endpoint at `localhost:8000`. Real tok/s without 30s probe. Phase 3 priority pull-forward — vLLM users need fleet routing most.
+- [ ] **Linux Thermal:** `/sys/class/thermal` — closes the thermal state gap on GeiserBMC and similar bare metal nodes.
+- [ ] **Windows Thermal:** WMI thermal data for Andy_PC and Windows nodes.
+- [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.
+- [ ] **macOS CPU Power (sudoless):** Entitlement-based `powermetrics` access without requiring root.
 
-## Monetization Model
+**Sovereignty**
+- [ ] **Sovereignty Tab (Settings):** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network.
+- [ ] **Audit Log Export (Free):** Exportable pairing and telemetry history.
 
-**Community Edition** — free, always, no account required for local use.
-- Full local dashboard at `localhost:7700` with all Deep Metal metrics
-- Hosted Fleet View for up to 5 nodes
-- The natural upgrade threshold: when your fleet grows past 5 nodes, you're running infrastructure
-
-**Team Edition** — paid subscription, unlocked at 6+ nodes.
-- Unlimited nodes
-- 90-day metric history
-- Sentinel Thermal Rerouting
-- Alert integrations (Slack, PagerDuty)
-- Priority support
-
-The local agent is and will remain open source. The hosted fleet infrastructure is the commercial layer.
+**Launch**
+- [ ] RTX 4090 rental test — complete three-way comparison table (M2 vs 4090 vs Ryzen)
+- [ ] README screenshot (three-node fleet with all Wattage/1K TKN populated)
+- [ ] Show HN post: "I coined WES — the MPG for local AI inference. Apple M2 scores 181.5. Ryzen 9 7950X scores 0.14. Here's why."
+- [ ] r/LocalLLaMA post
+- [ ] Ollama Discord #showcase
 
 ---
 
-*Wicklee is sovereign infrastructure. Your fleet data never leaves your network until you choose to connect it.*
+## Phase 4A — Intelligence Depth *(2–3 months)*
+
+> Requires DuckDB 90-day history. Unlocks trend-based insights.
+
+**Infrastructure**
+- [ ] **DuckDB Time-Series:** 90-day per-node, per-metric history stored on Railway. Powers all trend-based insights below.
+- [ ] **Historical Performance Graphs:** Same metric selector as live graph but spanning 1hr/24hr/7d/30d/90d.
+- [ ] **Percentile Baselines:** P50/P95 for tok/s, power, CPU per node — shown as reference lines on graphs.
+
+**Paid Intelligence Insights**
+- [ ] **Memory Pressure Forecasting:** Rate-of-change on memory pressure → ETA to critical. "At current rate, this node hits critical in ~7 minutes." Slack alert at 15min and 5min thresholds.
+- [ ] **Tok/s Regression Detection:** Current probe vs 7-day P50 baseline per node. Alert when >20% degradation.
+- [ ] **Quantization ROI Measurement:** Per-model, per-quant tok/s and W/1K TKN stored in DuckDB. "Q4 vs Q8 on YOUR hardware at YOUR thermal state" — live hardware-specific answer.
+- [ ] **Efficiency Regression per Model:** "WK-C133 used to run llama3.1:8b at 17 tok/s. It now runs it at 11 tok/s." Baseline history required. Slack alert when >20% regression.
+- [ ] **Fleet Degradation Trend:** Fleet-wide tok/s trend over 7/30 days.
+
+**Notifications**
+- [ ] **Slack / PagerDuty Webhook System:** Per-node, per-event-type configuration. Urgency levels: immediate, 5-min debounce, 15-min debounce, daily digest.
+- [ ] **Alert Threshold Configuration:** Per-node thresholds for thermal, power, tok/s, memory pressure.
+- [ ] **Idle Cost Weekly Digest:** "Fleet idle cost this week: $X" — emailed or Slacked Monday 9am.
+
+---
+
+## Phase 4B — Commercial Layer *(3–5 months)*
+
+- [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
+- [ ] **Keep Warm Toggle (Paid):** Wicklee sends silent ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity.
+- [ ] **Clerk Auth:** Replace DIY bcrypt/session system.
+- [ ] **CSV / JSON Export:** Any metric, any time range, any node.
+- [ ] **Cold Start Detection:** GPU spike + memory jump + elevated TTFT = cold start event. Requires TTFT data from Sentinel Proxy or vLLM metrics.
+- [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
+- [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
+- [ ] **Product Hunt launch**
+- [ ] **dev.to article:** "I built a GPU fleet monitor in Rust that measures wattage-per-token across heterogeneous hardware"
+
+---
+
+## Phase 5 — Enterprise / Sovereign *(6+ months)*
+
+**Sentinel Proxy**
+- [ ] **Inference Interceptor:** OpenAI-compatible proxy endpoint. Clients point at Wicklee; Wicklee forwards to healthiest node.
+- [ ] **Automatic Rerouting:** Transparent workload shifting on thermal/load threshold breach. No client changes required.
+- [ ] **Routing Policy Config:** `lowest-watt-per-token`, `lowest-thermal`, `lowest-load`, `round-robin`, `pinned` — selectable per model or client tag.
+
+**Sovereignty / Compliance**
+- [ ] **Cryptographically Signed Audit Export:** PDF signed by the Wicklee Agent's unique hardware ID (WK-XXXX). Tamper-evident. CISO-signable compliance artifact for HIPAA, financial services, defense-adjacent use cases.
+- [ ] **Sovereign Mode:** On-premise only — no cloud pairing, no outbound telemetry, airgapped operation.
+- [ ] **On-Premise Deployment:** Docker image + Helm chart for self-hosted fleet backend.
+
+**Enterprise Features**
+- [ ] SSO / SAML
+- [ ] HIPAA / SOC2 BAA
+- [ ] AMD GPU support (ROCm)
+- [ ] Enterprise tier pricing ($199/mo or $X/node)
+
+---
+
+## Tier Structure
+
+| | Community | Team | Enterprise |
+|---|---|---|---|
+| Nodes | Up to 3 | Unlimited | Unlimited |
+| Local dashboard | ✅ Full | ✅ Full | ✅ Full |
+| Live metrics (all) | ✅ Full | ✅ Full | ✅ Full |
+| Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full |
+| Fleet Intelligence panel | ✅ View | ✅ Full + alerts | ✅ Full |
+| Local Intelligence (session) | ✅ Free cards | ✅ Full + alerts | ✅ Full |
+| Local Intelligence (trend-based) | ❌ | ✅ Paid | ✅ Full |
+| Keep Warm toggle | ❌ | ✅ | ✅ |
+| 90-day history | ❌ | ✅ | ✅ |
+| Slack / PagerDuty | ❌ | ✅ | ✅ |
+| Sovereignty audit log | ✅ View | ✅ View | ✅ Signed export |
+| Sentinel Proxy routing | ❌ | ❌ | ✅ |
+| Sovereign Mode (no cloud) | ❌ | ❌ | ✅ |
+| Price | Free | ~$29/mo | ~$199/mo |
+
+---
+
+*Wicklee is sovereign infrastructure. Your fleet data never leaves your network until you choose.*
