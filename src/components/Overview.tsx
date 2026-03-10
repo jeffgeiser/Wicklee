@@ -451,8 +451,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               </p>
             </div>
           }
-          {/* icon={Zap} — was Throughput icon, replaced with Gauge */}
-          icon={Gauge} color="bg-amber-500"
+          icon={Gauge} /* revert: icon={Zap} */ color="bg-amber-500"
         />
         <StatCard
           title="Avg GPU Temp"
@@ -462,8 +461,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         <StatCard
           title="Total VRAM Used"
           value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{totalVramStr}</p>}
-          {/* icon={Database} — was Total VRAM icon, replaced with Layers */}
-          icon={Layers} color="bg-blue-600"
+          icon={Layers} /* revert: icon={Database} */ color="bg-blue-600"
         />
         <StatCard
           title="Wattage / 1k tkn"
@@ -491,8 +489,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               </p>
             </div>
           }
-          {/* icon={Zap} — was Cost/1k icon, replaced with DollarSign */}
-          icon={DollarSign} color="bg-cyan-400"
+          icon={DollarSign} /* revert: icon={Zap} */ color="bg-cyan-400"
         />
         {/* icon={Cpu} — was Fleet Nodes icon, replaced with Server */}
         <StatCard title="Fleet Nodes" value={<p className="text-2xl font-bold text-gray-900 dark:text-white">{nodes.length.toString()}</p>} icon={Server} color="bg-green-500" />
