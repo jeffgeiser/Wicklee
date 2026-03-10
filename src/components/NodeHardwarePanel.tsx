@@ -47,7 +47,7 @@ export const SentinelCard: React.FC<{
 // title prop surfaces footnotes as a tooltip on the label (avoids per-card repetition)
 const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; title?: string }> = ({ label, value, valueCls, title }) => (
   <div className="min-w-0">
-    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1" title={title}>{label}</p>
+    <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1" title={title}>{label}</p>
     <p className={`text-lg font-bold leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
   </div>
 );
@@ -63,7 +63,7 @@ const HudTile: React.FC<{ label: string; value: string; sub?: string; dim?: bool
 
 // ── Column header label ────────────────────────────────────────────────────────
 const ClusterLabel: React.FC<{ label: string }> = ({ label }) => (
-  <p className="text-[9px] text-gray-400 dark:text-gray-600 uppercase tracking-widest font-semibold mb-2">{label}</p>
+  <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold mb-2">{label}</p>
 );
 
 export const HardwareDetailPanel: React.FC<{ metrics: SentinelMetrics }> = ({ metrics: m }) => {
