@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ExternalLink, ChevronDown, Search, X } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ExternalLink, ChevronDown, Search, X, ArrowUpDown } from 'lucide-react';
 import { NodeAgent, SentinelMetrics } from '../types';
 import { HardwareDetailPanel, thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 
@@ -19,6 +19,15 @@ const fmtAgo = (ms: number): string => {
 };
 
 type SortKey     = 'registered' | 'nodeId' | 'hostname' | 'cpu' | 'tps' | 'lastActive';
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'registered', label: 'Registration order' },
+  { value: 'nodeId',     label: 'Node ID' },
+  { value: 'hostname',   label: 'Hostname' },
+  { value: 'cpu',        label: 'CPU usage ↓' },
+  { value: 'tps',        label: 'Tok/s ↓' },
+  { value: 'lastActive', label: 'Last active' },
+];
 type StatusFilter = 'all' | 'online' | 'offline';
 
 interface NodesListProps {
@@ -52,7 +61,7 @@ const CollapsibleNode: React.FC<CollapsibleNodeProps> = ({ node, metrics: m, las
   const tps        = m?.ollama_tokens_per_second;
 
   return (
-    <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
+    <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900">
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
@@ -119,6 +128,8 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
 
   const [search, setSearch]             = useState('');
   const [sortKey, setSortKey]           = useState<SortKey>('registered');
+  const [sortOpen, setSortOpen]         = useState(false);
+  const sortRef                         = useRef<HTMLDivElement>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   const esRef     = useRef<EventSource | null>(null);
@@ -171,6 +182,14 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
 
     connect();
     return () => { esRef.current?.close(); clearTimeout(retryTimer); };
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (sortRef.current && !sortRef.current.contains(e.target as Node)) setSortOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
   }, []);
 
   // ── Localhost view ─────────────────────────────────────────────────────────
@@ -334,18 +353,33 @@ const NodesList: React.FC<NodesListProps> = ({ nodes }) => {
             </button>
           )}
         </div>
-        <select
-          value={sortKey}
-          onChange={e => setSortKey(e.target.value as SortKey)}
-          className="text-xs bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-gray-300 focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
-        >
-          <option value="registered">Registration order</option>
-          <option value="nodeId">Node ID</option>
-          <option value="hostname">Hostname</option>
-          <option value="cpu">CPU usage ↓</option>
-          <option value="tps">Tok/s ↓</option>
-          <option value="lastActive">Last active</option>
-        </select>
+        <div className="relative shrink-0" ref={sortRef}>
+          <button
+            onClick={() => setSortOpen(o => !o)}
+            className="flex items-center gap-2 px-3 py-2 text-xs bg-gray-900 border border-gray-700 rounded-xl text-gray-300 hover:border-indigo-500 hover:text-gray-200 transition-colors focus:outline-none"
+          >
+            <ArrowUpDown className="w-3.5 h-3.5 text-gray-500" />
+            <span>{SORT_OPTIONS.find(o => o.value === sortKey)?.label ?? 'Sort'}</span>
+            <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${sortOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {sortOpen && (
+            <div className="absolute right-0 top-full mt-1.5 w-44 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 py-1 overflow-hidden">
+              {SORT_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => { setSortKey(opt.value); setSortOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                    sortKey === opt.value
+                      ? 'text-indigo-300 bg-indigo-500/10'
+                      : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Status filter pills ───────────────────────────────────────────────── */}
