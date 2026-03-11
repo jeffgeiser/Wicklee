@@ -215,10 +215,8 @@ const DetailBand: React.FC<{
           Connectivity
         </p>
         <div>
-          <DL label="Telemetry Endpoint" />
-          <DV cls="text-gray-600 dark:text-gray-400 break-all">
-            {isLocal ? 'Local Only' : CLOUD_URL.replace(/^https?:\/\//, '')}
-          </DV>
+          <DL label="Data Destination" />
+          <DV>{isLocal ? 'This device only' : 'Wicklee Cloud'}</DV>
         </div>
         <div>
           <DL label="Last Telemetry" />
