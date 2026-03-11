@@ -21,45 +21,13 @@ const CLOUD_URL = (() => {
     : v.startsWith('http') ? v : `https://${v}`;
 })();
 
-// ── Responsive grid approach ───────────────────────────────────────────────────
-// Columns hide at priority tiers as viewport narrows.
-// display:none removes a cell from grid flow, so grid-template-columns must
-// match the EXACT number of visible cells at every breakpoint.
-//
-// Column order in DOM (priority — always visible marked with ★):
-//   1. Checkbox          ★  40px
-//   2. Status + Node ID  ★  130px  (IDs are 7–10 chars, short and predictable)
-//   3. Identity          ★  minmax(0,1fr)  (chip name — variable, takes remaining space)
-//   4. OS                   hide < 1024px   80px
-//   5. Memory               hide < 860px    80px
-//   6. Connectivity      ★  90px
-//   7. Uptime               hide < 1024px   80px
-//   8. Version              hide < 1200px   70px
-//   9. Coverage          ★  80px
-//
-// Available content width = viewport − sidebar(256px) − padding(48px)
-//   768px → 464px | 1024px → 720px | 1200px → 896px | 1440px → 1136px
-//
-// Grid template changes in lockstep with hidden cells:
-//   < 860px  : 5 cols  — checkbox | node | identity | connectivity | coverage
-//   860–1024 : 6 cols  — + memory
-//   1024–1200: 8 cols  — + os + uptime
-//   1200px+  : 9 cols  — + version
-//
-// Tailwind arbitrary property + arbitrary breakpoint syntax (v3.2+)
-const MGMT_GRID_CLS = [
-  'grid gap-x-3 items-center',
-  '[grid-template-columns:40px_130px_minmax(120px,300px)_110px_80px]',
-  'min-[860px]:[grid-template-columns:40px_130px_minmax(120px,300px)_110px_110px_80px]',
-  'lg:[grid-template-columns:40px_130px_minmax(120px,300px)_90px_110px_110px_55px_55px]',
-  'min-[1200px]:[grid-template-columns:40px_130px_minmax(120px,300px)_80px_110px_110px_55px_45px_80px]',
-].join(' ');
-
-// Per-column visibility — applied to both header cells and data cells
-const COL_OS      = 'hidden lg:block';            // show >= 1024px
-const COL_MEMORY  = 'hidden min-[860px]:block';   // show >= 860px
-const COL_UPTIME  = 'hidden lg:block';            // show >= 1024px
-const COL_VERSION = 'hidden min-[1200px]:block';  // show >= 1200px
+// ── Management table grid ──────────────────────────────────────────────────────
+// Fixed column widths — no responsive hiding.
+// Container is overflow-x: auto so the table scrolls horizontally on narrow
+// viewports rather than collapsing or hiding columns.
+// Columns: SELECT(40) | NODE ID(100) | IDENTITY(220) | OS(80) | MEMORY(120) |
+//          CONNECTIVITY(110) | UPTIME(90) | VERSION(80) | COVERAGE(120) | SPACER(1fr)
+const MGMT_GRID_CLS = 'grid gap-x-3 items-center [grid-template-columns:40px_100px_220px_80px_120px_110px_90px_80px_120px_1fr]';
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -162,7 +130,7 @@ const MgmtTableHeader: React.FC<{
       className={`${MGMT_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}
     >
       <div
-        className="flex items-center justify-center cursor-pointer"
+        className="flex items-center justify-center cursor-pointer sticky left-4 bg-white dark:bg-gray-900"
         onClick={() => onToggleSelectAll(filteredIds)}
       >
         {allSelected
@@ -170,14 +138,15 @@ const MgmtTableHeader: React.FC<{
           : <Square className="w-3 h-3 text-gray-500" />
         }
       </div>
-      <p className={COL}>Node</p>
+      <p className={`${COL} sticky left-[68px] bg-white dark:bg-gray-900`}>Node</p>
       <p className={COL}>Identity</p>
-      <p className={`${COL} ${COL_OS}`}>OS</p>
-      <p className={`${COL} ${COL_MEMORY}`}>Memory</p>
+      <p className={COL}>OS</p>
+      <p className={COL}>Memory</p>
       <p className={COL}>Connectivity</p>
-      <p className={`${COL} ${COL_UPTIME}`}>Uptime</p>
-      <p className={`${COL} ${COL_VERSION}`}>Version</p>
+      <p className={COL}>Uptime</p>
+      <p className={COL}>Version</p>
       <p className={COL} title="Metric coverage — what this agent can see on its node">Coverage</p>
+      <div />
     </div>
   );
 };
@@ -411,13 +380,13 @@ const MgmtRow: React.FC<{
     >
       {/* Collapsed row */}
       <div
-        className={`${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
+        className={`group ${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
         onClick={() => setOpen(o => !o)}
       >
-        {/* Checkbox */}
+        {/* Checkbox (sticky) */}
         <div
           onClick={e => { e.stopPropagation(); onToggleSelect(); }}
-          className="flex items-center justify-center"
+          className="flex items-center justify-center overflow-hidden sticky left-4 bg-white dark:bg-gray-900 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/40"
         >
           {isSelected
             ? <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
@@ -425,8 +394,8 @@ const MgmtRow: React.FC<{
           }
         </div>
 
-        {/* Status + Node ID */}
-        <div className="flex items-center gap-2 min-w-0">
+        {/* Status + Node ID (sticky) */}
+        <div className="flex items-center gap-2 overflow-hidden sticky left-[68px] bg-white dark:bg-gray-900 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/40">
           <span className={`shrink-0 w-2 h-2 rounded-full ${dotCls}`} title={dotTooltip} />
           <div className="min-w-0">
             <p className="text-xs font-bold font-telin text-gray-900 dark:text-white truncate">{node.id}</p>
@@ -436,8 +405,8 @@ const MgmtRow: React.FC<{
           </div>
         </div>
 
-        {/* Identity — tooltip condenses hidden columns at narrow viewports */}
-        <div className="min-w-0" title={identityTooltip}>
+        {/* Identity */}
+        <div className="min-w-0 overflow-hidden" title={identityTooltip}>
           {chipName ? (
             <>
               <p className="text-xs font-telin text-indigo-400/90 truncate">{chipName}</p>
@@ -454,21 +423,21 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* OS — hide below 1024px */}
-        <div className={`min-w-0 ${COL_OS}`}>
+        {/* OS */}
+        <div className="min-w-0 overflow-hidden">
           {isOnline && os !== 'Unknown'
             ? <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate">{os}</p>
             : <p className="text-xs text-gray-600">—</p>
           }
         </div>
 
-        {/* Memory capacity — inventory, not live usage — hide below 860px */}
-        <div className={`min-w-0 ${COL_MEMORY}`}>
+        {/* Memory capacity — inventory, not live usage */}
+        <div className="min-w-0 overflow-hidden">
           <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate">{memCap}</p>
         </div>
 
         {/* Connectivity */}
-        <div>
+        <div className="overflow-hidden">
           {isOnline ? (
             isLocal ? (
               <div className="flex items-center gap-1.5">
@@ -486,15 +455,15 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* Uptime — hide below 1024px */}
-        <div className={COL_UPTIME}>
+        {/* Uptime */}
+        <div className="overflow-hidden">
           <span className="text-xs font-telin tabular-nums text-gray-500">
             {isOnline ? (node.uptime ?? '—') : '—'}
           </span>
         </div>
 
-        {/* Agent Version — not yet reported by agent — hide below 1200px */}
-        <div className={COL_VERSION}>
+        {/* Agent Version — not yet reported by agent */}
+        <div className="overflow-hidden">
           <span className="text-xs font-telin text-gray-600">—</span>
         </div>
 
@@ -528,6 +497,9 @@ const MgmtRow: React.FC<{
             </span>
           )}
         </div>
+
+        {/* SPACER */}
+        <div />
       </div>
 
       {/* Expanded detail band */}
@@ -735,7 +707,7 @@ const NodesList: React.FC<NodesListProps> = ({
         </div>
 
         {/* Node table */}
-        <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden bg-white dark:bg-gray-900">
+        <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-x-auto bg-white dark:bg-gray-900">
           <MgmtTableHeader
             filteredIds={[localNode.id]}
             selectedNodes={selectedNodes}
@@ -1035,7 +1007,7 @@ const NodesList: React.FC<NodesListProps> = ({
       </div>
 
       {/* ── Node table ────────────────────────────────────────────────────── */}
-      <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden bg-white dark:bg-gray-900">
+      <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-x-auto bg-white dark:bg-gray-900">
         <MgmtTableHeader
           filteredIds={filteredIds}
           selectedNodes={selectedNodes}
