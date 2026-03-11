@@ -394,17 +394,24 @@ const NodeOverrideRow: React.FC<{
   React.useEffect(() => { setKwhDraft(ov.kwhRate?.toString() ?? ''); }, [ov.kwhRate]);
   React.useEffect(() => { setPueDraft(ov.pue?.toString()  ?? ''); }, [ov.pue]);
 
+  // Per-cell saved flash state
+  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | null>(null);
+  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc') => {
+    setSavedCell(cell);
+    setTimeout(() => setSavedCell(c => c === cell ? null : c), 1500);
+  };
+
   const commitKwh = () => {
     const v = parseFloat(kwhDraft);
-    if (kwhDraft === '') { onOverride({ kwhRate: undefined }); }
-    else if (!isNaN(v) && v >= 0) { onOverride({ kwhRate: v }); }
+    if (kwhDraft === '') { onOverride({ kwhRate: undefined }); flashSaved('kwh'); }
+    else if (!isNaN(v) && v >= 0) { onOverride({ kwhRate: v }); flashSaved('kwh'); }
     else { setKwhDraft(ov.kwhRate?.toString() ?? ''); }
   };
 
   const commitPue = () => {
     const v = parseFloat(pueDraft);
-    if (pueDraft === '') { onOverride({ pue: undefined }); }
-    else if (!isNaN(v) && v >= 1.0 && v <= 3.0) { onOverride({ pue: v }); }
+    if (pueDraft === '') { onOverride({ pue: undefined }); flashSaved('pue'); }
+    else if (!isNaN(v) && v >= 1.0 && v <= 3.0) { onOverride({ pue: v }); flashSaved('pue'); }
     else { setPueDraft(ov.pue?.toString() ?? ''); }
   };
 
@@ -413,6 +420,13 @@ const NodeOverrideRow: React.FC<{
     ? 'text-gray-900 dark:text-white'
     : 'text-gray-400 dark:text-gray-500';
   const cellBase = 'w-full bg-transparent border-0 outline-none text-xs font-telin tabular-nums placeholder-gray-400 dark:placeholder-gray-600';
+
+  const SavedMark = () => (
+    <span className="flex items-center gap-0.5 animate-in fade-in duration-150 shrink-0">
+      <Check size={9} className="text-green-400" />
+      <span className="text-[9px] text-green-400">Saved</span>
+    </span>
+  );
 
   return (
     <tr className={`hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors ${eff.hasAnyOverride ? 'border-l-2 border-amber-400/40' : 'border-l-2 border-transparent'}`}>
@@ -434,62 +448,74 @@ const NodeOverrideRow: React.FC<{
 
       {/* Location Label */}
       <td className="px-3 py-3 max-w-[180px]">
-        <input
-          type="text"
-          value={ov.locationLabel ?? ''}
-          onChange={e => onOverride({ locationLabel: e.target.value || undefined })}
-          placeholder="e.g. Home lab, Hetzner Frankfurt"
-          title={ov.locationLabel ?? ''}
-          className={`${cellBase} truncate ${valCls(!!ov.locationLabel)}`}
-        />
+        <div className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={ov.locationLabel ?? ''}
+            onChange={e => { onOverride({ locationLabel: e.target.value || undefined }); flashSaved('loc'); }}
+            placeholder="e.g. Home lab, Hetzner Frankfurt"
+            title={ov.locationLabel ?? ''}
+            className={`${cellBase} truncate ${valCls(!!ov.locationLabel)}`}
+          />
+          {savedCell === 'loc' && <SavedMark />}
+        </div>
       </td>
 
       {/* kWh Rate */}
       <td className="px-3 py-3 text-right">
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          value={kwhDraft}
-          onChange={e => setKwhDraft(e.target.value)}
-          onBlur={commitKwh}
-          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-          placeholder={fleetSettings.kwhRate.toString()}
-          className={`${cellBase} text-right tabular-nums ${valCls(eff.kwhRateOverride)}`}
-        />
+        <div className="flex items-center justify-end gap-1.5">
+          {savedCell === 'kwh' && <SavedMark />}
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={kwhDraft}
+            onChange={e => setKwhDraft(e.target.value)}
+            onBlur={commitKwh}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder={fleetSettings.kwhRate.toString()}
+            className={`${cellBase} text-right tabular-nums ${valCls(eff.kwhRateOverride)}`}
+          />
+        </div>
       </td>
 
       {/* Currency */}
       <td className="px-3 py-3">
-        <div className="relative flex items-center">
-          <select
-            value={ov.currency ?? ''}
-            onChange={e => onOverride({ currency: e.target.value as NodeOverride['currency'] || undefined })}
-            className={`${cellBase} appearance-none cursor-pointer pr-5 ${valCls(eff.currencyOverride)}`}
-          >
-            <option value="">{fleetSettings.currency}</option>
-            {CURRENCY_OPTIONS.map(c => (
-              <option key={c.value} value={c.value}>{c.value}</option>
-            ))}
-          </select>
-          <ChevronDown size={10} className="pointer-events-none absolute right-0.5 text-gray-400 shrink-0" />
+        <div className="flex items-center gap-1.5">
+          <div className="relative flex items-center min-w-0 flex-1">
+            <select
+              value={ov.currency ?? ''}
+              onChange={e => { onOverride({ currency: e.target.value as NodeOverride['currency'] || undefined }); flashSaved('curr'); }}
+              className={`${cellBase} appearance-none cursor-pointer pr-5 ${valCls(eff.currencyOverride)}`}
+            >
+              <option value="">{fleetSettings.currency}</option>
+              {CURRENCY_OPTIONS.map(c => (
+                <option key={c.value} value={c.value}>{c.value}</option>
+              ))}
+            </select>
+            <ChevronDown size={10} className="pointer-events-none absolute right-0.5 text-gray-400 shrink-0" />
+          </div>
+          {savedCell === 'curr' && <SavedMark />}
         </div>
       </td>
 
       {/* PUE */}
       <td className="px-3 py-3 text-right">
-        <input
-          type="number"
-          min="1.0"
-          max="3.0"
-          step="0.1"
-          value={pueDraft}
-          onChange={e => setPueDraft(e.target.value)}
-          onBlur={commitPue}
-          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-          placeholder={fleetSettings.pue.toFixed(1)}
-          className={`${cellBase} text-right tabular-nums ${valCls(eff.pueOverride)}`}
-        />
+        <div className="flex items-center justify-end gap-1.5">
+          {savedCell === 'pue' && <SavedMark />}
+          <input
+            type="number"
+            min="1.0"
+            max="3.0"
+            step="0.1"
+            value={pueDraft}
+            onChange={e => setPueDraft(e.target.value)}
+            onBlur={commitPue}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder={fleetSettings.pue.toFixed(1)}
+            className={`${cellBase} text-right tabular-nums ${valCls(eff.pueOverride)}`}
+          />
+        </div>
       </td>
 
       {/* Fleet defaults chip */}
