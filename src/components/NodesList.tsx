@@ -49,10 +49,10 @@ const CLOUD_URL = (() => {
 // Tailwind arbitrary property + arbitrary breakpoint syntax (v3.2+)
 const MGMT_GRID_CLS = [
   'grid gap-x-3 items-center',
-  '[grid-template-columns:40px_130px_minmax(120px,300px)_90px_80px]',
-  'min-[860px]:[grid-template-columns:40px_130px_minmax(120px,300px)_80px_90px_80px]',
-  'lg:[grid-template-columns:40px_130px_minmax(120px,300px)_90px_80px_90px_80px_80px]',
-  'min-[1200px]:[grid-template-columns:40px_130px_minmax(120px,300px)_80px_80px_90px_80px_70px_80px]',
+  '[grid-template-columns:40px_130px_minmax(120px,300px)_110px_80px]',
+  'min-[860px]:[grid-template-columns:40px_130px_minmax(120px,300px)_110px_110px_80px]',
+  'lg:[grid-template-columns:40px_130px_minmax(120px,300px)_90px_110px_110px_55px_55px]',
+  'min-[1200px]:[grid-template-columns:40px_130px_minmax(120px,300px)_80px_110px_110px_55px_45px_80px]',
 ].join(' ');
 
 // Per-column visibility — applied to both header cells and data cells
