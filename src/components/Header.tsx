@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Bell, Settings, User, ChevronDown, Building2, LogOut, Key, UserCircle, Shield, Moon, Sun, BrainCircuit, CreditCard, Cloud, CloudLightning } from 'lucide-react';
+import { Search, Bell, Settings, User, LogOut, HelpCircle, FileText, Cloud, CloudLightning } from 'lucide-react';
 import { DashboardTab, PairingInfo, Tenant, User as UserType } from '../types';
 
 interface HeaderProps {
@@ -107,14 +107,6 @@ const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTe
             </button>
           )}
 
-          <button
-            onClick={onToggleTheme}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition-colors"
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-          >
-            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-          </button>
-
           <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition-colors relative">
             <Bell className="w-5 h-5" />
             <span className="absolute top-2 right-2.5 w-1.5 h-1.5 bg-red-500 rounded-full border border-white dark:border-gray-950"></span>
@@ -137,67 +129,60 @@ const Header: React.FC<HeaderProps> = ({ activeTab, tenants, currentTenant, onTe
               </button>
 
               {isProfileOpen && (
-                <div className="absolute top-full right-0 mt-2 w-64 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-2xl z-50 p-1.5 animate-in fade-in slide-in-from-top-2 duration-200">
-                  <div className="px-3 py-3 mb-1 border-b border-gray-100 dark:border-gray-800/50">
-                    <p className="text-xs font-bold text-gray-900 dark:text-gray-200">{currentUser.fullName}</p>
-                    <p className="text-[10px] text-gray-500">{currentUser.email}</p>
+                <div className="absolute top-full right-0 mt-2 w-[240px] bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-2xl z-50 p-1.5 animate-in fade-in slide-in-from-top-2 duration-200">
+                  {/* User info */}
+                  <div className="px-3 py-3 mb-1 border-b border-gray-100 dark:border-gray-800/50 flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0">
+                      <User className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-gray-900 dark:text-gray-200 truncate">{currentUser.fullName}</p>
+                      <p className="text-[10px] text-gray-500 truncate">{currentUser.email}</p>
+                      <span className="inline-flex items-center px-1.5 py-0.5 mt-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500">
+                        Free Plan
+                      </span>
+                    </div>
                   </div>
 
+                  {/* Menu items */}
                   <div className="space-y-0.5">
                     <button
-                      onClick={() => handleTabSelect(DashboardTab.PROFILE)}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
-                    >
-                      <UserCircle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                      View Profile
-                    </button>
-                    <button
-                      onClick={() => handleTabSelect(DashboardTab.SECURITY)}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
-                    >
-                      <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                      Account Security
-                    </button>
-                    <button
-                      onClick={() => handleTabSelect(DashboardTab.API_KEYS)}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
-                    >
-                      <Key className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                      API Keys
-                    </button>
-                    <button
-                      onClick={() => handleTabSelect(DashboardTab.AI_PROVIDERS)}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
-                    >
-                      <BrainCircuit className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                      AI Providers
-                    </button>
-                    <button
-                      onClick={() => handleTabSelect(DashboardTab.PREFERENCES)}
+                      onClick={() => handleTabSelect(DashboardTab.SETTINGS)}
                       className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                     >
                       <Settings className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                      Preferences
+                      Settings
                     </button>
-                    <button
-                      onClick={() => handleTabSelect(DashboardTab.BILLING)}
+                    <a
+                      href="https://github.com/jeffgeiser/Wicklee#readme"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setIsProfileOpen(false)}
                       className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                     >
-                      <CreditCard className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                      Billing & Subscription
-                    </button>
+                      <HelpCircle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                      Documentation
+                    </a>
+                    <a
+                      href="https://github.com/jeffgeiser/Wicklee/releases"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setIsProfileOpen(false)}
+                      className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                    >
+                      <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                      Release notes
+                    </a>
                   </div>
 
+                  {/* Sign out */}
                   <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50">
                     <button
-                      onClick={() => {
-                        setIsProfileOpen(false);
-                        onLogout?.();
-                      }}
+                      onClick={() => { setIsProfileOpen(false); onLogout?.(); }}
                       className="w-full text-left px-3 py-2 rounded-lg text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex items-center gap-2"
                     >
                       <LogOut className="w-4 h-4" />
-                      Sign Out
+                      Sign out
                     </button>
                   </div>
                 </div>
