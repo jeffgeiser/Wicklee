@@ -18,6 +18,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
 // ── DB type ───────────────────────────────────────────────────────────────────
 
@@ -141,14 +142,31 @@ struct FleetResponse {
     nodes: Vec<NodeSummary>,
 }
 
+// ── Clerk JWKS types ──────────────────────────────────────────────────────────
+
+/// A single RSA public key from the Clerk JWKS endpoint.
+#[derive(Deserialize, Clone)]
+struct JwkKey {
+    kid: String,
+    n:   String,   // base64url modulus
+    e:   String,   // base64url exponent
+}
+
+#[derive(Deserialize)]
+struct JwksResponse {
+    keys: Vec<JwkKey>,
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
     /// Persistent store for users, sessions, and node pairing records.
-    db:      Db,
+    db:          Db,
     /// In-memory telemetry cache keyed by node_id.
-    metrics: Arc<RwLock<HashMap<String, MetricsEntry>>>,
+    metrics:     Arc<RwLock<HashMap<String, MetricsEntry>>>,
+    /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
+    clerk_keys:  Arc<RwLock<Vec<JwkKey>>>,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -218,6 +236,12 @@ fn run_migrations(conn: &Connection) {
     // Needed for per-user node counting to enforce the free-tier limit correctly.
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN user_id TEXT;");
 
+    // Add clerk_id column — links a Clerk identity (sub claim) to an internal user.
+    let _ = conn.execute_batch("ALTER TABLE users ADD COLUMN clerk_id TEXT;");
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON users(clerk_id);"
+    );
+
     // Backfill: if only one user exists, assign all orphaned nodes to them.
     // Safe to run on every startup — no-ops when there are zero or multiple users.
     let _ = conn.execute_batch("
@@ -267,19 +291,130 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_owned())
 }
 
-/// Validate a Bearer token and return the user_id.
-/// Synchronous — intended to be called inside spawn_blocking or block_in_place.
-fn require_user(token: &str, conn: &rusqlite::Connection) -> Option<String> {
-    conn.query_row(
+// ── Clerk JWT helpers ─────────────────────────────────────────────────────────
+
+/// Fetch JWKS from Clerk. Synchronous — call from spawn_blocking.
+fn fetch_jwks(url: &str) -> Vec<JwkKey> {
+    match ureq::get(url).call() {
+        Ok(resp) => resp.into_json::<JwksResponse>()
+            .map(|j| j.keys)
+            .unwrap_or_default(),
+        Err(e) => {
+            eprintln!("[jwks] fetch failed: {e}");
+            vec![]
+        }
+    }
+}
+
+/// Verify a Clerk JWT and return the `sub` claim (Clerk user ID).
+fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct ClerkClaims { sub: String }
+
+    let header = jsonwebtoken::decode_header(token).ok()?;
+    let kid    = header.kid?;
+
+    // Find the matching key by kid; fall back to trying all keys if needed.
+    let matching: Vec<&JwkKey> = keys.iter().filter(|k| k.kid == kid).collect();
+    let candidates: &[&JwkKey] = if matching.is_empty() { &keys.iter().collect::<Vec<_>>() } else { &matching };
+
+    let mut val = Validation::new(Algorithm::RS256);
+    val.validate_aud = false; // Clerk uses azp, not aud
+
+    for jwk in candidates {
+        if let Ok(key) = DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
+            if let Ok(data) = decode::<ClerkClaims>(token, &key, &val) {
+                return Some(data.claims.sub);
+            }
+        }
+    }
+    None
+}
+
+/// Map a Clerk `sub` to an internal user ID, creating or linking the record as needed.
+/// - If a user with this clerk_id exists → return their id.
+/// - If exactly one user has no clerk_id → link them (solo-dev migration path).
+/// - Otherwise → create a new minimal user record.
+fn resolve_clerk_user(clerk_sub: &str, conn: &Connection) -> Option<String> {
+    // Already linked?
+    if let Ok(id) = conn.query_row(
+        "SELECT id FROM users WHERE clerk_id = ?1",
+        params![clerk_sub],
+        |r| r.get::<_, String>(0),
+    ) {
+        return Some(id);
+    }
+
+    // Exactly one unmapped user — link them (handles DIY→Clerk migration).
+    let unmapped: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM users WHERE clerk_id IS NULL",
+        [],
+        |r| r.get(0),
+    ).unwrap_or(0);
+
+    if unmapped == 1 {
+        if let Ok(id) = conn.query_row(
+            "SELECT id FROM users WHERE clerk_id IS NULL LIMIT 1",
+            [],
+            |r| r.get::<_, String>(0),
+        ) {
+            let _ = conn.execute(
+                "UPDATE users SET clerk_id = ?1 WHERE id = ?2",
+                params![clerk_sub, id],
+            );
+            return Some(id);
+        }
+    }
+
+    // New Clerk user — create a minimal record (Clerk owns the identity data).
+    let new_id = Uuid::new_v4().to_string();
+    let ts     = now_ms() as i64;
+    // Use clerk_sub as email placeholder (unique); password_hash empty (Clerk authenticates).
+    conn.execute(
+        "INSERT INTO users (id, email, password_hash, full_name, role, is_pro, created_at, clerk_id)
+         VALUES (?1, ?2, '', 'Clerk User', 'Owner', 0, ?3, ?2)",
+        params![new_id, clerk_sub, ts],
+    ).ok()?;
+    Some(new_id)
+}
+
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+
+/// Validate a Bearer token and return the internal user_id.
+/// Tries the legacy sessions table first, then Clerk JWT.
+/// Synchronous — call inside spawn_blocking or block_in_place.
+fn require_user(token: &str, conn: &Connection, clerk_keys: &[JwkKey]) -> Option<String> {
+    // Legacy DIY sessions (backward compat with old tokens).
+    if let Ok(id) = conn.query_row(
         "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
         params![token],
         |r| r.get::<_, String>(0),
-    ).ok()
+    ) {
+        return Some(id);
+    }
+
+    // Clerk JWT.
+    validate_clerk_jwt(token, clerk_keys)
+        .and_then(|sub| resolve_clerk_user(&sub, conn))
+}
+
+/// Like require_user but also returns email and is_pro for tier checks.
+fn require_user_info(
+    token: &str,
+    conn: &Connection,
+    clerk_keys: &[JwkKey],
+) -> Option<(String, String, i32)> {
+    let user_id = require_user(token, conn, clerk_keys)?;
+    conn.query_row(
+        "SELECT email, is_pro FROM users WHERE id = ?1",
+        params![user_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)),
+    ).ok().map(|(email, is_pro)| (user_id, email, is_pro))
 }
 
 /// Load the set of node IDs belonging to a user.
 /// Synchronous — call inside spawn_blocking or block_in_place.
-fn user_node_set(user_id: &str, conn: &rusqlite::Connection) -> HashSet<String> {
+fn user_node_set(user_id: &str, conn: &Connection) -> HashSet<String> {
     conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1")
         .ok()
         .map(|mut stmt| {
@@ -576,10 +711,11 @@ async fn handle_fleet(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
 
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let db = state.db.clone();
     let result: Option<Vec<(String, String, i64)>> = tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
-        let user_id = require_user(&token, &conn)?;
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
         let mut stmt = conn.prepare(
             "SELECT wk_id, fleet_url, last_seen FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
         ).ok()?;
@@ -633,15 +769,12 @@ async fn handle_activate(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
 
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let db = state.db.clone();
     // Returns (user_id, email, is_pro)
     let user_info: Option<(String, String, i32)> = tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
-        conn.query_row(
-            "SELECT u.id, u.email, u.is_pro FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
-            params![token],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i32>(2)?)),
-        ).ok()
+        require_user_info(&token, &conn, &clerk_keys)
     }).await.unwrap();
 
     let (user_id, email, is_pro_db) = match user_info {
@@ -712,11 +845,12 @@ async fn handle_fleet_stream(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
 
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let db = state.db.clone();
     let token2 = token.clone();
     let user_id = match tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
-        require_user(&token2, &conn)
+        require_user(&token2, &conn, &clerk_keys)
     }).await.unwrap() {
         Some(uid) => uid,
         None => return (StatusCode::UNAUTHORIZED,
@@ -829,10 +963,46 @@ async fn main() {
             .collect()
     };
 
-    let state = AppState {
-        db:      Arc::new(Mutex::new(conn)),
-        metrics: Arc::new(RwLock::new(seed_metrics)),
+    // Fetch Clerk JWKS on startup so JWT validation works immediately.
+    // Set CLERK_JWKS_URL in Railway env, e.g.:
+    //   https://<your-clerk-domain>/.well-known/jwks.json
+    let jwks_url = std::env::var("CLERK_JWKS_URL").ok();
+    let initial_keys = if let Some(ref url) = jwks_url {
+        let url2 = url.clone();
+        tokio::task::spawn_blocking(move || fetch_jwks(&url2))
+            .await
+            .unwrap_or_default()
+    } else {
+        eprintln!("[jwks] CLERK_JWKS_URL not set — Clerk JWT auth disabled");
+        vec![]
     };
+    if !initial_keys.is_empty() {
+        println!("  JWKS → {} key(s) loaded", initial_keys.len());
+    }
+    let clerk_keys = Arc::new(RwLock::new(initial_keys));
+
+    let state = AppState {
+        db:         Arc::new(Mutex::new(conn)),
+        metrics:    Arc::new(RwLock::new(seed_metrics)),
+        clerk_keys: clerk_keys.clone(),
+    };
+
+    // Refresh JWKS every 6 hours to pick up Clerk key rotations.
+    if let Some(url) = jwks_url {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+                let url2 = url.clone();
+                let new_keys = tokio::task::spawn_blocking(move || fetch_jwks(&url2))
+                    .await
+                    .unwrap_or_default();
+                if !new_keys.is_empty() {
+                    *clerk_keys.write().unwrap() = new_keys;
+                    println!("[jwks] refreshed");
+                }
+            }
+        });
+    }
 
     let app = Router::new()
         .route("/health",            get(handle_health))
