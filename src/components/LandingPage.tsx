@@ -136,13 +136,13 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp }) => {
       {/* Hero Section */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-16 sm:pb-32 text-center relative z-10">
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
-          Your GPU fleet is flying blind. <br />
+          Local AI inference,{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-400">
-            Wicklee fixes that in 5 minutes.
+            finally observable.
           </span>
         </h1>
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
-          Inference intelligence for sovereign AI fleets. Wicklee shows you GPU health, inference cost, and thermal state — across every node, in real time. Install in 60 seconds. No config required.
+          Routing intelligence. True inference cost. Thermal state. Live, across every node. Built for Ollama and vLLM. Install in 60 seconds — nothing to configure.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
           <button
