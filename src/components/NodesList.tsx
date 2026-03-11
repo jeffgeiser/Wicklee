@@ -20,9 +20,42 @@ const CLOUD_URL = (() => {
     : v.startsWith('http') ? v : `https://${v}`;
 })();
 
-// Fixed-width CSS grid for the node table rows AND header
-// checkbox | status+id | identity | os | memory | connectivity | uptime | version | permissions
-const MGMT_COLS = '40px 180px 200px 140px 110px 120px 120px 90px 110px';
+// ── Responsive grid approach ───────────────────────────────────────────────────
+// Columns hide at priority tiers as viewport narrows.
+// display:none removes a cell from grid flow, so grid-template-columns must
+// match the EXACT number of visible cells at every breakpoint.
+//
+// Column order in DOM (priority — always visible marked with ★):
+//   1. Checkbox          ★  40px
+//   2. Status + Node ID  ★  180px (flex at narrow)
+//   3. Identity          ★  200px (flex at narrow)
+//   4. OS                   hide < 1024px
+//   5. Memory               hide < 860px
+//   6. Connectivity      ★  120px
+//   7. Uptime               hide < 1024px
+//   8. Version              hide < 1200px
+//   9. Permissions       ★  110px
+//
+// Grid template changes in lockstep with hidden cells:
+//   < 860px  : 5 cols  — checkbox | node | identity | connectivity | perms
+//   860–1024 : 6 cols  — + memory
+//   1024–1200: 8 cols  — + os + uptime
+//   1200px+  : 9 cols  — + version (fixed px everywhere)
+//
+// Tailwind arbitrary property + arbitrary breakpoint syntax (v3.2+)
+const MGMT_GRID_CLS = [
+  'grid gap-x-3 items-center',
+  '[grid-template-columns:40px_minmax(0,1fr)_minmax(0,1fr)_120px_110px]',
+  'min-[860px]:[grid-template-columns:40px_minmax(0,1fr)_minmax(0,1fr)_110px_120px_110px]',
+  'lg:[grid-template-columns:40px_minmax(0,1fr)_minmax(0,1fr)_140px_110px_120px_120px_110px]',
+  'min-[1200px]:[grid-template-columns:40px_180px_200px_140px_110px_120px_120px_90px_110px]',
+].join(' ');
+
+// Per-column visibility — applied to both header cells and data cells
+const COL_OS      = 'hidden lg:block';            // show >= 1024px
+const COL_MEMORY  = 'hidden min-[860px]:block';   // show >= 860px
+const COL_UPTIME  = 'hidden lg:block';            // show >= 1024px
+const COL_VERSION = 'hidden min-[1200px]:block';  // show >= 1200px
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -122,8 +155,7 @@ const MgmtTableHeader: React.FC<{
     'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none';
   return (
     <div
-      className="grid gap-x-3 items-center px-4 py-2 border-b border-gray-100 dark:border-gray-800/60"
-      style={{ gridTemplateColumns: MGMT_COLS }}
+      className={`${MGMT_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}
     >
       <div
         className="flex items-center justify-center cursor-pointer"
@@ -136,11 +168,11 @@ const MgmtTableHeader: React.FC<{
       </div>
       <p className={COL}>Node</p>
       <p className={COL}>Identity</p>
-      <p className={COL}>OS</p>
-      <p className={COL}>Memory</p>
+      <p className={`${COL} ${COL_OS}`}>OS</p>
+      <p className={`${COL} ${COL_MEMORY}`}>Memory</p>
       <p className={COL}>Connectivity</p>
-      <p className={COL}>Uptime</p>
-      <p className={COL}>Version</p>
+      <p className={`${COL} ${COL_UPTIME}`}>Uptime</p>
+      <p className={`${COL} ${COL_VERSION}`}>Version</p>
       <p className={COL}>Permissions</p>
     </div>
   );
@@ -175,7 +207,7 @@ const DetailBand: React.FC<{
   const ollamaDetected = m?.ollama_running === true;
 
   return (
-    <div className="border-t border-gray-100 dark:border-gray-800 grid grid-cols-3 divide-x divide-gray-100 dark:divide-gray-800">
+    <div className="border-t border-gray-100 dark:border-gray-800 grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-800 min-[860px]:grid-cols-3 min-[860px]:divide-y-0 min-[860px]:divide-x">
 
       {/* A — CONNECTIVITY */}
       <div className="px-4 py-4 space-y-3">
@@ -356,14 +388,21 @@ const MgmtRow: React.FC<{
     ? 'bg-amber-400 animate-pulse'
     : 'bg-green-400 animate-pulse';
 
+  // Condensed tooltip for Identity cell — surfaces columns hidden at narrow widths
+  const identityTooltip = [
+    os !== 'Unknown' ? os : null,
+    memCap !== '—'   ? memCap : null,
+    isOnline && node.uptime ? `Up ${node.uptime}` : null,
+    'Agent v—',
+  ].filter(Boolean).join('  ·  ');
+
   return (
     <div
       className={`${enriched.isFlagged ? 'border-l-2 border-l-amber-400/50' : ''} ${!isOnline ? 'opacity-60' : ''}`}
     >
       {/* Collapsed row */}
       <div
-        className="grid gap-x-3 items-center px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer"
-        style={{ gridTemplateColumns: MGMT_COLS }}
+        className={`${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
         onClick={() => setOpen(o => !o)}
       >
         {/* Checkbox */}
@@ -388,8 +427,8 @@ const MgmtRow: React.FC<{
           </div>
         </div>
 
-        {/* Identity */}
-        <div className="min-w-0">
+        {/* Identity — tooltip condenses hidden columns at narrow viewports */}
+        <div className="min-w-0" title={identityTooltip}>
           {chipName ? (
             <>
               <p className="text-xs font-telin text-indigo-400/90 truncate">{chipName}</p>
@@ -406,16 +445,16 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* OS */}
-        <div className="min-w-0">
+        {/* OS — hide below 1024px */}
+        <div className={`min-w-0 ${COL_OS}`}>
           {isOnline && os !== 'Unknown'
             ? <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate">{os}</p>
             : <p className="text-xs text-gray-600">—</p>
           }
         </div>
 
-        {/* Memory capacity — inventory, not live usage */}
-        <div className="min-w-0">
+        {/* Memory capacity — inventory, not live usage — hide below 860px */}
+        <div className={`min-w-0 ${COL_MEMORY}`}>
           <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate">{memCap}</p>
         </div>
 
@@ -438,15 +477,15 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* Uptime */}
-        <div>
+        {/* Uptime — hide below 1024px */}
+        <div className={COL_UPTIME}>
           <span className="text-xs font-telin tabular-nums text-gray-500">
             {isOnline ? (node.uptime ?? '—') : '—'}
           </span>
         </div>
 
-        {/* Agent Version — not yet reported by agent */}
-        <div>
+        {/* Agent Version — not yet reported by agent — hide below 1200px */}
+        <div className={COL_VERSION}>
           <span className="text-xs font-telin text-gray-600">—</span>
         </div>
 
