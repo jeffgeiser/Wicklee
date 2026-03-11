@@ -338,7 +338,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
                       <div>kWh Rate</div>
                       <ClearColumnButton
-                        label="Reset column"
+                        label="Reset"
                         field="kwhRate"
                         confirmClear={confirmClear}
                         successField={successField}
@@ -350,7 +350,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-28">
                       <div>Currency</div>
                       <ClearColumnButton
-                        label="Reset column"
+                        label="Reset"
                         field="currency"
                         confirmClear={confirmClear}
                         successField={successField}
@@ -362,7 +362,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">
                       <div>PUE</div>
                       <ClearColumnButton
-                        label="Reset column"
+                        label="Reset"
                         field="pue"
                         confirmClear={confirmClear}
                         successField={successField}
