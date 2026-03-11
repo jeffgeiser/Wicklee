@@ -78,9 +78,9 @@ const fmtAgo = (ms: number): string => {
 //   1200px+  → 7 cols: all fixed px
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
-  '[grid-template-columns:minmax(0,1fr)_90px_90px_110px]',
-  'min-[860px]:[grid-template-columns:minmax(0,1fr)_minmax(0,1fr)_90px_90px_110px]',
-  'lg:[grid-template-columns:minmax(0,1fr)_minmax(0,1fr)_90px_90px_110px_100px]',
+  '[grid-template-columns:minmax(150px,1fr)_90px_90px_110px]',
+  'min-[860px]:[grid-template-columns:minmax(150px,1fr)_minmax(0,1fr)_90px_90px_110px]',
+  'lg:[grid-template-columns:minmax(150px,1fr)_minmax(0,1fr)_90px_90px_110px_100px]',
   'min-[1200px]:[grid-template-columns:180px_200px_90px_90px_80px_110px_100px]',
 ].join(' ');
 
