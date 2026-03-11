@@ -5,6 +5,7 @@ import Logo from './Logo';
 interface LandingPageProps {
   onSignIn: () => void;
   onSignUp: () => void;
+  onNavigate?: (path: string) => void;
 }
 
 const FeatureCard: React.FC<{ icon: React.ElementType, title: string, description: string }> = ({ icon: Icon, title, description }) => (
@@ -103,7 +104,7 @@ const metricCards = [
   },
 ];
 
-const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp }) => {
+const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 selection:bg-blue-600 selection:text-white">
       {/* Background Decor */}
@@ -117,7 +118,20 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp }) => {
         <Logo className="text-3xl" active={true} />
         <div className="flex items-center gap-4 sm:gap-8">
           <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
-          <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">GitHub</a>
+          <button
+            onClick={() => onNavigate?.('/blog')}
+            className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors"
+          >
+            Blog
+          </button>
+          <a
+            href="https://github.com/jeffgeiser/Wicklee"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors"
+          >
+            GitHub
+          </a>
           <button
             onClick={onSignIn}
             className="px-4 sm:px-6 py-2 border border-gray-700 hover:border-gray-500 text-white text-sm font-bold rounded-xl transition-all"

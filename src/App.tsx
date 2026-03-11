@@ -25,6 +25,8 @@ import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
 import AddNodeModal from './components/AddNodeModal';
 import { usePermissions } from './hooks/usePermissions';
+import BlogListing from './components/BlogListing';
+import BlogPost from './components/BlogPost';
 import { X, Sparkles, Zap, Shield, Globe } from 'lucide-react';
 
 const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: () => void }> = ({ isOpen, onClose, onUpgrade }) => {
@@ -141,6 +143,7 @@ const CLOUD_URL = (() => {
 })();
 
 const App: React.FC = () => {
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [isLoggedIn, setIsLoggedIn] = useState(isLocalHost);
   // True while we're checking localStorage for a saved session — prevents the
   // landing page from flashing before the /api/auth/me response arrives.
@@ -167,6 +170,17 @@ const App: React.FC = () => {
   });
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
   const socketRef = useRef<WebSocket | null>(null);
+
+  const navigate = useCallback((path: string) => {
+    window.history.pushState(null, '', path);
+    setCurrentPath(path);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => setCurrentPath(window.location.pathname);
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   // Restore session from localStorage on mount (hosted only — localhost skips auth entirely)
   useEffect(() => {
@@ -394,6 +408,28 @@ const App: React.FC = () => {
     setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   };
 
+  // Blog routes — public, no auth required
+  if (currentPath === '/blog' || currentPath === '/blog/') {
+    return (
+      <BlogListing
+        onNavigate={navigate}
+        onSignIn={() => setAuthModalMode('signin')}
+        onSignUp={() => setAuthModalMode('signup')}
+      />
+    );
+  }
+  const blogPostMatch = currentPath.match(/^\/blog\/([^/]+)$/);
+  if (blogPostMatch) {
+    return (
+      <BlogPost
+        slug={blogPostMatch[1]}
+        onNavigate={navigate}
+        onSignIn={() => setAuthModalMode('signin')}
+        onSignUp={() => setAuthModalMode('signup')}
+      />
+    );
+  }
+
   if (!sessionChecked) return null;
 
   if (!isLoggedIn) {
@@ -402,6 +438,7 @@ const App: React.FC = () => {
         <LandingPage
           onSignIn={() => setAuthModalMode('signin')}
           onSignUp={() => setAuthModalMode('signup')}
+          onNavigate={navigate}
         />
         {authModalMode && (
           <AuthModal

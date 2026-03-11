@@ -1,0 +1,36 @@
+# Wicklee
+> Fleet intelligence for sovereign AI.
+> Monitor GPU health, inference cost, thermal state, and WES scores
+> across every node running Ollama or vLLM on your own hardware.
+> Built for humans and their agents.
+
+## About
+- Wicklee is a sovereign GPU fleet monitor
+- Single Rust binary, embeds a React dashboard at localhost:7700
+- Cloud console at wicklee.dev for multi-node fleet view
+- WES (Wicklee Efficiency Score) = tok/s ÷ (Watts × ThermalPenalty)
+- The MPG for local AI inference
+
+## Blog
+- /blog — all posts
+- /blog/wes-the-mpg-for-local-ai-inference.md — WES introduction
+
+## API (Phase 3B — coming soon)
+- GET /api/v1/fleet — fleet summary, all nodes
+- GET /api/v1/fleet/wes — WES scores, all nodes, ranked
+- GET /api/v1/nodes/{id} — single node metrics
+- GET /api/v1/route/best — routing recommendation (latency or efficiency)
+
+## MCP Server (Phase 5 — coming soon)
+- wss://wicklee.dev/mcp
+- Tools: wicklee_fleet_status, wicklee_best_route,
+         wicklee_wes_scores, wicklee_node_metrics
+
+## Docs
+- /docs/install — installation guide
+- /docs/wes — WES formula and methodology
+- /docs/api — API reference (coming soon)
+
+## Install
+curl -fsSL https://wicklee.dev/install.sh | bash
+irm https://wicklee.dev/install.ps1 | iex
