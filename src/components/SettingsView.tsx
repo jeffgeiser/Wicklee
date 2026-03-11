@@ -292,7 +292,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   <th className="w-24" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50 dark:divide-gray-800/50">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                 {nodes.map(node => {
                   const eff = getNodeSettings(node.id);
                   const ov  = settings.nodes[node.id] ?? {};
@@ -403,7 +403,7 @@ const NodeOverrideRow: React.FC<{
     <tr className={`hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors ${eff.hasAnyOverride ? 'border-l-2 border-amber-400/40' : 'border-l-2 border-transparent'}`}>
 
       {/* Node ID — ◆ indicator when any override active */}
-      <td className="px-4 py-2.5">
+      <td className="px-4 py-3">
         <div className="flex items-center gap-1.5">
           {eff.hasAnyOverride && (
             <span className="text-amber-400 text-[9px] shrink-0" title="This node has custom overrides">◆</span>
@@ -413,23 +413,24 @@ const NodeOverrideRow: React.FC<{
       </td>
 
       {/* Hostname */}
-      <td className="px-3 py-2.5">
+      <td className="px-3 py-3">
         <span className="text-xs font-telin text-gray-500 truncate block">{node.hostname || '—'}</span>
       </td>
 
       {/* Location Label */}
-      <td className="px-3 py-2.5">
+      <td className="px-3 py-3 max-w-[180px]">
         <input
           type="text"
           value={ov.locationLabel ?? ''}
           onChange={e => onOverride({ locationLabel: e.target.value || undefined })}
-          placeholder="e.g. Home lab, Hetzner Frankfurt, Vast.ai US-East"
-          className={`${cellBase} ${valCls(!!ov.locationLabel)}`}
+          placeholder="e.g. Home lab, Hetzner Frankfurt"
+          title={ov.locationLabel ?? ''}
+          className={`${cellBase} truncate ${valCls(!!ov.locationLabel)}`}
         />
       </td>
 
       {/* kWh Rate */}
-      <td className="px-3 py-2.5 text-right">
+      <td className="px-3 py-3 text-right">
         {eff.kwhRateOverride ? (
           <input
             type="number"
@@ -458,8 +459,8 @@ const NodeOverrideRow: React.FC<{
       </td>
 
       {/* Currency */}
-      <td className="px-3 py-2.5">
-        <div className="relative">
+      <td className="px-3 py-3">
+        <div className="relative flex items-center">
           <select
             value={ov.currency ?? ''}
             onChange={e => onOverride({ currency: e.target.value as NodeOverride['currency'] || undefined })}
@@ -470,12 +471,12 @@ const NodeOverrideRow: React.FC<{
               <option key={c.value} value={c.value}>{c.value}</option>
             ))}
           </select>
-          <ChevronDown size={10} className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <ChevronDown size={10} className="pointer-events-none absolute right-0.5 text-gray-400 shrink-0" />
         </div>
       </td>
 
       {/* PUE */}
-      <td className="px-3 py-2.5 text-right">
+      <td className="px-3 py-3 text-right">
         {eff.pueOverride ? (
           <input
             type="number"
@@ -506,7 +507,7 @@ const NodeOverrideRow: React.FC<{
       </td>
 
       {/* Fleet defaults chip */}
-      <td className="px-3 py-2.5 text-right">
+      <td className="px-3 py-3 text-right">
         {!eff.hasAnyOverride && (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 whitespace-nowrap">
             Fleet defaults
