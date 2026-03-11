@@ -40,13 +40,22 @@ const fmtAgo = (ms: number): string => {
 };
 
 type NodeOS = 'macOS' | 'Linux' | 'Windows' | 'Unknown';
-const deriveOS = (m: SentinelMetrics | null): NodeOS => {
+
+// Fallback inference for older agents that predate the explicit os field.
+const inferOsFromMetrics = (m: SentinelMetrics | null): NodeOS => {
   if (!m) return 'Unknown';
-  if (m.cpu_power_w != null) return 'macOS';
-  if (m.nvidia_vram_total_mb != null) return 'Linux';
+  if (m.nvidia_power_draw_w != null) return 'Linux';
+  if (m.memory_pressure_percent != null) return 'macOS';
   const chip = (m.chip_name ?? '').toLowerCase();
+  if (chip.includes('ryzen') || chip.includes('intel core') || chip.includes('amd')) return 'Linux';
   if (chip.includes('apple') || /\bm[1-4]\b/.test(chip)) return 'macOS';
   return 'Unknown';
+};
+
+const deriveOS = (m: SentinelMetrics | null): NodeOS => {
+  const explicit = m?.os;
+  if (explicit === 'macOS' || explicit === 'Linux' || explicit === 'Windows') return explicit;
+  return inferOsFromMetrics(m);
 };
 
 type PermLevel = 'full' | 'partial' | 'limited';

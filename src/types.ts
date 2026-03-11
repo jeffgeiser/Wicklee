@@ -49,6 +49,8 @@ export interface SentinelMetrics {
   ollama_quantization?:      string | null;
   /** Sampled tok/s from 1-token /api/generate probe every 30s. Null until first probe completes. */
   ollama_tokens_per_second?: number | null;
+  /** Compile-time OS from agent — "macOS" | "Linux" | "Windows". Absent on older agents. */
+  os?: string | null;
 }
 
 export interface FleetEvent {

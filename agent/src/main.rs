@@ -120,6 +120,8 @@ struct MetricsPayload {
     /// Sampled tok/s from 30s 1-token probe. None until first probe completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_tokens_per_second: Option<f32>,
+    /// Compile-time OS — "macOS" | "Linux" | "Windows". Cannot be inferred incorrectly.
+    os: String,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -1163,6 +1165,13 @@ fn start_metrics_broadcaster(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                os: {
+                    #[cfg(target_os = "macos")]   { "macOS".to_string() }
+                    #[cfg(target_os = "linux")]   { "Linux".to_string() }
+                    #[cfg(target_os = "windows")] { "Windows".to_string() }
+                    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                    { "Unknown".to_string() }
+                },
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -1356,6 +1365,13 @@ async fn handle_metrics(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                os: {
+                    #[cfg(target_os = "macos")]   { "macOS".to_string() }
+                    #[cfg(target_os = "linux")]   { "Linux".to_string() }
+                    #[cfg(target_os = "windows")] { "Windows".to_string() }
+                    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                    { "Unknown".to_string() }
+                },
             };
 
             let event = match Event::default().json_data(&payload) {
