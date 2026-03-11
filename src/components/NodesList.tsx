@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { NodeAgent, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
+import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -173,7 +174,7 @@ const MgmtTableHeader: React.FC<{
       <p className={COL}>Connectivity</p>
       <p className={`${COL} ${COL_UPTIME}`}>Uptime</p>
       <p className={`${COL} ${COL_VERSION}`}>Version</p>
-      <p className={COL}>Permissions</p>
+      <p className={COL} title="Metric coverage — what this agent can see on its node">Coverage</p>
     </div>
   );
 };
@@ -380,11 +381,18 @@ const MgmtRow: React.FC<{
   const chipName = m?.gpu_name ?? m?.chip_name ?? null;
   const hostname = node.hostname && node.hostname !== node.id ? node.hostname : null;
 
-  const dotCls = !isOnline
-    ? 'bg-gray-500'
-    : perm !== 'full'
-    ? 'bg-amber-400 animate-pulse'
-    : 'bg-green-400 animate-pulse';
+  const dotState: 'online' | 'offline' | 'pending' =
+    isOnline ? 'online' :
+    lastSeenMs != null ? 'offline' :
+    'pending';
+  const dotCls =
+    dotState === 'online'  ? 'bg-green-400 animate-pulse' :
+    dotState === 'offline' ? 'bg-red-500' :
+    'bg-gray-500';
+  const dotTooltip =
+    dotState === 'online'  ? 'Online · last seen just now' :
+    dotState === 'offline' ? `Unreachable · last seen ${fmtNodeAgo(lastSeenMs!)}` :
+    'Pending · waiting for first report';
 
   // Condensed tooltip for Identity cell — surfaces columns hidden at narrow widths
   const identityTooltip = [
@@ -400,7 +408,7 @@ const MgmtRow: React.FC<{
     >
       {/* Collapsed row */}
       <div
-        className={`${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
+        className={`${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] max-h-[48px] overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
         onClick={() => setOpen(o => !o)}
       >
         {/* Checkbox */}
@@ -416,7 +424,7 @@ const MgmtRow: React.FC<{
 
         {/* Status + Node ID */}
         <div className="flex items-center gap-2 min-w-0">
-          <span className={`shrink-0 w-2 h-2 rounded-full ${dotCls}`} />
+          <span className={`shrink-0 w-2 h-2 rounded-full ${dotCls}`} title={dotTooltip} />
           <div className="min-w-0">
             <p className="text-xs font-bold font-telin text-gray-900 dark:text-white truncate">{node.id}</p>
             {hostname && (
@@ -487,27 +495,35 @@ const MgmtRow: React.FC<{
           <span className="text-xs font-telin text-gray-600">—</span>
         </div>
 
-        {/* Permissions */}
-        <div>
-          {perm === 'full'
-            ? <span className="text-xs font-telin text-green-400 whitespace-nowrap">✓ Full</span>
-            : perm === 'partial'
-            ? (
-              <span
-                className="text-xs font-telin text-amber-400 whitespace-nowrap overflow-hidden text-ellipsis block"
-                title="sudo missing — CPU power unavailable"
-              >
-                ⚠ Partial
-              </span>
-            ) : (
-              <span
-                className="text-xs font-telin text-red-400 whitespace-nowrap overflow-hidden text-ellipsis block"
-                title="Significant data unavailable"
-              >
-                ✗ Limited
-              </span>
-            )
-          }
+        {/* Coverage */}
+        <div className="overflow-hidden">
+          {!isOnline ? (
+            <span
+              className="text-xs font-telin text-gray-500 block truncate"
+              title="Node offline — coverage unknown"
+            >
+              —
+            </span>
+          ) : perm === 'full' ? (
+            <span
+              className="text-xs font-telin text-green-400 block truncate"
+              title="All metrics available — power, thermal, GPU, memory reporting normally"
+            >
+              ✓ Full
+            </span>
+          ) : (
+            <span
+              className="text-xs font-telin text-amber-400 block truncate"
+              title={[
+                'Some metrics unavailable',
+                m?.cpu_power_w == null    ? 'CPU power data missing' : null,
+                m?.nvidia_vram_total_mb == null ? 'GPU data missing'  : null,
+                m?.thermal_state == null  ? 'Thermal data missing'    : null,
+              ].filter(Boolean).join(' · ')}
+            >
+              ⚠ Partial
+            </span>
+          )}
         </div>
       </div>
 
@@ -770,7 +786,7 @@ const NodesList: React.FC<NodesListProps> = ({
   const enriched: EnrichedNode[] = nodes.map((node, idx) => {
     const metrics  = allMetrics[node.id] ?? null;
     const ls       = lastSeenMap[node.id];
-    const isOnline = metrics !== null && (ls == null || Date.now() - ls < 30_000);
+    const isOnline = metrics !== null && (ls == null || Date.now() - ls <= NODE_REACHABLE_MS);
     const perm     = derivePermissions(metrics);
     const ollamaOk = metrics?.ollama_running === true;
     const offlineGt10 = !isOnline && ls != null && Date.now() - ls > 10 * 60 * 1000;

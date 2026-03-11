@@ -3,6 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, WES_TOOLTIP } from '../utils/efficiency';
+import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -111,8 +112,19 @@ interface NodeRowProps {
   pue?: number;
 }
 
-const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, pue = 1.0 }) => {
+const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0 }) => {
   const isOnline = m !== null;
+
+  // 3-state reachability dot
+  const dotState: 'online' | 'offline' | 'pending' =
+    lastSeenMs != null
+      ? (Date.now() - lastSeenMs <= NODE_REACHABLE_MS ? 'online' : 'offline')
+      : m != null ? 'online'   // localhost: sentinel present, no lastSeenMs
+      : 'pending';
+  const dotTooltip =
+    dotState === 'online'  ? 'Online · last seen just now' :
+    dotState === 'offline' ? `Unreachable · last seen ${fmtNodeAgo(lastSeenMs!)}` :
+    'Pending · waiting for first report';
   const tps      = m?.ollama_tokens_per_second ?? null;
   const isActive = isOnline && tps != null && tps > 0;
 
@@ -164,17 +176,14 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     >
       {/* 1. NODE — status dot + ID + hostname */}
       <div className="flex items-center gap-2 min-w-0" title={nodeTooltip || undefined}>
-        <span className="relative flex h-2 w-2 shrink-0">
-          {isActive ? (
+        <span className="relative flex h-2 w-2 shrink-0" title={dotTooltip}>
+          {dotState === 'online' ? (
             <>
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
             </>
-          ) : isOnline ? (
-            <>
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-50" style={{ animationDuration: '3s' }} />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
-            </>
+          ) : dotState === 'offline' ? (
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
           ) : (
             <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500" />
           )}
@@ -730,6 +739,42 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     ? effectiveMetrics.reduce((acc, m) => acc + (getNodeSettings?.(m.node_id)?.pue ?? 1.0), 0) / effectiveMetrics.length
     : 1.0;
 
+  // ── SSE connection indicator (3-state) ──────────────────────────────────────
+  const sseNow = Date.now();
+
+  const unreachableNodeIds = isLocalHost
+    ? []
+    : Object.keys(lastSeenMsMap).filter(id => sseNow - (lastSeenMsMap[id] ?? 0) > NODE_REACHABLE_MS);
+  const reachableNodeIds = isLocalHost
+    ? []
+    : Object.keys(lastSeenMsMap).filter(id => sseNow - (lastSeenMsMap[id] ?? 0) <= NODE_REACHABLE_MS);
+  const localNodeStale = isLocalHost && sentinel != null && sseNow - (sentinel.timestamp_ms ?? 0) > NODE_REACHABLE_MS;
+  const localNodeId = sentinel?.hostname ?? 'local node';
+
+  const sseState: 'green' | 'amber' | 'red' = !connected
+    ? 'red'
+    : (isLocalHost ? localNodeStale : unreachableNodeIds.length > 0)
+    ? 'amber'
+    : 'green';
+
+  const sseLabel = sseState === 'red'
+    ? 'Disconnected'
+    : sseState === 'amber'
+    ? isLocalHost
+      ? 'Live · 1 node unreachable'
+      : `Live · ${unreachableNodeIds.length} node${unreachableNodeIds.length !== 1 ? 's' : ''} unreachable`
+    : 'Live · All nodes reporting';
+
+  const sseTooltip = sseState === 'red'
+    ? 'SSE stream disconnected · attempting to reconnect'
+    : sseState === 'amber'
+    ? isLocalHost
+      ? `SSE connected · ${localNodeId} last seen ${fmtAgo(sentinel?.timestamp_ms ?? 0)}`
+      : `SSE connected · ${unreachableNodeIds.map(id => `${id} last seen ${fmtAgo(lastSeenMsMap[id])}`).join(' · ')}`
+    : isLocalHost
+    ? `SSE connected · ${localNodeId} live`
+    : `SSE connected · ${reachableNodeIds.join(' ')} all live`;
+
   // Build Fleet Status row data
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [{
@@ -856,25 +901,30 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               {isLocalHost ? (sentinel ? '1' : '0') : nodes.length} node{(isLocalHost ? (sentinel ? 1 : 0) : nodes.length) !== 1 ? 's' : ''}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            {{
-              connected:    <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" style={{ animationDuration: '2s' }} /><span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" /></span>,
-              degraded:     <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" style={{ animationDuration: '4s' }} /><span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" /></span>,
-              idle:         <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-40" style={{ animationDuration: '6s' }} /><span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-600" /></span>,
-              disconnected: <span className="relative flex h-2 w-2"><span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500" /></span>,
-            }[connectionState]}
-            <span className={`text-[10px] font-medium ${{
-              connected:    'text-green-600 dark:text-green-400',
-              degraded:     'text-amber-500 dark:text-amber-400',
-              idle:         'text-cyan-600 dark:text-cyan-500',
-              disconnected: 'text-gray-500',
-            }[connectionState]}`}>
-              {{
-                connected:    transport === 'ws' ? 'Live · WS' : 'Live · SSE',
-                degraded:     'Stale · >30s',
-                idle:         'Idle · No Nodes',
-                disconnected: 'Reconnecting…',
-              }[connectionState]}
+          <div className="flex items-center gap-2" title={sseTooltip}>
+            {sseState === 'green' && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" style={{ animationDuration: '2s' }} />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+              </span>
+            )}
+            {sseState === 'amber' && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" style={{ animationDuration: '2s' }} />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+              </span>
+            )}
+            {sseState === 'red' && (
+              <span className="relative flex h-2 w-2">
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+              </span>
+            )}
+            <span className={`text-[10px] font-medium ${
+              sseState === 'green' ? 'text-green-600 dark:text-green-400' :
+              sseState === 'amber' ? 'text-amber-500 dark:text-amber-400' :
+              'text-red-600 dark:text-red-400'
+            }`}>
+              {sseLabel}
             </span>
           </div>
         </div>

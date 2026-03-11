@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { version } from '../package.json';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff } from 'lucide-react';
+import { useAuth, useUser } from '@clerk/clerk-react';
 import { ConnectionState, DashboardTab, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
+import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -12,7 +14,8 @@ import ScaffoldingView from './components/ScaffoldingView';
 import AIInsights from './components/AIInsights';
 import TeamManagement from './components/TeamManagement';
 import LandingPage from './components/LandingPage';
-import AuthModal from './components/AuthModal';
+import SignInPage from './components/SignInPage';
+import SignUpPage from './components/SignUpPage';
 import ProfileView from './components/ProfileView';
 import SecurityView from './components/SecurityView';
 import APIKeysView from './components/APIKeysView';
@@ -143,18 +146,25 @@ const CLOUD_URL = (() => {
 })();
 
 const App: React.FC = () => {
+  const { isSignedIn, isLoaded, getToken } = useAuth();
+  const { user } = useUser();
+
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
-  const [isLoggedIn, setIsLoggedIn] = useState(isLocalHost);
-  // True while we're checking localStorage for a saved session — prevents the
-  // landing page from flashing before the /api/auth/me response arrives.
-  const [sessionChecked, setSessionChecked] = useState(isLocalHost);
-  const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
-  const [currentUser, setCurrentUser] = useState<UserType>(LOCAL_USER);
+  // Build currentUser from Clerk user data (or LOCAL_USER for localhost)
+  const currentUser: UserType = isLocalHost
+    ? LOCAL_USER
+    : {
+        id: user?.id ?? 'local',
+        email: user?.primaryEmailAddress?.emailAddress ?? '',
+        fullName: user?.fullName ?? '',
+        role: 'Owner',
+        isPro: false,
+      };
   const [byokMode, setByokMode] = useState(false);
   const [userApiKey, setUserApiKey] = useState('');
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
@@ -163,6 +173,8 @@ const App: React.FC = () => {
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
   // Tracks last time cloud SSE delivered telemetry — used to show stale-node warning on hosted.
   const [lastCloudTelemetryMs, setLastCloudTelemetryMs] = useState<number | null>(null);
+  // Per-node last_seen_ms captured from the cloud SSE stream — drives footer reachability.
+  const [nodeLastSeenMs, setNodeLastSeenMs] = useState<Record<string, number>>({});
   // Tick counter — incremented every 10s on hosted so the stale-node banner appears promptly.
   const [, setTick] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -182,35 +194,11 @@ const App: React.FC = () => {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Restore session from localStorage on mount (hosted only — localhost skips auth entirely)
-  useEffect(() => {
-    if (isLocalHost) return;
-    const token = localStorage.getItem('wk_auth_token');
-    if (!token) { setSessionChecked(true); return; }
-
-    fetch(`${CLOUD_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(async (r) => {
-        if (!r.ok) { localStorage.removeItem('wk_auth_token'); return; }
-        const data = await r.json();
-        setCurrentUser({ id: data.id, email: data.email, fullName: data.fullName, role: data.role, isPro: data.isPro ?? false });
-        setIsLoggedIn(true);
-      })
-      .catch(() => localStorage.removeItem('wk_auth_token'))
-      .finally(() => setSessionChecked(true));
-  }, []);
-
-
-  const handleAuthSuccess = (user: UserType, token: string) => {
-    localStorage.setItem('wk_auth_token', token);
-    setCurrentUser(user);
-    setAuthModalMode(null);
-    setIsLoggedIn(true);
-  };
 
   // Called after a node is successfully paired via AddNodeModal; fetch updated fleet list.
   const handleNodeAdded = useCallback(async () => {
     try {
-      const token = localStorage.getItem('wk_auth_token');
+      const token = isLocalHost ? null : await getToken();
       const r = await fetch(`${CLOUD_URL}/api/fleet`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -239,19 +227,18 @@ const App: React.FC = () => {
     } catch {}
   }, []);
 
-  // Fetch paired nodes from cloud on login (hosted only). Runs after session restore
-  // and after a fresh sign-in so the node list survives page refresh.
+  // Fetch paired nodes from cloud on sign-in (hosted only).
   useEffect(() => {
-    if (isLocalHost || !isLoggedIn) return;
+    if (isLocalHost || !isSignedIn) return;
     handleNodeAdded();
-  }, [isLoggedIn, handleNodeAdded]);
+  }, [isSignedIn, handleNodeAdded]);
 
   // App-level cloud SSE subscription (hosted only).
   // Stays open regardless of the active tab so lastCloudTelemetryMs is always
   // current — prevents false "offline" warnings when navigating away from Overview.
   // Also patches node hostnames the first time real metrics arrive.
   useEffect(() => {
-    if (isLocalHost || !isLoggedIn) return;
+    if (isLocalHost || !isSignedIn) return;
     let es: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout>;
     const connect = () => {
@@ -261,6 +248,10 @@ const App: React.FC = () => {
           const fleet = JSON.parse(ev.data) as {
             nodes: Array<{ node_id: string; last_seen_ms: number; metrics: { hostname?: string } | null }>;
           };
+          // Always capture per-node last_seen_ms for footer reachability.
+          const lsUpdate: Record<string, number> = {};
+          for (const n of fleet.nodes) lsUpdate[n.node_id] = n.last_seen_ms;
+          setNodeLastSeenMs(prev => ({ ...prev, ...lsUpdate }));
           if (fleet.nodes.some(n => n.metrics)) {
             setLastCloudTelemetryMs(Date.now());
             // Patch hostnames into nodes that are still showing WK fallback ids.
@@ -281,7 +272,7 @@ const App: React.FC = () => {
     };
     connect();
     return () => { es?.close(); clearTimeout(retryTimer); };
-  }, [isLoggedIn]);
+  }, [isSignedIn]);
 
   const permissions = usePermissions(currentUser);
   const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
@@ -329,6 +320,8 @@ const App: React.FC = () => {
     }
     localStorage.setItem('theme', theme);
   }, [theme]);
+
+  const isLoggedIn = isLocalHost || !!isSignedIn;
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -383,14 +376,7 @@ const App: React.FC = () => {
     };
   }, [currentTenant.id, currentUser.id, isLoggedIn]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('wk_auth_token');
-    setCurrentUser(LOCAL_USER);
-    setIsLoggedIn(false);
-  };
-
   const handleUpgrade = () => {
-    setCurrentUser(prev => ({ ...prev, isPro: true }));
     setIsUpgradeModalOpen(false);
   };
 
@@ -408,13 +394,21 @@ const App: React.FC = () => {
     setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   };
 
+  // Clerk sign-in / sign-up routes
+  if (currentPath === '/sign-in' || currentPath.startsWith('/sign-in/')) {
+    return <SignInPage onNavigate={navigate} />;
+  }
+  if (currentPath === '/sign-up' || currentPath.startsWith('/sign-up/')) {
+    return <SignUpPage onNavigate={navigate} />;
+  }
+
   // Blog routes — public, no auth required
   if (currentPath === '/blog' || currentPath === '/blog/') {
     return (
       <BlogListing
         onNavigate={navigate}
-        onSignIn={() => setAuthModalMode('signin')}
-        onSignUp={() => setAuthModalMode('signup')}
+        onSignIn={() => navigate('/sign-in')}
+        onSignUp={() => navigate('/sign-up')}
       />
     );
   }
@@ -424,30 +418,22 @@ const App: React.FC = () => {
       <BlogPost
         slug={blogPostMatch[1]}
         onNavigate={navigate}
-        onSignIn={() => setAuthModalMode('signin')}
-        onSignUp={() => setAuthModalMode('signup')}
+        onSignIn={() => navigate('/sign-in')}
+        onSignUp={() => navigate('/sign-up')}
       />
     );
   }
 
-  if (!sessionChecked) return null;
+  // Wait for Clerk to determine auth state (prevents flash)
+  if (!isLocalHost && !isLoaded) return null;
 
   if (!isLoggedIn) {
     return (
-      <>
-        <LandingPage
-          onSignIn={() => setAuthModalMode('signin')}
-          onSignUp={() => setAuthModalMode('signup')}
-          onNavigate={navigate}
-        />
-        {authModalMode && (
-          <AuthModal
-            mode={authModalMode}
-            onSuccess={handleAuthSuccess}
-            onClose={() => setAuthModalMode(null)}
-          />
-        )}
-      </>
+      <LandingPage
+        onSignIn={() => navigate('/sign-in')}
+        onSignUp={() => navigate('/sign-up')}
+        onNavigate={navigate}
+      />
     );
   }
 
@@ -538,8 +524,7 @@ const App: React.FC = () => {
         activeTab={activeTab}
         setActiveTab={handleTabChange}
         currentUser={currentUser}
-        onUserChange={setCurrentUser}
-        onLogout={handleLogout}
+        onUserChange={() => {}}
         connectionState={connectionState}
         theme={theme}
         isLocalMode={isLocalMode}
@@ -556,7 +541,7 @@ const App: React.FC = () => {
           currentTenant={currentTenant}
           onTenantChange={setCurrentTenant}
           currentUser={currentUser}
-          onLogout={handleLogout}
+          onLogout={() => {}}
           setActiveTab={setActiveTab}
           theme={theme}
           onToggleTheme={toggleTheme}
@@ -616,13 +601,41 @@ const App: React.FC = () => {
                 Orchestrator: {isConnected ? 'Active' : 'Offline'}
               </span>
             ) : (
-              <span className="flex items-center gap-1.5">
-                <span className="relative flex h-2 w-2">
-                  {nodes.length > 0 && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${nodes.length > 0 ? 'bg-green-500' : 'bg-gray-500'}`}></span>
-                </span>
-                Fleet: {nodes.length} node{nodes.length !== 1 ? 's' : ''} online
-              </span>
+              (() => {
+                const ftNow = Date.now();
+                const total = nodes.length;
+                const online = nodes.filter(n => {
+                  const ls = nodeLastSeenMs[n.id];
+                  return ls != null && ftNow - ls <= NODE_REACHABLE_MS;
+                }).length;
+                const dotColor = total === 0 ? 'bg-gray-500'
+                  : online === total ? 'bg-green-500'
+                  : online > 0       ? 'bg-amber-500'
+                  : 'bg-red-500';
+                const textColor = total === 0 ? ''
+                  : online === total ? 'text-green-600 dark:text-green-400'
+                  : online > 0       ? 'text-amber-500 dark:text-amber-400'
+                  : 'text-red-600 dark:text-red-400';
+                const tooltip = nodes.map(n => {
+                  const ls = nodeLastSeenMs[n.id];
+                  const alive = ls != null && ftNow - ls <= NODE_REACHABLE_MS;
+                  const label = ls != null
+                    ? alive ? '● online' : `● offline · last seen ${fmtNodeAgo(ls)}`
+                    : '● pending';
+                  return `${n.hostname !== n.id ? n.hostname : n.id}  ${label}`;
+                }).join('\n');
+                return (
+                  <span className="flex items-center gap-1.5" title={tooltip || undefined}>
+                    <span className="relative flex h-2 w-2">
+                      {online === total && total > 0 && (
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      )}
+                      <span className={`relative inline-flex rounded-full h-2 w-2 ${dotColor}`}></span>
+                    </span>
+                    <span className={textColor}>Fleet: {online} / {total} online</span>
+                  </span>
+                );
+              })()
             )}
           </div>
           <div className="flex items-center gap-4">

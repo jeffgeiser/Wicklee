@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { X, CloudLightning, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useAuth } from '@clerk/clerk-react';
 
 interface AddNodeModalProps {
   isOpen: boolean;
@@ -9,6 +10,7 @@ interface AddNodeModalProps {
 }
 
 const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdded, cloudUrl }) => {
+  const { getToken } = useAuth();
   const [digits, setDigits] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -56,7 +58,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
     setLoading(true);
     setError('');
     try {
-      const token = localStorage.getItem('wk_auth_token');
+      const token = await getToken();
       const res = await fetch(`${cloudUrl}/api/pair/activate`, {
         method: 'POST',
         headers: {
