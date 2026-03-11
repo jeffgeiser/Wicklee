@@ -300,6 +300,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       onCancel={() => setConfirmClear(null)}
                     />
                   </th>
+                  <th className="w-24" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 dark:divide-gray-800/50">
@@ -440,17 +441,31 @@ const NodeOverrideRow: React.FC<{
 
       {/* kWh Rate */}
       <td className="px-3 py-2.5 text-right">
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          value={kwhDraft}
-          onChange={e => setKwhDraft(e.target.value)}
-          onBlur={commitKwh}
-          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-          placeholder={`${fleetSettings.kwhRate} (fleet)`}
-          className={`${cellBase} text-right ${valCls(eff.kwhRateOverride)}`}
-        />
+        {eff.kwhRateOverride ? (
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={kwhDraft}
+            onChange={e => setKwhDraft(e.target.value)}
+            onBlur={commitKwh}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder={fleetSettings.kwhRate.toString()}
+            className={`${cellBase} text-right text-gray-900 dark:text-white`}
+          />
+        ) : (
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={kwhDraft}
+            onChange={e => setKwhDraft(e.target.value)}
+            onBlur={commitKwh}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder={fleetSettings.kwhRate.toString()}
+            className={`${cellBase} text-right text-gray-400 dark:text-gray-500`}
+          />
+        )}
       </td>
 
       {/* Currency */}
@@ -461,7 +476,7 @@ const NodeOverrideRow: React.FC<{
             onChange={e => onOverride({ currency: e.target.value as NodeOverride['currency'] || undefined })}
             className={`${cellBase} appearance-none cursor-pointer pr-5 ${valCls(eff.currencyOverride)}`}
           >
-            <option value="">{fleetSettings.currency} (fleet)</option>
+            <option value="">{fleetSettings.currency}</option>
             {CURRENCY_OPTIONS.map(c => (
               <option key={c.value} value={c.value}>{c.value}</option>
             ))}
@@ -472,18 +487,42 @@ const NodeOverrideRow: React.FC<{
 
       {/* PUE */}
       <td className="px-3 py-2.5 text-right">
-        <input
-          type="number"
-          min="1.0"
-          max="3.0"
-          step="0.1"
-          value={pueDraft}
-          onChange={e => setPueDraft(e.target.value)}
-          onBlur={commitPue}
-          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-          placeholder={`${fleetSettings.pue.toFixed(1)} (fleet)`}
-          className={`${cellBase} text-right ${valCls(eff.pueOverride)}`}
-        />
+        {eff.pueOverride ? (
+          <input
+            type="number"
+            min="1.0"
+            max="3.0"
+            step="0.1"
+            value={pueDraft}
+            onChange={e => setPueDraft(e.target.value)}
+            onBlur={commitPue}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder={fleetSettings.pue.toFixed(1)}
+            className={`${cellBase} text-right text-gray-900 dark:text-white`}
+          />
+        ) : (
+          <input
+            type="number"
+            min="1.0"
+            max="3.0"
+            step="0.1"
+            value={pueDraft}
+            onChange={e => setPueDraft(e.target.value)}
+            onBlur={commitPue}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder={fleetSettings.pue.toFixed(1)}
+            className={`${cellBase} text-right text-gray-400 dark:text-gray-500`}
+          />
+        )}
+      </td>
+
+      {/* Fleet defaults chip */}
+      <td className="px-3 py-2.5 text-right">
+        {!eff.hasAnyOverride && (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 whitespace-nowrap">
+            Fleet defaults
+          </span>
+        )}
       </td>
     </tr>
   );
