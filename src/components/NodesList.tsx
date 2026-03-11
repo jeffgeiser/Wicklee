@@ -28,28 +28,31 @@ const CLOUD_URL = (() => {
 //
 // Column order in DOM (priority — always visible marked with ★):
 //   1. Checkbox          ★  40px
-//   2. Status + Node ID  ★  180px (flex at narrow)
-//   3. Identity          ★  200px (flex at narrow)
-//   4. OS                   hide < 1024px
-//   5. Memory               hide < 860px
-//   6. Connectivity      ★  120px
-//   7. Uptime               hide < 1024px
-//   8. Version              hide < 1200px
-//   9. Permissions       ★  110px
+//   2. Status + Node ID  ★  130px  (IDs are 7–10 chars, short and predictable)
+//   3. Identity          ★  minmax(0,1fr)  (chip name — variable, takes remaining space)
+//   4. OS                   hide < 1024px   80px
+//   5. Memory               hide < 860px    80px
+//   6. Connectivity      ★  90px
+//   7. Uptime               hide < 1024px   80px
+//   8. Version              hide < 1200px   70px
+//   9. Coverage          ★  80px
+//
+// Available content width = viewport − sidebar(256px) − padding(48px)
+//   768px → 464px | 1024px → 720px | 1200px → 896px | 1440px → 1136px
 //
 // Grid template changes in lockstep with hidden cells:
-//   < 860px  : 5 cols  — checkbox | node | identity | connectivity | perms
+//   < 860px  : 5 cols  — checkbox | node | identity | connectivity | coverage
 //   860–1024 : 6 cols  — + memory
 //   1024–1200: 8 cols  — + os + uptime
-//   1200px+  : 9 cols  — + version (fixed px everywhere)
+//   1200px+  : 9 cols  — + version
 //
 // Tailwind arbitrary property + arbitrary breakpoint syntax (v3.2+)
 const MGMT_GRID_CLS = [
   'grid gap-x-3 items-center',
-  '[grid-template-columns:40px_minmax(160px,1fr)_minmax(0,1fr)_120px_110px]',
-  'min-[860px]:[grid-template-columns:40px_minmax(160px,1fr)_minmax(0,1fr)_110px_120px_110px]',
-  'lg:[grid-template-columns:40px_minmax(160px,1fr)_minmax(0,1fr)_140px_110px_120px_120px_110px]',
-  'min-[1200px]:[grid-template-columns:40px_180px_200px_140px_110px_120px_120px_90px_110px]',
+  '[grid-template-columns:40px_130px_minmax(0,1fr)_90px_80px]',
+  'min-[860px]:[grid-template-columns:40px_130px_minmax(0,1fr)_80px_90px_80px]',
+  'lg:[grid-template-columns:40px_130px_minmax(0,1fr)_90px_80px_90px_80px_80px]',
+  'min-[1200px]:[grid-template-columns:40px_130px_minmax(150px,1fr)_80px_80px_90px_80px_70px_80px]',
 ].join(' ');
 
 // Per-column visibility — applied to both header cells and data cells
