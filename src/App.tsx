@@ -244,7 +244,8 @@ const App: React.FC = () => {
     const connect = async () => {
       // EventSource doesn't support custom headers — pass auth as query param.
       const tok = await getToken();
-      if (!tok) { retryTimer = setTimeout(connect, 5000); return; }
+      if (!tok) { console.warn('[sse] getToken() returned null — retrying'); retryTimer = setTimeout(connect, 5000); return; }
+      console.log('[sse] connecting with token length', tok.length);
       es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(tok)}`);
       es.onmessage = (ev) => {
         try {
@@ -268,7 +269,8 @@ const App: React.FC = () => {
           }
         } catch { /* malformed frame */ }
       };
-      es.onerror = () => {
+      es.onerror = (e) => {
+        console.error('[sse] error', e);
         es?.close();
         retryTimer = setTimeout(connect, 5000);
       };
