@@ -1,5 +1,5 @@
-import React from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Leaf, Key, Cloud, CloudLightning, Github, Settings } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Leaf, Key, Cloud, CloudLightning, Settings, HelpCircle, FileText, User as UserIcon } from 'lucide-react';
 import Logo from './Logo';
 import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
@@ -20,6 +20,18 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, connectionState = 'disconnected', theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
   const permissions = usePermissions(currentUser);
+  const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
+  const avatarMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (avatarMenuRef.current && !avatarMenuRef.current.contains(e.target as Node)) {
+        setIsAvatarMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const items = [
     { id: DashboardTab.OVERVIEW, icon: LayoutGrid, label: 'Intelligence', show: true },
@@ -30,7 +42,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.AI_PROVIDERS, icon: Key, label: 'AI Key Vault', show: currentUser.isPro && !isLocalMode },
     { id: DashboardTab.TEAM, icon: Users, label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
     { id: DashboardTab.SUSTAINABILITY, icon: Leaf, label: 'Sustainability', show: true },
-    { id: DashboardTab.SETTINGS, icon: Settings, label: 'Settings', show: true },
   ];
 
   const handleRoleToggle = (role: UserRole) => {
@@ -69,23 +80,22 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
         ))}
       </nav>
 
-      <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-3">
-        {isLocalHost ? (() => {
+      <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-1">
+        {/* Fleet Connect pill — localhost only */}
+        {isLocalHost && (() => {
           const status = pairingInfo?.status;
           const nodeId = pairingInfo?.node_id;
           const isPending = status === 'pending';
           const isConnectedFleet = status === 'connected';
-
           const borderClass = isConnectedFleet
             ? 'border-green-500/30 hover:border-green-500/50'
             : isPending
             ? 'border-amber-500/30 hover:border-amber-500/50'
             : 'border-gray-700/50 hover:border-gray-600/50';
-
           return (
             <button
               onClick={onOpenPairing}
-              className={`w-full px-4 py-3 rounded-xl border text-left transition-all ${borderClass}`}
+              className={`w-full px-4 py-3 rounded-xl border text-left transition-all mb-2 ${borderClass}`}
             >
               <div className="flex items-center gap-2">
                 {isConnectedFleet ? (
@@ -105,26 +115,112 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
               )}
             </button>
           );
-        })() : (
-          <a
-            href="https://github.com/jeffgeiser/Wicklee#readme"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
-          >
-            <Github className="w-4 h-4 shrink-0" />
-            Documentation →
-          </a>
-        )}
-        {!isLocalHost && (
+        })()}
+
+        {/* Settings */}
+        <button
+          onClick={() => setActiveTab(DashboardTab.SETTINGS)}
+          className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+            activeTab === DashboardTab.SETTINGS
+              ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-600/20'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent'
+          }`}
+        >
+          <Settings className="w-4 h-4" />
+          <span className="flex-1 text-left">Settings</span>
+        </button>
+
+        {/* Docs */}
+        <a
+          href="https://github.com/jeffgeiser/Wicklee#readme"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent transition-all"
+        >
+          <HelpCircle className="w-4 h-4" />
+          <span className="flex-1 text-left">Docs</span>
+        </a>
+
+        {/* Divider */}
+        <div className="border-t border-gray-200 dark:border-gray-800 my-1" />
+
+        {/* Avatar / profile — dropdown opens upward */}
+        <div className="relative" ref={avatarMenuRef}>
           <button
-            onClick={onLogout}
-            className="w-full flex items-center gap-3 px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/5 rounded-lg transition-all border border-transparent hover:border-red-200 dark:hover:border-red-500/20"
+            onClick={() => setIsAvatarMenuOpen(v => !v)}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
           >
-            <LogOut className="w-4 h-4" />
-            Sign Out
+            <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0 overflow-hidden">
+              <UserIcon className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+            </div>
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate flex-1 text-left">
+              {currentUser.fullName}
+            </span>
           </button>
-        )}
+
+          {/* Upward dropdown */}
+          {isAvatarMenuOpen && (
+            <div className="absolute bottom-full left-0 mb-2 w-[240px] bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-2xl z-50 p-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+              {/* User info */}
+              <div className="px-3 py-3 mb-1 border-b border-gray-100 dark:border-gray-800/50 flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0">
+                  <UserIcon className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-gray-900 dark:text-gray-200 truncate">{currentUser.fullName}</p>
+                  <p className="text-[10px] text-gray-500 truncate">{currentUser.email}</p>
+                  <span className="inline-flex items-center px-1.5 py-0.5 mt-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500">
+                    Free Plan
+                  </span>
+                </div>
+              </div>
+
+              {/* Menu items */}
+              <div className="space-y-0.5">
+                <button
+                  onClick={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                >
+                  <Settings className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  Settings
+                </button>
+                <a
+                  href="https://github.com/jeffgeiser/Wicklee#readme"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setIsAvatarMenuOpen(false)}
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                >
+                  <HelpCircle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  Documentation
+                </a>
+                <a
+                  href="https://github.com/jeffgeiser/Wicklee/releases"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setIsAvatarMenuOpen(false)}
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                >
+                  <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  Release notes
+                </a>
+              </div>
+
+              {/* Sign out */}
+              {!isLocalHost && (
+                <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50">
+                  <button
+                    onClick={() => { setIsAvatarMenuOpen(false); onLogout(); }}
+                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex items-center gap-2"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );
