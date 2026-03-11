@@ -160,6 +160,10 @@ export function useSettings() {
     [persist],
   );
 
+  const clearAllNodeOverrides = useCallback(() => {
+    setSettings(prev => persist({ ...prev, nodes: {} }));
+  }, [persist]);
+
   const getNodeSettings = useCallback(
     (nodeId: string): NodeEffectiveSettings => {
       const ov = settings.nodes[nodeId] ?? {};
@@ -187,5 +191,6 @@ export function useSettings() {
     updateFleet,
     setNodeOverride,
     clearAllOverridesForField,
+    clearAllNodeOverrides,
   };
 }

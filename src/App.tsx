@@ -165,7 +165,7 @@ const App: React.FC = () => {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
-  const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField } = useSettings();
+  const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
   const socketRef = useRef<WebSocket | null>(null);
 
   // Restore session from localStorage on mount (hosted only — localhost skips auth entirely)
@@ -437,7 +437,7 @@ const App: React.FC = () => {
       case DashboardTab.TEAM:
         return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.SETTINGS:
-        return <SettingsView nodes={nodes} settings={settings} savedToast={savedToast} getNodeSettings={getNodeSettings} updateFleet={updateFleet} setNodeOverride={setNodeOverride} clearAllOverridesForField={clearAllOverridesForField} />;
+        return <SettingsView nodes={nodes} settings={settings} savedToast={savedToast} getNodeSettings={getNodeSettings} updateFleet={updateFleet} setNodeOverride={setNodeOverride} clearAllOverridesForField={clearAllOverridesForField} clearAllNodeOverrides={clearAllNodeOverrides} />;
       case DashboardTab.SUSTAINABILITY:
         return <SustainabilityView nodes={nodes} />;
       case DashboardTab.PROFILE:
