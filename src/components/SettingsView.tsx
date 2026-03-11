@@ -42,7 +42,12 @@ const Section: React.FC<{
 // ── Shared input classes ──────────────────────────────────────────────────────
 
 const INPUT_BASE =
-  'h-9 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 text-sm font-telin text-gray-900 dark:text-white focus:outline-none focus:border-indigo-500/60 focus:ring-1 focus:ring-indigo-500/30 transition-colors';
+  'h-9 bg-gray-50 dark:bg-gray-800 border rounded-lg px-3 text-sm font-telin text-gray-900 dark:text-white focus:outline-none focus:ring-1 transition-colors';
+
+const inputCls = (dirty: boolean) =>
+  dirty
+    ? `${INPUT_BASE} border-amber-400/60 dark:border-amber-400/50 focus:border-amber-400/60 focus:ring-amber-400/20`
+    : `${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30`;
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
@@ -67,10 +72,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   React.useEffect(() => { setPueDraft(settings.fleet.pue.toString()); }, [settings.fleet.pue]);
   React.useEffect(() => { setCurrDraft(settings.fleet.currency); }, [settings.fleet.currency]);
 
-  const isDirty =
-    kwhDraft !== settings.fleet.kwhRate.toString() ||
-    pueDraft !== settings.fleet.pue.toString() ||
-    currDraft !== settings.fleet.currency;
+  const kwhDirty  = kwhDraft  !== settings.fleet.kwhRate.toString();
+  const pueDirty  = pueDraft  !== settings.fleet.pue.toString();
+  const currDirty = currDraft !== settings.fleet.currency;
+  const isDirty   = kwhDirty || pueDirty || currDirty;
 
   const handleFleetSave = () => {
     const kwh = parseFloat(kwhDraft);
@@ -148,7 +153,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 value={kwhDraft}
                 onChange={e => setKwhDraft(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
-                className={`${INPUT_BASE} w-28 tabular-nums`}
+                className={`${inputCls(kwhDirty)} w-28 tabular-nums`}
               />
               <p className="text-[10px] text-gray-500">$/kWh</p>
             </div>
@@ -160,7 +165,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 <select
                   value={currDraft}
                   onChange={e => setCurrDraft(e.target.value as FleetSettings['currency'])}
-                  className={`${INPUT_BASE} w-full appearance-none pr-7`}
+                  className={`${inputCls(currDirty)} w-full appearance-none pr-7`}
                 >
                   {CURRENCY_OPTIONS.map(c => (
                     <option key={c.value} value={c.value}>{c.label}</option>
@@ -182,7 +187,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 value={pueDraft}
                 onChange={e => setPueDraft(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
-                className={`${INPUT_BASE} w-24 tabular-nums`}
+                className={`${inputCls(pueDirty)} w-24 tabular-nums`}
               />
               <p className="text-[10px] text-gray-500">1.0 = home lab · 1.4–1.6 = datacenter/colo</p>
             </div>
