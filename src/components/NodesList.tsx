@@ -46,9 +46,9 @@ const CLOUD_URL = (() => {
 // Tailwind arbitrary property + arbitrary breakpoint syntax (v3.2+)
 const MGMT_GRID_CLS = [
   'grid gap-x-3 items-center',
-  '[grid-template-columns:40px_minmax(0,1fr)_minmax(0,1fr)_120px_110px]',
-  'min-[860px]:[grid-template-columns:40px_minmax(0,1fr)_minmax(0,1fr)_110px_120px_110px]',
-  'lg:[grid-template-columns:40px_minmax(0,1fr)_minmax(0,1fr)_140px_110px_120px_120px_110px]',
+  '[grid-template-columns:40px_minmax(160px,1fr)_minmax(0,1fr)_120px_110px]',
+  'min-[860px]:[grid-template-columns:40px_minmax(160px,1fr)_minmax(0,1fr)_110px_120px_110px]',
+  'lg:[grid-template-columns:40px_minmax(160px,1fr)_minmax(0,1fr)_140px_110px_120px_120px_110px]',
   'min-[1200px]:[grid-template-columns:40px_180px_200px_140px_110px_120px_120px_90px_110px]',
 ].join(' ');
 
