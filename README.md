@@ -80,7 +80,7 @@ wicklee (single binary, ~700KB)
 
 For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates all paired agents into a single hosted dashboard.
 
-- **Free:** up to 5 nodes
+- **Free:** up to 3 nodes
 - **Team Edition:** unlimited nodes, 90-day history, Sentinel alerts — coming soon
 
 To pair a node: run `wicklee --pair` or open `localhost:7700` and click **Connect to Fleet**.
