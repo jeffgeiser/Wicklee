@@ -496,7 +496,7 @@ const MgmtRow: React.FC<{
         </div>
 
         {/* Coverage */}
-        <div className="overflow-hidden">
+        <div className="overflow-hidden min-w-0">
           {!isOnline ? (
             <span
               className="text-xs font-telin text-gray-500 block truncate"
