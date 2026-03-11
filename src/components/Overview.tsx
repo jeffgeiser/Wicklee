@@ -82,9 +82,9 @@ const fmtAgo = (ms: number): string => {
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
   '[grid-template-columns:130px_70px_70px_90px]',
-  'min-[860px]:[grid-template-columns:130px_minmax(0,1fr)_70px_70px_90px]',
-  'lg:[grid-template-columns:130px_minmax(0,1fr)_70px_70px_90px_90px]',
-  'min-[1200px]:[grid-template-columns:150px_minmax(0,1fr)_90px_90px_80px_110px_100px]',
+  'min-[860px]:[grid-template-columns:130px_minmax(120px,300px)_70px_70px_90px]',
+  'lg:[grid-template-columns:130px_minmax(120px,300px)_70px_70px_90px_90px]',
+  'min-[1200px]:[grid-template-columns:150px_minmax(120px,300px)_90px_90px_80px_110px_100px]',
 ].join(' ');
 
 const FS_MODEL  = 'hidden min-[860px]:block';   // show >= 860px
