@@ -4,6 +4,41 @@
 
 ---
 
+### Marketing — Hero Copy & Meta Tags
+*1 commit — 5b4366f*
+
+- **Headline**: "Local AI inference, finally observable." (gradient on "finally observable.")
+- **Subheading**: "Routing intelligence. True inference cost. Thermal state. Live, across every node. Built for Ollama and vLLM. Install in 60 seconds — nothing to configure."
+- **`index.html`**: Updated `<title>` and added `meta description`, `og:title`, `og:description`, `twitter:title`, `twitter:description` (all five meta tags were previously missing).
+
+---
+
+### Settings Page — Full Redesign (5 sections)
+*1 commit — 23df820*
+
+Ground-up rebuild of `SettingsView.tsx`. Auto-save throughout — no explicit Save button.
+
+1. **Cost & Energy** — Fleet defaults (kWh rate, currency, PUE) with auto-save on blur/Enter, amber dirty-state borders, and live cost preview panel (100W reference node × PUE × kWh × 24/7 × 30.4 days).
+2. **Node Configuration** — Per-node override table preserved with column-clear + apply-all; "Management →" quick link.
+3. **Display & Units** — Radio groups for temperature (°C/°F), power (W/BTU), WES display (Auto/Fixed), theme (Dark/Light/System).
+4. **Alerts & Notifications** — Phase 4A locked preview with four placeholder alert types, dimmed and non-interactive.
+5. **Account & Data** — Agent version, fleet status pill, JSON export, danger zone with two-step confirm reset.
+
+`useSettings.ts`: `FleetSettings` extended with `temperatureUnit`, `powerUnit`, `wesDisplay`, `themePreference`. `App.tsx`: SettingsView now receives `theme`, `onThemeChange`, `onNavigateToManagement`, `pairingInfo`.
+
+---
+
+### Management Page + Fleet Status — Responsive Layout & Bug Fixes
+*5 commits — 249d1b5 ← 45bffc5*
+
+1. **Management page full redesign** (`45bffc5`) — Complete rebuild of `NodesList.tsx`: 4 header tiles (Fleet VRAM, Connectivity, Hardware Mix, Lifecycle Alerts), 9-column CSS grid table, expandable DetailBand (Connectivity / Node Settings / Diagnostics), bulk actions bar. Removed per-node real-time metrics, Sovereignty Score tile, Provider Mix tile.
+2. **Responsive column priority** (`73a912f`) — `MGMT_GRID_CLS` with Tailwind v3 arbitrary breakpoints; columns hide in priority tiers at 860/1024/1200px. Identity cell surfaces hidden columns via `title` tooltip.
+3. **Connectivity panel** (`06abc43`) — Removed raw backend URL; replaced with "Data Destination: Wicklee Cloud / This device only".
+4. **Fleet Status memory bugs** (`74a1eff`) — Memory % showing 15 decimal places → 1dp (`Math.round(v * 1000) / 10`); "memory —" empty state → "—".
+5. **Responsive Fleet Status + permissions wrap** (`249d1b5`) — `FLEET_GRID_CLS` responsive grid with 4 breakpoint tiers; `FS_MODEL/WATTS/MEMORY` visibility classes; `whitespace-nowrap` on Permissions badge.
+
+---
+
 ### Settings Page — Interaction Clarity & Alignment
 *5 commits — d407ec3 ← 5570e60*
 
@@ -76,11 +111,14 @@ Full Settings page with Fleet Defaults (electricity rate, currency, PUE) and per
 | File | Purpose |
 |---|---|
 | `src/hooks/useSettings.ts` | Fleet/node settings hook, localStorage persistence |
-| `src/components/SettingsView.tsx` | Settings page UI — fleet defaults + node override table |
-| `src/components/NodesList.tsx` | Management tab — node registry, hardware panel, provider mix |
+| `src/components/SettingsView.tsx` | Settings page UI — 5 sections, auto-save, display prefs |
+| `src/components/LandingPage.tsx` | Marketing landing page (wicklee.dev) |
+| `src/components/NodesList.tsx` | Management tab — node registry, responsive grid table |
 | `src/components/NodeHardwarePanel.tsx` | Node detail hardware tile grid |
+| `src/components/Overview.tsx` | Fleet Intelligence + Fleet Status with responsive grid |
 | `src/App.tsx` | Root orchestrator — WebSocket, tab routing, settings wiring |
 | `src/types.ts` | Shared TypeScript interfaces |
+| `index.html` | App shell + meta/OG/Twitter tags |
 
 ---
 
