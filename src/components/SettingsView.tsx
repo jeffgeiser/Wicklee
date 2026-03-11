@@ -259,7 +259,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
                   <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Location Label</th>
                   <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
-                    <div>kWh Rate</div>
+                    <div className="text-right">kWh Rate</div>
                     <ClearColumnButton
                       label="Reset column to fleet default"
                       field="kwhRate"
@@ -283,7 +283,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     />
                   </th>
                   <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">
-                    <div>PUE</div>
+                    <div className="text-right">PUE</div>
                     <ClearColumnButton
                       label="Reset column to fleet default"
                       field="pue"
@@ -436,31 +436,17 @@ const NodeOverrideRow: React.FC<{
 
       {/* kWh Rate */}
       <td className="px-3 py-3 text-right">
-        {eff.kwhRateOverride ? (
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={kwhDraft}
-            onChange={e => setKwhDraft(e.target.value)}
-            onBlur={commitKwh}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            placeholder={fleetSettings.kwhRate.toString()}
-            className={`${cellBase} text-right text-gray-900 dark:text-white`}
-          />
-        ) : (
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={kwhDraft}
-            onChange={e => setKwhDraft(e.target.value)}
-            onBlur={commitKwh}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            placeholder={fleetSettings.kwhRate.toString()}
-            className={`${cellBase} text-right text-gray-400 dark:text-gray-500`}
-          />
-        )}
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={kwhDraft}
+          onChange={e => setKwhDraft(e.target.value)}
+          onBlur={commitKwh}
+          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          placeholder={fleetSettings.kwhRate.toString()}
+          className={`${cellBase} text-right tabular-nums ${valCls(eff.kwhRateOverride)}`}
+        />
       </td>
 
       {/* Currency */}
@@ -482,33 +468,18 @@ const NodeOverrideRow: React.FC<{
 
       {/* PUE */}
       <td className="px-3 py-3 text-right">
-        {eff.pueOverride ? (
-          <input
-            type="number"
-            min="1.0"
-            max="3.0"
-            step="0.1"
-            value={pueDraft}
-            onChange={e => setPueDraft(e.target.value)}
-            onBlur={commitPue}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            placeholder={fleetSettings.pue.toFixed(1)}
-            className={`${cellBase} text-right text-gray-900 dark:text-white`}
-          />
-        ) : (
-          <input
-            type="number"
-            min="1.0"
-            max="3.0"
-            step="0.1"
-            value={pueDraft}
-            onChange={e => setPueDraft(e.target.value)}
-            onBlur={commitPue}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            placeholder={fleetSettings.pue.toFixed(1)}
-            className={`${cellBase} text-right text-gray-400 dark:text-gray-500`}
-          />
-        )}
+        <input
+          type="number"
+          min="1.0"
+          max="3.0"
+          step="0.1"
+          value={pueDraft}
+          onChange={e => setPueDraft(e.target.value)}
+          onBlur={commitPue}
+          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          placeholder={fleetSettings.pue.toFixed(1)}
+          className={`${cellBase} text-right tabular-nums ${valCls(eff.pueOverride)}`}
+        />
       </td>
 
       {/* Fleet defaults chip */}
