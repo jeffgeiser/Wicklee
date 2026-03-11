@@ -490,18 +490,18 @@ const MgmtRow: React.FC<{
         {/* Permissions */}
         <div>
           {perm === 'full'
-            ? <span className="text-xs font-telin text-green-400">✓ Full</span>
+            ? <span className="text-xs font-telin text-green-400 whitespace-nowrap">✓ Full</span>
             : perm === 'partial'
             ? (
               <span
-                className="text-xs font-telin text-amber-400"
+                className="text-xs font-telin text-amber-400 whitespace-nowrap overflow-hidden text-ellipsis block"
                 title="sudo missing — CPU power unavailable"
               >
                 ⚠ Partial
               </span>
             ) : (
               <span
-                className="text-xs font-telin text-red-400"
+                className="text-xs font-telin text-red-400 whitespace-nowrap overflow-hidden text-ellipsis block"
                 title="Significant data unavailable"
               >
                 ✗ Limited
