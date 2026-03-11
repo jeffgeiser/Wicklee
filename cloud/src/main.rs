@@ -311,23 +311,48 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
     #[derive(Deserialize)]
     struct ClerkClaims { sub: String }
 
-    let header = jsonwebtoken::decode_header(token).ok()?;
-    let kid    = header.kid?;
+    if keys.is_empty() {
+        eprintln!("[auth] clerk_keys is empty — CLERK_JWKS_URL not set or fetch failed");
+        return None;
+    }
 
-    // Find the matching key by kid; fall back to trying all keys if needed.
-    let matching: Vec<&JwkKey> = keys.iter().filter(|k| k.kid == kid).collect();
-    let candidates: &[&JwkKey] = if matching.is_empty() { &keys.iter().collect::<Vec<_>>() } else { &matching };
+    let header = match jsonwebtoken::decode_header(token) {
+        Ok(h) => h,
+        Err(e) => { eprintln!("[auth] JWT decode_header failed: {e}"); return None; }
+    };
+
+    // kid is optional — if absent, try every key in the JWKS.
+    let candidates: Vec<&JwkKey> = match &header.kid {
+        Some(kid) => {
+            let m: Vec<&JwkKey> = keys.iter().filter(|k| &k.kid == kid).collect();
+            if m.is_empty() {
+                eprintln!("[auth] JWT kid={kid} not found in JWKS ({} keys cached)", keys.len());
+                keys.iter().collect() // fall back to all keys
+            } else { m }
+        }
+        None => {
+            eprintln!("[auth] JWT has no kid — trying all {} cached keys", keys.len());
+            keys.iter().collect()
+        }
+    };
 
     let mut val = Validation::new(Algorithm::RS256);
     val.validate_aud = false; // Clerk uses azp, not aud
+    val.leeway = 60;          // 60s leeway for clock skew
 
-    for jwk in candidates {
-        if let Ok(key) = DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
-            if let Ok(data) = decode::<ClerkClaims>(token, &key, &val) {
-                return Some(data.claims.sub);
+    for jwk in &candidates {
+        match DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
+            Err(e) => { eprintln!("[auth] DecodingKey build failed for kid={}: {e}", jwk.kid); }
+            Ok(key) => match decode::<ClerkClaims>(token, &key, &val) {
+                Ok(data) => {
+                    eprintln!("[auth] JWT valid — sub={}", data.claims.sub);
+                    return Some(data.claims.sub);
+                }
+                Err(e) => { eprintln!("[auth] JWT decode failed for kid={}: {e}", jwk.kid); }
             }
         }
     }
+    eprintln!("[auth] JWT validation exhausted all candidates");
     None
 }
 
