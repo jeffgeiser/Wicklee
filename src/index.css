@@ -6,19 +6,10 @@
 @theme {
   --font-family-sans: 'Inter', sans-serif;
   --font-family-mono: 'JetBrains Mono', monospace;
-  --font-family-telin: 'Telin', 'JetBrains Mono', monospace;
+  --font-family-telin: 'JetBrains Mono', monospace;
   --shadow-glow: 0 0 15px -3px rgba(59, 130, 246, 0.4);
 }
 
-/* Telin — place font files in /public/fonts/Telin.* when available */
-@font-face {
-  font-family: 'Telin';
-  src: local('Telin'),
-       url('/fonts/Telin.woff2') format('woff2'),
-       url('/fonts/Telin.woff')  format('woff');
-  font-weight: 400 700;
-  font-display: swap;
-}
 
 @utility font-telin {
   font-family: var(--font-family-telin);
