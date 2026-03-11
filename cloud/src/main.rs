@@ -942,6 +942,14 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
 async fn main() {
     let conn = open_db();
 
+    // One-shot node purge — set RESET_NODES=1 in Railway env, redeploy once,
+    // then remove the var.  Clears the nodes table and the in-memory cache so
+    // all nodes can be re-paired from scratch.
+    if std::env::var("RESET_NODES").as_deref() == Ok("1") {
+        conn.execute_batch("DELETE FROM nodes;").expect("RESET_NODES purge failed");
+        println!("  ⚠  RESET_NODES=1 — all nodes purged.  Remove this env var now.");
+    }
+
     // Pre-load known nodes from the DB so they survive Railway redeploys.
     // metrics is always None here — the frontend shows "last seen X ago" until
     // the agent re-pushes real telemetry (within its 2s push cadence).
