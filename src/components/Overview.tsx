@@ -62,21 +62,43 @@ const fmtAgo = (ms: number): string => {
   return `${Math.floor(s / 3600)}h ago`;
 };
 
-// ── Fleet Status grid — 7 fixed-width columns, enforced at container level ────
-// NODE(180) · MODEL(200) · WES(90) · TOK/S(90) · WATTS(80) · THERMAL(110) · MEMORY(100)
-const FLEET_COLS = '180px 200px 90px 90px 80px 110px 100px';
+// ── Fleet Status responsive grid ─────────────────────────────────────────────
+// Column DOM order: NODE · MODEL · WES · TOK/S · WATTS · THERMAL · MEMORY
+// Priority (always visible): NODE, WES, TOK/S, THERMAL
+//   HIDE < 860px  : MODEL
+//   HIDE < 1024px : MEMORY
+//   HIDE < 1200px : WATTS
+//
+// Grid template changes in lockstep with hidden cells (display:none removes
+// from grid flow, so track count must match visible cell count at every bp):
+//   <860px   → 4 cols: NODE | WES | TOK/S | THERMAL
+//   860-1024 → 5 cols: + MODEL
+//   1024-1200→ 6 cols: + MEMORY   (WATTS still hidden)
+//   1200px+  → 7 cols: all fixed px
+const FLEET_GRID_CLS = [
+  'grid gap-x-3 items-center',
+  '[grid-template-columns:minmax(0,1fr)_90px_90px_110px]',
+  'min-[860px]:[grid-template-columns:minmax(0,1fr)_minmax(0,1fr)_90px_90px_110px]',
+  'lg:[grid-template-columns:minmax(0,1fr)_minmax(0,1fr)_90px_90px_110px_100px]',
+  'min-[1200px]:[grid-template-columns:180px_200px_90px_90px_80px_110px_100px]',
+].join(' ');
+
+const FS_MODEL  = 'hidden min-[860px]:block';   // show >= 860px
+const FS_WATTS  = 'hidden min-[1200px]:block';  // show >= 1200px
+const FS_MEMORY = 'hidden lg:block';            // show >= 1024px
+
+const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none';
 
 // ── Column header row ─────────────────────────────────────────────────────────
 const FleetStatusHeader: React.FC = () => (
-  <div
-    className="grid gap-x-3 px-4 py-2 border-b border-gray-100 dark:border-gray-800/60"
-    style={{ gridTemplateColumns: FLEET_COLS }}
-  >
-    {['NODE', 'MODEL', 'WES', 'TOK/S', 'WATTS', 'THERMAL', 'MEMORY'].map(col => (
-      <p key={col} className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none">
-        {col}
-      </p>
-    ))}
+  <div className={`${FLEET_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}>
+    <p className={FS_HDR}>NODE</p>
+    <p className={`${FS_HDR} ${FS_MODEL}`}>MODEL</p>
+    <p className={FS_HDR}>WES</p>
+    <p className={FS_HDR}>TOK/S</p>
+    <p className={`${FS_HDR} ${FS_WATTS}`}>WATTS</p>
+    <p className={FS_HDR}>THERMAL</p>
+    <p className={`${FS_HDR} ${FS_MEMORY}`}>MEMORY</p>
   </div>
 );
 
@@ -129,13 +151,19 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
 
   const V = `text-xs font-telin ${!isOnline ? 'text-gray-400 dark:text-gray-600' : ''}`;
 
+  // Condensed tooltip on NODE cell — surfaces columns hidden at narrow viewports
+  const nodeTooltip = [
+    modelStr !== '—' && modelStr !== 'No runtime' ? modelStr : null,
+    hasPower && isOnline ? `${totalPowerW.toFixed(1)}W` : null,
+    memPct != null ? `${memPct}% ${memLabel}` : null,
+  ].filter(Boolean).join('  ·  ');
+
   return (
     <div
-      className={`grid items-center gap-x-3 px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors${!isOnline ? ' opacity-50' : ''}`}
-      style={{ gridTemplateColumns: FLEET_COLS }}
+      className={`${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors${!isOnline ? ' opacity-50' : ''}`}
     >
       {/* 1. NODE — status dot + ID + hostname */}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-2 min-w-0" title={nodeTooltip || undefined}>
         <span className="relative flex h-2 w-2 shrink-0">
           {isActive ? (
             <>
@@ -159,8 +187,8 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       </div>
 
-      {/* 2. MODEL */}
-      <div className="min-w-0">
+      {/* 2. MODEL — hide below 860px */}
+      <div className={`min-w-0 ${FS_MODEL}`}>
         <p className={`${V} truncate ${!isOnline || !m?.ollama_running ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
           {modelStr}
         </p>
@@ -191,8 +219,8 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </span>
       </div>
 
-      {/* 5. WATTS */}
-      <div className="min-w-0">
+      {/* 5. WATTS — hide below 1200px */}
+      <div className={`min-w-0 ${FS_WATTS}`}>
         <span
           className={`${V} ${hasPower && isOnline ? 'text-gray-700 dark:text-gray-300' : 'text-gray-500 dark:text-gray-600'}`}
           title="Current power draw of this node."
@@ -215,9 +243,9 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 7. MEMORY / VRAM */}
+      {/* 7. MEMORY / VRAM — hide below 1024px */}
       <div
-        className="min-w-0"
+        className={`min-w-0 ${FS_MEMORY}`}
         title={hasNvidia
           ? 'GPU memory in use as % of total. Exhaustion causes inference to spill to system RAM.'
           : 'Kernel memory pressure — the OS\'s assessment of memory stress, not just raw usage.'}
