@@ -39,15 +39,6 @@ const Section: React.FC<{
   </div>
 );
 
-// ── Field label ───────────────────────────────────────────────────────────────
-
-const FieldLabel: React.FC<{ children: React.ReactNode; helper?: string }> = ({ children, helper }) => (
-  <div>
-    <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-0.5">{children}</p>
-    {helper && <p className="text-[10px] text-gray-500">{helper}</p>}
-  </div>
-);
-
 // ── Shared input classes ──────────────────────────────────────────────────────
 
 const INPUT_BASE =
@@ -149,24 +140,22 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
             {/* Electricity Rate */}
             <div className="space-y-1.5">
-              <FieldLabel>Electricity Rate</FieldLabel>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={kwhDraft}
-                  onChange={e => setKwhDraft(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
-                  className={`${INPUT_BASE} w-28 tabular-nums`}
-                />
-                <span className="text-xs text-gray-500 shrink-0">$/kWh</span>
-              </div>
+              <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Electricity Rate</p>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={kwhDraft}
+                onChange={e => setKwhDraft(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
+                className={`${INPUT_BASE} w-28 tabular-nums`}
+              />
+              <p className="text-[10px] text-gray-500">$/kWh</p>
             </div>
 
             {/* Currency */}
             <div className="space-y-1.5">
-              <FieldLabel>Currency</FieldLabel>
+              <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Currency</p>
               <div className="relative">
                 <select
                   value={currDraft}
@@ -179,13 +168,12 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 </select>
                 <ChevronDown size={12} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
               </div>
+              <p className="text-[10px] text-gray-500">Display only — no FX conversion</p>
             </div>
 
             {/* PUE */}
             <div className="space-y-1.5">
-              <FieldLabel helper="1.0 = home lab  ·  1.4–1.6 = datacenter/colo">
-                PUE Multiplier
-              </FieldLabel>
+              <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">PUE Multiplier</p>
               <input
                 type="number"
                 min="1.0"
@@ -196,6 +184,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
                 className={`${INPUT_BASE} w-24 tabular-nums`}
               />
+              <p className="text-[10px] text-gray-500">1.0 = home lab · 1.4–1.6 = datacenter/colo</p>
             </div>
           </div>
 
