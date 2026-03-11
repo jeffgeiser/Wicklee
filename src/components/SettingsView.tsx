@@ -33,7 +33,7 @@ const Section: React.FC<{
       <span className={`inline-flex items-center justify-center w-5 h-5 rounded ${iconBg} shrink-0`}>
         <Icon size={11} className={iconCls} />
       </span>
-      <h2 className="text-sm font-bold font-telin text-gray-900 dark:text-white tracking-tight">{title}</h2>
+      <h2 className="text-sm font-bold text-gray-900 dark:text-white tracking-tight">{title}</h2>
     </div>
     {children}
   </div>
