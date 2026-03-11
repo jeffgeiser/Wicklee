@@ -251,6 +251,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         ) : (
           <div className="overflow-x-auto">
+            {/* Legend */}
+            <div className="px-4 pt-3 pb-1 flex items-center gap-1.5">
+              <span className="text-amber-400 text-[9px]">◆</span>
+              <span className="text-[9px] text-gray-400 dark:text-gray-500">= custom override active</span>
+            </div>
             {/* Table */}
             <table className="w-full text-sm">
               <thead>
