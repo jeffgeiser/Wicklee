@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Query, State},
     http::{header, HeaderMap, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
@@ -859,16 +859,22 @@ async fn handle_activate(
 /// GET /api/fleet/stream — SSE stream pushing fleet snapshots every 2 s.
 /// The browser at wicklee.dev subscribes here instead of connecting to localhost.
 /// Returns 401 before opening the stream if auth is missing or invalid.
+///
+/// Auth: Bearer header OR ?token= query param (EventSource can't send headers).
 async fn handle_fleet_stream(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     // Auth check — reject before opening the SSE connection.
-    let token = match extract_bearer(&headers) {
-        Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
-    };
+    // EventSource doesn't support custom headers, so accept token via query param too.
+    let token = extract_bearer(&headers)
+        .or_else(|| params.get("token").cloned())
+        .unwrap_or_default();
+    if token.is_empty() {
+        return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response();
+    }
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let db = state.db.clone();
