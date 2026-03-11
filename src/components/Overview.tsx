@@ -63,46 +63,26 @@ const fmtAgo = (ms: number): string => {
   return `${Math.floor(s / 3600)}h ago`;
 };
 
-// ── Fleet Status responsive grid ─────────────────────────────────────────────
-// Column DOM order: NODE · MODEL · WES · TOK/S · WATTS · THERMAL · MEMORY
-// Priority (always visible): NODE, WES, TOK/S, THERMAL
-//   HIDE < 860px  : MODEL
-//   HIDE < 1024px : MEMORY
-//   HIDE < 1200px : WATTS
-//
-// Available content width = viewport − sidebar(256px) − padding(48px)
-//   768px → 464px | 1024px → 720px | 1200px → 896px
-//
-// Grid template changes in lockstep with hidden cells (display:none removes
-// from grid flow, so track count must match visible cell count at every bp):
-//   <860px   → 4 cols: NODE(130) | WES(70) | TOK/S(70) | THERMAL(90)
-//   860-1024 → 5 cols: + MODEL(1fr)
-//   1024-1200→ 6 cols: + MEMORY(90)  — WATTS still hidden
-//   1200px+  → 7 cols: all visible
-const FLEET_GRID_CLS = [
-  'grid gap-x-3 items-center',
-  '[grid-template-columns:130px_70px_70px_90px]',
-  'min-[860px]:[grid-template-columns:130px_minmax(120px,300px)_70px_70px_90px]',
-  'lg:[grid-template-columns:130px_minmax(120px,300px)_70px_70px_90px_90px]',
-  'min-[1200px]:[grid-template-columns:150px_minmax(120px,300px)_90px_90px_80px_110px_100px]',
-].join(' ');
-
-const FS_MODEL  = 'hidden min-[860px]:block';   // show >= 860px
-const FS_WATTS  = 'hidden min-[1200px]:block';  // show >= 1200px
-const FS_MEMORY = 'hidden lg:block';            // show >= 1024px
+// ── Fleet Status grid ────────────────────────────────────────────────────────
+// Columns: STATUS/ID · MEMORY · MODEL · WES · TOK/S · WATTS · THERMAL · SPACER
+// Fixed widths — no responsive hiding. Container is overflow-x: auto so the
+// table scrolls horizontally on narrow viewports rather than hiding columns.
+// SPACER (1fr) absorbs excess space on wide screens.
+const FLEET_GRID_CLS = 'grid gap-x-3 items-center [grid-template-columns:140px_120px_200px_80px_80px_80px_100px_1fr]';
 
 const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
 
 // ── Column header row ─────────────────────────────────────────────────────────
 const FleetStatusHeader: React.FC = () => (
   <div className={`${FLEET_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}>
-    <p className={FS_HDR}>NODE</p>
-    <p className={`${FS_HDR} ${FS_MODEL}`}>MODEL</p>
+    <p className={`${FS_HDR} sticky left-4 bg-white dark:bg-gray-900`}>NODE</p>
+    <p className={FS_HDR}>MEMORY</p>
+    <p className={FS_HDR}>MODEL</p>
     <p className={FS_HDR}>WES</p>
     <p className={FS_HDR}>TOK/S</p>
-    <p className={`${FS_HDR} ${FS_WATTS}`}>WATTS</p>
+    <p className={FS_HDR}>WATTS</p>
     <p className={FS_HDR}>THERMAL</p>
-    <p className={`${FS_HDR} ${FS_MEMORY}`}>MEMORY</p>
+    <div />
   </div>
 );
 
@@ -175,10 +155,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
 
   return (
     <div
-      className={`${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors${!isOnline ? ' opacity-50' : ''}`}
+      className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors${!isOnline ? ' opacity-50' : ''}`}
     >
-      {/* 1. NODE — status dot + ID + hostname */}
-      <div className="flex items-center gap-2 min-w-0" title={nodeTooltip || undefined}>
+      {/* 1. NODE — status dot + ID + hostname (sticky) */}
+      <div className="flex items-center gap-2 overflow-hidden sticky left-4 bg-white dark:bg-gray-900 group-hover:bg-gray-50/50 dark:group-hover:bg-gray-800/30" title={nodeTooltip || undefined}>
         <span className="relative flex h-2 w-2 shrink-0" title={dotTooltip}>
           {dotState === 'online' ? (
             <>
@@ -199,65 +179,9 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       </div>
 
-      {/* 2. MODEL — hide below 860px */}
-      <div className={`min-w-0 ${FS_MODEL}`}>
-        <p className={`${V} truncate ${!isOnline || !m?.ollama_running ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
-          {modelStr}
-        </p>
-      </div>
-
-      {/* 3. WES */}
-      <div className="flex items-center gap-1 min-w-0">
-        {thermalWarn && isOnline && (
-          <AlertTriangle size={9} className="text-amber-400 shrink-0" title="Thermal throttling active" />
-        )}
-        <span
-          className={`${V} font-semibold ${wes != null ? wesColorClass(wes) : 'text-gray-500 dark:text-gray-600'}`}
-          title={wes != null && wes < 10
-            ? wesBreakdownTitle(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, m?.chip_name ?? m?.gpu_name ?? null)
-            : WES_TOOLTIP}
-        >
-          {wes != null ? formatWES(wes) : '—'}
-        </span>
-      </div>
-
-      {/* 4. TOK/S */}
-      <div className="min-w-0">
-        <span
-          className={`${V} ${isActive ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}
-          title="Tokens per second — measured generation throughput from the active model."
-        >
-          {isActive ? tps!.toFixed(1) : '—'}
-        </span>
-      </div>
-
-      {/* 5. WATTS — hide below 1200px */}
-      <div className={`min-w-0 ${FS_WATTS}`}>
-        <span
-          className={`${V} ${hasPower && isOnline ? 'text-gray-700 dark:text-gray-300' : 'text-gray-500 dark:text-gray-600'}`}
-          title="Current power draw of this node."
-        >
-          {hasPower && isOnline ? `${totalPowerW.toFixed(1)}W` : '—'}
-        </span>
-      </div>
-
-      {/* 6. THERMAL — pill badge */}
-      <div className="min-w-0">
-        {isOnline && thermalStr ? (
-          <span
-            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-800 ${thermalCls} whitespace-nowrap`}
-            title="Hardware thermal state. Serious or Critical means active clock throttling is underway."
-          >
-            {thermalStr}
-          </span>
-        ) : (
-          <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
-        )}
-      </div>
-
-      {/* 7. MEMORY / VRAM — hide below 1024px */}
+      {/* 2. MEMORY / VRAM */}
       <div
-        className={`min-w-0 ${FS_MEMORY}`}
+        className="min-w-0 overflow-hidden"
         title={hasNvidia
           ? 'GPU memory in use as % of total. Exhaustion causes inference to spill to system RAM.'
           : 'Kernel memory pressure — the OS\'s assessment of memory stress, not just raw usage.'}
@@ -273,6 +197,65 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
           <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
         )}
       </div>
+
+      {/* 3. MODEL */}
+      <div className="min-w-0 overflow-hidden">
+        <p className={`${V} truncate ${!isOnline || !m?.ollama_running ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
+          {modelStr}
+        </p>
+      </div>
+
+      {/* 4. WES */}
+      <div className="flex items-center gap-1 overflow-hidden">
+        {thermalWarn && isOnline && (
+          <AlertTriangle size={9} className="text-amber-400 shrink-0" title="Thermal throttling active" />
+        )}
+        <span
+          className={`${V} font-semibold ${wes != null ? wesColorClass(wes) : 'text-gray-500 dark:text-gray-600'}`}
+          title={wes != null && wes < 10
+            ? wesBreakdownTitle(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, m?.chip_name ?? m?.gpu_name ?? null)
+            : WES_TOOLTIP}
+        >
+          {wes != null ? formatWES(wes) : '—'}
+        </span>
+      </div>
+
+      {/* 5. TOK/S */}
+      <div className="min-w-0 overflow-hidden">
+        <span
+          className={`${V} ${isActive ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}
+          title="Tokens per second — measured generation throughput from the active model."
+        >
+          {isActive ? tps!.toFixed(1) : '—'}
+        </span>
+      </div>
+
+      {/* 6. WATTS */}
+      <div className="min-w-0 overflow-hidden">
+        <span
+          className={`${V} ${hasPower && isOnline ? 'text-gray-700 dark:text-gray-300' : 'text-gray-500 dark:text-gray-600'}`}
+          title="Current power draw of this node."
+        >
+          {hasPower && isOnline ? `${totalPowerW.toFixed(1)}W` : '—'}
+        </span>
+      </div>
+
+      {/* 7. THERMAL — pill badge */}
+      <div className="min-w-0 overflow-hidden">
+        {isOnline && thermalStr ? (
+          <span
+            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-800 ${thermalCls} whitespace-nowrap`}
+            title="Hardware thermal state. Serious or Critical means active clock throttling is underway."
+          >
+            {thermalStr}
+          </span>
+        ) : (
+          <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
+        )}
+      </div>
+
+      {/* SPACER */}
+      <div />
     </div>
   );
 };
@@ -933,14 +916,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         </div>
 
         {nodeRows.length > 0 ? (
-          <>
+          <div className="overflow-x-auto">
             <FleetStatusHeader />
             <div className="divide-y divide-gray-100 dark:divide-gray-800">
               {nodeRows.map(row => (
                 <FleetStatusRow key={row.nodeId} {...row} />
               ))}
             </div>
-          </>
+          </div>
         ) : (
           <div className="py-10 text-center text-sm text-gray-500">
             {isLocalHost ? 'Connecting to local agent…' : 'No nodes paired yet.'}
