@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Settings, Zap, MapPin, Check, X, ChevronDown } from 'lucide-react';
-import type { NodeAgent } from '../types';
+import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Lock } from 'lucide-react';
+import type { NodeAgent, PairingInfo } from '../types';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
@@ -17,18 +17,23 @@ interface SettingsViewProps {
   setNodeOverride: (nodeId: string, patch: Partial<NodeOverride>) => void;
   clearAllOverridesForField: (field: 'kwhRate' | 'currency' | 'pue') => void;
   clearAllNodeOverrides: () => void;
+  theme: 'light' | 'dark';
+  onThemeChange: (t: 'dark' | 'light' | 'system') => void;
+  onNavigateToManagement: () => void;
+  pairingInfo: PairingInfo | null;
 }
 
-// ── Section wrapper ───────────────────────────────────────────────────────────
+// ── Section ───────────────────────────────────────────────────────────────────
 
 const Section: React.FC<{
+  id: string;
   title: string;
   icon: React.ElementType;
   iconBg: string;
   iconCls: string;
   children: React.ReactNode;
-}> = ({ title, icon: Icon, iconBg, iconCls, children }) => (
-  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+}> = ({ id, title, icon: Icon, iconBg, iconCls, children }) => (
+  <div id={id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden scroll-mt-6">
     <div className="flex items-center gap-2.5 px-6 py-4 border-b border-gray-100 dark:border-gray-800">
       <span className={`inline-flex items-center justify-center w-5 h-5 rounded ${iconBg} shrink-0`}>
         <Icon size={11} className={iconCls} />
@@ -36,6 +41,34 @@ const Section: React.FC<{
       <h2 className="text-sm font-bold text-gray-900 dark:text-white tracking-tight">{title}</h2>
     </div>
     {children}
+  </div>
+);
+
+// ── RadioGroup ────────────────────────────────────────────────────────────────
+
+const RadioGroup: React.FC<{
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (v: string) => void;
+}> = ({ label, options, value, onChange }) => (
+  <div className="space-y-2">
+    <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">{label}</p>
+    <div className="flex items-center gap-1 flex-wrap">
+      {options.map(opt => (
+        <button
+          key={opt.value}
+          onClick={() => onChange(opt.value)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+            value === opt.value
+              ? 'bg-indigo-600 border-indigo-600 text-white'
+              : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-indigo-400/50 hover:text-indigo-400'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
   </div>
 );
 
@@ -60,58 +93,45 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   setNodeOverride,
   clearAllOverridesForField,
   clearAllNodeOverrides,
+  theme,
+  onThemeChange,
+  onNavigateToManagement,
+  pairingInfo,
 }) => {
-  // Fleet Defaults — local drafts, explicit save
+  // ── Fleet defaults drafts (numbers need validation before commit) ───────────
   const [kwhDraft, setKwhDraft] = useState(settings.fleet.kwhRate.toString());
-  const [pueDraft,  setPueDraft] = useState(settings.fleet.pue.toString());
-  const [currDraft, setCurrDraft] = useState(settings.fleet.currency);
-  const [fleetSaved, setFleetSaved] = useState(false);
+  const [pueDraft, setPueDraft] = useState(settings.fleet.pue.toString());
 
-  // Sync drafts when fleet settings change externally
   React.useEffect(() => { setKwhDraft(settings.fleet.kwhRate.toString()); }, [settings.fleet.kwhRate]);
   React.useEffect(() => { setPueDraft(settings.fleet.pue.toString()); }, [settings.fleet.pue]);
-  React.useEffect(() => { setCurrDraft(settings.fleet.currency); }, [settings.fleet.currency]);
 
-  const kwhDirty  = kwhDraft  !== settings.fleet.kwhRate.toString();
-  const pueDirty  = pueDraft  !== settings.fleet.pue.toString();
-  const currDirty = currDraft !== settings.fleet.currency;
-  const isDirty   = kwhDirty || pueDirty || currDirty;
+  const kwhDirty = kwhDraft !== settings.fleet.kwhRate.toString();
+  const pueDirty = pueDraft !== settings.fleet.pue.toString();
 
-  const handleFleetSave = () => {
-    const kwh = parseFloat(kwhDraft);
-    const pue = parseFloat(pueDraft);
-    if (isNaN(kwh) || kwh < 0)              { setKwhDraft(settings.fleet.kwhRate.toString()); return; }
-    if (isNaN(pue) || pue < 1.0 || pue > 3.0) { setPueDraft(settings.fleet.pue.toString());  return; }
-    updateFleet({
-      kwhRate: Math.round(kwh * 10000) / 10000,
-      currency: currDraft,
-      pue: Math.round(pue * 10) / 10,
-    });
-    setFleetSaved(true);
-    setTimeout(() => setFleetSaved(false), 1800);
+  const commitKwh = () => {
+    const v = parseFloat(kwhDraft);
+    if (!isNaN(v) && v >= 0) updateFleet({ kwhRate: Math.round(v * 10000) / 10000 });
+    else setKwhDraft(settings.fleet.kwhRate.toString());
   };
 
-  // ── Clear column handlers ───────────────────────────────────────────────────
+  const commitPue = () => {
+    const v = parseFloat(pueDraft);
+    if (!isNaN(v) && v >= 1.0 && v <= 3.0) updateFleet({ pue: Math.round(v * 10) / 10 });
+    else setPueDraft(settings.fleet.pue.toString());
+  };
 
+  // ── Live cost preview ──────────────────────────────────────────────────────
+  const draftKwh = parseFloat(kwhDraft);
+  const draftPue = parseFloat(pueDraft);
+  const effKwh = !isNaN(draftKwh) && draftKwh >= 0 ? draftKwh : settings.fleet.kwhRate;
+  const effPue = !isNaN(draftPue) && draftPue >= 1  ? draftPue : settings.fleet.pue;
+  const currSymbol = CURRENCY_OPTIONS.find(c => c.value === settings.fleet.currency)?.symbol ?? '$';
+  // 100W node, 24/7, 30.4 days/month
+  const monthlyCost100W = (100 / 1000) * effPue * 24 * 30.4 * effKwh;
+
+  // ── Column clear state ─────────────────────────────────────────────────────
   const [confirmClear, setConfirmClear] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
   const [successField, setSuccessField] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
-
-  // Apply-all confirm state
-  const [confirmApplyAll, setConfirmApplyAll] = useState(false);
-  const [applyAllDone, setApplyAllDone] = useState(false);
-
-  const overrideNodeCount = nodes.filter(n => getNodeSettings(n.id).hasAnyOverride).length;
-
-  const handleApplyAll = () => {
-    if (confirmApplyAll) {
-      clearAllNodeOverrides();
-      setConfirmApplyAll(false);
-      setApplyAllDone(true);
-      setTimeout(() => setApplyAllDone(false), 1800);
-    } else {
-      setConfirmApplyAll(true);
-    }
-  };
 
   const handleClearField = (field: 'kwhRate' | 'currency' | 'pue') => {
     if (confirmClear === field) {
@@ -125,23 +145,65 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const confirmText = (field: 'kwhRate' | 'currency' | 'pue') => {
-    if (field === 'kwhRate')  return `Reset all kWh rate overrides? Nodes will use $${settings.fleet.kwhRate}/kWh.`;
+    if (field === 'kwhRate')  return `Reset all kWh overrides? Nodes will use ${currSymbol}${settings.fleet.kwhRate}/kWh.`;
     if (field === 'currency') return `Reset all currency overrides? Nodes will use ${settings.fleet.currency}.`;
     return `Reset all PUE overrides? Nodes will use PUE ${settings.fleet.pue.toFixed(1)}.`;
   };
 
+  // ── Apply fleet defaults to all nodes ─────────────────────────────────────
+  const [confirmApplyAll, setConfirmApplyAll] = useState(false);
+  const [applyAllDone, setApplyAllDone] = useState(false);
+  const overrideNodeCount = nodes.filter(n => getNodeSettings(n.id).hasAnyOverride).length;
+
+  const handleApplyAll = () => {
+    if (confirmApplyAll) {
+      clearAllNodeOverrides();
+      setConfirmApplyAll(false);
+      setApplyAllDone(true);
+      setTimeout(() => setApplyAllDone(false), 1800);
+    } else {
+      setConfirmApplyAll(true);
+    }
+  };
+
+  // ── Danger zone ────────────────────────────────────────────────────────────
+  const [confirmReset, setConfirmReset] = useState(false);
+  const handleResetAll = () => {
+    if (confirmReset) {
+      updateFleet({ ...FLEET_DEFAULTS });
+      clearAllNodeOverrides();
+      setConfirmReset(false);
+    } else {
+      setConfirmReset(true);
+    }
+  };
+
+  // ── Export settings ────────────────────────────────────────────────────────
+  const handleExport = () => {
+    const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'wicklee-settings.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Theme preference ───────────────────────────────────────────────────────
+  // settings.fleet.themePreference is the stored value; fall back to current effective theme
+  const themePreference: string = settings.fleet.themePreference ?? theme;
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
+    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
 
       {/* Page title */}
       <div className="space-y-1">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
-        <p className="text-sm text-gray-500">Fleet defaults and per-node energy configuration.</p>
+        <p className="text-sm text-gray-500">Fleet defaults, node configuration, and display preferences.</p>
       </div>
 
-      {/* ── Fleet Defaults ──────────────────────────────────────────────────── */}
-      <Section title="Fleet Defaults" icon={Zap} iconBg="bg-amber-500/10" iconCls="text-amber-400">
+      {/* ── ① COST & ENERGY ─────────────────────────────────────────────── */}
+      <Section id="cost-energy" title="Cost & Energy" icon={Zap} iconBg="bg-amber-500/10" iconCls="text-amber-400">
         <div className="px-6 py-5 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
 
@@ -149,12 +211,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="space-y-1.5">
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Electricity Rate</p>
               <input
-                type="number"
-                min="0"
-                step="0.01"
+                type="number" min="0" step="0.01"
                 value={kwhDraft}
                 onChange={e => setKwhDraft(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
+                onBlur={commitKwh}
+                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                 className={`${inputCls(kwhDirty)} w-28 tabular-nums`}
               />
               <p className="text-[10px] text-gray-500">$/kWh</p>
@@ -165,9 +226,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Currency</p>
               <div className="relative">
                 <select
-                  value={currDraft}
-                  onChange={e => setCurrDraft(e.target.value as FleetSettings['currency'])}
-                  className={`${inputCls(currDirty)} w-full appearance-none pr-7`}
+                  value={settings.fleet.currency}
+                  onChange={e => updateFleet({ currency: e.target.value as FleetSettings['currency'] })}
+                  className={`${inputCls(false)} w-full appearance-none pr-7`}
                 >
                   {CURRENCY_OPTIONS.map(c => (
                     <option key={c.value} value={c.value}>{c.label}</option>
@@ -182,63 +243,308 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="space-y-1.5">
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">PUE Multiplier</p>
               <input
-                type="number"
-                min="1.0"
-                max="3.0"
-                step="0.1"
+                type="number" min="1.0" max="3.0" step="0.1"
                 value={pueDraft}
                 onChange={e => setPueDraft(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
+                onBlur={commitPue}
+                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                 className={`${inputCls(pueDirty)} w-24 tabular-nums`}
               />
               <p className="text-[10px] text-gray-500">1.0 = home lab · 1.4–1.6 = datacenter/colo</p>
             </div>
           </div>
 
-          <div className="flex items-start justify-between border-t border-gray-100 dark:border-gray-800 pt-4">
-            <p className="text-[11px] text-gray-500 mt-1.5">
-              These values apply to all nodes. Override any setting per-node below for nodes in different locations or energy markets.
+          {/* Live cost preview */}
+          <div className="rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-800 px-4 py-3">
+            <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+              Cost Preview · 100 W node · 24/7
             </p>
-            <div className="flex flex-col items-end gap-2 shrink-0 ml-4">
-              {/* Save row */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold font-telin text-gray-900 dark:text-white">
+                {currSymbol}{monthlyCost100W.toFixed(2)}
+              </span>
+              <span className="text-xs text-gray-500">/month</span>
+            </div>
+            <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+              {currSymbol}{effKwh.toFixed(4)}/kWh · PUE {effPue.toFixed(1)}
+            </p>
+          </div>
+
+          <p className="text-[11px] text-gray-400 dark:text-gray-500">
+            These values apply to all nodes. Override any setting per-node in Node Configuration below.
+          </p>
+        </div>
+      </Section>
+
+      {/* ── ② NODE CONFIGURATION ─────────────────────────────────────────── */}
+      <Section id="node-configuration" title="Node Configuration" icon={MapPin} iconBg="bg-indigo-500/10" iconCls="text-indigo-400">
+        {nodes.length === 0 ? (
+          <div className="px-6 py-12 text-center space-y-2">
+            <p className="text-sm text-gray-500">No nodes connected yet.</p>
+            <button
+              onClick={onNavigateToManagement}
+              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              Go to Management →
+            </button>
+          </div>
+        ) : (
+          <div>
+            {/* Controls bar */}
+            <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-4 flex-wrap border-b border-gray-100 dark:border-gray-800">
+              <div className="flex items-center gap-1.5">
+                <span className="text-amber-400 text-[9px]">◆</span>
+                <span className="text-[9px] text-gray-400 dark:text-gray-500">= custom override active</span>
+              </div>
               <div className="flex items-center gap-3">
-                {fleetSaved && (
-                  <div className="flex items-center gap-1.5 animate-in fade-in duration-200">
-                    <Check size={11} className="text-green-400" />
-                    <span className="text-[11px] font-medium text-green-400">Saved</span>
-                  </div>
-                )}
-                {isDirty && (
+                {applyAllDone ? (
+                  <span className="flex items-center gap-1 text-[10px] text-green-400">
+                    <Check size={9} /> All overrides cleared
+                  </span>
+                ) : confirmApplyAll ? (
+                  <span className="flex items-center gap-2">
+                    <span className="text-[10px] text-amber-500">
+                      Reset {overrideNodeCount} node{overrideNodeCount !== 1 ? 's' : ''}?
+                    </span>
+                    <button onClick={handleApplyAll} className="text-[10px] font-semibold text-red-400 hover:text-red-300 transition-colors">Confirm</button>
+                    <button onClick={() => setConfirmApplyAll(false)} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
+                  </span>
+                ) : (
                   <button
-                    onClick={handleFleetSave}
-                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                    onClick={handleApplyAll}
+                    disabled={overrideNodeCount === 0}
+                    className="text-[10px] text-gray-500 hover:text-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   >
-                    Save Changes
+                    Apply fleet defaults to all nodes
                   </button>
                 )}
+                <button
+                  onClick={onNavigateToManagement}
+                  className="text-[10px] text-gray-500 hover:text-indigo-400 transition-colors"
+                >
+                  Management →
+                </button>
               </div>
+            </div>
 
-              {/* Apply-all row */}
-              {applyAllDone ? (
-                <div className="flex items-center gap-1.5 animate-in fade-in duration-200">
-                  <Check size={11} className="text-green-400" />
-                  <span className="text-[11px] font-medium text-green-400">All overrides cleared</span>
+            {/* Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 dark:border-gray-800">
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Node ID</th>
+                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
+                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Location Label</th>
+                    <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
+                      <div>kWh Rate</div>
+                      <ClearColumnButton
+                        label="Reset column"
+                        field="kwhRate"
+                        confirmClear={confirmClear}
+                        successField={successField}
+                        confirmText={confirmText('kwhRate')}
+                        onConfirm={() => handleClearField('kwhRate')}
+                        onCancel={() => setConfirmClear(null)}
+                      />
+                    </th>
+                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-28">
+                      <div>Currency</div>
+                      <ClearColumnButton
+                        label="Reset column"
+                        field="currency"
+                        confirmClear={confirmClear}
+                        successField={successField}
+                        confirmText={confirmText('currency')}
+                        onConfirm={() => handleClearField('currency')}
+                        onCancel={() => setConfirmClear(null)}
+                      />
+                    </th>
+                    <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">
+                      <div>PUE</div>
+                      <ClearColumnButton
+                        label="Reset column"
+                        field="pue"
+                        confirmClear={confirmClear}
+                        successField={successField}
+                        confirmText={confirmText('pue')}
+                        onConfirm={() => handleClearField('pue')}
+                        onCancel={() => setConfirmClear(null)}
+                      />
+                    </th>
+                    <th className="w-20" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                  {nodes.map(node => {
+                    const eff = getNodeSettings(node.id);
+                    const ov  = settings.nodes[node.id] ?? {};
+                    return (
+                      <NodeOverrideRow
+                        key={node.id}
+                        node={node}
+                        eff={eff}
+                        ov={ov}
+                        fleetSettings={settings.fleet}
+                        onOverride={(patch) => setNodeOverride(node.id, patch)}
+                      />
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </Section>
+
+      {/* ── ③ DISPLAY & UNITS ────────────────────────────────────────────── */}
+      <Section id="display-units" title="Display & Units" icon={Monitor} iconBg="bg-blue-500/10" iconCls="text-blue-400">
+        <div className="px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <RadioGroup
+            label="Temperature"
+            options={[
+              { value: 'C', label: '°C  Celsius' },
+              { value: 'F', label: '°F  Fahrenheit' },
+            ]}
+            value={settings.fleet.temperatureUnit}
+            onChange={v => updateFleet({ temperatureUnit: v as 'C' | 'F' })}
+          />
+          <RadioGroup
+            label="Power Display"
+            options={[
+              { value: 'W',   label: 'Watts' },
+              { value: 'BTU', label: 'BTU/hr' },
+            ]}
+            value={settings.fleet.powerUnit}
+            onChange={v => updateFleet({ powerUnit: v as 'W' | 'BTU' })}
+          />
+          <RadioGroup
+            label="WES Display"
+            options={[
+              { value: 'auto',  label: 'Auto  (mWES / WES)' },
+              { value: 'fixed', label: 'Fixed  (WES)' },
+            ]}
+            value={settings.fleet.wesDisplay}
+            onChange={v => updateFleet({ wesDisplay: v as 'auto' | 'fixed' })}
+          />
+          <RadioGroup
+            label="Theme"
+            options={[
+              { value: 'dark',   label: 'Dark' },
+              { value: 'light',  label: 'Light' },
+              { value: 'system', label: 'System' },
+            ]}
+            value={themePreference}
+            onChange={v => {
+              updateFleet({ themePreference: v as 'dark' | 'light' | 'system' });
+              onThemeChange(v as 'dark' | 'light' | 'system');
+            }}
+          />
+        </div>
+      </Section>
+
+      {/* ── ④ ALERTS & NOTIFICATIONS ─────────────────────────────────────── */}
+      <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
+        <div className="px-6 py-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider shrink-0 mt-0.5">
+              <Lock size={9} /> Phase 4A
+            </span>
+            <p className="text-xs text-gray-500">
+              Alert rules and notification channels are coming in the next major release.
+            </p>
+          </div>
+          <div className="space-y-2 opacity-40 pointer-events-none select-none">
+            {[
+              { label: 'Thermal threshold',  desc: 'Alert when any node exceeds a set temperature' },
+              { label: 'Node offline',        desc: 'Alert when a node stops reporting telemetry' },
+              { label: 'High power draw',     desc: 'Alert when fleet power exceeds a wattage budget' },
+              { label: 'Cost overrun',        desc: 'Alert when projected monthly cost exceeds a limit' },
+            ].map(item => (
+              <div
+                key={item.label}
+                className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40"
+              >
+                <div>
+                  <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">{item.label}</p>
+                  <p className="text-[10px] text-gray-500">{item.desc}</p>
                 </div>
-              ) : confirmApplyAll ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-amber-500">
-                    This will reset {overrideNodeCount} node{overrideNodeCount !== 1 ? 's' : ''} with custom overrides.
-                  </span>
-                  <button onClick={handleApplyAll}   className="text-[10px] font-semibold text-red-400 hover:text-red-300 transition-colors">Confirm</button>
-                  <button onClick={() => setConfirmApplyAll(false)} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
+                <div className="w-8 h-4 rounded-full bg-gray-200 dark:bg-gray-700 shrink-0" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </Section>
+
+      {/* ── ⑤ ACCOUNT & DATA ─────────────────────────────────────────────── */}
+      <Section id="account" title="Account & Data" icon={User} iconBg="bg-gray-500/10" iconCls="text-gray-400">
+        <div className="px-6 py-5 space-y-5">
+
+          {/* Version & Fleet Status */}
+          <div className="grid grid-cols-2 gap-6">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Agent Version</p>
+              <p className="text-sm font-telin text-gray-900 dark:text-white">v0.4.5</p>
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Fleet Status</p>
+              {pairingInfo?.status === 'connected' ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                  <p className="text-sm font-telin text-green-400">Connected</p>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-gray-400 dark:bg-gray-600 shrink-0" />
+                  <p className="text-sm font-telin text-gray-500 dark:text-gray-400">Local mode</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Export */}
+          <div className="flex items-center justify-between py-4 border-t border-gray-100 dark:border-gray-800">
+            <div>
+              <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Export Settings</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">Download your fleet and node settings as JSON.</p>
+            </div>
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400 hover:border-indigo-400/50 hover:text-indigo-400 transition-colors"
+            >
+              <Download size={11} /> Export
+            </button>
+          </div>
+
+          {/* Danger zone */}
+          <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-500/70 mb-3">Danger Zone</p>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Reset all settings</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Restore fleet defaults and clear all node overrides.</p>
+              </div>
+              {confirmReset ? (
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] text-amber-500">This cannot be undone.</span>
+                  <button
+                    onClick={handleResetAll}
+                    className="px-2.5 py-1 rounded-lg bg-rose-500/10 border border-rose-500/30 text-[10px] font-semibold text-rose-400 hover:bg-rose-500/20 transition-colors"
+                  >
+                    Confirm Reset
+                  </button>
+                  <button
+                    onClick={() => setConfirmReset(false)}
+                    className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    Cancel
+                  </button>
                 </div>
               ) : (
                 <button
-                  onClick={handleApplyAll}
-                  disabled={overrideNodeCount === 0}
-                  className="px-2 py-0.5 text-[10px] rounded border border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-indigo-400/60 hover:text-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  onClick={() => setConfirmReset(true)}
+                  className="shrink-0 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs text-gray-500 hover:border-rose-500/40 hover:text-rose-400 transition-colors"
                 >
-                  Apply fleet defaults to all nodes
+                  Reset defaults
                 </button>
               )}
             </div>
@@ -246,89 +552,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </Section>
 
-      {/* ── Node Overrides ──────────────────────────────────────────────────── */}
-      <Section title="Node Overrides" icon={MapPin} iconBg="bg-indigo-500/10" iconCls="text-indigo-400">
-        {nodes.length === 0 ? (
-          <div className="px-6 py-12 text-center">
-            <p className="text-sm text-gray-500">
-              No nodes paired yet — node overrides will appear here once your first node is connected.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            {/* Legend */}
-            <div className="px-4 pt-3 pb-1 flex items-center gap-1.5">
-              <span className="text-amber-400 text-[9px]">◆</span>
-              <span className="text-[9px] text-gray-400 dark:text-gray-500">= custom override active</span>
-            </div>
-            {/* Table */}
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 dark:border-gray-800">
-                  <th className="text-left px-4 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Node ID</th>
-                  <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
-                  <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Location Label</th>
-                  <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
-                    <div className="text-right">kWh Rate</div>
-                    <ClearColumnButton
-                      label="Reset column to fleet default"
-                      field="kwhRate"
-                      confirmClear={confirmClear}
-                      successField={successField}
-                      confirmText={confirmText('kwhRate')}
-                      onConfirm={() => handleClearField('kwhRate')}
-                      onCancel={() => setConfirmClear(null)}
-                    />
-                  </th>
-                  <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-28">
-                    <div>Currency</div>
-                    <ClearColumnButton
-                      label="Reset column to fleet default"
-                      field="currency"
-                      confirmClear={confirmClear}
-                      successField={successField}
-                      confirmText={confirmText('currency')}
-                      onConfirm={() => handleClearField('currency')}
-                      onCancel={() => setConfirmClear(null)}
-                    />
-                  </th>
-                  <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">
-                    <div className="text-right">PUE</div>
-                    <ClearColumnButton
-                      label="Reset column to fleet default"
-                      field="pue"
-                      confirmClear={confirmClear}
-                      successField={successField}
-                      confirmText={confirmText('pue')}
-                      onConfirm={() => handleClearField('pue')}
-                      onCancel={() => setConfirmClear(null)}
-                    />
-                  </th>
-                  <th className="w-24" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                {nodes.map(node => {
-                  const eff = getNodeSettings(node.id);
-                  const ov  = settings.nodes[node.id] ?? {};
-                  return (
-                    <NodeOverrideRow
-                      key={node.id}
-                      node={node}
-                      eff={eff}
-                      ov={ov}
-                      fleetSettings={settings.fleet}
-                      onOverride={(patch) => setNodeOverride(node.id, patch)}
-                    />
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Section>
-
-      {/* ── Saved toast ─────────────────────────────────────────────────────── */}
+      {/* Saved toast */}
       {savedToast && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-gray-900 border border-gray-700/80 rounded-xl shadow-xl shadow-black/40 animate-in fade-in slide-in-from-bottom-2 duration-200">
           <Check size={13} className="text-green-400 shrink-0" />
@@ -394,7 +618,6 @@ const NodeOverrideRow: React.FC<{
   React.useEffect(() => { setKwhDraft(ov.kwhRate?.toString() ?? ''); }, [ov.kwhRate]);
   React.useEffect(() => { setPueDraft(ov.pue?.toString()  ?? ''); }, [ov.pue]);
 
-  // Per-cell saved flash state
   const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | null>(null);
   const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc') => {
     setSavedCell(cell);
@@ -415,10 +638,7 @@ const NodeOverrideRow: React.FC<{
     else { setPueDraft(ov.pue?.toString() ?? ''); }
   };
 
-  // Overridden values → high-contrast white; inheriting fleet default → muted
-  const valCls  = (active: boolean) => active
-    ? 'text-gray-900 dark:text-white'
-    : 'text-gray-400 dark:text-gray-500';
+  const valCls  = (active: boolean) => active ? 'text-gray-900 dark:text-white' : 'text-gray-400 dark:text-gray-500';
   const cellBase = 'w-full bg-transparent border-0 outline-none text-xs font-telin tabular-nums placeholder-gray-400 dark:placeholder-gray-600';
 
   const SavedMark = () => (
@@ -431,7 +651,7 @@ const NodeOverrideRow: React.FC<{
   return (
     <tr className={`hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors ${eff.hasAnyOverride ? 'border-l-2 border-amber-400/40' : 'border-l-2 border-transparent'}`}>
 
-      {/* Node ID — ◆ indicator when any override active */}
+      {/* Node ID */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-1.5">
           {eff.hasAnyOverride && (
@@ -466,9 +686,7 @@ const NodeOverrideRow: React.FC<{
         <div className="flex items-center justify-end gap-1.5">
           {savedCell === 'kwh' && <SavedMark />}
           <input
-            type="number"
-            min="0"
-            step="0.01"
+            type="number" min="0" step="0.01"
             value={kwhDraft}
             onChange={e => setKwhDraft(e.target.value)}
             onBlur={commitKwh}
@@ -504,10 +722,7 @@ const NodeOverrideRow: React.FC<{
         <div className="flex items-center justify-end gap-1.5">
           {savedCell === 'pue' && <SavedMark />}
           <input
-            type="number"
-            min="1.0"
-            max="3.0"
-            step="0.1"
+            type="number" min="1.0" max="3.0" step="0.1"
             value={pueDraft}
             onChange={e => setPueDraft(e.target.value)}
             onBlur={commitPue}

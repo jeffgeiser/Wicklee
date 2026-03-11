@@ -34,6 +34,10 @@ export interface FleetSettings {
   kwhRate: number;
   currency: CurrencyCode;
   pue: number;
+  temperatureUnit: 'C' | 'F';
+  powerUnit: 'W' | 'BTU';
+  wesDisplay: 'auto' | 'fixed';
+  themePreference: 'dark' | 'light' | 'system';
 }
 
 export interface NodeOverride {
@@ -66,6 +70,10 @@ export const FLEET_DEFAULTS: FleetSettings = {
   kwhRate: 0.12,
   currency: 'USD',
   pue: 1.0,
+  temperatureUnit: 'C',
+  powerUnit: 'W',
+  wesDisplay: 'auto',
+  themePreference: 'dark',
 };
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
