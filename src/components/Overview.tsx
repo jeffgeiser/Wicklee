@@ -70,18 +70,21 @@ const fmtAgo = (ms: number): string => {
 //   HIDE < 1024px : MEMORY
 //   HIDE < 1200px : WATTS
 //
+// Available content width = viewport − sidebar(256px) − padding(48px)
+//   768px → 464px | 1024px → 720px | 1200px → 896px
+//
 // Grid template changes in lockstep with hidden cells (display:none removes
 // from grid flow, so track count must match visible cell count at every bp):
-//   <860px   → 4 cols: NODE | WES | TOK/S | THERMAL
-//   860-1024 → 5 cols: + MODEL
-//   1024-1200→ 6 cols: + MEMORY   (WATTS still hidden)
-//   1200px+  → 7 cols: all fixed px
+//   <860px   → 4 cols: NODE(130) | WES(70) | TOK/S(70) | THERMAL(90)
+//   860-1024 → 5 cols: + MODEL(1fr)
+//   1024-1200→ 6 cols: + MEMORY(90)  — WATTS still hidden
+//   1200px+  → 7 cols: all visible
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
-  '[grid-template-columns:minmax(150px,1fr)_90px_90px_110px]',
-  'min-[860px]:[grid-template-columns:minmax(150px,1fr)_minmax(0,1fr)_90px_90px_110px]',
-  'lg:[grid-template-columns:minmax(150px,1fr)_minmax(0,1fr)_90px_90px_110px_100px]',
-  'min-[1200px]:[grid-template-columns:180px_200px_90px_90px_80px_110px_100px]',
+  '[grid-template-columns:130px_70px_70px_90px]',
+  'min-[860px]:[grid-template-columns:130px_minmax(0,1fr)_70px_70px_90px]',
+  'lg:[grid-template-columns:130px_minmax(0,1fr)_70px_70px_90px_90px]',
+  'min-[1200px]:[grid-template-columns:150px_minmax(0,1fr)_90px_90px_80px_110px_100px]',
 ].join(' ');
 
 const FS_MODEL  = 'hidden min-[860px]:block';   // show >= 860px
