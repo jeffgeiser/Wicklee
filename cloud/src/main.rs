@@ -13,7 +13,7 @@ use tokio_stream::StreamExt as _;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -217,6 +217,20 @@ fn run_migrations(conn: &Connection) {
     // Add user_id column — links each node to the account that activated it.
     // Needed for per-user node counting to enforce the free-tier limit correctly.
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN user_id TEXT;");
+
+    // Backfill: if only one user exists, assign all orphaned nodes to them.
+    // Safe to run on every startup — no-ops when there are zero or multiple users.
+    let _ = conn.execute_batch("
+        UPDATE nodes
+        SET user_id = (SELECT id FROM users LIMIT 1)
+        WHERE user_id IS NULL
+          AND (SELECT COUNT(*) FROM users) = 1;
+    ");
+
+    // Index for per-user node queries.
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_nodes_user_id ON nodes(user_id);"
+    );
 }
 
 // ── Tier constants ────────────────────────────────────────────────────────────
@@ -251,6 +265,30 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_owned())
+}
+
+/// Validate a Bearer token and return the user_id.
+/// Synchronous — intended to be called inside spawn_blocking or block_in_place.
+fn require_user(token: &str, conn: &rusqlite::Connection) -> Option<String> {
+    conn.query_row(
+        "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
+        params![token],
+        |r| r.get::<_, String>(0),
+    ).ok()
+}
+
+/// Load the set of node IDs belonging to a user.
+/// Synchronous — call inside spawn_blocking or block_in_place.
+fn user_node_set(user_id: &str, conn: &rusqlite::Connection) -> HashSet<String> {
+    conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1")
+        .ok()
+        .map(|mut stmt| {
+            stmt.query_map(params![user_id], |r| r.get::<_, String>(0))
+                .ok()
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
@@ -528,23 +566,38 @@ async fn handle_telemetry(
 }
 
 /// GET /api/fleet
-async fn handle_fleet(State(state): State<AppState>) -> impl IntoResponse {
-    // Load persisted node records.
+async fn handle_fleet(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
     let db = state.db.clone();
-    let persisted: Vec<(String, String, i64)> = tokio::task::spawn_blocking(move || {
+    let result: Option<Vec<(String, String, i64)>> = tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
+        let user_id = require_user(&token, &conn)?;
         let mut stmt = conn.prepare(
-            "SELECT wk_id, fleet_url, last_seen FROM nodes ORDER BY last_seen DESC"
-        ).unwrap();
-        stmt.query_map([], |r| Ok((
+            "SELECT wk_id, fleet_url, last_seen FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![user_id], |r| Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, i64>(2)?,
         )))
-        .unwrap()
+        .ok()?
         .filter_map(|r| r.ok())
-        .collect()
+        .collect())
     }).await.unwrap();
+
+    let persisted = match result {
+        Some(rows) => rows,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
     let metrics_map = state.metrics.read().unwrap();
     let nodes: Vec<NodeSummary> = persisted.into_iter().map(|(node_id, fleet_url, last_seen_db)| {
@@ -554,7 +607,7 @@ async fn handle_fleet(State(state): State<AppState>) -> impl IntoResponse {
         NodeSummary { node_id, fleet_url, last_seen_ms, metrics }
     }).collect();
 
-    Json(FleetResponse { nodes })
+    Json(FleetResponse { nodes }).into_response()
 }
 
 /// POST /api/pair/activate — user enters 6-digit code from their terminal to link the node.
@@ -573,96 +626,135 @@ async fn handle_activate(
             Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
     }
 
-    // Resolve the calling user (if authenticated) to check tier limits.
-    let bearer = extract_bearer(&headers);
-    let db     = state.db.clone();
-    let bearer2 = bearer.clone();
+    // Auth is required — a node must always be owned by an account.
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let db = state.db.clone();
     // Returns (user_id, email, is_pro)
-    let user_info: Option<(String, String, i32)> = if let Some(tok) = bearer2 {
-        tokio::task::spawn_blocking(move || {
-            let conn = db.lock().unwrap();
-            conn.query_row(
-                "SELECT u.id, u.email, u.is_pro FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
-                params![tok],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i32>(2)?)),
-            ).ok()
-        }).await.unwrap()
-    } else {
-        None
+    let user_info: Option<(String, String, i32)> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        conn.query_row(
+            "SELECT u.id, u.email, u.is_pro FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
+            params![token],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i32>(2)?)),
+        ).ok()
+    }).await.unwrap();
+
+    let (user_id, email, is_pro_db) = match user_info {
+        Some(info) => info,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
     // Enforce free-tier node limit per user (skip for dev account or pro users).
-    if let Some((ref user_id, ref email, is_pro_db)) = user_info {
-        let is_pro = is_pro_db != 0 || is_dev_account(email);
-        if !is_pro {
-            let db2     = state.db.clone();
-            let uid     = user_id.clone();
-            let count: usize = tokio::task::spawn_blocking(move || {
-                let conn = db2.lock().unwrap();
-                conn.query_row(
-                    "SELECT COUNT(*) FROM nodes WHERE user_id = ?1",
-                    params![uid],
-                    |r| r.get::<_, i64>(0),
-                ).unwrap_or(0) as usize
-            }).await.unwrap();
-            if count >= MAX_FREE_NODES {
-                return (StatusCode::PAYMENT_REQUIRED,
-                    Json(serde_json::json!({
-                        "error": format!("Free tier limit reached ({MAX_FREE_NODES} nodes). Upgrade to add more.")
-                    }))).into_response();
-            }
+    let is_pro = is_pro_db != 0 || is_dev_account(&email);
+    if !is_pro {
+        let db2 = state.db.clone();
+        let uid = user_id.clone();
+        let count: usize = tokio::task::spawn_blocking(move || {
+            let conn = db2.lock().unwrap();
+            conn.query_row(
+                "SELECT COUNT(*) FROM nodes WHERE user_id = ?1",
+                params![uid],
+                |r| r.get::<_, i64>(0),
+            ).unwrap_or(0) as usize
+        }).await.unwrap();
+        if count >= MAX_FREE_NODES {
+            return (StatusCode::PAYMENT_REQUIRED,
+                Json(serde_json::json!({
+                    "error": format!("Free tier limit reached ({MAX_FREE_NODES} nodes). Upgrade to add more.")
+                }))).into_response();
         }
     }
 
     let db   = state.db.clone();
     let code = body.code.clone();
+    let uid  = user_id.clone();
 
     let row: Option<(String, String)> = tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
-        conn.query_row(
+        let row = conn.query_row(
             "SELECT wk_id, fleet_url FROM nodes WHERE code = ?1",
             params![code],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        ).ok()
+        ).ok()?;
+        // Stamp user_id immediately — always set, never NULL.
+        let _ = conn.execute(
+            "UPDATE nodes SET user_id = ?1 WHERE wk_id = ?2",
+            params![uid, row.0],
+        );
+        Some(row)
     }).await.unwrap();
 
     match row {
         None => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Code not found or already used. Make sure the agent is running and try again." }))).into_response(),
-        Some((node_id, fleet_url)) => {
-            // Stamp the node with the activating user's id so future limit checks
-            // are scoped per account rather than counting the entire nodes table.
-            if let Some((ref user_id, _, _)) = user_info {
-                let db2    = state.db.clone();
-                let uid    = user_id.clone();
-                let nid    = node_id.clone();
-                tokio::task::spawn_blocking(move || {
-                    let conn = db2.lock().unwrap();
-                    let _ = conn.execute(
-                        "UPDATE nodes SET user_id = ?1 WHERE wk_id = ?2",
-                        params![uid, nid],
-                    );
-                }).await.unwrap();
-            }
-            (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response()
-        }
+        Some((node_id, fleet_url)) =>
+            (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response(),
     }
 }
 
 /// GET /api/fleet/stream — SSE stream pushing fleet snapshots every 2 s.
 /// The browser at wicklee.dev subscribes here instead of connecting to localhost.
+/// Returns 401 before opening the stream if auth is missing or invalid.
 async fn handle_fleet_stream(
     State(state): State<AppState>,
-) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Auth check — reject before opening the SSE connection.
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let token2 = token.clone();
+    let user_id = match tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        require_user(&token2, &conn)
+    }).await.unwrap() {
+        Some(uid) => uid,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    // Load initial node set for this user.
+    let db = state.db.clone();
+    let uid2 = user_id.clone();
+    let initial_nodes: HashSet<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        user_node_set(&uid2, &conn)
+    }).await.unwrap();
+
     let interval_stream = tokio_stream::wrappers::IntervalStream::new(
         tokio::time::interval(Duration::from_secs(2)),
     );
 
+    let db_stream  = state.db.clone();
+    let uid_stream = user_id.clone();
+    let mut nodes  = initial_nodes;
+    let mut tick: u32 = 0;
+
     let stream = interval_stream.map(move |_| {
+        tick += 1;
+        // Refresh the user's node list every 30 ticks (~60 s) to pick up
+        // newly paired nodes without restarting the stream.
+        if tick % 30 == 0 {
+            nodes = tokio::task::block_in_place(|| {
+                let conn = db_stream.lock().unwrap();
+                user_node_set(&uid_stream, &conn)
+            });
+        }
+
         let metrics_map = state.metrics.read().unwrap();
-        // Build the same shape as FleetResponse but inline so we don't need DB here.
-        let nodes: Vec<serde_json::Value> = metrics_map
+        let node_list: Vec<serde_json::Value> = metrics_map
             .iter()
+            .filter(|(node_id, _)| nodes.contains(node_id.as_str()))
             .map(|(node_id, entry)| {
                 serde_json::json!({
                     "node_id":      node_id,
@@ -672,12 +764,12 @@ async fn handle_fleet_stream(
             })
             .collect();
 
-        let data = serde_json::to_string(&serde_json::json!({ "nodes": nodes }))
+        let data = serde_json::to_string(&serde_json::json!({ "nodes": node_list }))
             .unwrap_or_else(|_| r#"{"nodes":[]}"#.to_string());
         Ok::<_, Infallible>(Event::default().data(data))
     });
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 /// GET /health — trivial liveness probe, no DB dependency.
@@ -772,8 +864,10 @@ async fn main() {
     println!("║  POST /api/auth/login                        ║");
     println!("║  GET  /api/auth/me                           ║");
     println!("║  POST /api/pair/claim                        ║");
+    println!("║  POST /api/pair/activate                     ║");
     println!("║  POST /api/telemetry                         ║");
     println!("║  GET  /api/fleet                             ║");
+    println!("║  GET  /api/fleet/stream                      ║");
     println!("║  Listening on {addr:<30} ║");
     println!("╚══════════════════════════════════════════════╝");
 
