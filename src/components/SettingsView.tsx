@@ -100,6 +100,21 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const [confirmClear, setConfirmClear] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
   const [successField, setSuccessField] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
 
+  // Apply-all confirm state
+  const [confirmApplyAll, setConfirmApplyAll] = useState(false);
+  const [applyAllDone, setApplyAllDone] = useState(false);
+
+  const handleApplyAll = () => {
+    if (confirmApplyAll) {
+      clearAllNodeOverrides();
+      setConfirmApplyAll(false);
+      setApplyAllDone(true);
+      setTimeout(() => setApplyAllDone(false), 1800);
+    } else {
+      setConfirmApplyAll(true);
+    }
+  };
+
   const handleClearField = (field: 'kwhRate' | 'currency' | 'pue') => {
     if (confirmClear === field) {
       clearAllOverridesForField(field);
@@ -184,23 +199,47 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-between border-t border-gray-100 dark:border-gray-800 pt-4">
-            <p className="text-[11px] text-gray-500">
+          <div className="flex items-start justify-between border-t border-gray-100 dark:border-gray-800 pt-4">
+            <p className="text-[11px] text-gray-500 mt-1.5">
               These values apply to all nodes. Override any setting per-node below for nodes in different locations or energy markets.
             </p>
-            <div className="flex items-center gap-3 shrink-0 ml-4">
-              {fleetSaved && (
+            <div className="flex flex-col items-end gap-2 shrink-0 ml-4">
+              {/* Save row */}
+              <div className="flex items-center gap-3">
+                {fleetSaved && (
+                  <div className="flex items-center gap-1.5 animate-in fade-in duration-200">
+                    <Check size={11} className="text-green-400" />
+                    <span className="text-[11px] font-medium text-green-400">Saved</span>
+                  </div>
+                )}
+                {isDirty && (
+                  <button
+                    onClick={handleFleetSave}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                  >
+                    Save Changes
+                  </button>
+                )}
+              </div>
+
+              {/* Apply-all row */}
+              {applyAllDone ? (
                 <div className="flex items-center gap-1.5 animate-in fade-in duration-200">
                   <Check size={11} className="text-green-400" />
-                  <span className="text-[11px] font-medium text-green-400">Saved</span>
+                  <span className="text-[11px] font-medium text-green-400">All overrides cleared</span>
                 </div>
-              )}
-              {isDirty && (
+              ) : confirmApplyAll ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-amber-500">Remove all per-node overrides?</span>
+                  <button onClick={handleApplyAll}   className="text-[10px] font-semibold text-red-400 hover:text-red-300 transition-colors">Confirm</button>
+                  <button onClick={() => setConfirmApplyAll(false)} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
+                </div>
+              ) : (
                 <button
-                  onClick={handleFleetSave}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                  onClick={handleApplyAll}
+                  className="text-[10px] text-gray-500 hover:text-indigo-400 transition-colors"
                 >
-                  Save Changes
+                  Apply fleet defaults to all nodes
                 </button>
               )}
             </div>
@@ -228,7 +267,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
                     <div>kWh Rate</div>
                     <ClearColumnButton
-                      label="Set all to fleet default"
+                      label="Reset column to fleet default"
                       field="kwhRate"
                       confirmClear={confirmClear}
                       successField={successField}
@@ -240,7 +279,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   <th className="text-left px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-28">
                     <div>Currency</div>
                     <ClearColumnButton
-                      label="Set all to fleet default"
+                      label="Reset column to fleet default"
                       field="currency"
                       confirmClear={confirmClear}
                       successField={successField}
@@ -252,7 +291,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   <th className="text-right px-3 py-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">
                     <div>PUE</div>
                     <ClearColumnButton
-                      label="Set all to fleet default"
+                      label="Reset column to fleet default"
                       field="pue"
                       confirmClear={confirmClear}
                       successField={successField}
