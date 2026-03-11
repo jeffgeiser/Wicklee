@@ -117,33 +117,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
           );
         })()}
 
-        {/* Settings */}
-        <button
-          onClick={() => setActiveTab(DashboardTab.SETTINGS)}
-          className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-            activeTab === DashboardTab.SETTINGS
-              ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-600/20'
-              : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent'
-          }`}
-        >
-          <Settings className="w-4 h-4" />
-          <span className="flex-1 text-left">Settings</span>
-        </button>
-
-        {/* Docs */}
-        <a
-          href="https://github.com/jeffgeiser/Wicklee#readme"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent transition-all"
-        >
-          <HelpCircle className="w-4 h-4" />
-          <span className="flex-1 text-left">Docs</span>
-        </a>
-
-        {/* Divider */}
-        <div className="border-t border-gray-200 dark:border-gray-800 my-1" />
-
         {/* Avatar / profile — dropdown opens upward */}
         <div className="relative" ref={avatarMenuRef}>
           <button
