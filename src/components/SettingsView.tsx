@@ -16,6 +16,7 @@ interface SettingsViewProps {
   updateFleet: (patch: Partial<FleetSettings>) => void;
   setNodeOverride: (nodeId: string, patch: Partial<NodeOverride>) => void;
   clearAllOverridesForField: (field: 'kwhRate' | 'currency' | 'pue') => void;
+  clearAllNodeOverrides: () => void;
 }
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
@@ -62,30 +63,42 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   updateFleet,
   setNodeOverride,
   clearAllOverridesForField,
+  clearAllNodeOverrides,
 }) => {
-  // Local draft for number inputs (save on blur)
-  const [kwhDraft, setKwhDraft]  = useState(settings.fleet.kwhRate.toString());
+  // Fleet Defaults — local drafts, explicit save
+  const [kwhDraft, setKwhDraft] = useState(settings.fleet.kwhRate.toString());
   const [pueDraft,  setPueDraft] = useState(settings.fleet.pue.toString());
+  const [currDraft, setCurrDraft] = useState(settings.fleet.currency);
+  const [fleetSaved, setFleetSaved] = useState(false);
 
-  // Confirm + success state for "Set all to fleet default"
-  const [confirmClear, setConfirmClear] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
-  const [successField, setSuccessField] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
+  // Sync drafts when fleet settings change externally
+  React.useEffect(() => { setKwhDraft(settings.fleet.kwhRate.toString()); }, [settings.fleet.kwhRate]);
+  React.useEffect(() => { setPueDraft(settings.fleet.pue.toString()); }, [settings.fleet.pue]);
+  React.useEffect(() => { setCurrDraft(settings.fleet.currency); }, [settings.fleet.currency]);
 
-  // ── Fleet defaults handlers ─────────────────────────────────────────────────
+  const isDirty =
+    kwhDraft !== settings.fleet.kwhRate.toString() ||
+    pueDraft !== settings.fleet.pue.toString() ||
+    currDraft !== settings.fleet.currency;
 
-  const commitKwh = () => {
-    const v = parseFloat(kwhDraft);
-    if (!isNaN(v) && v >= 0) updateFleet({ kwhRate: Math.round(v * 10000) / 10000 });
-    else setKwhDraft(settings.fleet.kwhRate.toString());
-  };
-
-  const commitPue = () => {
-    const v = parseFloat(pueDraft);
-    if (!isNaN(v) && v >= 1.0 && v <= 3.0) updateFleet({ pue: Math.round(v * 10) / 10 });
-    else setPueDraft(settings.fleet.pue.toString());
+  const handleFleetSave = () => {
+    const kwh = parseFloat(kwhDraft);
+    const pue = parseFloat(pueDraft);
+    if (isNaN(kwh) || kwh < 0)              { setKwhDraft(settings.fleet.kwhRate.toString()); return; }
+    if (isNaN(pue) || pue < 1.0 || pue > 3.0) { setPueDraft(settings.fleet.pue.toString());  return; }
+    updateFleet({
+      kwhRate: Math.round(kwh * 10000) / 10000,
+      currency: currDraft,
+      pue: Math.round(pue * 10) / 10,
+    });
+    setFleetSaved(true);
+    setTimeout(() => setFleetSaved(false), 1800);
   };
 
   // ── Clear column handlers ───────────────────────────────────────────────────
+
+  const [confirmClear, setConfirmClear] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
+  const [successField, setSuccessField] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
 
   const handleClearField = (field: 'kwhRate' | 'currency' | 'pue') => {
     if (confirmClear === field) {
@@ -99,9 +112,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const confirmText = (field: 'kwhRate' | 'currency' | 'pue') => {
-    if (field === 'kwhRate')  return `Clear all kWh rate overrides? Nodes will use $${settings.fleet.kwhRate}/kWh.`;
-    if (field === 'currency') return `Clear all currency overrides? Nodes will use ${settings.fleet.currency}.`;
-    return `Clear all PUE overrides? Nodes will use PUE ${settings.fleet.pue.toFixed(1)}.`;
+    if (field === 'kwhRate')  return `Reset all kWh rate overrides? Nodes will use $${settings.fleet.kwhRate}/kWh.`;
+    if (field === 'currency') return `Reset all currency overrides? Nodes will use ${settings.fleet.currency}.`;
+    return `Reset all PUE overrides? Nodes will use PUE ${settings.fleet.pue.toFixed(1)}.`;
   };
 
 
@@ -129,8 +142,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   step="0.01"
                   value={kwhDraft}
                   onChange={e => setKwhDraft(e.target.value)}
-                  onBlur={commitKwh}
-                  onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                  onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
                   className={`${INPUT_BASE} w-28 tabular-nums`}
                 />
                 <span className="text-xs text-gray-500 shrink-0">$/kWh</span>
@@ -142,8 +154,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
               <FieldLabel>Currency</FieldLabel>
               <div className="relative">
                 <select
-                  value={settings.fleet.currency}
-                  onChange={e => updateFleet({ currency: e.target.value as FleetSettings['currency'] })}
+                  value={currDraft}
+                  onChange={e => setCurrDraft(e.target.value as FleetSettings['currency'])}
                   className={`${INPUT_BASE} w-full appearance-none pr-7`}
                 >
                   {CURRENCY_OPTIONS.map(c => (
@@ -156,9 +168,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
             {/* PUE */}
             <div className="space-y-1.5">
-              <FieldLabel
-                helper="1.0 = home lab  ·  1.4–1.6 = datacenter/colo"
-              >
+              <FieldLabel helper="1.0 = home lab  ·  1.4–1.6 = datacenter/colo">
                 PUE Multiplier
               </FieldLabel>
               <input
@@ -168,8 +178,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 step="0.1"
                 value={pueDraft}
                 onChange={e => setPueDraft(e.target.value)}
-                onBlur={commitPue}
-                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                onKeyDown={e => { if (e.key === 'Enter') handleFleetSave(); }}
                 className={`${INPUT_BASE} w-24 tabular-nums`}
               />
             </div>
@@ -179,12 +188,22 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <p className="text-[11px] text-gray-500">
               These values apply to all nodes. Override any setting per-node below for nodes in different locations or energy markets.
             </p>
-            {savedToast && (
-              <div className="flex items-center gap-1.5 shrink-0 ml-4 animate-in fade-in duration-200">
-                <Check size={11} className="text-green-400" />
-                <span className="text-[11px] font-medium text-green-400">Saved</span>
-              </div>
-            )}
+            <div className="flex items-center gap-3 shrink-0 ml-4">
+              {fleetSaved && (
+                <div className="flex items-center gap-1.5 animate-in fade-in duration-200">
+                  <Check size={11} className="text-green-400" />
+                  <span className="text-[11px] font-medium text-green-400">Saved</span>
+                </div>
+              )}
+              {isDirty && (
+                <button
+                  onClick={handleFleetSave}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                >
+                  Save Changes
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </Section>
