@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Bell, Cloud, CloudLightning } from 'lucide-react';
+import { Bell, Cloud, CloudLightning } from 'lucide-react';
 import { DashboardTab, PairingInfo, Tenant, User as UserType } from '../types';
 
 interface HeaderProps {
@@ -40,16 +40,6 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing }
       </div>
 
       <div className="flex items-center gap-6">
-        {/* Search */}
-        <div className="relative group hidden md:block">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 group-focus-within:text-blue-600 transition-colors" />
-          <input
-            type="text"
-            placeholder="Search fleet..."
-            className="bg-gray-100 dark:bg-gray-800 border-none rounded-full pl-9 pr-4 py-1.5 text-sm w-64 focus:ring-1 focus:ring-blue-600 transition-all outline-none text-gray-900 dark:text-white"
-          />
-        </div>
-
         <div className="flex items-center gap-4">
           {/* Fleet Connect button */}
           {pairingInfo?.status === 'connected' ? (

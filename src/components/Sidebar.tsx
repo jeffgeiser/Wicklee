@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Leaf, Key, Cloud, CloudLightning, Settings, HelpCircle, FileText, User as UserIcon } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Leaf, Key, Cloud, CloudLightning, Settings, HelpCircle, FileText, User as UserIcon, UserCog } from 'lucide-react';
+import { useClerk } from '@clerk/clerk-react';
 import Logo from './Logo';
 import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
@@ -9,7 +10,6 @@ interface SidebarProps {
   setActiveTab: (tab: DashboardTab) => void;
   currentUser: User;
   onUserChange: (user: User) => void;
-  onLogout: () => void;
   connectionState?: ConnectionState;
   theme?: 'light' | 'dark';
   isLocalMode?: boolean;
@@ -18,7 +18,8 @@ interface SidebarProps {
   onOpenPairing?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, onLogout, connectionState = 'disconnected', theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, connectionState = 'disconnected', theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
+  const { signOut, openUserProfile } = useClerk();
   const permissions = usePermissions(currentUser);
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -179,11 +180,18 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 </a>
               </div>
 
-              {/* Sign out */}
+              {/* Manage Account + Sign out (hosted only) */}
               {!isLocalHost && (
-                <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50">
+                <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50 space-y-0.5">
                   <button
-                    onClick={() => { setIsAvatarMenuOpen(false); onLogout(); }}
+                    onClick={() => { setIsAvatarMenuOpen(false); openUserProfile(); }}
+                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                  >
+                    <UserCog className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    Manage Account
+                  </button>
+                  <button
+                    onClick={() => { setIsAvatarMenuOpen(false); signOut({ redirectUrl: '/' }); }}
                     className="w-full text-left px-3 py-2 rounded-lg text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex items-center gap-2"
                   >
                     <LogOut className="w-4 h-4" />
