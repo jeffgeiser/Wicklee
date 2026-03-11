@@ -437,7 +437,25 @@ const App: React.FC = () => {
       case DashboardTab.TEAM:
         return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.SETTINGS:
-        return <SettingsView nodes={nodes} settings={settings} savedToast={savedToast} getNodeSettings={getNodeSettings} updateFleet={updateFleet} setNodeOverride={setNodeOverride} clearAllOverridesForField={clearAllOverridesForField} clearAllNodeOverrides={clearAllNodeOverrides} />;
+        return <SettingsView
+          nodes={nodes}
+          settings={settings}
+          savedToast={savedToast}
+          getNodeSettings={getNodeSettings}
+          updateFleet={updateFleet}
+          setNodeOverride={setNodeOverride}
+          clearAllOverridesForField={clearAllOverridesForField}
+          clearAllNodeOverrides={clearAllNodeOverrides}
+          theme={theme}
+          onThemeChange={(t) => {
+            const effective = t === 'system'
+              ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+              : t;
+            setTheme(effective);
+          }}
+          onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
+          pairingInfo={pairingInfo}
+        />;
       case DashboardTab.SUSTAINABILITY:
         return <SustainabilityView nodes={nodes} />;
       case DashboardTab.PROFILE:
