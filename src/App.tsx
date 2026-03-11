@@ -241,8 +241,11 @@ const App: React.FC = () => {
     if (isLocalHost || !isSignedIn) return;
     let es: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout>;
-    const connect = () => {
-      es = new EventSource(`${CLOUD_URL}/api/fleet/stream`);
+    const connect = async () => {
+      // EventSource doesn't support custom headers — pass auth as query param.
+      const tok = await getToken();
+      if (!tok) { retryTimer = setTimeout(connect, 5000); return; }
+      es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(tok)}`);
       es.onmessage = (ev) => {
         try {
           const fleet = JSON.parse(ev.data) as {
