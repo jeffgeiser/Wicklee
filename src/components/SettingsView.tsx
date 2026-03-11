@@ -100,6 +100,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const [confirmApplyAll, setConfirmApplyAll] = useState(false);
   const [applyAllDone, setApplyAllDone] = useState(false);
 
+  const overrideNodeCount = nodes.filter(n => getNodeSettings(n.id).hasAnyOverride).length;
+
   const handleApplyAll = () => {
     if (confirmApplyAll) {
       clearAllNodeOverrides();
@@ -224,14 +226,17 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               ) : confirmApplyAll ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-amber-500">Remove all per-node overrides?</span>
+                  <span className="text-[10px] text-amber-500">
+                    This will reset {overrideNodeCount} node{overrideNodeCount !== 1 ? 's' : ''} with custom overrides.
+                  </span>
                   <button onClick={handleApplyAll}   className="text-[10px] font-semibold text-red-400 hover:text-red-300 transition-colors">Confirm</button>
                   <button onClick={() => setConfirmApplyAll(false)} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
                 </div>
               ) : (
                 <button
                   onClick={handleApplyAll}
-                  className="text-[10px] text-gray-500 hover:text-indigo-400 transition-colors"
+                  disabled={overrideNodeCount === 0}
+                  className="px-2 py-0.5 text-[10px] rounded border border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-indigo-400/60 hover:text-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
                   Apply fleet defaults to all nodes
                 </button>
