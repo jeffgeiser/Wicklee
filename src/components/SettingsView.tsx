@@ -340,6 +340,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       <ClearColumnButton
                         label="Reset"
                         field="kwhRate"
+                        align="right"
                         confirmClear={confirmClear}
                         successField={successField}
                         confirmText={confirmText('kwhRate')}
@@ -364,6 +365,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                       <ClearColumnButton
                         label="Reset"
                         field="pue"
+                        align="right"
                         confirmClear={confirmClear}
                         successField={successField}
                         confirmText={confirmText('pue')}
@@ -571,12 +573,14 @@ const ClearColumnButton: React.FC<{
   confirmClear: 'kwhRate' | 'currency' | 'pue' | null;
   successField: 'kwhRate' | 'currency' | 'pue' | null;
   confirmText: string;
+  align?: 'left' | 'right';
   onConfirm: () => void;
   onCancel: () => void;
-}> = ({ label, field, confirmClear, successField, confirmText, onConfirm, onCancel }) => {
+}> = ({ label, field, confirmClear, successField, confirmText, align = 'left', onConfirm, onCancel }) => {
+  const justifyClass = align === 'right' ? 'justify-end' : 'justify-start';
   if (successField === field) {
     return (
-      <div className="flex items-center gap-1 mt-1">
+      <div className={`flex items-center gap-1 mt-1 ${justifyClass}`}>
         <Check size={9} className="text-green-400" />
         <span className="text-[9px] font-semibold text-green-400">Reset</span>
       </div>
@@ -585,8 +589,8 @@ const ClearColumnButton: React.FC<{
   if (confirmClear === field) {
     return (
       <div className="mt-1 space-y-1">
-        <p className="text-[9px] text-amber-500 leading-tight max-w-[140px]">{confirmText}</p>
-        <div className="flex items-center gap-2">
+        <p className={`text-[9px] text-amber-500 leading-tight max-w-[140px] ${align === 'right' ? 'text-right' : ''}`}>{confirmText}</p>
+        <div className={`flex items-center gap-2 ${justifyClass}`}>
           <button onClick={onConfirm} className="text-[9px] font-semibold text-red-400 hover:text-red-300 transition-colors">Confirm</button>
           <button onClick={onCancel}  className="text-[9px] text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
         </div>
@@ -596,7 +600,7 @@ const ClearColumnButton: React.FC<{
   return (
     <button
       onClick={onConfirm}
-      className="block mt-1 text-[9px] text-gray-500 hover:text-indigo-400 transition-colors"
+      className={`block w-full mt-1 text-[9px] text-gray-500 hover:text-indigo-400 transition-colors ${align === 'right' ? 'text-right' : 'text-left'}`}
     >
       {label}
     </button>
