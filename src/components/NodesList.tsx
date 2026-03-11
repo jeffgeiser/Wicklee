@@ -153,7 +153,7 @@ const MgmtTableHeader: React.FC<{
   const allSelected =
     filteredIds.length > 0 && filteredIds.every(id => selectedNodes.has(id));
   const COL =
-    'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none';
+    'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
   return (
     <div
       className={`${MGMT_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}
@@ -408,7 +408,7 @@ const MgmtRow: React.FC<{
     >
       {/* Collapsed row */}
       <div
-        className={`${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] max-h-[48px] overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
+        className={`${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
         onClick={() => setOpen(o => !o)}
       >
         {/* Checkbox */}

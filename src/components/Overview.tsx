@@ -88,7 +88,7 @@ const FS_MODEL  = 'hidden min-[860px]:block';   // show >= 860px
 const FS_WATTS  = 'hidden min-[1200px]:block';  // show >= 1200px
 const FS_MEMORY = 'hidden lg:block';            // show >= 1024px
 
-const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none';
+const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
 
 // ── Column header row ─────────────────────────────────────────────────────────
 const FleetStatusHeader: React.FC = () => (
