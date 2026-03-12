@@ -25,6 +25,8 @@
 - Railway cloud backend with SQLite persistence (survives redeployment)
 - Rate limiting: auth endpoints protected against brute force
 - SSE fleet stream — live telemetry aggregated from all paired nodes
+- Clerk authentication — hosted signup/login, JWT-based session management
+- FleetStreamContext — single SSE connection shared across all dashboard components via React Context
 
 **Inference Runtime**
 - Ollama integration: auto-detect `localhost:11434`, model name, quantization, size
@@ -209,7 +211,7 @@
 
 ## Phase 4B — Commercial Layer *(3–5 months)*
 
-- [ ] **Clerk Auth:** Replace DIY bcrypt/session system. Powers org model for Team Edition.
+- [x] **Clerk Auth:** ✅ Shipped. Clerk-managed signup/login with JWT. Stream tokens (UUID, 60s TTL) authenticate SSE connections.
 - [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
 - [ ] **Keep Warm Toggle (Paid):** Wicklee sends silent ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity.
 - [ ] **CSV / JSON Export:** Any metric, any time range, any node.
