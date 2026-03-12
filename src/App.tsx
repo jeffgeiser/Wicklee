@@ -243,7 +243,10 @@ const App: React.FC = () => {
   }, []);
 
   const permissions = usePermissions(currentUser);
-  const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
+  // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
+  // This is the sole source of truth for Cockpit vs Mission Control mode — never derived
+  // from runtime auth state or pairing status.
+  const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
 
   const fetchPairingStatus = useCallback(async () => {
     try {
@@ -352,7 +355,7 @@ const App: React.FC = () => {
       case DashboardTab.OVERVIEW:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
       case DashboardTab.NODES:
-        return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} />;
+        return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} />;
       case DashboardTab.TRACES:
         return <TracesView nodes={nodes} tenantId={currentTenant.id} />;
       case DashboardTab.SCAFFOLDING:
@@ -626,7 +629,10 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
             )}
           </div>
           <div className="flex items-center gap-4">
-            <span className="mono">v{version}</span>
+            {/* VITE_AGENT_VERSION is injected by the Rust build script from Cargo.toml
+                (e.g. VITE_AGENT_VERSION=0.5.1 npm run build). Falls back to package.json
+                version for the cloud/dev build. */}
+            <span className="mono">v{(import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? version}</span>
           </div>
         </footer>
       </main>

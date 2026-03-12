@@ -4,10 +4,23 @@ import { NodeAgent } from '../types';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
+// Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
+// In local (Cockpit) mode this page operates in "Emergency Mode":
+//   Priority order for future insight cards:
+//     1. Model-to-Hardware Fit Score
+//     2. Unified Memory Exhaustion Warning
+//     3. Thermal Degradation Correlation
+//     4. Power Anomaly Detection
+//     5. Model Eviction Prediction
+//   Fleet-economics insights (WES Leaderboard, Cost Efficiency, Idle Fleet Cost) are hidden.
+//   All cost values use getNodeSettings() — never hardcoded kWh rates.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+
 const AIInsights: React.FC<{
-  nodes: NodeAgent[], 
+  nodes: NodeAgent[],
   userApiKey?: string,
-  onNavigateToSecurity?: () => void 
+  onNavigateToSecurity?: () => void
 }> = ({ nodes, userApiKey, onNavigateToSecurity }) => {
   const [loading, setLoading] = useState(false);
   const [insight, setInsight] = useState<string | null>(null);
