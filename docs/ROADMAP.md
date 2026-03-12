@@ -33,6 +33,7 @@
 - 30-second sampled tok/s probe via `/api/generate` (num_predict=3)
 - Wattage/1K TKN: live calculation from board power ÷ tok/s
 - Cost/1K TKN: wattage × configurable kWh rate (default $0.13)
+- vLLM integration: Prometheus `/metrics` at `localhost:8000` — real tok/s (no 30s probe), model name, KV cache utilisation %, requests running; 2s poll; `#[serde(skip_serializing_if)]` keeps JSON compact when not running
 
 **UI**
 - Fleet Overview: 6 real-time summary cards (all live data, no mock values)
@@ -133,11 +134,16 @@
 > Goal: close hardware gaps, launch publicly, ship Agent API v1.
 
 ### Platform
-- [ ] **vLLM Integration:** Prometheus `/metrics` endpoint at `localhost:8000`. Real tok/s without 30s probe. vLLM users need fleet routing most.
-- [ ] **Linux Thermal:** `/sys/class/thermal` — closes the thermal state gap on GeiserBMC and similar bare metal nodes.
+- [x] **vLLM Integration:** ✅ Shipped (v0.4.5). Prometheus `/metrics` at `localhost:8000`. Real tok/s, model name, KV cache %, requests running. Ollama and vLLM can run simultaneously — fleet tok/s sums both.
+- [x] **Linux Thermal:** ✅ Shipped (v0.4.5). `/sys/class/thermal` — thermal state on GeiserBMC and similar bare metal nodes.
 - [ ] **Windows Thermal:** WMI thermal data for Windows nodes. Annotated as "estimated" in UI — lowest data quality platform.
 - [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.
 - [ ] **macOS CPU Power (sudoless):** Entitlement-based `powermetrics` access without requiring root.
+
+### Binary Release & Local-Sync Pipeline
+- [ ] **Automated UI Sync** — post-build script that copies `frontend/dist/` into the agent embed path and verifies hashes match the cloud deployment. Prevents version drift between the Cockpit SPA and Mission Control SPA. Build gate: block release if hashes diverge.
+- [ ] **10Hz WebSocket** — Hardware Rail for the Cockpit. Rolling CPU/GPU/Thermal/Power sparkline at 10 frames/second. Separate `/ws` endpoint from the 1Hz `/api/metrics` SSE stream. The pulse chart is the Cockpit's signature visual.
+- [ ] **Sovereign Mode Toggle** — UI control in Settings → Account & Data. Permanently disables the cloud relay even when a pairing code is entered. Backed by a `sovereign.lock` file that the agent respects on restart. Enterprise gate for HIPAA/defense operators who cannot have outbound telemetry under any circumstances.
 
 ### WES Platform Expansion
 - [ ] **AMD CPU thermal** — k10temp + clock ratio derivation. Cache max boost at agent startup. Clock ratio thresholds: ≥0.95→1.0, ≥0.80→1.25, ≥0.60→1.75, <0.60→2.5. Temperature tie-breaker at >85°C. Flagged as `clock_ratio` source in UI.

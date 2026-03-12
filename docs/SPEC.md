@@ -52,6 +52,61 @@ The hosted dashboard at `wicklee.dev` aggregates all paired agents for the opera
 
 ---
 
+## The Dual-Surface Strategy: Cockpit vs. Mission Control
+
+Wicklee has two distinct UI identities, selected at runtime by a single `isLocalhost` flag:
+
+```typescript
+const isLocalhost = window.location.hostname === 'localhost' ||
+                    window.location.hostname === '127.0.0.1';
+```
+
+### The Cockpit (`localhost:7700`)
+
+The agent's embedded React SPA. Built for the operator sitting at, or SSHed into, a bare-metal node.
+
+| Property | Value |
+|---|---|
+| **Auth** | None — the filesystem is the auth |
+| **Transport** | 10Hz WebSocket (Hardware Rail) + 1Hz SSE |
+| **Scope** | This node only |
+| **Outbound** | Zero — fully sovereign by default |
+| **Tab identity** | Node Intelligence |
+
+**Cockpit-exclusive surfaces:**
+- **Node Intelligence** — per-node insight cards driven by local Ollama. Thermal degradation, model fit, power anomaly, eviction prediction. All local inference, no cloud dependency.
+- **Hardware Rail** — live scrolling diagnostic timeline. CPU, GPU, Thermal, Power at 10Hz. The pulse chart is the Cockpit's signature visual.
+
+**Credibility principle:** The Cockpit must never show fleet-oriented chrome (pair-node onboarding, multi-node aggregates, WES leaderboard, Inference Density Map) on a local install. A user at `localhost:7700` has one node — fleet UI erodes trust in all the data.
+
+### Mission Control (`wicklee.dev`)
+
+The hosted dashboard. Built for the operator or team lead managing multiple nodes.
+
+| Property | Value |
+|---|---|
+| **Auth** | Clerk — hosted signup/login, JWT |
+| **Transport** | 1Hz SSE via FleetStreamContext (single shared connection) |
+| **Scope** | All paired nodes |
+| **Outbound** | Telemetry forwarded to cloud backend on pairing |
+| **Tab identity** | AI Insights |
+
+**Mission Control-exclusive surfaces:**
+- **Fleet Overview** — aggregate cards: Fleet Throughput, Inference Density, WES Leaderboard, Idle Cost, Thermal Diversity
+- **Inference Density Map** — hexagonal hive plot, pulse on active inference nodes
+- **Node Registry** — Management page across all paired nodes with Coverage column
+- **Team** — RBAC, collaborator management, billing
+
+### Why Two Identities
+
+The Credibility Gap: a unified UI serving both surfaces means local operators see fleet chrome (pair nodes, team management, billing) alongside their single-node metrics. This signals "cloud SaaS" rather than "sovereign tool" — the wrong impression for the Show HN audience and for HIPAA/defense operators who chose the agent for its sovereignty properties.
+
+`isLocalhost` is the sole branch point. Both identities are the same React codebase.
+
+**Typography standard:** All numeric telemetry values use `font-telin` (JetBrains Mono variant) with `tabular-nums` to prevent layout shifts during 10Hz updates.
+
+---
+
 ## Binary Architecture
 
 ```
@@ -80,8 +135,8 @@ wicklee-agent (single Rust binary, ~700KB)
 │   ├── GET localhost:11434/api/ps    → active model, quantization, model size
 │   └── POST localhost:11434/api/generate → 3-token probe → tok/s measurement
 │
-├── vLLM Harvester (Phase 3B)
-│   └── GET localhost:8000/metrics    → Prometheus metrics → real tok/s
+├── vLLM Harvester (2s poll)
+│   └── GET localhost:8000/metrics    → Prometheus text → tok/s, model name, KV cache %, requests running
 │
 ├── Cloud Relay (when paired)
 │   └── POST /api/telemetry      → push MetricsPayload to wicklee.dev cloud backend
@@ -139,6 +194,8 @@ The `#[serde(default)]` attribute on the cloud side means:
 
 All fields are nullable. Null values display with honest gap labels in the UI — never as zero, never as an error.
 
+**vLLM fields** (included when vLLM is detected at `localhost:8000`): `vllm_running`, `vllm_model_name`, `vllm_tokens_per_sec`, `vllm_cache_usage_perc` (0–100%), `vllm_requests_running`. Uses `#[serde(skip_serializing_if = "Option::is_none")]` on the agent — absent from JSON when vLLM is not running.
+
 ---
 
 ## Derived Metrics
@@ -153,7 +210,7 @@ WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)
 ```
 
 Where:
-- `tok/s` = `ollama_tokens_per_second`
+- `tok/s` = `ollama_tokens_per_second` + `vllm_tokens_per_sec` (whichever runtimes are active; Ollama and vLLM can run simultaneously on the same node)
 - `Watts_adjusted` = `cpu_power_w` (Apple Silicon) or `nvidia_board_power_w` (NVIDIA), adjusted by PUE if configured
 - `ThermalPenalty` = lookup from `thermal_state`:
 
@@ -306,11 +363,11 @@ Enterprise tier produces a tamper-evident PDF audit report signed by the agent's
 |---|---|---|---|---|
 | macOS Apple Silicon | ✅ | ✅ ioreg | ✅ pmset | ⚠️ root only |
 | macOS Intel | ✅ | ✅ ioreg | ✅ xcpm sysctl | ⚠️ root only |
-| Linux (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 3B | ✅ RAPL (kernel 5.10+) |
-| Linux (AMD CPU-only) | ✅ | ❌ | 🔜 Phase 3B | ✅ RAPL (kernel 5.10+) |
-| Linux (AMD GPU) | ✅ | 📋 Phase 5 | 🔜 Phase 3B | ✅ RAPL |
+| Linux (NVIDIA) | ✅ | ✅ nvml-wrapper | ✅ /sys/class/thermal | ✅ RAPL (kernel 5.10+) |
+| Linux (AMD CPU-only) | ✅ | ❌ | ✅ /sys/class/thermal | ✅ RAPL (kernel 5.10+) |
+| Linux (AMD GPU) | ✅ | 📋 Phase 5 | ✅ /sys/class/thermal | ✅ RAPL |
 | Windows (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 3B | 📋 Phase 5 |
-| Linux musl (static) | ✅ | ✅ nvml-wrapper† | 🔜 | ✅ |
+| Linux musl (static) | ✅ | ✅ nvml-wrapper† | ✅ | ✅ |
 
 † nvml-wrapper excluded on musl targets; NVIDIA Linux users should use gnu builds
 
