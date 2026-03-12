@@ -122,6 +122,10 @@ struct MetricsPayload {
     ollama_tokens_per_second: Option<f32>,
     /// Compile-time OS — "macOS" | "Linux" | "Windows". Cannot be inferred incorrectly.
     os: String,
+    /// Drain-on-send event log. Normally empty; populated when background tasks
+    /// (e.g. self-update) emit a notable event. Frontend renders as Live Activity entries.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    live_activities: Vec<LiveActivityEvent>,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -158,6 +162,26 @@ struct PairingStatusResponse {
     code: Option<String>,
     expires_at: Option<u64>,
     fleet_url: Option<String>,
+}
+
+// ── Live Activity Events ──────────────────────────────────────────────────────
+
+/// A timestamped log entry surfaced in the dashboard Live Activity panel.
+/// Written by background tasks (e.g. self-update) and drained into every
+/// MetricsPayload broadcast on the next 100 ms tick.
+#[derive(Serialize, Clone)]
+struct LiveActivityEvent {
+    message:      String,
+    timestamp_ms: u64,
+    /// Frontend style hint: "info" | "warn" | "error"
+    level:        &'static str,
+}
+
+/// Response shape of GET https://wicklee.dev/api/agent/version
+#[derive(Deserialize)]
+struct AgentVersionResponse {
+    latest:       String,
+    download_url: String,
 }
 
 // ── Hardware Helpers ──────────────────────────────────────────────────────────
@@ -1205,6 +1229,7 @@ fn start_metrics_broadcaster(
     ollama_metrics:        Arc<Mutex<OllamaMetrics>>,
     rapl_metrics:          Arc<Mutex<Option<f32>>>,
     linux_thermal_metrics: Arc<Mutex<Option<String>>>,
+    live_events:           Arc<Mutex<Vec<LiveActivityEvent>>>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -1242,6 +1267,12 @@ fn start_metrics_broadcaster(
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
 
+            // Drain any pending live-activity events (normally empty, non-zero during update).
+            let pending_events: Vec<LiveActivityEvent> = live_events
+                .lock()
+                .map(|mut v| std::mem::take(&mut *v))
+                .unwrap_or_default();
+
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
                 hostname:                node_id.clone(),
@@ -1278,6 +1309,7 @@ fn start_metrics_broadcaster(
                     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
                     { "Unknown".to_string() }
                 },
+                live_activities: pending_events,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -1481,6 +1513,8 @@ async fn handle_metrics(
                     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
                     { "Unknown".to_string() }
                 },
+                // SSE handler never generates live-activity events; broadcaster owns that.
+                live_activities: Vec::new(),
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -1527,6 +1561,174 @@ fn serve_asset(path: &str) -> Response<Body> {
              Run `npm run build` from the repo root, then recompile the agent.",
         ))
         .unwrap()
+}
+
+// ── Self-Update ───────────────────────────────────────────────────────────────
+
+/// Returns a static platform string that matches the GitHub release asset names,
+/// e.g. "darwin-aarch64" → "wicklee-agent-darwin-aarch64".
+// The fallback "unknown" literal is unreachable on every supported platform —
+// suppress the warning rather than clutter with complex cfg(not(any(…))) guards.
+#[allow(unreachable_code)]
+fn agent_platform() -> &'static str {
+    #[cfg(all(target_os = "macos",   target_arch = "aarch64"))] { return "darwin-aarch64"; }
+    #[cfg(all(target_os = "linux",   target_arch = "x86_64"))]  { return "linux-x86_64";  }
+    #[cfg(all(target_os = "linux",   target_arch = "aarch64"))] { return "linux-aarch64"; }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]  { return "windows-x86_64"; }
+    "unknown"
+}
+
+/// Returns true when `remote` is strictly newer than `current` (simple X.Y.Z
+/// comparison — no pre-release handling needed for agent auto-updates).
+fn is_newer_version(current: &str, remote: &str) -> bool {
+    let parse = |v: &str| -> [u64; 3] {
+        let s = v.trim_start_matches('v');
+        let mut it = s.split('.').filter_map(|p| p.parse::<u64>().ok());
+        [it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0)]
+    };
+    parse(remote) > parse(current)
+}
+
+/// Checks https://wicklee.dev/api/agent/version, downloads the new binary when
+/// a newer version is available, atomically replaces the current executable via
+/// `self_update::self_replace`, emits a Live Activity event, and restarts.
+///
+/// All error paths log to stderr and return without panicking — startup must
+/// never be blocked or aborted due to a failed update check.
+///
+/// **Sovereign Mode gate**: if the agent is unpaired (no cloud_session_token),
+/// the check is skipped entirely to honour the operator's no-outbound-traffic choice.
+async fn check_and_apply_update(
+    pairing_state: Arc<Mutex<PairingState>>,
+    live_events:   Arc<Mutex<Vec<LiveActivityEvent>>>,
+) {
+    // ── Sovereign Mode gate ────────────────────────────────────────────────────
+    {
+        let state = pairing_state.lock().unwrap();
+        if state.cloud_session_token.is_none() {
+            eprintln!("[update] sovereign mode — skipping update check (no fleet pairing)");
+            return;
+        }
+    }
+
+    let platform = agent_platform();
+    if platform == "unknown" {
+        eprintln!("[update] unrecognised platform — skipping update check");
+        return;
+    }
+
+    let current = env!("CARGO_PKG_VERSION");
+    eprintln!("[update] checking for update  current=v{current}  platform={platform}");
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent(format!("wicklee-agent/{current}"))
+        .build()
+    {
+        Ok(c)  => c,
+        Err(e) => { eprintln!("[update] client build failed: {e}"); return; }
+    };
+
+    // ── Version check ──────────────────────────────────────────────────────────
+    let url = format!("https://wicklee.dev/api/agent/version?platform={platform}");
+    let resp = match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r)  => { eprintln!("[update] version endpoint returned {}", r.status()); return; }
+        Err(e) => { eprintln!("[update] version check failed: {e}"); return; }
+    };
+
+    let info: AgentVersionResponse = match resp.json::<AgentVersionResponse>().await {
+        Ok(v)  => v,
+        Err(e) => { eprintln!("[update] failed to parse version response: {e}"); return; }
+    };
+
+    if !is_newer_version(current, &info.latest) {
+        eprintln!("[update] already up to date (v{current})");
+        return;
+    }
+
+    let new_version = info.latest.clone();
+    eprintln!("[update] update available: v{current} → v{new_version}  downloading...");
+
+    // ── Download binary ────────────────────────────────────────────────────────
+    let download_resp = match client.get(&info.download_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r)  => { eprintln!("[update] download returned {}", r.status()); return; }
+        Err(e) => { eprintln!("[update] download request failed: {e}"); return; }
+    };
+
+    let bytes = match download_resp.bytes().await {
+        Ok(b) if !b.is_empty() => b,
+        Ok(_)  => { eprintln!("[update] download completed with zero bytes — aborting"); return; }
+        Err(e) => { eprintln!("[update] failed to read download body: {e}"); return; }
+    };
+
+    // Write to a sibling temp file so rename stays on the same filesystem.
+    let current_exe = match std::env::current_exe() {
+        Ok(p)  => p,
+        Err(e) => { eprintln!("[update] could not resolve current exe: {e}"); return; }
+    };
+    let tmp_path = current_exe.with_extension("update_tmp");
+
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        eprintln!("[update] failed to write temp binary: {e}");
+        return;
+    }
+
+    // chmod +x on Unix (Windows exe bits are not a thing).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(&tmp_path) {
+            Ok(m) => {
+                let mut perms = m.permissions();
+                perms.set_mode(0o755);
+                if let Err(e) = std::fs::set_permissions(&tmp_path, perms) {
+                    eprintln!("[update] chmod failed: {e}");
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return;
+                }
+            }
+            Err(e) => {
+                eprintln!("[update] metadata read failed: {e}");
+                let _ = std::fs::remove_file(&tmp_path);
+                return;
+            }
+        }
+    }
+
+    // ── Atomic binary replacement via self_update ──────────────────────────────
+    if let Err(e) = self_update::self_replace::self_replace(&tmp_path) {
+        eprintln!("[update] binary replacement failed: {e}");
+        let _ = std::fs::remove_file(&tmp_path);
+        return;
+    }
+    // temp file is now the old binary — clean it up on best-effort basis.
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let msg = format!("Wicklee agent updated v{current} → v{new_version}");
+    eprintln!("[update] {msg}  restarting...");
+
+    // ── Emit Live Activity event ───────────────────────────────────────────────
+    // Push before restarting so the broadcaster picks it up in the next tick.
+    {
+        let mut evts = live_events.lock().unwrap();
+        evts.push(LiveActivityEvent {
+            message:      msg,
+            timestamp_ms: now_ms(),
+            level:        "info",
+        });
+    }
+
+    // Give the broadcaster one full tick to drain the event to all WebSocket clients.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // ── Restart ────────────────────────────────────────────────────────────────
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match std::process::Command::new(&current_exe).args(&args).spawn() {
+        Ok(_)  => std::process::exit(0),
+        Err(e) => eprintln!("[update] restart failed — continuing on new binary: {e}"),
+    }
 }
 
 // ── Server Bootstrap ──────────────────────────────────────────────────────────
@@ -1580,12 +1782,17 @@ async fn main() {
     let ollama_metrics        = start_ollama_harvester();
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
+
+    // Shared event queue for drain-on-send live activity entries (update notifications etc.).
+    let live_events: Arc<Mutex<Vec<LiveActivityEvent>>> = Arc::new(Mutex::new(Vec::new()));
+
     let broadcast_tx          = start_metrics_broadcaster(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         Arc::clone(&ollama_metrics),
         Arc::clone(&rapl_metrics),
         Arc::clone(&linux_thermal_metrics),
+        Arc::clone(&live_events),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -1605,7 +1812,7 @@ async fn main() {
         .route("/api/pair/claim",     post(handle_pair_claim))
         .route("/api/pair/disconnect",post(handle_pair_disconnect))
         .fallback(static_handler)
-        .layer(axum::extract::Extension(pairing_state))
+        .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
         .layer(axum::extract::Extension(apple_metrics))
         .layer(axum::extract::Extension(nvidia_metrics))
         .layer(axum::extract::Extension(ollama_metrics))
@@ -1628,6 +1835,20 @@ async fn main() {
     println!("║   http://localhost:{port:<26}║");
     println!("║                                              ║");
     println!("╚══════════════════════════════════════════════╝");
+
+    // ── Self-update check ─────────────────────────────────────────────────────
+    // Runs once after the server is bound. Spawned so axum::serve is not delayed.
+    // Sovereign Mode agents (unpaired) skip this entirely inside the function.
+    {
+        let pairing_state = Arc::clone(&pairing_state);
+        let live_events   = Arc::clone(&live_events);
+        tokio::spawn(async move {
+            // Brief startup delay — lets the server stabilise and write its
+            // first few metrics frames before we do any network I/O.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            check_and_apply_update(pairing_state, live_events).await;
+        });
+    }
 
     axum::serve(listener, app)
         .await

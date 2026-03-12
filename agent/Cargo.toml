@@ -19,6 +19,9 @@ mime_guess    = "2"
 tokio-stream  = "0.1"
 # Outbound HTTPS for cloud pairing registration.
 reqwest       = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Binary self-replacement for the auto-update flow.
+# default-features = false: we use reqwest directly for downloads; only need self_replace().
+self_update   = { version = "0.41", default-features = false }
 
 # ── Platform-specific dependencies ────────────────────────────────────────────
 # sysctl exposes macOS/Linux kernel tunables — not available on Windows.
