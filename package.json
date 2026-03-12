@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:agent": "tsc && vite build --mode agent",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0 --port ${PORT:-3000}"
   },

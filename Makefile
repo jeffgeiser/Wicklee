@@ -12,10 +12,10 @@ UNAME       := $(shell uname)
 
 .PHONY: build install clean
 
-## build — compile Vite frontend then embed it into the Rust release binary
+## build — compile Vite frontend (agent mode) then embed it into the Rust release binary
 build:
 	@echo "⟳  Building frontend..."
-	npm run build
+	npm run build:agent
 	@echo "⟳  Building Rust agent (release)..."
 	cd agent && $(CARGO) build --release
 	@echo "✓  Build complete  →  $(BINARY)"
