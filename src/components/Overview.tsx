@@ -639,9 +639,22 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   // Using ollama_running rather than ollama_tokens_per_second avoids false negatives
   // when a node previously ran inference: the tok/s value lingers from the last probe
   // even after Ollama has stopped, causing the old check to miss the node entirely.
+  // "actively inferring" = ollama service is up AND a recent tok/s probe returned > 0.
+  // A node is idle if it is NOT actively inferring — this covers:
+  //   • Ollama not installed / not running (ollama_running falsy)
+  //   • Ollama running but waiting for requests (tok/s null or 0)
+  //   • Ollama running with a loaded model that isn't currently generating
+  // Using ollama_running alone was too strict: nodes with Ollama installed always
+  // report ollama_running: true (service is reachable) even when no inference
+  // is happening, causing the entire fleet to be excluded from the cost calc.
+  const isActivelyInferring = (m: SentinelMetrics) =>
+    m.ollama_running === true &&
+    m.ollama_tokens_per_second != null &&
+    m.ollama_tokens_per_second > 0;
+
   const idleFleetCostPerDay = (() => {
     const idle = effectiveMetrics.filter(m =>
-      m.ollama_running !== true &&
+      !isActivelyInferring(m) &&
       (m.nvidia_power_draw_w != null || m.cpu_power_w != null)
     );
     if (idle.length === 0) return null;
@@ -656,7 +669,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   })();
   const idlePowerNodes = effectiveMetrics.filter(m =>
     (m.nvidia_power_draw_w != null || m.cpu_power_w != null) &&
-    m.ollama_running !== true
+    !isActivelyInferring(m)
   );
   const avgPue = effectiveMetrics.length > 0
     ? effectiveMetrics.reduce((acc, m) => acc + (getNodeSettings?.(m.node_id)?.pue ?? 1.0), 0) / effectiveMetrics.length
