@@ -153,6 +153,9 @@ const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
+  // True until the first /api/fleet fetch settles (or Clerk hasn't loaded yet).
+  // Prevents EmptyFleetState from flashing on page refresh while auth resolves.
+  const [nodesLoading, setNodesLoading] = useState(!isLocalHost);
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
   // Build currentUser from Clerk user data (or LOCAL_USER for localhost)
   const currentUser: UserType = isLocalHost
@@ -213,7 +216,11 @@ const App: React.FC = () => {
         }));
         setNodes(mappedNodes);
       }
-    } catch {}
+    } catch {
+      // Fetch failed — still mark loading done so empty state can render if truly zero nodes.
+    } finally {
+      setNodesLoading(false);
+    }
   }, []);
 
   // Fetch paired nodes from cloud on sign-in (hosted only).
@@ -343,7 +350,7 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} />;
       case DashboardTab.TRACES:
@@ -399,7 +406,7 @@ const App: React.FC = () => {
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
   };
 
