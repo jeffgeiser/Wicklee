@@ -69,11 +69,20 @@ const fmtAgo = (ms: number): string => {
 };
 
 // ── Fleet Status grid ────────────────────────────────────────────────────────
-// Columns: STATUS/ID · MEMORY · MODEL · WES · TOK/S · WATTS · THERMAL · SPACER
-// Fixed widths — no responsive hiding. Container is overflow-x: auto so the
-// table scrolls horizontally on narrow viewports rather than hiding columns.
+// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/S · W/1K · WATTS · GPU% · THERMAL · SPACER
+// Responsive priority — always visible: NODE, MODEL, WES, TOK/S
+//   sm+  adds: THERMAL
+//   md+  adds: MEMORY, VRAM, W/1K, WATTS, GPU%
 // SPACER (1fr) absorbs excess space on wide screens.
-const FLEET_GRID_CLS = 'grid gap-x-3 items-center [grid-template-columns:140px_120px_200px_80px_80px_80px_100px_1fr]';
+const FLEET_GRID_CLS = [
+  'grid gap-x-3 items-center',
+  // mobile: NODE · MODEL · WES · TOK/S · SPACER
+  '[grid-template-columns:140px_200px_80px_80px_1fr]',
+  // sm: + THERMAL
+  'sm:[grid-template-columns:140px_200px_80px_80px_100px_1fr]',
+  // md: full set
+  'md:[grid-template-columns:140px_120px_80px_200px_80px_80px_80px_80px_80px_100px_1fr]',
+].join(' ');
 
 const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
 
@@ -81,12 +90,15 @@ const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400
 const FleetStatusHeader: React.FC = () => (
   <div className={`${FLEET_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}>
     <p className={`${FS_HDR} sticky left-4 bg-white dark:bg-gray-900`}>NODE</p>
-    <p className={FS_HDR}>MEMORY</p>
+    <p className={`${FS_HDR} hidden md:block`}>MEMORY</p>
+    <p className={`${FS_HDR} hidden md:block`}>VRAM</p>
     <p className={FS_HDR}>MODEL</p>
     <p className={FS_HDR}>WES</p>
     <p className={FS_HDR}>TOK/S</p>
-    <p className={FS_HDR}>WATTS</p>
-    <p className={FS_HDR}>THERMAL</p>
+    <p className={`${FS_HDR} hidden md:block`}>W/1K</p>
+    <p className={`${FS_HDR} hidden md:block`}>WATTS</p>
+    <p className={`${FS_HDR} hidden md:block`}>GPU%</p>
+    <p className={`${FS_HDR} hidden sm:block`}>THERMAL</p>
     <div />
   </div>
 );
@@ -152,6 +164,31 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : !m!.ollama_running ? 'No runtime'
     : (m!.ollama_active_model ?? '—');
 
+  // VRAM % — NVIDIA only; Apple Silicon unified memory is architecturally distinct → show —
+  const vramPctRaw = hasNvidia
+    ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
+    : null;
+  const vramPct = vramPctRaw != null ? Math.round(vramPctRaw * 10) / 10 : null;
+  const vramColorCls = vramPct == null ? 'text-gray-500 dark:text-gray-600'
+    : vramPct >= 90 ? 'text-red-400'
+    : vramPct >= 70 ? 'text-amber-400'
+    : 'text-green-400';
+  const vramBarCls = vramPct == null ? 'bg-gray-500'
+    : vramPct >= 90 ? 'bg-red-400'
+    : vramPct >= 70 ? 'bg-amber-400'
+    : 'bg-green-400';
+
+  // W/1K — same formula as tile 6: (nodeWatts / nodeTps) × 1000
+  const nodeWattPer1k = (isActive && hasPower && totalPowerW > 0)
+    ? Math.round((totalPowerW / tps!) * 1000)
+    : null;
+
+  // GPU% — Apple Silicon via IOKit/AGX, NVIDIA via NVML
+  const gpuPct = isOnline
+    ? (m!.nvidia_gpu_utilization_percent ?? m!.gpu_utilization_percent ?? null)
+    : null;
+  const gpuPctDisplay = gpuPct != null ? Math.round(gpuPct) : null;
+
   const V = `text-xs font-telin ${!isOnline ? 'text-gray-400 dark:text-gray-600' : ''}`;
 
   // Condensed tooltip on NODE cell — surfaces columns hidden at narrow viewports
@@ -195,7 +232,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
           Memory Pressure Forecasting (rate-of-change → ETA to critical) is a Phase 4A Insights tab feature.
           Do not add predictive/forecast logic to this column. */}
       <div
-        className="min-w-0 overflow-hidden"
+        className="hidden md:block min-w-0 overflow-hidden"
         title={hasNvidia
           ? 'GPU memory in use as % of total. Exhaustion causes inference to spill to system RAM.'
           : 'Kernel memory pressure — the OS\'s assessment of memory stress, not just raw usage.'}
@@ -205,6 +242,23 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             <span className={`text-xs font-telin tabular-nums ${memColorCls}`}>{memPct}%</span>
             <div className="w-10 h-1 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden shrink-0">
               <div className={`h-full ${memBarCls} rounded-full`} style={{ width: `${Math.min(memPct, 100)}%` }} />
+            </div>
+          </div>
+        ) : (
+          <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
+        )}
+      </div>
+
+      {/* 2b. VRAM — NVIDIA dedicated VRAM only; Apple Silicon shows — (unified memory is architecturally distinct) */}
+      <div
+        className="hidden md:block min-w-0 overflow-hidden"
+        title="NVIDIA dedicated VRAM utilisation. Apple Silicon uses unified memory — shown in MEMORY column instead."
+      >
+        {vramPct != null ? (
+          <div className="flex items-center gap-1.5">
+            <span className={`text-xs font-telin tabular-nums ${vramColorCls}`}>{vramPct}%</span>
+            <div className="w-10 h-1 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden shrink-0">
+              <div className={`h-full ${vramBarCls} rounded-full`} style={{ width: `${Math.min(vramPct, 100)}%` }} />
             </div>
           </div>
         ) : (
@@ -244,8 +298,20 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </span>
       </div>
 
-      {/* 6. WATTS */}
-      <div className="min-w-0 overflow-hidden">
+      {/* 6. W/1K — (nodeWatts / tps) × 1000; null when tok/s is zero or absent */}
+      <div className="hidden md:block min-w-0 overflow-hidden" title="Watts per 1 000 tokens — a per-node efficiency index. Lower is better.">
+        {nodeWattPer1k != null ? (
+          <span className={`${V} text-gray-700 dark:text-gray-300`}>
+            {nodeWattPer1k}
+            <span className="text-gray-400 dark:text-gray-600"> W</span>
+          </span>
+        ) : (
+          <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
+        )}
+      </div>
+
+      {/* 7. WATTS */}
+      <div className="hidden md:block min-w-0 overflow-hidden">
         <span
           className={`${V} ${hasPower && isOnline ? 'text-gray-700 dark:text-gray-300' : 'text-gray-500 dark:text-gray-600'}`}
           title="Current power draw of this node."
@@ -254,8 +320,19 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </span>
       </div>
 
-      {/* 7. THERMAL — pill badge */}
-      <div className="min-w-0 overflow-hidden">
+      {/* 8. GPU% — Apple Silicon (IOKit/AGX) or NVIDIA (NVML); no progress bar */}
+      <div className="hidden md:block min-w-0 overflow-hidden" title="GPU core utilisation. Source: NVML (NVIDIA) or IOKit AGX (Apple Silicon).">
+        {gpuPctDisplay != null ? (
+          <span className={`${V} text-gray-700 dark:text-gray-300`}>
+            {gpuPctDisplay}<span className="text-gray-400 dark:text-gray-600">%</span>
+          </span>
+        ) : (
+          <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
+        )}
+      </div>
+
+      {/* 9. THERMAL — pill badge */}
+      <div className="hidden sm:block min-w-0 overflow-hidden">
         {isOnline && thermalStr ? (
           <span
             className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-800 ${thermalCls} whitespace-nowrap`}
