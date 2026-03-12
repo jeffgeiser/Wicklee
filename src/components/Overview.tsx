@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, WES_TOOLTIP } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
@@ -159,7 +159,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
 
   return (
     <div
-      className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors${!isOnline ? ' opacity-50' : ''}`}
+      className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors${dotState === 'offline' ? ' opacity-50' : ''}`}
     >
       {/* 1. NODE — status dot + ID + hostname (sticky) */}
       <div className="flex items-center gap-2 overflow-hidden sticky left-4 bg-white dark:bg-gray-900 group-hover:bg-gray-50/50 dark:group-hover:bg-gray-800/30" title={nodeTooltip || undefined}>
@@ -170,7 +170,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
               <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
             </>
           ) : dotState === 'offline' ? (
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+            <span className="relative inline-flex rounded-full h-2 w-2 border border-gray-500 dark:border-gray-600" />
           ) : (
             <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-500" />
           )}
@@ -179,6 +179,9 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
           <p className="text-xs font-telin font-bold text-gray-900 dark:text-white truncate leading-none">{nodeId}</p>
           {hostname !== nodeId && (
             <p className="text-[10px] text-gray-500 truncate leading-none mt-0.5">{hostname}</p>
+          )}
+          {dotState === 'offline' && (
+            <p className="text-[9px] text-gray-400 dark:text-gray-600 leading-none mt-0.5">unreachable</p>
           )}
         </div>
       </div>
@@ -679,6 +682,29 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? effectiveMetrics.reduce((acc, m) => acc + (getNodeSettings?.(m.node_id)?.pue ?? 1.0), 0) / effectiveMetrics.length
     : 1.0;
 
+  // Fleet Intelligence — Cost Efficiency + Tokens Per Watt
+  // Only over inference-active nodes (tpsNodes) so PUE + rate apply to actual workload.
+  const fleetHourlyCostUsd = (() => {
+    const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
+    if (powerNodes.length === 0) return null;
+    return powerNodes.reduce((acc, m) => {
+      const ns   = getNodeSettings?.(m.node_id);
+      const pue  = ns?.pue ?? 1.0;
+      const rate = ns?.kwhRate ?? fleetKwhRate;
+      const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+      return acc + watts * pue * rate / 1000;
+    }, 0);
+  })();
+  const costPer1kTokensNew = calculateCostPer1kTokens(fleetTps, fleetHourlyCostUsd);
+
+  const totalPowerOfTpsNodes = (() => {
+    const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
+    if (powerNodes.length === 0) return null;
+    return powerNodes.reduce((acc, m) =>
+      acc + (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0), 0);
+  })();
+  const tokensPerWattVal = calculateTokensPerWatt(fleetTps, totalPowerOfTpsNodes);
+
   // ── SSE connection indicator (3-state) ──────────────────────────────────────
   const sseNow = Date.now();
 
@@ -1143,19 +1169,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           {/* ── Right: 5 metric cards ────────────────────────────────────────── */}
           <div className="grid grid-cols-2 gap-3">
 
-            {/* 1. Fleet Throughput */}
+            {/* 1. Cost Efficiency */}
             <FleetCard
-              label="Fleet Throughput"
+              label="Cost Efficiency"
               sub={
-                <p className="text-[10px] text-gray-600">
-                  {fleetTps != null ? `across ${tpsNodes.length} active node${tpsNodes.length !== 1 ? 's' : ''}` : 'no active inference'}
+                <p className="text-[10px] text-gray-600 leading-tight">
+                  {costPer1kTokensNew != null
+                    ? `${tpsNodes.length} active node${tpsNodes.length !== 1 ? 's' : ''} · per-node PUE`
+                    : 'no active inference'}
                 </p>
               }
             >
-              <p className={`text-xl font-bold font-telin leading-none ${fleetTps != null ? 'text-green-400' : 'text-gray-600'}`}>
-                {fleetTps != null ? `${fleetTps.toFixed(1)}` : '—'}
+              <p className={`text-xl font-bold font-telin leading-none ${costPer1kTokensNew != null ? 'text-cyan-400' : 'text-gray-600'}`}>
+                {costPer1kTokensNew != null ? `$${costPer1kTokensNew.toFixed(4)}` : '—'}
               </p>
-              {fleetTps != null && <p className="text-[10px] text-gray-500 mt-0.5">tok/s</p>}
+              {costPer1kTokensNew != null && <p className="text-[10px] text-gray-500 mt-0.5">/1k tokens</p>}
             </FleetCard>
 
             {/* 2. Fleet Avg WES */}
@@ -1182,21 +1210,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               </p>
             </FleetCard>
 
-            {/* 3. Fleet Power Cost */}
+            {/* 3. Tokens Per Watt */}
             <FleetCard
-              label="Fleet Power Cost"
+              label="Tokens Per Watt"
               sub={
                 <p className="text-[10px] text-gray-600 leading-tight">
-                  {idleFleetCostPerDay != null
-                    ? `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} reporting power · est. at current draw`
-                    : fleetKwhRate === 0.12 ? 'Set your kWh rate in Settings for accurate costs' : 'no power data'}
+                  {tokensPerWattVal != null
+                    ? `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · fleet inference efficiency`
+                    : 'no active inference'}
                 </p>
               }
             >
-              <p className={`text-xl font-bold font-telin leading-none ${idleFleetCostPerDay != null ? 'text-gray-200' : 'text-gray-600'}`}>
-                {idleFleetCostPerDay != null ? `$${idleFleetCostPerDay.toFixed(2)}` : '—'}
+              <p className={`text-xl font-bold font-telin leading-none ${tokensPerWattVal != null ? 'text-emerald-400' : 'text-gray-600'}`}>
+                {tokensPerWattVal != null ? tokensPerWattVal.toFixed(2) : '—'}
               </p>
-              {idleFleetCostPerDay != null && <p className="text-[10px] text-gray-500 mt-0.5">/day</p>}
+              {tokensPerWattVal != null && <p className="text-[10px] text-gray-500 mt-0.5">tok/s per W</p>}
             </FleetCard>
 
             {/* 4. Thermal Diversity */}
