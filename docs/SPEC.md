@@ -238,6 +238,34 @@ WES is the primary input to the **Fleet WES Leaderboard** (Insight #2), **Therma
 
 ---
 
+## UI Architecture
+
+### Typography Standard
+
+Three font tokens are defined in `src/index.css` and loaded from Google Fonts (`Inter` + `JetBrains Mono`). Each token has a strict semantic scope — using the wrong token for a given context is a bug, not a style preference.
+
+| Token | Resolves to | `tabular-nums` | Scope |
+|---|---|---|---|
+| `font-sans` | Inter | ❌ | All prose, navigation labels, tab names, descriptions, status text |
+| `font-mono` | JetBrains Mono | ❌ | Code blocks, shell commands, install snippets, URLs, pairing codes, API keys |
+| `font-telin` | JetBrains Mono | ✅ | **All live telemetry values** — tok/s, WES, °C, watts, %, MB, ms latency |
+
+**`font-telin` is a load-bearing utility.** The `tabular-nums` variant makes every digit render at identical width, preventing layout shifts when values update at 10Hz. At high update frequencies, variable-width digits cause cards to jitter horizontally — `font-telin` eliminates this structurally rather than by clamping container widths.
+
+```css
+/* src/index.css */
+@utility font-telin {
+  font-family: var(--font-family-telin);   /* JetBrains Mono */
+  font-variant-numeric: tabular-nums;       /* fixed-width digits */
+}
+```
+
+**Rule:** Any numeric value derived from a live SSE payload field must use `font-telin`. This includes derived metrics (WES, Wattage/1K TKN, Thermal Cost %) and all future Insight card scores (Model-Fit Score, Tok/s regression delta, Memory Pressure Forecast). `font-mono` is for static strings — not live data.
+
+`font-telin` is also a future-proof token: if the typeface changes (e.g. swapping in a dedicated data typeface), one CSS variable update reflows every telemetry surface in the dashboard.
+
+---
+
 ## Cloud Backend Architecture
 
 ```
