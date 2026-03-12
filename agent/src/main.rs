@@ -47,7 +47,7 @@ struct OllamaMetrics {
     ollama_active_model:      Option<String>,
     ollama_model_size_gb:     Option<f32>,
     ollama_quantization:      Option<String>,
-    /// Sampled tok/s: measured by a 1-token /api/generate probe every 30s.
+    /// Sustained tok/s: eval_rate from Ollama /api/generate probe every 30s.
     /// Reflects actual node throughput under current thermal/load conditions.
     ollama_tokens_per_second: Option<f32>,
 }
@@ -117,7 +117,7 @@ struct MetricsPayload {
     ollama_model_size_gb:     Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_quantization:      Option<String>,
-    /// Sampled tok/s from 30s 1-token probe. None until first probe completes.
+    /// Sustained tok/s from 30s probe (eval_rate field from Ollama). None until first probe completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_tokens_per_second: Option<f32>,
     /// Compile-time OS — "macOS" | "Linux" | "Windows". Cannot be inferred incorrectly.
@@ -991,13 +991,18 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 //
 //   Main task (5s):  GET /api/ps — active model name, size, quantization.
 //
-//   Probe task (30s): POST /api/generate with num_predict=3 — measures actual
-//     inference throughput on this node under current thermal/load conditions.
-//     Parses eval_count / eval_duration from the final streaming JSON line.
-//     NOTE: num_predict=1 causes Ollama to omit eval_duration from the response.
+//   Probe task (30s): POST /api/generate with num_predict=20 — reads eval_rate
+//     (tok/s) from the final streaming JSON line returned by Ollama.
+//     eval_rate is Ollama's own sustained-generation measurement and is far more
+//     accurate than a derived eval_count/eval_duration ratio, especially on NVIDIA
+//     hardware where GPU ramp-up inflates short-sample latency.
+//     num_predict=20 ensures NVIDIA nodes reach steady-state speed before Ollama
+//     reports eval_rate. The 30s probe interval makes the added overhead negligible.
 //     NOTE: /metrics Prometheus endpoint does not exist in Ollama ≤ v0.17.7.
 
-/// Sends a 1-token generate request and returns tok/s from the timing stats.
+/// Fires a 20-token generate probe and returns eval_rate (tok/s) from the Ollama
+/// response. eval_rate is the authoritative sustained generation speed reported
+/// directly by Ollama — do not recalculate from eval_count / eval_duration.
 async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> {
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
     let url = "http://127.0.0.1:11434/api/generate";
@@ -1007,7 +1012,7 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
             "model":   model,
             "prompt":  " ",
             "stream":  true,
-            "options": { "num_predict": 3 }
+            "options": { "num_predict": 20 }
         }))
         .send()
         .await
@@ -1020,15 +1025,15 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
 
     let text = resp.text().await.ok()?;
 
-    // The final non-empty JSON line has done:true + eval_count + eval_duration (ns).
+    // The final non-empty JSON line has done:true + eval_rate (tok/s, f64).
+    // eval_rate is Ollama's own measurement — use it directly.
     for line in text.lines().rev() {
         if line.is_empty() { continue; }
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
             if json["done"].as_bool() != Some(true) { continue; }
-            let eval_count    = json["eval_count"].as_u64().unwrap_or(0);
-            let eval_dur_ns   = json["eval_duration"].as_u64().unwrap_or(0);
-            if eval_count == 0 || eval_dur_ns == 0 { return None; }
-            return Some(eval_count as f32 / (eval_dur_ns as f32 / 1_000_000_000.0));
+            if let Some(rate) = json["eval_rate"].as_f64() {
+                if rate > 0.0 { return Some(rate as f32); }
+            }
         }
     }
     None
