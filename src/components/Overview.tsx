@@ -634,42 +634,30 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   // Tile 7 — COST / 1K TOKENS: wattPer1k × fleet_kwh_rate / 1000
   const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * fleetKwhRate : null;
 
-  // Tile 8 — IDLE FLEET COST / DAY: ∑ idle_watts × pue_i × 24h × rate_i
-  // "idle" = ollama_running !== true (covers false, null, undefined).
-  // Using ollama_running rather than ollama_tokens_per_second avoids false negatives
-  // when a node previously ran inference: the tok/s value lingers from the last probe
-  // even after Ollama has stopped, causing the old check to miss the node entirely.
-  // "actively inferring" = ollama service is up AND a recent tok/s probe returned > 0.
-  // A node is idle if it is NOT actively inferring — this covers:
-  //   • Ollama not installed / not running (ollama_running falsy)
-  //   • Ollama running but waiting for requests (tok/s null or 0)
-  //   • Ollama running with a loaded model that isn't currently generating
-  // Using ollama_running alone was too strict: nodes with Ollama installed always
-  // report ollama_running: true (service is reachable) even when no inference
-  // is happening, causing the entire fleet to be excluded from the cost calc.
-  const isActivelyInferring = (m: SentinelMetrics) =>
-    m.ollama_running === true &&
-    m.ollama_tokens_per_second != null &&
-    m.ollama_tokens_per_second > 0;
-
+  // Tile 8 — FLEET POWER COST / DAY: ∑ watts_i × pue_i × 24h × rate_i
+  // Covers all nodes that report power data (cpu_power_w or nvidia_power_draw_w).
+  // We intentionally do NOT filter by inference activity here: ollama_tokens_per_second
+  // is a 30-second probe value that persists after inference stops, making any
+  // "is actively inferring" check unreliable — it would exclude the entire fleet.
+  // This tile represents the always-on infrastructure electricity cost.
+  // Power: nvidia_power_draw_w preferred (NVIDIA via NVML); falls back to cpu_power_w
+  // (Apple Silicon powermetrics or Linux RAPL).
   const idleFleetCostPerDay = (() => {
-    const idle = effectiveMetrics.filter(m =>
-      !isActivelyInferring(m) &&
-      (m.nvidia_power_draw_w != null || m.cpu_power_w != null)
+    const withPower = effectiveMetrics.filter(m =>
+      m.nvidia_power_draw_w != null || m.cpu_power_w != null
     );
-    if (idle.length === 0) return null;
-    return idle.reduce((acc, m) => {
+    if (withPower.length === 0) return null;
+    return withPower.reduce((acc, m) => {
       const ns = getNodeSettings?.(m.node_id);
       const pue = ns?.pue ?? 1.0;
       const rate = ns?.kwhRate ?? fleetKwhRate;
-      // Prefer NVIDIA board power (dedicated GPU); fall back to Apple Silicon CPU power.
+      // Prefer NVIDIA board power (dedicated GPU); fall back to Apple Silicon / RAPL CPU power.
       const watts = m.nvidia_power_draw_w ?? m.cpu_power_w ?? 0;
       return acc + watts * pue * 24 * (rate / 1000);
     }, 0);
   })();
   const idlePowerNodes = effectiveMetrics.filter(m =>
-    (m.nvidia_power_draw_w != null || m.cpu_power_w != null) &&
-    !isActivelyInferring(m)
+    m.nvidia_power_draw_w != null || m.cpu_power_w != null
   );
   const avgPue = effectiveMetrics.length > 0
     ? effectiveMetrics.reduce((acc, m) => acc + (getNodeSettings?.(m.node_id)?.pue ?? 1.0), 0) / effectiveMetrics.length
@@ -812,13 +800,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           iconCls="text-cyan-400"
         />
 
-        {/* 8. IDLE FLEET COST */}
+        {/* 8. FLEET POWER COST */}
         <InsightTile
-          label="Idle Fleet Cost"
+          label="Fleet Power Cost"
           value={idleFleetCostPerDay != null ? `$${idleFleetCostPerDay.toFixed(2)}/day` : '—'}
           valueCls={idleFleetCostPerDay == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={idleFleetCostPerDay != null
-            ? `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} idle · PUE ${avgPue.toFixed(1)}`
+            ? `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} reporting · PUE ${avgPue.toFixed(1)}`
             : 'no power data'}
           icon={DollarSign}
           iconCls="text-gray-400 dark:text-gray-500"
@@ -1178,13 +1166,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
               </p>
             </FleetCard>
 
-            {/* 3. Idle Fleet Cost */}
+            {/* 3. Fleet Power Cost */}
             <FleetCard
-              label="Idle Fleet Cost"
+              label="Fleet Power Cost"
               sub={
                 <p className="text-[10px] text-gray-600 leading-tight">
                   {idleFleetCostPerDay != null
-                    ? `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} at idle · est. at current draw`
+                    ? `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} reporting power · est. at current draw`
                     : fleetKwhRate === 0.12 ? 'Set your kWh rate in Settings for accurate costs' : 'no power data'}
                 </p>
               }
