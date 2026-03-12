@@ -34,19 +34,15 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
   };
 
   return (
-    <>
-      {/* ── Logo corner zone ──────────────────────────────────────────────────────
-           Fixed 64×64 px tile at the absolute top-left of the viewport.
-           z-40 > sidebar z-30, so the expanding nav never covers the logo.
-           position:fixed removes it from the header's stacking context so it
-           is always a true sibling of the sidebar in the paint order.       */}
-      <div className="hidden md:flex fixed left-0 top-0 z-40 w-16 h-16 items-center justify-start pl-3 overflow-hidden bg-white dark:bg-gray-900 border-r border-b border-gray-200 dark:border-gray-800 transition-colors">
-        <Logo className="text-base" connectionState={connectionState} theme={theme} />
-      </div>
-
-    <header className="h-16 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10 transition-colors">
-      {/* Left: page title — logo lives in the fixed corner zone above */}
+    // ── z-40: sticky header paints above the fixed nav rail (z-30) at root ──
+    // <main> carries no z-index so creates no stacking context; the sticky
+    // z-index is therefore evaluated at the root level where z-40 > z-30.
+    // The logo lives here — in the content-area header — and is never inside
+    // the nav rail. Nav expand/collapse cannot obscure it.
+    <header className="h-16 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40 transition-colors">
+      {/* Left: logo + page title */}
       <div className="flex items-center gap-4">
+        <Logo className="text-base" connectionState={connectionState} theme={theme} />
         {titles[activeTab] && (
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white whitespace-nowrap">
             {titles[activeTab]}
@@ -94,7 +90,6 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
         </div>
       </div>
     </header>
-  </>
   );
 };
 
