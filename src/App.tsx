@@ -152,7 +152,6 @@ const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
-  const [isConnected, setIsConnected] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
   // Build currentUser from Clerk user data (or LOCAL_USER for localhost)
@@ -181,7 +180,6 @@ const App: React.FC = () => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
-  const socketRef = useRef<WebSocket | null>(null);
 
   const navigate = useCallback((path: string) => {
     window.history.pushState(null, '', path);
@@ -242,11 +240,21 @@ const App: React.FC = () => {
     let es: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout>;
     const connect = async () => {
-      // EventSource doesn't support custom headers — pass auth as query param.
-      const tok = await getToken();
-      if (!tok) { console.warn('[sse] getToken() returned null — retrying'); retryTimer = setTimeout(connect, 5000); return; }
-      console.log('[sse] connecting with token length', tok.length);
-      es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(tok)}`);
+      // EventSource cannot send Authorization headers. Fetch a single-use
+      // short-lived token via a normal authenticated request, then pass it
+      // as a query param so the backend can validate and open the stream.
+      let streamToken: string;
+      try {
+        const jwt = await getToken();
+        if (!jwt) { retryTimer = setTimeout(connect, 5000); return; }
+        const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
+          headers: { Authorization: `Bearer ${jwt}` },
+        });
+        if (!res.ok) { retryTimer = setTimeout(connect, 5000); return; }
+        streamToken = (await res.json()).stream_token;
+      } catch { retryTimer = setTimeout(connect, 5000); return; }
+
+      es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`);
       es.onmessage = (ev) => {
         try {
           const fleet = JSON.parse(ev.data) as {
@@ -269,8 +277,7 @@ const App: React.FC = () => {
           }
         } catch { /* malformed frame */ }
       };
-      es.onerror = (e) => {
-        console.error('[sse] error', e);
+      es.onerror = () => {
         es?.close();
         retryTimer = setTimeout(connect, 5000);
       };
@@ -328,58 +335,6 @@ const App: React.FC = () => {
 
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
-  useEffect(() => {
-    if (!isLoggedIn) return;
-
-    const connectWS = () => {
-      // Use the current host so the embedded binary (port 7700) connects to
-      // itself, and the Railway deploy connects to its own origin automatically.
-      // Use wss:// when served over HTTPS (required by browsers for mixed-content).
-      const wsHost = window.location.host || 'localhost:7700';
-      const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const wsUrl = `${wsProto}://${wsHost}/ws?tenant_id=${currentTenant.id}&user_id=${currentUser.id}`;
-      console.log(`Connecting to Wicklee Backend for tenant ${currentTenant.name}...`);
-      
-      const socket = new WebSocket(wsUrl);
-      socketRef.current = socket;
-
-      socket.onopen = () => {
-        setIsConnected(true);
-        console.log('Connected to Wicklee Orchestrator');
-      };
-
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.nodes) {
-            setNodes(prev => prev.map(node => {
-              const update = data.nodes.find((n: any) => n.id === node.id);
-              return update ? { ...node, ...update } : node;
-            }));
-          }
-        } catch (err) {
-          console.error('Failed to parse WebSocket message', err);
-        }
-      };
-
-      socket.onclose = () => {
-        setIsConnected(false);
-        console.log('Disconnected from Wicklee Orchestrator. Retrying in 5s...');
-        setTimeout(connectWS, 5000);
-      };
-
-      socket.onerror = (err) => {
-        console.error('WebSocket error:', err);
-        socket.close();
-      };
-    };
-
-    connectWS();
-
-    return () => {
-      socketRef.current?.close();
-    };
-  }, [currentTenant.id, currentUser.id, isLoggedIn]);
 
   const handleUpgrade = () => {
     setIsUpgradeModalOpen(false);
@@ -557,24 +512,7 @@ const App: React.FC = () => {
         
         <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 scroll-smooth">
           <div className="max-w-7xl mx-auto space-y-6">
-            {/* Localhost: show disconnected banner when WS/SSE to local agent is down */}
-            {isLocalHost && !isConnected && activeTab !== DashboardTab.SCAFFOLDING && (
-              <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6 animate-pulse">
-                <div className="flex items-center gap-3">
-                  <WifiOff className="w-5 h-5 text-amber-500" />
-                  <div>
-                    <h3 className="text-sm font-semibold text-amber-600 dark:text-amber-200">Disconnected from Local Agent</h3>
-                    <p className="text-xs text-amber-600/80 dark:text-amber-500/80">Dashboard is showing cached/mock data. Please start the Wicklee Rust backend.</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setActiveTab(DashboardTab.SCAFFOLDING)}
-                  className="px-3 py-1 bg-amber-500/10 dark:bg-amber-500/20 hover:bg-amber-500/20 dark:hover:bg-amber-500/30 text-amber-600 dark:text-amber-200 text-xs font-bold rounded-lg transition-all"
-                >
-                  View Setup Guide
-                </button>
-              </div>
-            )}
+
             {/* Hosted: show stale-node warning if paired node hasn't sent telemetry in >30s */}
             {!isLocalHost && nodes.length > 0 && lastCloudTelemetryMs !== null && (Date.now() - lastCloudTelemetryMs > 30_000) && (
               <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center gap-3 mb-6">
@@ -597,13 +535,8 @@ const App: React.FC = () => {
           <div className="flex items-center gap-4">
             {isLocalHost ? (
               <span className="flex items-center gap-1.5">
-                <span className="relative flex h-2 w-2">
-                  {isConnected && (
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  )}
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                </span>
-                Orchestrator: {isConnected ? 'Active' : 'Offline'}
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                Local
               </span>
             ) : (
               (() => {
@@ -645,12 +578,6 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
             <span className="mono">v{version}</span>
-            {isLocalHost && (
-              <span className="flex items-center gap-1">
-                <Activity className="w-3 h-3" />
-                Latency: {isConnected ? '12ms' : '--'}
-              </span>
-            )}
           </div>
         </footer>
       </main>
