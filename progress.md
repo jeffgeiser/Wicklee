@@ -4,6 +4,39 @@
 
 ---
 
+### Agent — Linux Thermal State Detection
+*1 commit — 46591d9*
+
+Added `harvest_linux_thermal()` to the agent harvester (`agent/src/main.rs`). Linux nodes (e.g. GeiserBMC / Ryzen 9 7950X) previously reported `thermal_state: null`; they now emit a populated value from the kernel sysfs thermal subsystem.
+
+**How it works:**
+- Reads all `/sys/class/thermal/thermal_zone*/temp` files — each contains temperature in millidegrees Celsius. No subprocess, no sudo required.
+- Takes the maximum temperature across all zones.
+- Maps to the four-state scale used by the existing macOS pmset path:
+  - `< 70°C` → `"Normal"` · `70–79` → `"Elevated"` · `80–89` → `"Serious"` · `≥ 90` → `"Critical"`
+- Returns `None` gracefully when `/sys/class/thermal` is absent (old kernels, some containers) or all zone files fail to parse. Never panics.
+
+**`start_linux_thermal_harvester()`** — same `Arc<Mutex<Option<String>>>` pattern as `start_rapl_harvester()`. Polls every 5 seconds. `#[cfg(target_os = "linux")]` guard is inside the unconditional wrapper so the shared Arc compiles on macOS/Windows without dead-code.
+
+**Wiring:** Both `MetricsPayload` construction sites (WS broadcaster + SSE handler) now use `apple.thermal_state.or(linux_thermal)` — macOS pmset/sysctl result takes precedence; Linux fills in on non-Apple hosts. Windows remains `None`. A `[diag] linux thermal OK → <state>` startup diagnostic line confirms sysfs is being read on boot.
+
+No changes to cloud backend, frontend rendering, macOS detection, or any other field.
+
+---
+
+### Agent / Frontend — Misc Bug Fixes & Doc Updates
+*4 commits — b3fad4d ← ce54d66*
+
+1. **Fleet Power Cost tile** (`623d317`) — Renamed "Idle Fleet Cost" → "Fleet Power Cost". Root cause: `ollama_tokens_per_second` is a 30-second sampled probe value that persists from the last measurement, so `isActivelyInferring` was always `true` for recently-probed nodes, making `idle.length === 0` every time. Fix: removed the inference-activity filter; tile now computes cost for all nodes reporting `cpu_power_w` or `nvidia_power_draw_w`. Sub-label updated to "N nodes reporting · PUE X.X". Same fix applied to `src/utils/efficiency.ts`.
+
+2. **Linux memory % in Fleet Status** (`c26553b`) — Memory % column was blank for Linux nodes because `memory_pressure_percent` is Apple Silicon only. Added fallback: `memory_pressure_percent ?? (total_memory_mb > 0 ? (used_memory_mb / total_memory_mb) * 100 : null)` at both the fleet row render and the chart history buffer push in `Overview.tsx`.
+
+3. **EmptyFleetState flash on refresh** (`b3fad4d`) — On page reload, `nodes` initialises as `[]` and Clerk takes a moment to resolve `isSignedIn` before the `/api/fleet` fetch fires. Overview briefly saw `nodes.length === 0` and rendered the "Add your first node" onboarding screen. Fix: added `nodesLoading` flag in `App.tsx` (starts `true` for hosted mode, cleared in `finally` block of `handleNodeAdded`). Overview shows a spinner while `nodesLoading` is true and only renders `EmptyFleetState` once the fetch settles and nodes is genuinely empty.
+
+4. **Docs** (`a7be012`, `313b353`) — Added "Agent ↔ Cloud Payload Sync Rule" section to `docs/SPEC.md`. Updated `docs/ROADMAP.md` to mark Clerk Auth shipped and add FleetStreamContext to the shipped list.
+
+---
+
 ### Marketing — Hero Copy & Meta Tags
 *1 commit — 5b4366f*
 
