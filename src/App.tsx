@@ -138,10 +138,19 @@ const LOCAL_USER: UserType = {
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 // Cloud backend URL — env var takes precedence; falls back to the known Railway service.
-// Always absolute so fetch() doesn't resolve against the static host origin.
+//
+// Three modes:
+//   unset / ''  → direct backend URL (dev, agent builds)
+//   '/'         → empty string = same-origin; nginx proxies /api/* to backend
+//   'https://…' → explicit absolute URL
+//
+// In the Railway frontend service set VITE_CLOUD_URL=/ to enable the nginx
+// reverse proxy so all API calls flow through wicklee.dev/api/* instead of
+// crossing origins (eliminates CORS, hides the backend URL from the client).
 const CLOUD_URL = (() => {
-  const v = import.meta.env.VITE_CLOUD_URL ?? '';
+  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
   if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  if (v === '/') return '';   // same-origin proxy mode — nginx handles routing
   return v.startsWith('http') ? v : `https://${v}`;
 })();
 
