@@ -42,7 +42,7 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
     <header className="h-16 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40 transition-colors">
       {/* Left: logo + page title */}
       <div className="flex items-center gap-4">
-        <Logo className="text-base" connectionState={connectionState} theme={theme} />
+        <Logo className="text-xl" connectionState={connectionState} theme={theme} />
         {titles[activeTab] && (
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white whitespace-nowrap">
             {titles[activeTab]}
