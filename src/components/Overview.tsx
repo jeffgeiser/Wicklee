@@ -709,15 +709,56 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   }, [handleMetrics]);
 
   // Feed cloud metrics into the history buffer for the System Performance chart.
+  // Fleet-wide aggregation: average CPU/GPU/mem across all reporting nodes, sum power.
+  // GPU check uses both field names so Apple Silicon (gpu_utilization_percent) and
+  // NVIDIA (nvidia_gpu_utilization_percent) nodes both contribute — nodes with neither
+  // field are excluded from the GPU average but do not drop the series.
   const prevCloudMetricsRef = useRef<Record<string, SentinelMetrics>>({});
   useEffect(() => {
     if (isLocalHost) return;
-    const firstNew = Object.entries(cloudMetrics).find(
+    const hasNew = Object.entries(cloudMetrics).some(
       ([id, m]) => m.timestamp_ms !== prevCloudMetricsRef.current[id]?.timestamp_ms,
     );
-    if (firstNew) pushHistoryPoint(firstNew[1]);
     prevCloudMetricsRef.current = cloudMetrics;
-  }, [cloudMetrics, pushHistoryPoint]);
+    if (!hasNew) return;
+
+    const all = Object.values(cloudMetrics);
+    if (all.length === 0) return;
+
+    const latestTs = Math.max(...all.map(m => m.timestamp_ms));
+    const d = new Date(latestTs);
+    const lbl = `${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+
+    // GPU — check both Apple Silicon and NVIDIA field names; exclude nodes where both are null
+    const gpuVals = all
+      .map(m => m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null)
+      .filter((v): v is number => v != null);
+    const gpu = gpuVals.length > 0 ? gpuVals.reduce((a, b) => a + b, 0) / gpuVals.length : null;
+
+    // CPU — average across all nodes
+    const cpu = all.reduce((a, m) => a + m.cpu_usage_percent, 0) / all.length;
+
+    // Memory — average across nodes that report pressure or used/total
+    const memVals = all
+      .map(m => m.memory_pressure_percent ??
+        (m.total_memory_mb > 0 ? (m.used_memory_mb / m.total_memory_mb) * 100 : null))
+      .filter((v): v is number => v != null);
+    const mem = memVals.length > 0 ? memVals.reduce((a, b) => a + b, 0) / memVals.length : null;
+
+    // Power — total draw across all nodes that report any power metric
+    const powerVals = all
+      .map(m => (m.cpu_power_w != null || m.nvidia_power_draw_w != null)
+        ? (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0)
+        : null)
+      .filter((v): v is number => v != null);
+    const power = powerVals.length > 0 ? powerVals.reduce((a, b) => a + b, 0) : null;
+
+    setHistory(prev => {
+      const pt: HistoryPoint = { time: lbl, gpu, cpu, mem, power };
+      const next = [...prev, pt];
+      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+    });
+  }, [cloudMetrics]);
 
   // Close metric dropdown on outside click
   useEffect(() => {
