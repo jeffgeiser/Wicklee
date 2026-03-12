@@ -13,6 +13,8 @@ const isLocalHost = window.location.hostname === 'localhost' || window.location.
 
 interface OverviewProps {
   nodes: NodeAgent[];
+  /** True while the initial /api/fleet fetch is in-flight. Suppresses EmptyFleetState flash on refresh. */
+  nodesLoading?: boolean;
   isPro?: boolean;
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
@@ -399,7 +401,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 );
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, getNodeSettings, fleetKwhRate = 0.12 }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, getNodeSettings, fleetKwhRate = 0.12 }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -538,6 +540,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     ? (sentinel ? { [sentinel.node_id ?? 'local']: sentinel } : {})
     : cloudMetrics;
   const lastSeenMsMap = cloudLastSeen;
+
+  // While the initial fleet fetch is in-flight (nodesLoading), show a blank
+  // loading screen rather than EmptyFleetState — avoids the "Add your first node"
+  // flash on every page refresh for users who already have nodes paired.
+  if (!isLocalHost && nodesLoading) {
+    return (
+      <div className="flex items-center justify-center py-32 animate-in fade-in duration-300">
+        <div className="flex items-center gap-3 text-gray-500">
+          <div className="w-4 h-4 rounded-full border-2 border-gray-600 border-t-indigo-400 animate-spin" />
+          <span className="text-sm font-medium">Loading fleet…</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!isLocalHost && nodes.length === 0) {
     return <EmptyFleetState onAddNode={onAddNode} />;
