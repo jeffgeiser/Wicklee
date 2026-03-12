@@ -91,6 +91,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
       'group/nav',
     ].join(' ')}>
 
+      {/* ── 64 px spacer — mirrors the fixed logo corner zone height ─────────
+           Ensures nav items start below y=64 so the expanded rail never
+           covers the logo or the sticky page-title header.              */}
+      <div className="h-16 shrink-0" aria-hidden="true" />
+
       {/* Nav items */}
       <nav className="flex-1 px-3 space-y-1 py-4 overflow-hidden">
         {items.filter(i => i.show).map((item) => (
