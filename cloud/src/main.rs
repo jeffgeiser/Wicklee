@@ -494,13 +494,10 @@ async fn handle_stream_token(
     let st2 = stream_token.clone();
     tokio::task::spawn_blocking(move || {
         let conn = db2.lock().unwrap();
-        let result = conn.execute(
+        conn.execute(
             "INSERT INTO stream_tokens (token, user_id, expires_ms) VALUES (?1, ?2, ?3)",
             params![st2, user_id, expires_ms],
-        );
-        println!("[stream-token] inserted token={} result={:?}", &st2[..8], result);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM stream_tokens", [], |r| r.get(0)).unwrap_or(-1);
-        println!("[stream-token] total rows in stream_tokens={}", count);
+        ).ok();
     }).await.unwrap();
 
     (StatusCode::OK, Json(serde_json::json!({ "stream_token": stream_token }))).into_response()
@@ -929,22 +926,15 @@ async fn handle_fleet_stream(
     let st_clone = stream_token.clone();
     let user_id = match tokio::task::spawn_blocking(move || {
         let conn = db_auth.lock().unwrap();
-        println!("[stream-token] looking up token={} now={}", &st_clone[..8], now);
         // Fetch the token row (validates existence and expiry in one shot).
-        let row: Option<String> = conn.query_row(
+        // Do NOT delete here — EventSource may retry after a proxy 502,
+        // and the token is already time-limited to 60 s.  The background
+        // cleanup task purges expired tokens every 5 minutes.
+        conn.query_row(
             "SELECT user_id FROM stream_tokens WHERE token = ?1 AND expires_ms > ?2",
             params![st_clone, now],
-            |r| r.get(0),
-        ).ok();
-        println!("[stream-token] lookup result={:?}", &row);
-        if let Some(ref uid) = row {
-            // Consume immediately — single-use.
-            conn.execute("DELETE FROM stream_tokens WHERE token = ?1", params![st_clone]).ok();
-            Some(uid.clone())
-        } else {
-            // Either token not found or already expired.
-            None
-        }
+            |r| r.get::<_, String>(0),
+        ).ok()
     }).await.unwrap() {
         Some(uid) => uid,
         None => return (StatusCode::UNAUTHORIZED,
