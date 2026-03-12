@@ -159,14 +159,26 @@ struct JwksResponse {
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
+/// Single-use short-lived token for authenticating EventSource connections.
+/// EventSource cannot send custom headers, so we issue a UUID token via a
+/// normal authenticated request and the client passes it as a query param.
+struct StreamToken {
+    user_id:    String,
+    expires_ms: u64,
+}
+
+type StreamTokens = Arc<RwLock<HashMap<String, StreamToken>>>;
+
 #[derive(Clone)]
 struct AppState {
     /// Persistent store for users, sessions, and node pairing records.
-    db:          Db,
+    db:             Db,
     /// In-memory telemetry cache keyed by node_id.
-    metrics:     Arc<RwLock<HashMap<String, MetricsEntry>>>,
+    metrics:        Arc<RwLock<HashMap<String, MetricsEntry>>>,
     /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
-    clerk_keys:  Arc<RwLock<Vec<JwkKey>>>,
+    clerk_keys:     Arc<RwLock<Vec<JwkKey>>>,
+    /// Single-use stream tokens for EventSource auth (60 s TTL).
+    stream_tokens:  StreamTokens,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -452,6 +464,41 @@ fn user_node_set(user_id: &str, conn: &Connection) -> HashSet<String> {
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
+
+/// GET /api/auth/stream-token
+/// Issues a single-use 60-second token for EventSource connections.
+/// EventSource cannot send Authorization headers, so the client fetches this
+/// token via a normal authenticated request, then passes it as ?token=<uuid>.
+async fn handle_stream_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+    let user_id = match tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        require_user(&token, &conn, &clerk_keys)
+    }).await.unwrap() {
+        Some(uid) => uid,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let stream_token = Uuid::new_v4().to_string();
+    let expires_ms = now_ms() + 60_000;
+    state.stream_tokens.write().unwrap().insert(
+        stream_token.clone(),
+        StreamToken { user_id, expires_ms },
+    );
+
+    (StatusCode::OK, Json(serde_json::json!({ "stream_token": stream_token }))).into_response()
+}
 
 /// POST /api/auth/signup
 async fn handle_signup(
@@ -857,35 +904,28 @@ async fn handle_activate(
 }
 
 /// GET /api/fleet/stream — SSE stream pushing fleet snapshots every 2 s.
-/// The browser at wicklee.dev subscribes here instead of connecting to localhost.
-/// Returns 401 before opening the stream if auth is missing or invalid.
-///
-/// Auth: Bearer header OR ?token= query param (EventSource can't send headers).
+/// Auth: single-use stream token via ?token=<uuid> (issued by /api/auth/stream-token).
+/// EventSource cannot send Authorization headers, so we use a short-lived UUID token.
 async fn handle_fleet_stream(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    // Auth check — reject before opening the SSE connection.
-    // EventSource doesn't support custom headers, so accept token via query param too.
-    let token = extract_bearer(&headers)
-        .or_else(|| params.get("token").cloned())
-        .unwrap_or_default();
-    if token.is_empty() {
-        return (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response();
-    }
+    let stream_token = match params.get("token") {
+        Some(t) if !t.is_empty() => t.clone(),
+        _ => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing stream token" }))).into_response(),
+    };
 
-    let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let token2 = token.clone();
-    let user_id = match tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token2, &conn, &clerk_keys)
-    }).await.unwrap() {
-        Some(uid) => uid,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    // Validate and consume the single-use token.
+    let user_id = {
+        let mut tokens = state.stream_tokens.write().unwrap();
+        match tokens.remove(&stream_token) {
+            None => return (StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Invalid stream token" }))).into_response(),
+            Some(st) if st.expires_ms < now_ms() => return (StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Stream token expired" }))).into_response(),
+            Some(st) => st.user_id,
+        }
     };
 
     // Load initial node set for this user.
@@ -1021,9 +1061,10 @@ async fn main() {
     let clerk_keys = Arc::new(RwLock::new(initial_keys));
 
     let state = AppState {
-        db:         Arc::new(Mutex::new(conn)),
-        metrics:    Arc::new(RwLock::new(seed_metrics)),
-        clerk_keys: clerk_keys.clone(),
+        db:            Arc::new(Mutex::new(conn)),
+        metrics:       Arc::new(RwLock::new(seed_metrics)),
+        clerk_keys:    clerk_keys.clone(),
+        stream_tokens: Arc::new(RwLock::new(HashMap::new())),
     };
 
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.
@@ -1045,9 +1086,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/health",            get(handle_health))
-        .route("/api/auth/signup",  post(handle_signup))
-        .route("/api/auth/login",   post(handle_login))
-        .route("/api/auth/me",      get(handle_me))
+        .route("/api/auth/signup",       post(handle_signup))
+        .route("/api/auth/login",        post(handle_login))
+        .route("/api/auth/me",           get(handle_me))
+        .route("/api/auth/stream-token", get(handle_stream_token))
         .route("/api/pair/claim",    post(handle_claim))
         .route("/api/pair/activate", post(handle_activate))
         .route("/api/telemetry",    post(handle_telemetry))
