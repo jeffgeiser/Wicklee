@@ -89,3 +89,47 @@ export function calculateIdleFleetCostPerDay(
     return acc + watts * pue * 24 * (rateUsdPerKwh / 1000);
   }, 0);
 }
+
+/**
+ * Cost per 1,000 tokens in USD.
+ *
+ * Formula: (fleetHourlyCostUsd / (fleetTps × 3600)) × 1000
+ * where fleetHourlyCostUsd = ∑ watts_i × pue_i × rate_i / 1000 (in $/hr).
+ *
+ * @param fleetTps           Fleet tok/s (∑ across inference-active nodes)
+ * @param fleetHourlyCostUsd Fleet electricity cost per hour in USD, PUE already applied
+ * @returns null when fleetTps is zero/null or no cost data is available
+ *
+ * TODO: vLLM backend — ollama_tokens_per_second is the only tok/s source today.
+ *       Wire in vLLM inference stats once the vLLM adapter ships.
+ */
+export function calculateCostPer1kTokens(
+  fleetTps: number | null,
+  fleetHourlyCostUsd: number | null,
+): number | null {
+  if (fleetTps == null || fleetTps <= 0) return null;
+  if (fleetHourlyCostUsd == null) return null;
+  // Tokens per hour = fleetTps × 3600; cost per 1k = hourly_cost / (tok_per_hr / 1000)
+  return (fleetHourlyCostUsd / (fleetTps * 3.6));
+}
+
+/**
+ * Tokens per watt — fleet inference throughput efficiency.
+ *
+ * Formula: fleetTps / totalFleetWatts
+ * Measures how many tok/s the fleet delivers per watt of draw.
+ *
+ * @param fleetTps        Fleet tok/s across inference-active nodes
+ * @param totalFleetWatts Total power draw of those same nodes in watts
+ * @returns null when fleetTps or power data is unavailable
+ *
+ * TODO: vLLM backend — extend to include vLLM node power once the adapter ships.
+ */
+export function calculateTokensPerWatt(
+  fleetTps: number | null,
+  totalFleetWatts: number | null,
+): number | null {
+  if (fleetTps == null || fleetTps <= 0) return null;
+  if (totalFleetWatts == null || totalFleetWatts <= 0) return null;
+  return fleetTps / totalFleetWatts;
+}
