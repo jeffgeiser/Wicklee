@@ -5,22 +5,15 @@ import {
   Database, Wifi, Cpu, AlertTriangle,
   ExternalLink, CheckCircle, AlertCircle,
 } from 'lucide-react';
-import { useAuth } from '@clerk/clerk-react';
 import { NodeAgent, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
+import { useFleetStream } from '../contexts/FleetStreamContext';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const isLocalHost =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-  return !v
-    ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
-    : v.startsWith('http') ? v : `https://${v}`;
-})();
 
 // ── Management table grid ──────────────────────────────────────────────────────
 // Fixed column widths — no responsive hiding.
@@ -541,11 +534,15 @@ interface NodesListProps {
 const NodesList: React.FC<NodesListProps> = ({
   nodes, getNodeSettings, onNavigateToSettings,
 }) => {
-  const { getToken } = useAuth();
+  const {
+    allNodeMetrics: cloudMetrics,
+    lastSeenMsMap: cloudLastSeen,
+    connected: cloudConnected,
+  } = useFleetStream();
+
+  // Local-only state
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
-  const [allMetrics, setAllMetrics]     = useState<Record<string, SentinelMetrics>>({});
-  const [lastSeenMap, setLastSeenMap]   = useState<Record<string, number>>({});
-  const [connected, setConnected]       = useState(false);
+  const [localConnected, setLocalConnected] = useState(false);
 
   const [search, setSearch]               = useState('');
   const [sortKey, setSortKey]             = useState<SortKey>('registered');
@@ -558,62 +555,32 @@ const NodesList: React.FC<NodesListProps> = ({
   const sortRef  = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // ── SSE ────────────────────────────────────────────────────────────────────
+  // Unified references
+  const allMetrics = isLocalHost
+    ? (localMetrics ? { [localMetrics.node_id ?? 'local']: localMetrics } : {})
+    : cloudMetrics;
+  const lastSeenMap = cloudLastSeen;
+  const connected = isLocalHost ? localConnected : cloudConnected;
+
+  // ── SSE (local only) ──────────────────────────────────────────────────────
   useEffect(() => {
+    if (!isLocalHost) return;
     let retryTimer: ReturnType<typeof setTimeout>;
-    const connect = async () => {
-      if (isLocalHost) {
-        const es = new EventSource('/api/metrics');
-        esRef.current = es;
-        es.onmessage = ev => {
-          try { setLocalMetrics(JSON.parse(ev.data) as SentinelMetrics); setConnected(true); }
-          catch { /* ignore */ }
-        };
-        es.onerror = () => {
-          setConnected(false); es.close(); esRef.current = null;
-          retryTimer = setTimeout(connect, 3000);
-        };
-      } else {
-        // Fetch a short-lived stream token (same pattern as App.tsx)
-        try {
-          const jwt = await getToken();
-          if (!jwt) { retryTimer = setTimeout(connect, 5000); return; }
-          const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
-            headers: { Authorization: `Bearer ${jwt}` },
-          });
-          if (!res.ok) { retryTimer = setTimeout(connect, 5000); return; }
-          const { stream_token: streamToken } = await res.json();
-          const es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`);
-          esRef.current = es;
-          es.onopen = () => setConnected(true);
-          es.onmessage = ev => {
-            try {
-              const fleet = JSON.parse(ev.data) as {
-                nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }>;
-              };
-              const updM: Record<string, SentinelMetrics> = {};
-              const updLS: Record<string, number> = {};
-              for (const n of fleet.nodes) {
-                updLS[n.node_id] = n.last_seen_ms;
-                if (n.metrics) updM[n.node_id] = n.metrics;
-              }
-              setLastSeenMap(prev => ({ ...prev, ...updLS }));
-              if (Object.keys(updM).length > 0)
-                setAllMetrics(prev => ({ ...prev, ...updM }));
-            } catch { /* ignore */ }
-          };
-          es.onerror = () => {
-            setConnected(false); es.close(); esRef.current = null;
-            retryTimer = setTimeout(connect, 5000);
-          };
-        } catch {
-          retryTimer = setTimeout(connect, 5000);
-        }
-      }
+    const connect = () => {
+      const es = new EventSource('/api/metrics');
+      esRef.current = es;
+      es.onmessage = ev => {
+        try { setLocalMetrics(JSON.parse(ev.data) as SentinelMetrics); setLocalConnected(true); }
+        catch { /* ignore */ }
+      };
+      es.onerror = () => {
+        setLocalConnected(false); es.close(); esRef.current = null;
+        retryTimer = setTimeout(connect, 3000);
+      };
     };
     connect();
     return () => { esRef.current?.close(); clearTimeout(retryTimer); };
-  }, [getToken]);
+  }, []);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

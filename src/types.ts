@@ -102,6 +102,31 @@ export interface PairingInfo {
   fleet_url?: string | null;
 }
 
+/** Shape of a single node in the fleet SSE stream frame. */
+export interface FleetNode {
+  node_id: string;
+  last_seen_ms: number;
+  metrics: SentinelMetrics | null;
+}
+
+/** Values exposed by FleetStreamContext to consumers via useFleetStream(). */
+export interface FleetStreamState {
+  /** Latest metrics per node_id. */
+  allNodeMetrics: Record<string, SentinelMetrics>;
+  /** Per-node last_seen_ms from the SSE stream. */
+  lastSeenMsMap: Record<string, number>;
+  /** Detected fleet events (online/offline/thermal), newest first, max 50. */
+  fleetEvents: FleetEvent[];
+  /** Whether the EventSource is currently connected. */
+  connected: boolean;
+  /** Transport type — 'sse' once connected, null before first open. */
+  transport: 'sse' | null;
+  /** Timestamp (Date.now()) of the last SSE frame that contained metrics. */
+  lastTelemetryMs: number | null;
+  /** Derived ambient connection state for logo/sidebar animations. */
+  connectionState: ConnectionState;
+}
+
 export enum DashboardTab {
   OVERVIEW = 'overview',
   NODES = 'nodes',
