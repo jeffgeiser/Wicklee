@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info } from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
@@ -10,6 +10,10 @@ import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+// Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
+// Controls Cockpit vs Mission Control rendering mode. Never derived from runtime auth state.
+const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
 
 interface OverviewProps {
   nodes: NodeAgent[];
@@ -406,6 +410,72 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
   </div>
 );
 
+// ── High-Frequency Diagnostic Rail — agent build only, replaces Fleet Status ──
+// Renders 4 live rows (CPU · GPU · Mem Pressure · Board Power) fed by the 10Hz
+// WebSocket stream. Replaces the fleet table when isLocalMode is true.
+interface RailRowProps {
+  label:   string;
+  value:   string;
+  pct?:    number | null;
+  textCls: string;
+  barCls:  string;
+}
+const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls }) => (
+  <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0">
+    <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 w-28 shrink-0">{label}</p>
+    <p className={`text-sm font-telin font-bold w-20 shrink-0 ${textCls}`}>{value}</p>
+    {pct != null && (
+      <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden">
+        <div
+          className={`h-full ${barCls} rounded-full transition-all duration-100`}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </div>
+    )}
+  </div>
+);
+
+const DiagnosticRail: React.FC<{ sentinel: SentinelMetrics | null; transport: 'ws' | 'sse' | null }> = ({ sentinel: s, transport }) => {
+  if (!s) {
+    return (
+      <div className="py-10 text-center text-sm text-gray-500">
+        {transport === null ? 'Connecting to local agent…' : 'Awaiting first telemetry frame…'}
+      </div>
+    );
+  }
+
+  const cpuPct  = s.cpu_usage_percent;
+  const gpuPct  = s.nvidia_gpu_utilization_percent ?? s.gpu_utilization_percent ?? null;
+  const memPct  = s.memory_pressure_percent
+    ?? (s.total_memory_mb > 0 ? (s.used_memory_mb / s.total_memory_mb) * 100 : null);
+  const powerW  = (s.cpu_power_w ?? 0) + (s.nvidia_power_draw_w ?? 0);
+  const hasPow  = s.cpu_power_w != null || s.nvidia_power_draw_w != null;
+
+  const utilCls = (pct: number) =>
+    pct > 90 ? { text: 'text-red-400', bar: 'bg-red-400' } :
+    pct > 70 ? { text: 'text-amber-400', bar: 'bg-amber-400' } :
+               { text: 'text-green-400', bar: 'bg-green-400' };
+
+  const cpu = utilCls(cpuPct);
+
+  return (
+    <div>
+      <RailRow label="CPU Usage" value={`${cpuPct.toFixed(1)}%`} pct={cpuPct} textCls={cpu.text} barCls={cpu.bar} />
+      {gpuPct != null && (() => {
+        const g = utilCls(gpuPct);
+        return <RailRow label="GPU Utilization" value={`${gpuPct.toFixed(1)}%`} pct={gpuPct} textCls={g.text} barCls={g.bar} />;
+      })()}
+      {memPct != null && (() => {
+        const m = utilCls(memPct);
+        return <RailRow label="Memory Pressure" value={`${memPct.toFixed(1)}%`} pct={memPct} textCls={m.text} barCls={m.bar} />;
+      })()}
+      {hasPow && (
+        <RailRow label="Board Power" value={`${powerW.toFixed(1)} W`} textCls="text-amber-400" barCls="bg-amber-400" />
+      )}
+    </div>
+  );
+};
+
 // ── Main component ─────────────────────────────────────────────────────────────
 const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, getNodeSettings, fleetKwhRate = 0.12 }) => {
   const {
@@ -773,15 +843,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           value={fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '—'}
           valueCls={fleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={fleetTps != null
-            ? `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · sampled`
+            ? isLocalMode ? 'sampled every 30s' : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · sampled`
             : hasAnyOllama ? 'sampling every 30s' : 'no inference runtime'}
           icon={Activity}
           iconCls="text-indigo-400"
         />
 
-        {/* 2. FLEET HEALTH */}
+        {/* 2. FLEET / NODE HEALTH */}
         <InsightTile
-          label="Fleet Health"
+          label={isLocalMode ? 'Node Health' : 'Fleet Health'}
           value={fleetHealthPct != null ? `${fleetHealthPct}%` : '—'}
           valueCls={fleetHealthCls}
           sub={fleetHealthPct != null ? 'Normal / Fair thermal' : 'no thermal data'}
@@ -789,9 +859,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-amber-400"
         />
 
-        {/* 3. TOTAL FLEET VRAM */}
+        {/* 3. TOTAL FLEET / NODE VRAM */}
         <InsightTile
-          label="Total Fleet VRAM"
+          label={isLocalMode ? 'Node VRAM' : 'Total Fleet VRAM'}
           value={vramUtilPct != null ? `${vramUtilPct}%` : effectiveMetrics.length > 0 ? `${vramUsedGB} GB` : '—'}
           valueCls={vramUtilPct == null && effectiveMetrics.length === 0 ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={vramUtilPct != null ? `${vramUsedGB} / ${vramCapacityGB} GB` : vramUtilPct == null && effectiveMetrics.length > 0 ? `${vramUsedGB} GB used` : undefined}
@@ -799,27 +869,52 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-blue-400"
         />
 
-        {/* 4. FLEET NODES */}
-        <InsightTile
-          label="Fleet Nodes"
-          value={fleetTotalCount > 0 ? `${fleetLiveCount} / ${fleetTotalCount}` : '—'}
-          sub={fleetLiveCount > 0
-            ? `${fleetLiveCount} online`
-            : fleetTotalCount > 0 ? 'no nodes live' : undefined}
-          icon={Server}
-          iconCls="text-green-400"
-        />
+        {/* 4. FLEET NODES (cloud) / RUNTIME STATUS (local) */}
+        {isLocalMode ? (
+          <InsightTile
+            label="Runtime"
+            value={
+              sentinel?.vllm_running  ? (sentinel.vllm_model_name ?? 'vLLM') :
+              sentinel?.ollama_running ? (sentinel.ollama_active_model ?? 'Ollama') :
+              sentinel ? 'No runtime' : '—'
+            }
+            valueCls={
+              (sentinel?.ollama_running || sentinel?.vllm_running)
+                ? 'text-green-400'
+                : 'text-gray-400 dark:text-gray-600'
+            }
+            sub={
+              sentinel?.vllm_running  ? 'vLLM · active' :
+              sentinel?.ollama_running ? 'Ollama · active' :
+              sentinel ? 'Ollama + vLLM not detected' : undefined
+            }
+            icon={Cpu}
+            iconCls="text-green-400"
+          />
+        ) : (
+          <InsightTile
+            label="Fleet Nodes"
+            value={fleetTotalCount > 0 ? `${fleetLiveCount} / ${fleetTotalCount}` : '—'}
+            sub={fleetLiveCount > 0
+              ? `${fleetLiveCount} online`
+              : fleetTotalCount > 0 ? 'no nodes live' : undefined}
+            icon={Server}
+            iconCls="text-green-400"
+          />
+        )}
 
         {/* ── Row 2: Efficiency & ROI ──────────────────────────────────────── */}
 
-        {/* 5. AVG WES */}
+        {/* 5. AVG WES / NODE WES */}
         <InsightTile
-          label="Avg WES"
+          label={isLocalMode ? 'Node WES' : 'Avg WES'}
           value={formatWES(fleetAvgWES)}
           valueCls={wesColorClass(fleetAvgWES)}
           valueTitle={WES_TOOLTIP}
           sub={fleetAvgWES != null
-            ? `${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''} · inference MPG`
+            ? isLocalMode
+              ? 'inference efficiency · this node'
+              : `${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''} · inference MPG`
             : wesEntries.length > 0 ? 'no active inference' : 'connect runtime'}
           icon={Zap}
           iconCls="text-amber-400"
@@ -845,13 +940,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-cyan-400"
         />
 
-        {/* 8. FLEET POWER COST */}
+        {/* 8. FLEET / NODE POWER COST */}
         <InsightTile
-          label="Fleet Power Cost"
+          label={isLocalMode ? 'Node Power Cost' : 'Fleet Power Cost'}
           value={idleFleetCostPerDay != null ? `$${idleFleetCostPerDay.toFixed(2)}/day` : '—'}
           valueCls={idleFleetCostPerDay == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={idleFleetCostPerDay != null
-            ? `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} reporting · PUE ${avgPue.toFixed(1)}`
+            ? isLocalMode
+              ? `PUE ${avgPue.toFixed(1)} · 24h estimate`
+              : `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} reporting · PUE ${avgPue.toFixed(1)}`
             : 'no power data'}
           icon={DollarSign}
           iconCls="text-gray-400 dark:text-gray-500"
@@ -859,16 +956,24 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
       </div>
 
-      {/* ── Fleet Status ─────────────────────────────────────────────────────── */}
+      {/* ── Fleet Status (cloud) / Diagnostic Rail (agent) ───────────────────── */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
         {/* Section header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-gray-400" />
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet Status</h3>
-            <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
-              {isLocalHost ? (sentinel ? '1' : '0') : nodes.length} node{(isLocalHost ? (sentinel ? 1 : 0) : nodes.length) !== 1 ? 's' : ''}
-            </span>
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+              {isLocalMode ? 'Live Hardware' : 'Fleet Status'}
+            </h3>
+            {isLocalMode ? (
+              <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full font-semibold">
+                {transport === 'ws' ? '10 Hz' : '1 Hz'}
+              </span>
+            ) : (
+              <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
+                {isLocalHost ? (sentinel ? '1' : '0') : nodes.length} node{(isLocalHost ? (sentinel ? 1 : 0) : nodes.length) !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2" title={sseTooltip}>
             {sseState === 'green' && (
@@ -898,19 +1003,25 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           </div>
         </div>
 
-        {nodeRows.length > 0 ? (
-          <div className="overflow-x-auto">
-            <FleetStatusHeader />
-            <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              {nodeRows.map(row => (
-                <FleetStatusRow key={row.nodeId} {...row} />
-              ))}
-            </div>
-          </div>
+        {isLocalMode ? (
+          // ── Diagnostic Rail: live hardware metrics at 10 Hz ──────────────────
+          <DiagnosticRail sentinel={sentinel} transport={transport} />
         ) : (
-          <div className="py-10 text-center text-sm text-gray-500">
-            {isLocalHost ? 'Connecting to local agent…' : 'No nodes paired yet.'}
-          </div>
+          // ── Fleet Status table ───────────────────────────────────────────────
+          nodeRows.length > 0 ? (
+            <div className="overflow-x-auto">
+              <FleetStatusHeader />
+              <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                {nodeRows.map(row => (
+                  <FleetStatusRow key={row.nodeId} {...row} />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="py-10 text-center text-sm text-gray-500">
+              {isLocalHost ? 'Connecting to local agent…' : 'No nodes paired yet.'}
+            </div>
+          )
         )}
       </div>
 
@@ -1140,7 +1251,30 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         );
       })()}
 
-      {/* ── Fleet Intelligence ────────────────────────────────────────────────── */}
+      {/* ── Fleet Intelligence (cloud) / Fleet Preview CTA (agent) ──────────── */}
+      {isLocalMode ? (
+        // ── Fleet Preview CTA — points user to Mission Control for fleet-level analytics
+        <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+              Manage your entire AI fleet
+            </p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Track all nodes, WES leaderboards, thermal fleet health, and cross-node routing from the Mission Control dashboard.
+            </p>
+          </div>
+          <a
+            href="https://wicklee.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
+          >
+            Open Mission Control
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        </div>
+      ) : (
+      // ── Fleet Intelligence — full analytics section (cloud / Mission Control only)
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
         <div className="flex items-center gap-2 mb-5">
           <BrainCircuit className="w-4 h-4 text-indigo-400" />
@@ -1307,6 +1441,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           </div>
         </div>
       </div>
+      )} {/* end isLocalMode ternary — Fleet Intelligence / Fleet Preview CTA */}
     </div>
   );
 };

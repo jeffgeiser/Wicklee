@@ -5,6 +5,10 @@ import Logo from './Logo';
 import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
+// Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
+// In agent builds, ClerkProvider is absent — this gates all useClerk() calls.
+const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+
 interface SidebarProps {
   activeTab: DashboardTab;
   setActiveTab: (tab: DashboardTab) => void;
@@ -18,8 +22,36 @@ interface SidebarProps {
   onOpenPairing?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, connectionState = 'disconnected', theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
+// ── Clerk-dependent account actions — rendered ONLY in non-agent (cloud) builds ─
+// Isolated here so useClerk() is called inside a component that is conditionally
+// mounted, satisfying React's hooks-in-same-order rule while keeping ClerkProvider
+// absent from the agent binary's render tree.
+const ClerkAccountActions: React.FC<{
+  onClose: () => void;
+  onNavigateSettings: () => void;
+}> = ({ onClose, onNavigateSettings: _nav }) => {
   const { signOut, openUserProfile } = useClerk();
+  return (
+    <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50 space-y-0.5">
+      <button
+        onClick={() => { onClose(); openUserProfile(); }}
+        className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+      >
+        <UserCog className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+        Manage Account
+      </button>
+      <button
+        onClick={() => { onClose(); signOut({ redirectUrl: '/' }); }}
+        className="w-full text-left px-3 py-2 rounded-lg text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex items-center gap-2"
+      >
+        <LogOut className="w-4 h-4" />
+        Sign out
+      </button>
+    </div>
+  );
+};
+
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, connectionState = 'disconnected', theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
   const permissions = usePermissions(currentUser);
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -35,7 +67,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   }, []);
 
   const items = [
-    { id: DashboardTab.OVERVIEW, icon: LayoutGrid, label: 'Intelligence', show: true },
+    { id: DashboardTab.OVERVIEW, icon: LayoutGrid, label: isLocalMode ? 'Node Intelligence' : 'Intelligence', show: true },
     { id: DashboardTab.NODES, icon: Server, label: 'Management', show: true },
     { id: DashboardTab.TRACES, icon: Activity, label: 'Observability', show: true },
     { id: DashboardTab.SCAFFOLDING, icon: Terminal, label: 'Scaffolding', show: currentUser.isPro && permissions.canViewScaffolding },
@@ -180,24 +212,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 </a>
               </div>
 
-              {/* Manage Account + Sign out (hosted only) */}
-              {!isLocalHost && (
-                <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50 space-y-0.5">
-                  <button
-                    onClick={() => { setIsAvatarMenuOpen(false); openUserProfile(); }}
-                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
-                  >
-                    <UserCog className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                    Manage Account
-                  </button>
-                  <button
-                    onClick={() => { setIsAvatarMenuOpen(false); signOut({ redirectUrl: '/' }); }}
-                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex items-center gap-2"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    Sign out
-                  </button>
-                </div>
+              {/* Manage Account + Sign out — cloud build only (ClerkProvider present) */}
+              {!IS_AGENT && !isLocalHost && (
+                <ClerkAccountActions
+                  onClose={() => setIsAvatarMenuOpen(false)}
+                  onNavigateSettings={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
+                />
               )}
             </div>
           )}
