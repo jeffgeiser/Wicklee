@@ -49,6 +49,14 @@ export interface SentinelMetrics {
   ollama_quantization?:      string | null;
   /** Sampled tok/s from 1-token /api/generate probe every 30s. Null until first probe completes. */
   ollama_tokens_per_second?: number | null;
+  // vLLM runtime (absent/false when not running)
+  vllm_running?:          boolean;
+  vllm_model_name?:       string | null;
+  /** Avg generation throughput from vLLM Prometheus /metrics. Null until first probe. */
+  vllm_tokens_per_sec?:   number | null;
+  /** KV cache utilisation 0–100%. Agent multiplies vLLM's 0–1 value by 100. */
+  vllm_cache_usage_perc?: number | null;
+  vllm_requests_running?: number | null;
   /** Compile-time OS from agent — "macOS" | "Linux" | "Windows". Absent on older agents. */
   os?: string | null;
 }
