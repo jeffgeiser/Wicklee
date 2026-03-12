@@ -41,10 +41,12 @@ interface InsightTileProps {
   valueCls?: string;
   valueTitle?: string;
   sub?: string;
+  /** Optional second sub-line — rendered more muted than sub, used for contextual conversions. */
+  sub2?: string;
   icon: React.ElementType;
   iconCls?: string;
 }
-const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, valueTitle, sub, icon: Icon, iconCls }) => (
+const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, valueTitle, sub, sub2, icon: Icon, iconCls }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between h-[116px]">
     <div className="flex items-start justify-between gap-2">
       <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">{label}</p>
@@ -58,6 +60,7 @@ const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, value
         {value}
       </p>
       {sub && <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-tight">{sub}</p>}
+      {sub2 && <p className="text-[10px] text-gray-400 dark:text-gray-600 mt-0.5 leading-tight">{sub2}</p>}
     </div>
   </div>
 );
@@ -70,10 +73,10 @@ const fmtAgo = (ms: number): string => {
 };
 
 // ── Fleet Status grid ────────────────────────────────────────────────────────
-// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/S · W/1K · WATTS · GPU% · THERMAL · SPACER
+// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/S · TOK/W · WATTS · GPU% · THERMAL · SPACER
 // Responsive priority — always visible: NODE, MODEL, WES, TOK/S
 //   sm+  adds: THERMAL
-//   md+  adds: MEMORY, VRAM, W/1K, WATTS, GPU%
+//   md+  adds: MEMORY, VRAM, TOK/W, WATTS, GPU%
 // SPACER (1fr) absorbs excess space on wide screens.
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
@@ -96,7 +99,7 @@ const FleetStatusHeader: React.FC = () => (
     <p className={FS_HDR}>MODEL</p>
     <p className={FS_HDR}>WES</p>
     <p className={FS_HDR}>TOK/S</p>
-    <p className={`${FS_HDR} hidden md:block`}>W/1K</p>
+    <p className={`${FS_HDR} hidden md:block`}>TOK/W</p>
     <p className={`${FS_HDR} hidden md:block`}>WATTS</p>
     <p className={`${FS_HDR} hidden md:block`}>GPU%</p>
     <p className={`${FS_HDR} hidden sm:block`}>THERMAL</p>
@@ -198,9 +201,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : vramPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // W/1K — same formula as tile 6: (nodeWatts / nodeTps) × 1000
-  const nodeWattPer1k = (isActive && hasPower && totalPowerW > 0)
-    ? Math.round((totalPowerW / tps!) * 1000)
+  // TOK/W — tokens per watt: tps ÷ totalPowerW. Both inputs are already smoothed so
+  // the derived ratio is naturally smooth. Null when watts or tok/s is zero or absent.
+  const nodeTokPerWatt = (isActive && hasPower && totalPowerW > 0)
+    ? tps! / totalPowerW
     : null;
 
   // GPU% — Apple Silicon via IOKit/AGX, NVIDIA via NVML
@@ -323,12 +327,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </span>
       </div>
 
-      {/* 6. W/1K — (nodeWatts / tps) × 1000; null when tok/s is zero or absent */}
-      <div className="hidden md:block min-w-0 overflow-hidden" title="Watts per 1 000 tokens — a per-node efficiency index. Lower is better.">
-        {nodeWattPer1k != null ? (
+      {/* 6. TOK/W — tokens per watt: tps ÷ watts. Higher is better. Null when watts or tok/s unavailable. */}
+      <div className="hidden md:block min-w-0 overflow-hidden" title="Tokens per watt — inference efficiency per unit of power. Higher is better.">
+        {nodeTokPerWatt != null ? (
           <span className={`${V} text-gray-700 dark:text-gray-300`}>
-            {nodeWattPer1k}
-            <span className="text-gray-400 dark:text-gray-600"> W</span>
+            {nodeTokPerWatt.toFixed(1)}
           </span>
         ) : (
           <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
@@ -1066,12 +1069,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-emerald-400"
         />
 
-        {/* 7. COST / 1K TOKENS */}
+        {/* 7. COST / 1K TOKENS — sub2 shows the per-million equivalent so operators
+            can compare directly against cloud API pricing without mental arithmetic. */}
         <InsightTile
           label="Cost / 1k Tokens"
           value={displayCostPer1k != null ? `$${displayCostPer1k.toFixed(4)}` : '—'}
           valueCls={displayCostPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={`at $${fleetKwhRate}/kWh`}
+          sub2={displayCostPer1k != null ? `≈ $${(displayCostPer1k * 1000).toFixed(2)} / 1M tokens` : undefined}
           icon={DollarSign}
           iconCls="text-cyan-400"
         />
@@ -1442,22 +1447,35 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           {/* ── Right: 5 metric cards ────────────────────────────────────────── */}
           <div className="grid grid-cols-2 gap-3">
 
-            {/* 1. Cost Efficiency */}
-            <FleetCard
-              label="Cost Efficiency"
-              sub={
-                <p className="text-[10px] text-gray-600 leading-tight">
-                  {displayCostPer1kNew != null
-                    ? `${tpsNodes.length} active node${tpsNodes.length !== 1 ? 's' : ''} · per-node PUE`
-                    : 'no active inference'}
-                </p>
-              }
-            >
-              <p className={`text-xl font-bold font-telin leading-none ${displayCostPer1kNew != null ? 'text-cyan-400' : 'text-gray-600'}`}>
-                {displayCostPer1kNew != null ? `$${displayCostPer1kNew.toFixed(4)}` : '—'}
-              </p>
-              {displayCostPer1kNew != null && <p className="text-[10px] text-gray-500 mt-0.5">/1k tokens</p>}
-            </FleetCard>
+            {/* 1. Cost Efficiency — shown per million tokens so sovereign fleet costs are legible
+                (sovereign inference is typically sub-cent / 1k, making 1k the wrong display unit).
+                displayCostPer1kNew is already smoothed; ×1000 gives per-1M without a second buffer. */}
+            {(() => {
+              const displayCostPer1M = displayCostPer1kNew != null ? displayCostPer1kNew * 1000 : null;
+              // Never show $0.000 — if rounds to zero at 3 dp, show < $0.001
+              const costStr = displayCostPer1M == null
+                ? '—'
+                : displayCostPer1M < 0.001
+                ? '< $0.001'
+                : `$${displayCostPer1M.toFixed(3)}`;
+              return (
+                <FleetCard
+                  label="Cost Efficiency"
+                  sub={
+                    <p className="text-[10px] text-gray-600 leading-tight">
+                      {displayCostPer1M != null
+                        ? `est. from current draw · ${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''}`
+                        : 'no active inference'}
+                    </p>
+                  }
+                >
+                  <p className={`text-xl font-bold font-telin leading-none ${displayCostPer1M != null ? 'text-cyan-400' : 'text-gray-600'}`}>
+                    {costStr}
+                  </p>
+                  {displayCostPer1M != null && <p className="text-[10px] text-gray-500 mt-0.5">/1M tokens</p>}
+                </FleetCard>
+              );
+            })()}
 
             {/* 2. Fleet Avg WES
                 Fleet Avg WES stays here permanently as a live aggregate (Intelligence = "Now").
