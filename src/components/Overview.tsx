@@ -186,7 +186,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       </div>
 
-      {/* 2. MEMORY / VRAM */}
+      {/* 2. MEMORY / VRAM
+          Memory column = live utilization only (memory_used, memory_pressure_%).
+          Memory Pressure Forecasting (rate-of-change → ETA to critical) is a Phase 4A Insights tab feature.
+          Do not add predictive/forecast logic to this column. */}
       <div
         className="min-w-0 overflow-hidden"
         title={hasNvidia
@@ -1186,7 +1189,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               {costPer1kTokensNew != null && <p className="text-[10px] text-gray-500 mt-0.5">/1k tokens</p>}
             </FleetCard>
 
-            {/* 2. Fleet Avg WES */}
+            {/* 2. Fleet Avg WES
+                Fleet Avg WES stays here permanently as a live aggregate (Intelligence = "Now").
+                Phase 4A: ranked leaderboard with trend lines and regression detection moves to Insights tab.
+                Do not migrate the live aggregate — only the historical/interpretive layer goes to Insights. */}
             <FleetCard
               label="Fleet Avg WES"
               sub={
