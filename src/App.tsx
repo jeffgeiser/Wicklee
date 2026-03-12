@@ -145,9 +145,22 @@ const CLOUD_URL = (() => {
   return v.startsWith('http') ? v : `https://${v}`;
 })();
 
-const App: React.FC = () => {
-  const { isSignedIn, isLoaded, getToken } = useAuth();
-  const { user } = useUser();
+// Build-time flag: true in the agent binary where ClerkProvider is absent.
+// Hoisted to module scope so it's available to both AppCore and the export shim.
+const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+
+interface AppCoreProps {
+  isSignedIn: boolean | undefined;
+  isLoaded: boolean;
+  getToken: () => Promise<string | null>;
+  user: {
+    id?: string;
+    primaryEmailAddress?: { emailAddress?: string | null } | null;
+    fullName?: string | null;
+  } | null;
+}
+
+const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user }) => {
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
@@ -455,6 +468,23 @@ const App: React.FC = () => {
     </FleetStreamProvider>
   );
 };
+
+// Thin cloud-build bridge — calls Clerk hooks inside ClerkProvider context.
+// Isolated into its own component so useAuth/useUser are never invoked in
+// the agent binary where ClerkProvider is absent from the render tree.
+const CloudApp: React.FC = () => {
+  const { isSignedIn, isLoaded, getToken } = useAuth();
+  const { user } = useUser();
+  return <AppCore isSignedIn={isSignedIn} isLoaded={isLoaded} getToken={getToken} user={user} />;
+};
+
+// Exported root component.
+// Agent builds: skip Clerk hooks entirely and render with local-mode defaults.
+// Cloud builds: delegate to CloudApp which calls hooks within ClerkProvider.
+const App: React.FC = () =>
+  IS_AGENT
+    ? <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />
+    : <CloudApp />;
 
 // ── DashboardShell ────────────────────────────────────────────────────────────
 // Inner component that lives inside FleetStreamProvider so it can call useFleetStream().
