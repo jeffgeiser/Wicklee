@@ -47,7 +47,7 @@ The hosted dashboard at `wicklee.dev` aggregates all paired agents for the opera
 - **Latency:** 500ms–1s polling from each agent to cloud, SSE to browser
 - **Scope:** All paired nodes — full fleet in one view
 - **Pairing:** 6-digit code entered at `wicklee.dev` — no agent config required
-- **Auth:** Email + password (bcrypt). Clerk migration planned for Phase 4B.
+- **Auth:** Clerk (hosted signup/login, JWT). Stream tokens authenticate SSE connections.
 - **Tiers:** Community (3 nodes, free), Team (unlimited, paid ~$29/mo), Enterprise (sovereign, paid ~$199/mo)
 
 ---
@@ -89,6 +89,20 @@ wicklee-agent (single Rust binary, ~700KB)
 └── Static Assets (rust-embed)
     └── frontend/dist/           → Compiled React/Tailwind SPA, baked in at build time
 ```
+
+---
+
+## Agent ↔ Cloud Payload Sync Rule
+
+`MetricsPayload` is defined independently in both `agent/src/main.rs` and `cloud/src/main.rs`. They must stay in sync.
+
+**Rule:** Any field added to `MetricsPayload` in the agent **must** also be added to the cloud struct with `#[serde(default)]`. This ensures older cloud deployments (or older agents) don't reject payloads when a new field is present or absent.
+
+The `#[serde(default)]` attribute on the cloud side means:
+- A new field sent by a newer agent → cloud deserializes it correctly
+- An older agent that doesn't send the field → cloud gets the field's `Default` value (typically `None` for `Option<T>`)
+
+**Never add a non-optional, non-defaulted field to `MetricsPayload` on the agent without the matching cloud update deployed first.** The cloud processes telemetry from all paired agents simultaneously — a missing field with no default will cause deserialization failures for all agents on that firmware until the cloud redeploys.
 
 ---
 
@@ -172,10 +186,10 @@ WES is the primary input to the **Fleet WES Leaderboard** (Insight #2), **Therma
 ```
 wicklee-cloud (Rust + Axum, deployed on Railway)
 │
-├── Auth
-│   ├── POST /api/auth/signup      → bcrypt hash, SQLite insert
-│   ├── POST /api/auth/login       → bcrypt verify, session token
-│   └── POST /api/auth/logout      → session invalidation
+├── Auth (Clerk)
+│   ├── Clerk-managed signup/login (hosted UI, JWT issued by Clerk)
+│   ├── POST /api/auth/stream-token  → exchange Clerk JWT for short-lived SSE stream token (UUID, 60s TTL)
+│   └── Scheduled cleanup task       → purge expired stream_tokens every 5 minutes
 │
 ├── Pairing
 │   ├── POST /api/pair/claim       → generate 6-digit code, store with account
@@ -183,14 +197,30 @@ wicklee-cloud (Rust + Axum, deployed on Railway)
 │
 ├── Telemetry
 │   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms
-│   └── GET  /api/fleet            → SSE stream to browser, aggregated from all nodes
+│   └── GET  /api/fleet/stream?token=  → SSE stream to browser; token = stream_token from /api/auth/stream-token
 │
 └── Storage
     ├── SQLite (rusqlite, bundled)  → users, sessions, nodes (persistent via Railway volume)
     └── DuckDB (Phase 4A)          → time-series metric history, 90-day retention
 ```
 
-**Rate limits:** POST /api/auth/login (5/15min), /api/auth/signup (3/hr), /api/pair/activate (10/5min)
+**Rate limits:** POST /api/pair/activate (10/5min). Auth rate limiting is handled by Clerk.
+
+---
+
+## Frontend SSE Architecture
+
+The hosted dashboard opens a single SSE connection to the cloud backend, managed by `FleetStreamContext` (`src/contexts/FleetStreamContext.tsx`):
+
+- `FleetStreamProvider` (wrapped in `App.tsx`) owns the one `EventSource`
+- Fetches a stream token via Clerk JWT → `POST /api/auth/stream-token`
+- Opens `EventSource(/api/fleet/stream?token=...)`
+- Exposes fleet state via `useFleetStream()` hook
+- Consumers: `Overview`, `NodesList`, `DashboardShell` (footer/header)
+- Event detection (online/offline/thermal transitions) runs inside the provider
+- `onNodesSnapshot` callback patches node hostnames from telemetry into the nodes array
+
+Previously, three components each opened their own `EventSource` — three token fetches, three connections, three places to break. The context consolidates this to a single connection shared via React Context.
 
 ---
 
