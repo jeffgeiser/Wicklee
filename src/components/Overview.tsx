@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info } from 'lucide-react';
-import { useAuth } from '@clerk/clerk-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, WES_TOOLTIP } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
-import { ConnectionState, NodeAgent, PairingInfo, SentinelMetrics, FleetEvent } from '../types';
+import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
+import { useFleetStream } from '../contexts/FleetStreamContext';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
@@ -17,8 +17,6 @@ interface OverviewProps {
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
   onAddNode?: () => void;
-  onTelemetryUpdate?: () => void;
-  onConnectionStateChange?: (state: ConnectionState) => void;
   getNodeSettings?: (nodeId: string) => { pue: number; kwhRate: number; currency: string };
   fleetKwhRate?: number;
 }
@@ -398,16 +396,20 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 );
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate, onConnectionStateChange, getNodeSettings, fleetKwhRate = 0.12 }) => {
-  const { getToken } = useAuth();
+const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, getNodeSettings, fleetKwhRate = 0.12 }) => {
+  const {
+    allNodeMetrics: cloudMetrics,
+    lastSeenMsMap: cloudLastSeen,
+    fleetEvents,
+    connected: cloudConnected,
+    transport: cloudTransport,
+    connectionState,
+  } = useFleetStream();
+
+  // Local-only state (used when isLocalHost for WS/SSE to the local agent)
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
-  const [allNodeMetrics, setAllNodeMetrics] = useState<Record<string, SentinelMetrics>>({});
-  const [lastSeenMsMap, setLastSeenMsMap]   = useState<Record<string, number>>({});
-  const [fleetEvents, setFleetEvents]       = useState<FleetEvent[]>([]);
-  const prevLiveRef    = useRef<Record<string, boolean>>({});
-  const prevThermalRef = useRef<Record<string, string | null>>({});
+  const [localConnected, setLocalConnected] = useState(false);
+  const [localTransport, setLocalTransport] = useState<'ws' | 'sse' | null>(null);
 
   type MetricKey = 'gpu' | 'cpu' | 'mem' | 'power';
   interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; }
@@ -418,21 +420,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const [metricOpen, setMetricOpen] = useState(false);
   const metricDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Tick every 5s so stale-node detection re-evaluates even when no SSE arrives.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 5_000);
-    return () => clearInterval(id);
-  }, []);
-
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  const CLOUD_URL = (() => {
-    const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-    return !v ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
-      : v.startsWith('http') ? v : `https://${v}`;
-  })();
+  // Unified connected / transport for rendering (local uses own state, cloud uses context)
+  const connected = isLocalHost ? localConnected : cloudConnected;
+  const transport = isLocalHost ? localTransport : cloudTransport;
 
   const pushHistoryPoint = useCallback((data: SentinelMetrics) => {
     setHistory(prev => {
@@ -452,132 +445,59 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
   const handleMetrics = useCallback((data: SentinelMetrics) => {
     setSentinel(data);
-    setConnected(true);
+    setLocalConnected(true);
     pushHistoryPoint(data);
   }, [pushHistoryPoint]);
 
+  // Local WS/SSE connection — only active on localhost.
   useEffect(() => {
+    if (!isLocalHost) return;
+
     let retryWs:  ReturnType<typeof setTimeout>;
     let retrySse: ReturnType<typeof setTimeout>;
     let wsFailed = false;
 
-    if (isLocalHost) {
-      const connectSSE = () => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) return;
-        const es = new EventSource('/api/metrics');
-        esRef.current = es;
-        es.onopen    = () => setTransport('sse');
-        es.onmessage = (ev) => {
-          try { handleMetrics(JSON.parse(ev.data) as SentinelMetrics); setTransport('sse'); }
-          catch { /* malformed frame */ }
-        };
-        es.onerror = () => {
-          setConnected(false);
-          es.close();
-          esRef.current = null;
-          retrySse = setTimeout(connectSSE, 3000);
-        };
+    const connectSSE = () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) return;
+      const es = new EventSource('/api/metrics');
+      esRef.current = es;
+      es.onopen    = () => setLocalTransport('sse');
+      es.onmessage = (ev) => {
+        try { handleMetrics(JSON.parse(ev.data) as SentinelMetrics); setLocalTransport('sse'); }
+        catch { /* malformed frame */ }
       };
-
-      const connectWS = () => {
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-        wsRef.current = ws;
-        ws.onmessage = (ev) => {
-          try {
-            handleMetrics(JSON.parse(ev.data as string) as SentinelMetrics);
-            setTransport('ws');
-            if (esRef.current) { esRef.current.close(); esRef.current = null; }
-          } catch { /* malformed frame */ }
-        };
-        ws.onerror = () => { wsFailed = true; };
-        ws.onclose = () => {
-          wsRef.current = null;
-          setConnected(false);
-          if (wsFailed) { connectSSE(); }
-          else {
-            if (!esRef.current) connectSSE();
-            retryWs = setTimeout(() => { wsFailed = false; connectWS(); }, 3000);
-          }
-        };
+      es.onerror = () => {
+        setLocalConnected(false);
+        es.close();
+        esRef.current = null;
+        retrySse = setTimeout(connectSSE, 3000);
       };
+    };
 
-      connectWS();
-    } else {
-      const connectCloudSSE = async () => {
-        // Fetch a short-lived stream token (same pattern as App.tsx)
+    const connectWS = () => {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      wsRef.current = ws;
+      ws.onmessage = (ev) => {
         try {
-          const jwt = await getToken();
-          if (!jwt) { retrySse = setTimeout(connectCloudSSE, 5000); return; }
-          const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
-            headers: { Authorization: `Bearer ${jwt}` },
-          });
-          if (!res.ok) { retrySse = setTimeout(connectCloudSSE, 5000); return; }
-          const { stream_token: streamToken } = await res.json();
-          const es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`);
-          esRef.current = es;
-          es.onopen = () => { setTransport('sse'); setConnected(true); };
-        es.onmessage = (ev) => {
-          try {
-            const fleet = JSON.parse(ev.data) as { nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }> };
-            const updated: Record<string, SentinelMetrics> = {};
-            const updatedLastSeen: Record<string, number>  = {};
-            const now = Date.now();
-            const newEvents: FleetEvent[] = [];
-
-            for (const n of fleet.nodes) {
-              updatedLastSeen[n.node_id] = n.last_seen_ms;
-              const isNowLive = n.metrics != null && (now - n.last_seen_ms) < 30_000;
-              const wasLive   = prevLiveRef.current[n.node_id];
-
-              if (isNowLive && n.metrics) {
-                updated[n.node_id] = n.metrics;
-                if (wasLive === false) {
-                  // Node came back online
-                  newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'node_online', nodeId: n.node_id, hostname: n.metrics.hostname ?? n.node_id });
-                } else if (wasLive === true) {
-                  // Check thermal change
-                  const prevThermal = prevThermalRef.current[n.node_id];
-                  const curThermal  = n.metrics.thermal_state;
-                  if (prevThermal !== undefined && prevThermal !== curThermal && curThermal != null) {
-                    newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'thermal_change', nodeId: n.node_id, hostname: n.metrics.hostname ?? n.node_id, detail: prevThermal != null ? `${prevThermal} → ${curThermal}` : curThermal ?? '' });
-                  }
-                }
-                prevThermalRef.current[n.node_id] = n.metrics.thermal_state;
-              } else if (!isNowLive && wasLive === true) {
-                // Node went offline
-                newEvents.push({ id: Math.random().toString(36).slice(2), ts: now, type: 'node_offline', nodeId: n.node_id, hostname: n.metrics?.hostname ?? n.node_id });
-              }
-              prevLiveRef.current[n.node_id] = isNowLive;
-            }
-
-            setLastSeenMsMap(prev => ({ ...prev, ...updatedLastSeen }));
-            if (Object.keys(updated).length > 0) {
-              setAllNodeMetrics(prev => ({ ...prev, ...updated }));
-              // Feed the first live node's metrics into the history buffer
-              // so the System Performance graph works on the hosted view too.
-              const firstLive = Object.values(updated)[0];
-              if (firstLive) pushHistoryPoint(firstLive);
-              onTelemetryUpdate?.();
-              setTransport('sse');
-            }
-            if (newEvents.length > 0) {
-              setFleetEvents(prev => [...newEvents, ...prev].slice(0, 50));
-            }
-          } catch { /* malformed frame */ }
-        };
-        es.onerror = () => {
-          setConnected(false);
-          es.close();
-          esRef.current = null;
-          retrySse = setTimeout(connectCloudSSE, 5000);
-        };
-        } catch {
-          retrySse = setTimeout(connectCloudSSE, 5000);
+          handleMetrics(JSON.parse(ev.data as string) as SentinelMetrics);
+          setLocalTransport('ws');
+          if (esRef.current) { esRef.current.close(); esRef.current = null; }
+        } catch { /* malformed frame */ }
+      };
+      ws.onerror = () => { wsFailed = true; };
+      ws.onclose = () => {
+        wsRef.current = null;
+        setLocalConnected(false);
+        if (wsFailed) { connectSSE(); }
+        else {
+          if (!esRef.current) connectSSE();
+          retryWs = setTimeout(() => { wsFailed = false; connectWS(); }, 3000);
         }
       };
-      connectCloudSSE();
-    }
+    };
+
+    connectWS();
 
     return () => {
       clearTimeout(retryWs);
@@ -585,7 +505,18 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       wsRef.current?.close();
       esRef.current?.close();
     };
-  }, [handleMetrics, pushHistoryPoint, CLOUD_URL, getToken]);
+  }, [handleMetrics]);
+
+  // Feed cloud metrics into the history buffer for the System Performance chart.
+  const prevCloudMetricsRef = useRef<Record<string, SentinelMetrics>>({});
+  useEffect(() => {
+    if (isLocalHost) return;
+    const firstNew = Object.entries(cloudMetrics).find(
+      ([id, m]) => m.timestamp_ms !== prevCloudMetricsRef.current[id]?.timestamp_ms,
+    );
+    if (firstNew) pushHistoryPoint(firstNew[1]);
+    prevCloudMetricsRef.current = cloudMetrics;
+  }, [cloudMetrics, pushHistoryPoint]);
 
   // Close metric dropdown on outside click
   useEffect(() => {
@@ -597,28 +528,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
     return () => document.removeEventListener('mousedown', handler);
   }, [metricOpen]);
 
-  // Derive ambient connection state for logo + status dot.
-  // Must be computed BEFORE the early return — hooks (useEffect below) cannot
-  // be called after a conditional return (React rules of hooks).
-  const STALE_THRESHOLD_MS = 30_000;
-  const nowMs = Date.now();
-  const hasNodes = isLocalHost ? sentinel != null : Object.keys(allNodeMetrics).length > 0;
-  const allStale = isLocalHost
-    ? (sentinel != null && nowMs - (sentinel.timestamp_ms ?? 0) > STALE_THRESHOLD_MS)
-    : Object.keys(lastSeenMsMap).length > 0 &&
-      Object.values(lastSeenMsMap).every((t: number) => nowMs - t > STALE_THRESHOLD_MS);
-  const connectionState: ConnectionState = !connected
-    ? 'disconnected'
-    : !hasNodes
-    ? 'idle'
-    : allStale
-    ? 'degraded'
-    : 'connected';
-
-  // Report connection state change to parent (drives logo animation in Sidebar)
-  useEffect(() => {
-    onConnectionStateChange?.(connectionState);
-  }, [connectionState, onConnectionStateChange]);
+  // allNodeMetrics / lastSeenMsMap: unified references for local vs cloud
+  const allNodeMetrics = isLocalHost
+    ? (sentinel ? { [sentinel.node_id ?? 'local']: sentinel } : {})
+    : cloudMetrics;
+  const lastSeenMsMap = cloudLastSeen;
 
   if (!isLocalHost && nodes.length === 0) {
     return <EmptyFleetState onAddNode={onAddNode} />;

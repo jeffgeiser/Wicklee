@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { version } from '../package.json';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/clerk-react';
-import { ConnectionState, DashboardTab, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
+import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
+import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -152,7 +153,6 @@ const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
   // Build currentUser from Clerk user data (or LOCAL_USER for localhost)
   const currentUser: UserType = isLocalHost
@@ -170,12 +170,6 @@ const App: React.FC = () => {
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
-  // Tracks last time cloud SSE delivered telemetry — used to show stale-node warning on hosted.
-  const [lastCloudTelemetryMs, setLastCloudTelemetryMs] = useState<number | null>(null);
-  // Per-node last_seen_ms captured from the cloud SSE stream — drives footer reachability.
-  const [nodeLastSeenMs, setNodeLastSeenMs] = useState<Record<string, number>>({});
-  // Tick counter — incremented every 10s on hosted so the stale-node banner appears promptly.
-  const [, setTick] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
@@ -202,9 +196,6 @@ const App: React.FC = () => {
       });
       if (r.ok) {
         const data = await r.json();
-        // Seed last telemetry time from cloud fleet response so we can detect stale nodes.
-        const maxLastSeen = (data.nodes ?? []).reduce((max: number, n: any) => Math.max(max, n.last_seen_ms ?? 0), 0);
-        if (maxLastSeen > 0) setLastCloudTelemetryMs(maxLastSeen);
         // Map cloud NodeSummary → frontend NodeAgent shape
         const mappedNodes = (data.nodes ?? []).map((n: any) => ({
           id: n.node_id as string,
@@ -231,67 +222,18 @@ const App: React.FC = () => {
     handleNodeAdded();
   }, [isSignedIn, handleNodeAdded]);
 
-  // App-level cloud SSE subscription (hosted only).
-  // Stays open regardless of the active tab so lastCloudTelemetryMs is always
-  // current — prevents false "offline" warnings when navigating away from Overview.
-  // Also patches node hostnames the first time real metrics arrive.
-  useEffect(() => {
-    if (isLocalHost || !isSignedIn) return;
-    let es: EventSource | null = null;
-    let retryTimer: ReturnType<typeof setTimeout>;
-    const connect = async () => {
-      // EventSource cannot send Authorization headers. Fetch a single-use
-      // short-lived token via a normal authenticated request, then pass it
-      // as a query param so the backend can validate and open the stream.
-      let streamToken: string;
-      try {
-        console.log('[sse] fetching stream token...');
-        const jwt = await getToken();
-        console.log('[sse] jwt:', jwt?.slice(0, 20));
-        if (!jwt) { retryTimer = setTimeout(connect, 5000); return; }
-        const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
-          headers: { Authorization: `Bearer ${jwt}` },
-        });
-        console.log('[sse] stream token response:', res.status);
-        if (!res.ok) { retryTimer = setTimeout(connect, 5000); return; }
-        streamToken = (await res.json()).stream_token;
-        console.log('[sse] opening SSE with token:', streamToken?.slice(0, 8));
-      } catch (error) {
-        console.log('[sse] stream token fetch failed:', error);
-        retryTimer = setTimeout(connect, 5000); return;
-      }
-
-      es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`);
-      es.onmessage = (ev) => {
-        try {
-          const fleet = JSON.parse(ev.data) as {
-            nodes: Array<{ node_id: string; last_seen_ms: number; metrics: { hostname?: string } | null }>;
-          };
-          // Always capture per-node last_seen_ms for footer reachability.
-          const lsUpdate: Record<string, number> = {};
-          for (const n of fleet.nodes) lsUpdate[n.node_id] = n.last_seen_ms;
-          setNodeLastSeenMs(prev => ({ ...prev, ...lsUpdate }));
-          if (fleet.nodes.some(n => n.metrics)) {
-            setLastCloudTelemetryMs(Date.now());
-            // Patch hostnames into nodes that are still showing WK fallback ids.
-            setNodes(prev => prev.map(node => {
-              const match = fleet.nodes.find(n => n.node_id === node.id);
-              if (match?.metrics?.hostname && node.hostname === node.id) {
-                return { ...node, hostname: match.metrics.hostname };
-              }
-              return node;
-            }));
-          }
-        } catch { /* malformed frame */ }
-      };
-      es.onerror = () => {
-        es?.close();
-        retryTimer = setTimeout(connect, 5000);
-      };
-    };
-    connect();
-    return () => { es?.close(); clearTimeout(retryTimer); };
-  }, [isSignedIn]);
+  // Callback for FleetStreamProvider — patches node hostnames when real metrics arrive.
+  const handleNodesSnapshot = useCallback((snapshot: FleetNode[]) => {
+    if (snapshot.some(n => n.metrics)) {
+      setNodes(prev => prev.map(node => {
+        const match = snapshot.find(n => n.node_id === node.id);
+        if (match?.metrics?.hostname && node.hostname === node.id) {
+          return { ...node, hostname: match.metrics.hostname };
+        }
+        return node;
+      }));
+    }
+  }, []);
 
   const permissions = usePermissions(currentUser);
   const isLocalMode = !pairingInfo || pairingInfo.status !== 'connected';
@@ -324,12 +266,6 @@ const App: React.FC = () => {
     return () => clearInterval(id);
   }, [pairingInfo?.status, fetchPairingStatus]);
 
-  // Periodically re-render on hosted so the stale-node banner detects the 30s threshold.
-  useEffect(() => {
-    if (isLocalHost) return;
-    const id = setInterval(() => setTick(t => t + 1), 10_000);
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -407,7 +343,7 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
+        return <Overview nodes={nodes} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} />;
       case DashboardTab.TRACES:
@@ -463,9 +399,108 @@ const App: React.FC = () => {
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onTelemetryUpdate={isLocalHost ? undefined : () => setLastCloudTelemetryMs(Date.now())} onConnectionStateChange={setConnectionState} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
+        return <Overview nodes={nodes} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
   };
+
+  return (
+    <FleetStreamProvider
+      isSignedIn={!!isSignedIn}
+      getToken={getToken}
+      onNodesSnapshot={handleNodesSnapshot}
+    >
+      <DashboardShell
+        nodes={nodes}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        handleTabChange={handleTabChange}
+        currentUser={currentUser}
+        currentTenant={currentTenant}
+        setCurrentTenant={setCurrentTenant}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        isLocalMode={isLocalMode}
+        pairingInfo={pairingInfo}
+        permissions={permissions}
+        settings={settings}
+        savedToast={savedToast}
+        getNodeSettings={getNodeSettings}
+        updateFleet={updateFleet}
+        setNodeOverride={setNodeOverride}
+        clearAllOverridesForField={clearAllOverridesForField}
+        clearAllNodeOverrides={clearAllNodeOverrides}
+        byokMode={byokMode}
+        setByokMode={setByokMode}
+        userApiKey={userApiKey}
+        setUserApiKey={setUserApiKey}
+        isUpgradeModalOpen={isUpgradeModalOpen}
+        setIsUpgradeModalOpen={setIsUpgradeModalOpen}
+        handleUpgrade={handleUpgrade}
+        isPairingModalOpen={isPairingModalOpen}
+        setIsPairingModalOpen={setIsPairingModalOpen}
+        isAddNodeModalOpen={isAddNodeModalOpen}
+        setIsAddNodeModalOpen={setIsAddNodeModalOpen}
+        handleNodeAdded={handleNodeAdded}
+        generatePairingCode={generatePairingCode}
+        disconnectFleet={disconnectFleet}
+        renderContent={renderContent}
+      />
+    </FleetStreamProvider>
+  );
+};
+
+// ── DashboardShell ────────────────────────────────────────────────────────────
+// Inner component that lives inside FleetStreamProvider so it can call useFleetStream().
+// Renders the sidebar, header, content area (with stale-node banner), and footer.
+
+interface DashboardShellProps {
+  nodes: NodeAgent[];
+  activeTab: DashboardTab;
+  setActiveTab: (t: DashboardTab) => void;
+  handleTabChange: (t: DashboardTab) => void;
+  currentUser: UserType;
+  currentTenant: Tenant;
+  setCurrentTenant: (t: Tenant) => void;
+  theme: 'light' | 'dark';
+  toggleTheme: () => void;
+  isLocalMode: boolean;
+  pairingInfo: PairingInfo | null;
+  permissions: ReturnType<typeof usePermissions>;
+  settings: ReturnType<typeof useSettings>['settings'];
+  savedToast: boolean;
+  getNodeSettings: ReturnType<typeof useSettings>['getNodeSettings'];
+  updateFleet: ReturnType<typeof useSettings>['updateFleet'];
+  setNodeOverride: ReturnType<typeof useSettings>['setNodeOverride'];
+  clearAllOverridesForField: ReturnType<typeof useSettings>['clearAllOverridesForField'];
+  clearAllNodeOverrides: ReturnType<typeof useSettings>['clearAllNodeOverrides'];
+  byokMode: boolean;
+  setByokMode: (v: boolean) => void;
+  userApiKey: string;
+  setUserApiKey: (v: string) => void;
+  isUpgradeModalOpen: boolean;
+  setIsUpgradeModalOpen: (v: boolean) => void;
+  handleUpgrade: () => void;
+  isPairingModalOpen: boolean;
+  setIsPairingModalOpen: (v: boolean) => void;
+  isAddNodeModalOpen: boolean;
+  setIsAddNodeModalOpen: (v: boolean) => void;
+  handleNodeAdded: () => void;
+  generatePairingCode: () => void;
+  disconnectFleet: () => void;
+  renderContent: () => React.ReactNode;
+}
+
+const DashboardShell: React.FC<DashboardShellProps> = (props) => {
+  const { connectionState, lastTelemetryMs, lastSeenMsMap } = useFleetStream();
+  const {
+    nodes, activeTab, handleTabChange, setActiveTab,
+    currentUser, currentTenant, setCurrentTenant,
+    theme, toggleTheme, isLocalMode, pairingInfo,
+    isUpgradeModalOpen, setIsUpgradeModalOpen, handleUpgrade,
+    isPairingModalOpen, setIsPairingModalOpen,
+    isAddNodeModalOpen, setIsAddNodeModalOpen, handleNodeAdded,
+    generatePairingCode, disconnectFleet, renderContent,
+  } = props;
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-300">
@@ -499,7 +534,7 @@ const App: React.FC = () => {
         pairingInfo={pairingInfo}
         onOpenPairing={() => setIsPairingModalOpen(true)}
       />
-      
+
       <MobileTabBar activeTab={activeTab} setActiveTab={handleTabChange} />
       <main className="flex-1 flex flex-col overflow-hidden">
         <Header
@@ -516,12 +551,12 @@ const App: React.FC = () => {
           onOpenPairing={isLocalHost ? () => setIsPairingModalOpen(true) : () => setIsAddNodeModalOpen(true)}
           isLocalHost={isLocalHost}
         />
-        
+
         <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 scroll-smooth">
           <div className="max-w-7xl mx-auto space-y-6">
 
             {/* Hosted: show stale-node warning if paired node hasn't sent telemetry in >30s */}
-            {!isLocalHost && nodes.length > 0 && lastCloudTelemetryMs !== null && (Date.now() - lastCloudTelemetryMs > 30_000) && (
+            {!isLocalHost && nodes.length > 0 && lastTelemetryMs !== null && (Date.now() - lastTelemetryMs > 30_000) && (
               <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center gap-3 mb-6">
                 <WifiOff className="w-5 h-5 text-amber-500 shrink-0" />
                 <div>
@@ -529,7 +564,7 @@ const App: React.FC = () => {
                     Node {nodes[0].hostname} appears offline
                   </h3>
                   <p className="text-xs text-amber-600/80 dark:text-amber-500/80">
-                    Last seen {new Date(lastCloudTelemetryMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} — make sure the Wicklee agent is running on this machine.
+                    Last seen {new Date(lastTelemetryMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} — make sure the Wicklee agent is running on this machine.
                   </p>
                 </div>
               </div>
@@ -550,7 +585,7 @@ const App: React.FC = () => {
                 const ftNow = Date.now();
                 const total = nodes.length;
                 const online = nodes.filter(n => {
-                  const ls = nodeLastSeenMs[n.id];
+                  const ls = lastSeenMsMap[n.id];
                   return ls != null && ftNow - ls <= NODE_REACHABLE_MS;
                 }).length;
                 const dotColor = total === 0 ? 'bg-gray-500'
@@ -562,7 +597,7 @@ const App: React.FC = () => {
                   : online > 0       ? 'text-amber-500 dark:text-amber-400'
                   : 'text-red-600 dark:text-red-400';
                 const tooltip = nodes.map(n => {
-                  const ls = nodeLastSeenMs[n.id];
+                  const ls = lastSeenMsMap[n.id];
                   const alive = ls != null && ftNow - ls <= NODE_REACHABLE_MS;
                   const label = ls != null
                     ? alive ? '● online' : `● offline · last seen ${fmtNodeAgo(ls)}`
