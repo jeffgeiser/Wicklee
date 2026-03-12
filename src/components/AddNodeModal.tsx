@@ -9,13 +9,23 @@ interface AddNodeModalProps {
   cloudUrl: string;
 }
 
+// Build-time flag — AddNodeModal is cloud-only; agent builds never need it.
+const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+
 const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdded, cloudUrl }) => {
-  const { getToken } = useAuth();
+  // Standard React hooks — always called so hook order is consistent.
   const [digits, setDigits] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // In agent builds ClerkProvider is absent — bail before calling useAuth().
+  // IS_AGENT is a build-time constant so this early return is always taken
+  // (agent) or never taken (cloud), keeping hook call count consistent.
+  if (IS_AGENT) return null;
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const { getToken } = useAuth();
 
   if (!isOpen) return null;
 
