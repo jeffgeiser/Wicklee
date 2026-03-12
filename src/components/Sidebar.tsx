@@ -91,13 +91,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
       'group/nav',
     ].join(' ')}>
 
-      {/* Nav items */}
-      <nav className="flex-1 px-3 space-y-1 py-4 overflow-hidden">
+      {/* Nav items — pt-16 clears the sticky header zone (header height = 64px = 4rem) */}
+      <nav className="flex-1 px-3 space-y-1 pt-16 pb-4 overflow-hidden">
         {items.filter(i => i.show).map((item) => (
           <button
             key={item.id}
             onClick={() => setActiveTab(item.id)}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+            className={`w-full flex items-center gap-3 px-6 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === item.id
                 ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-600/20'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent'
@@ -148,16 +148,18 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
           );
         })()}
 
-        {/* Avatar / profile — dropdown opens upward; only reachable when nav is expanded */}
+        {/* Avatar / profile — dropdown opens upward; only reachable when nav is expanded.
+            Collapsed state: avatar centered in the rail (justify-center, no gap/px).
+            Expanded state:  left-aligned with gap + px-3 padding (group-hover/nav variants). */}
         <div className="relative" ref={avatarMenuRef}>
           <button
             onClick={() => setIsAvatarMenuOpen(v => !v)}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
+            className="w-full flex items-center justify-center group-hover/nav:justify-start group-hover/nav:gap-3 group-hover/nav:px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
           >
             <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0 overflow-hidden">
-              <UserIcon className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+              <UserIcon className="w-4 h-4 text-gray-600 dark:text-gray-300" />
             </div>
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap truncate flex-1 text-left opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap max-w-0 overflow-hidden group-hover/nav:max-w-full text-left opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">
               {currentUser.fullName}
             </span>
           </button>
@@ -168,7 +170,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
               {/* User info */}
               <div className="px-3 py-3 mb-1 border-b border-gray-100 dark:border-gray-800/50 flex items-center gap-3">
                 <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0">
-                  <UserIcon className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                  <UserIcon className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-gray-900 dark:text-gray-200 truncate">{currentUser.fullName}</p>
