@@ -201,11 +201,9 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : vramPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // TOK/W — tokens per kilowatt: tps ÷ (totalPowerW / 1000).
-  // Both inputs are already smoothed; dividing watts by 1000 keeps the display value
-  // in a readable range (e.g. 50 rather than 0.05).
+  // TOK/W — tokens per watt: tps ÷ totalPowerW. Both inputs are already smoothed.
   const nodeTokPerWatt = (isActive && hasPower && totalPowerW > 0)
-    ? tps! / (totalPowerW / 1000)
+    ? tps! / totalPowerW
     : null;
   // Audit log: confirms per-node smoothed inputs feeding the TOK/W column.
   // Remove after field verification.
@@ -966,7 +964,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const displayFleetWatts   = fleetWattsBuf.push(totalPowerOfTpsNodes, fleetTs);
   // Fleet Tokens Per Watt — tok/s ÷ (kW) — consistent formula with Fleet Status table column.
   const displayTokPerKW = (displayFleetTps != null && displayFleetWatts != null && displayFleetWatts > 0)
-    ? displayFleetTps / (displayFleetWatts / 1000)
+    ? displayFleetTps / displayFleetWatts
     : null;
   // Audit log: confirms smoothed fleet-level inputs feeding the Fleet Intelligence card.
   // Remove after field verification.
@@ -1560,7 +1558,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             </FleetCard>
 
             {/* 3. Tokens Per Watt — uses same formula as Fleet Status TOK/W column:
-                tps ÷ (watts / 1000). Inputs are smoothed fleet-total values so this
+                tps ÷ watts. Inputs are smoothed fleet-total values so this
                 matches what the per-node column rows would sum to on a single-node setup. */}
             <FleetCard
               label="Tokens Per Watt"
@@ -1575,7 +1573,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               <p className={`text-xl font-bold font-telin leading-none ${displayTokPerKW != null ? 'text-emerald-400' : 'text-gray-600'}`}>
                 {displayTokPerKW != null ? displayTokPerKW.toFixed(1) : '—'}
               </p>
-              {displayTokPerKW != null && <p className="text-[10px] text-gray-500 mt-0.5">tok/kW</p>}
+              {displayTokPerKW != null && <p className="text-[10px] text-gray-500 mt-0.5">tok/W</p>}
             </FleetCard>
 
             {/* 4. Thermal Diversity */}
