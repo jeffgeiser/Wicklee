@@ -309,6 +309,117 @@ Previously, three components each opened their own `EventSource` — three token
 
 ---
 
+## Frontend Deployment Architecture
+
+### Railway Services
+
+Wicklee uses two separate Railway services from the same repository:
+
+| Service | Dockerfile | URL |
+|---|---|---|
+| **wicklee-frontend** | `Dockerfile` (repo root) | `wicklee.dev` |
+| **wicklee-cloud** | `cloud/Dockerfile` | `vibrant-fulfillment-production-62c0.up.railway.app` |
+
+`railway.toml` at the repo root configures the frontend service. `cloud/railway.toml` configures the backend service.
+
+---
+
+### Multi-Stage Docker Build
+
+The frontend Railway service runs a two-stage Docker build defined at the repo root:
+
+```
+Dockerfile (repo root)
+│
+├── Stage 1 — builder (node:22-slim)
+│   ├── ARG VITE_CLERK_PUBLISHABLE_KEY   ← baked into JS bundle at compile time
+│   ├── ARG VITE_CLOUD_URL               ← baked into JS bundle at compile time
+│   └── npm run build → agent/frontend/dist/
+│
+└── Stage 2 — serve (nginx:alpine)
+    ├── Copies dist/ → /usr/share/nginx/html
+    ├── entrypoint.sh: envsubst '$PORT' substitutes Railway's port at runtime
+    └── nginx serves on PORT, proxying /api/* to the cloud backend
+```
+
+**Critical:** Vite replaces `import.meta.env.VITE_*` at **compile time**, not runtime. Build-time env vars must be declared as Docker `ARG`s — Railway injects service environment variables as build args for any declared `ARG`. Missing `ARG` declarations produce `undefined` in the built JS bundle.
+
+---
+
+### nginx Reverse Proxy (`nginx.conf`)
+
+All `/api/*` requests arriving at `wicklee.dev` are reverse-proxied to the cloud backend:
+
+```
+wicklee.dev/api/*  →  https://vibrant-fulfillment-production-62c0.up.railway.app/api/*
+```
+
+The proxy rewrites the `Host` header to the backend domain and forwards `X-Real-IP` / `X-Forwarded-For` for logging. This eliminates CORS entirely — the browser sees only same-origin requests.
+
+**`/api/fleet/stream` has its own location block** listed before the generic `/api/` rule. All five SSE-critical directives are required together — missing any one will cause the stream to stall or disconnect:
+
+| Directive | Value | Why it's required |
+|---|---|---|
+| `proxy_buffering` | `off` | nginx must not accumulate chunks before forwarding — events must reach the browser immediately |
+| `proxy_cache` | `off` | Bypass any cache layer that would hold the response body |
+| `proxy_http_version` | `1.1` | HTTP/1.1 is required for chunked transfer encoding and upstream keep-alive |
+| `proxy_set_header Connection` | `''` | Clears the hop-by-hop `Connection` header so the upstream TCP connection stays open |
+| `proxy_read_timeout` | `86400s` | Holds the connection open for 24 hours — without this nginx closes idle SSE streams after 60s |
+
+All other `/api/*` routes use standard timeouts (`proxy_read_timeout 30s`).
+
+The SPA catch-all (`try_files $uri $uri/ /index.html`) ensures React Router handles all non-asset paths correctly — no path falls through to a 404.
+
+---
+
+### `$PORT` Substitution at Runtime
+
+Railway injects the assigned service port as a `PORT` environment variable at **container startup** (not build time). nginx must listen on this port. Since nginx configuration is static, `entrypoint.sh` runs `envsubst` before starting nginx:
+
+```bash
+# Only $PORT is substituted — all nginx variables ($remote_addr, $uri, etc.)
+# are passed through literally and interpreted by nginx itself.
+envsubst '$PORT' < /etc/nginx/conf.d/nginx.conf.template \
+  > /etc/nginx/conf.d/default.conf
+exec nginx -g 'daemon off;'
+```
+
+Passing `'$PORT'` explicitly (not `'$*'`) to `envsubst` is essential — without it, nginx variables like `$remote_addr` would be substituted to empty strings, silently breaking header forwarding.
+
+---
+
+### `VITE_CLOUD_URL` Modes
+
+Both `App.tsx` and `FleetStreamContext.tsx` share the same `CLOUD_URL` resolution logic. Every `fetch()` and `EventSource()` call in the frontend uses `CLOUD_URL` as its base:
+
+| `VITE_CLOUD_URL` | `CLOUD_URL` resolves to | Used for |
+|---|---|---|
+| unset or `''` | `https://vibrant-fulfillment-production-62c0.up.railway.app` | Local dev, agent binary builds |
+| `/` | `''` (empty string — same-origin) | Railway frontend service (nginx proxy active) |
+| `https://…` | The specified URL | Explicit override / staging |
+
+**Active on Railway:** `VITE_CLOUD_URL=/` — all API calls use relative paths (`/api/fleet`, `/api/auth/stream-token`, etc.) that nginx routes to the backend. Switching back to direct calls requires only changing this one env var.
+
+---
+
+### Build-Time Flag: `IS_AGENT` vs `isLocalHost`
+
+Two separate flags control UI identity — they serve different purposes and must not be conflated:
+
+| Flag | Source | Type | Purpose |
+|---|---|---|---|
+| `IS_AGENT` | `VITE_BUILD_TARGET === 'agent'` | Build-time constant | Which **binary** is running — agent (Rust-embedded) or cloud frontend (Railway) |
+| `isLocalHost` | `window.location.hostname` check | Runtime boolean | Which **surface** to show — Cockpit (single node) or Mission Control (fleet) |
+
+`IS_AGENT` is a Rollup dead-code-elimination constant. When `true`:
+- The entire Clerk module is excluded from the bundle (dynamic `import()` in `index.tsx`'s `else` branch is tree-shaken by Rollup)
+- `App.tsx` renders `AppCore` with stub auth values — `useAuth()`/`useUser()` are never called
+- `AddNodeModal.tsx` returns `null` before `useAuth()` — `ClerkProvider` is never in the render tree
+
+`isLocalHost` is evaluated at runtime on every page load. An operator at `localhost:7700` sees the Cockpit surface (single-node identity, no fleet chrome). The same build served at `wicklee.dev` shows Mission Control (fleet identity, team management, billing).
+
+---
+
 ## Intelligence Architecture
 
 ### The Unique Position
@@ -403,9 +514,12 @@ Enterprise tier produces a tamper-evident PDF audit report signed by the agent's
 
 ## Build Pipeline
 
+### Agent Binary (local, `make` / GitHub Actions)
+
 ```bash
-# 1. Build the React frontend
-npm ci && npm run build
+# 1. Build the React frontend in agent mode
+#    VITE_BUILD_TARGET=agent → IS_AGENT=true, Clerk excluded from bundle
+npm ci && npm run build:agent
 # Output: agent/frontend/dist/
 
 # 2. Build the Rust agent (embeds dist/ via rust-embed)
@@ -417,7 +531,26 @@ wicklee
 # Dashboard: http://localhost:7700
 ```
 
-**Release pipeline:** tag push (`git tag vX.X.X && git push origin vX.X.X`) triggers 4-platform GitHub Actions build. Assets: `wicklee-agent-darwin-aarch64`, `wicklee-agent-linux-x86_64`, `wicklee-agent-linux-aarch64`, `wicklee-agent-windows-x86_64.exe`.
+`make` and `make install` run both steps in order and optionally copy the binary to `/usr/local/bin`.
+
+### Cloud Frontend (Railway — `wicklee.dev`)
+
+Railway builds the repo-root `Dockerfile` automatically on every push to `main`:
+
+```
+Docker build (Railway CI)
+│
+├── npm ci
+├── npm run build          ← standard mode (not agent), VITE_BUILD_TARGET unset
+│   Using env vars injected by Railway via ARG declarations:
+│     VITE_CLERK_PUBLISHABLE_KEY  (baked into bundle)
+│     VITE_CLOUD_URL=/            (baked into bundle — enables nginx proxy mode)
+│
+└── nginx serves agent/frontend/dist/ on $PORT
+    /api/* → proxied to vibrant-fulfillment-production-62c0.up.railway.app
+```
+
+**Release pipeline (agent):** tag push (`git tag vX.X.X && git push origin vX.X.X`) triggers 4-platform GitHub Actions build. Assets: `wicklee-agent-darwin-aarch64`, `wicklee-agent-linux-x86_64`, `wicklee-agent-linux-aarch64`, `wicklee-agent-windows-x86_64.exe`.
 
 **Linux targets use musl** (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) for fully static binaries with no glibc dependency.
 
