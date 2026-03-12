@@ -914,42 +914,29 @@ async fn handle_fleet_stream(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let stream_token = match params.get("token") {
-        Some(t) if !t.is_empty() => {
-            println!("[fleet-stream] request arrived token={}", &t[..8.min(t.len())]);
-            t.clone()
-        }
+        Some(t) if !t.is_empty() => t.clone(),
         _ => {
-            println!("[fleet-stream] request arrived with NO token param");
             return (StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "Missing stream token" }))).into_response();
         }
     };
 
-    // Validate and consume the single-use token from SQLite.
-    // Using spawn_blocking so the SELECT+DELETE are on the same connection/thread.
+    // Validate the token from SQLite.
+    // Using spawn_blocking so the SELECT runs on the same connection/thread.
     let now = now_ms() as i64;
     let db_auth = state.db.clone();
     let st_clone = stream_token.clone();
     let user_id = match tokio::task::spawn_blocking(move || {
         let conn = db_auth.lock().unwrap();
-
-        // Diagnostic: how many tokens exist in the table right now?
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM stream_tokens", [], |r| r.get(0)
-        ).unwrap_or(-1);
-        println!("[fleet-stream] stream_tokens row count={}", count);
-
         // Fetch the token row (validates existence and expiry in one shot).
         // Do NOT delete here — EventSource may retry after a proxy 502,
         // and the token is already time-limited to 60 s.  The background
         // cleanup task purges expired tokens every 5 minutes.
-        let row = conn.query_row(
+        conn.query_row(
             "SELECT user_id FROM stream_tokens WHERE token = ?1 AND expires_ms > ?2",
             params![st_clone, now],
             |r| r.get::<_, String>(0),
-        ).ok();
-        println!("[fleet-stream] token lookup: {:?} (now_ms={})", &row, now);
-        row
+        ).ok()
     }).await.unwrap() {
         Some(uid) => uid,
         None => return (StatusCode::UNAUTHORIZED,
