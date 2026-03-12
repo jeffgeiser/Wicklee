@@ -201,11 +201,15 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : vramPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // TOK/W — tokens per watt: tps ÷ totalPowerW. Both inputs are already smoothed so
-  // the derived ratio is naturally smooth. Null when watts or tok/s is zero or absent.
+  // TOK/W — tokens per kilowatt: tps ÷ (totalPowerW / 1000).
+  // Both inputs are already smoothed; dividing watts by 1000 keeps the display value
+  // in a readable range (e.g. 50 rather than 0.05).
   const nodeTokPerWatt = (isActive && hasPower && totalPowerW > 0)
-    ? tps! / totalPowerW
+    ? tps! / (totalPowerW / 1000)
     : null;
+  // Audit log: confirms per-node smoothed inputs feeding the TOK/W column.
+  // Remove after field verification.
+  console.log('[tok/W audit] table row', nodeId, { tps, totalPowerW, nodeTokPerWatt });
 
   // GPU% — Apple Silicon via IOKit/AGX, NVIDIA via NVML
   const gpuPct = isOnline
@@ -621,6 +625,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const costPer1kBuf    = useRollingBuffer(); // Tile 7: $ / 1k tokens
   const fleetWesBuf     = useRollingBuffer(); // Tile 5 + Fleet Intelligence WES card
   const costPer1kNewBuf = useRollingBuffer(); // Fleet Intelligence cost card
+  const fleetWattsBuf   = useRollingBuffer(); // Fleet Intelligence Tokens Per Watt card
 
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
@@ -952,11 +957,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const fleetTs = effectiveMetrics.length > 0
     ? Math.max(...effectiveMetrics.map(m => m.timestamp_ms))
     : 0;
-  const displayFleetTps     = fleetTpsBuf.push(fleetTps,         fleetTs);
-  const displayWattPer1k    = wattPer1kBuf.push(wattPer1k,       fleetTs);
-  const displayCostPer1k    = costPer1kBuf.push(costPer1k,       fleetTs);
-  const displayFleetAvgWES  = fleetWesBuf.push(fleetAvgWES,      fleetTs);
+  const displayFleetTps     = fleetTpsBuf.push(fleetTps,              fleetTs);
+  const displayWattPer1k    = wattPer1kBuf.push(wattPer1k,            fleetTs);
+  const displayCostPer1k    = costPer1kBuf.push(costPer1k,            fleetTs);
+  const displayFleetAvgWES  = fleetWesBuf.push(fleetAvgWES,           fleetTs);
   const displayCostPer1kNew = costPer1kNewBuf.push(costPer1kTokensNew, fleetTs);
+  // Smoothed fleet total watts — same node set as fleetTps (tpsNodes with power data).
+  const displayFleetWatts   = fleetWattsBuf.push(totalPowerOfTpsNodes, fleetTs);
+  // Fleet Tokens Per Watt — tok/s ÷ (kW) — consistent formula with Fleet Status table column.
+  const displayTokPerKW = (displayFleetTps != null && displayFleetWatts != null && displayFleetWatts > 0)
+    ? displayFleetTps / (displayFleetWatts / 1000)
+    : null;
+  // Audit log: confirms smoothed fleet-level inputs feeding the Fleet Intelligence card.
+  // Remove after field verification.
+  console.log('[tok/W audit] fleet card', { displayFleetTps, displayFleetWatts, displayTokPerKW });
 
   // ── SSE connection indicator (3-state) ──────────────────────────────────────
   const sseNow = Date.now();
@@ -1545,21 +1559,23 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               </p>
             </FleetCard>
 
-            {/* 3. Tokens Per Watt */}
+            {/* 3. Tokens Per Watt — uses same formula as Fleet Status TOK/W column:
+                tps ÷ (watts / 1000). Inputs are smoothed fleet-total values so this
+                matches what the per-node column rows would sum to on a single-node setup. */}
             <FleetCard
               label="Tokens Per Watt"
               sub={
                 <p className="text-[10px] text-gray-600 leading-tight">
-                  {tokensPerWattVal != null
+                  {displayTokPerKW != null
                     ? `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · fleet inference efficiency`
                     : 'no active inference'}
                 </p>
               }
             >
-              <p className={`text-xl font-bold font-telin leading-none ${tokensPerWattVal != null ? 'text-emerald-400' : 'text-gray-600'}`}>
-                {tokensPerWattVal != null ? tokensPerWattVal.toFixed(2) : '—'}
+              <p className={`text-xl font-bold font-telin leading-none ${displayTokPerKW != null ? 'text-emerald-400' : 'text-gray-600'}`}>
+                {displayTokPerKW != null ? displayTokPerKW.toFixed(1) : '—'}
               </p>
-              {tokensPerWattVal != null && <p className="text-[10px] text-gray-500 mt-0.5">tok/s per W</p>}
+              {displayTokPerKW != null && <p className="text-[10px] text-gray-500 mt-0.5">tok/kW</p>}
             </FleetCard>
 
             {/* 4. Thermal Diversity */}
