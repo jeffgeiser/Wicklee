@@ -126,9 +126,12 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // Memory / VRAM
   const hasNvidia = m?.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0;
   const memLabel  = hasNvidia ? 'VRAM' : 'Memory';
-  const memPct    = hasNvidia
-    ? Math.round(((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 1000) / 10
-    : (m?.memory_pressure_percent != null ? Math.round(m.memory_pressure_percent * 10) / 10 : null);
+  // memory_pressure_percent is Apple Silicon only; fall back to used/total for Linux nodes.
+  const memPctRaw = hasNvidia
+    ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
+    : m?.memory_pressure_percent ??
+      (m != null && m.total_memory_mb > 0 ? (m.used_memory_mb / m.total_memory_mb) * 100 : null);
+  const memPct = memPctRaw != null ? Math.round(memPctRaw * 10) / 10 : null;
   const memColorCls = memPct == null ? 'text-gray-500 dark:text-gray-600'
     : memPct >= 90 ? 'text-red-400'
     : memPct >= 70 ? 'text-amber-400'
@@ -435,7 +438,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
         time:  lbl,
         gpu:   data.nvidia_gpu_utilization_percent ?? data.gpu_utilization_percent ?? null,
         cpu:   data.cpu_usage_percent,
-        mem:   data.memory_pressure_percent ?? null,
+        // memory_pressure_percent is Apple Silicon only; fall back to used/total for Linux.
+        mem:   data.memory_pressure_percent ??
+               (data.total_memory_mb > 0 ? (data.used_memory_mb / data.total_memory_mb) * 100 : null),
         power: data.cpu_power_w ?? data.nvidia_power_draw_w ?? null,
       };
       const next = [...prev, pt];
