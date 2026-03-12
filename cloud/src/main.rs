@@ -316,6 +316,35 @@ fn fetch_jwks(url: &str) -> Vec<JwkKey> {
     }
 }
 
+// ── Agent version cache ───────────────────────────────────────────────────────
+
+const GH_RELEASES_URL: &str =
+    "https://api.github.com/repos/jeffgeiser/Wicklee/releases/latest";
+const VERSION_CACHE_TTL_MS: u64 = 5 * 60 * 1_000; // 5 minutes
+
+struct GhReleaseCache {
+    fetched_at_ms: u64,
+    latest:        String, // "0.4.7" (v-prefix stripped)
+    tag_name:      String, // "v0.4.7" (used in download URLs)
+}
+
+static RELEASE_CACHE: Mutex<Option<GhReleaseCache>> = Mutex::new(None);
+
+/// Fetch the latest GitHub release. Synchronous — run via spawn_blocking.
+/// Returns (tag_name, version_no_v) or None on any error.
+fn fetch_github_latest() -> Option<(String, String)> {
+    #[derive(Deserialize)]
+    struct GhRelease { tag_name: String }
+    let resp = ureq::get(GH_RELEASES_URL)
+        .set("User-Agent", "wicklee-cloud/1.0")
+        .call()
+        .ok()?;
+    let release: GhRelease = resp.into_json().ok()?;
+    let tag = release.tag_name;
+    let ver = tag.trim_start_matches('v').to_string();
+    Some((tag, ver))
+}
+
 /// Verify a Clerk JWT and return the `sub` claim (Clerk user ID).
 fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
     #[derive(Deserialize)]
@@ -997,6 +1026,81 @@ async fn handle_health() -> StatusCode {
     StatusCode::OK
 }
 
+/// GET /api/agent/version?platform={platform}
+///
+/// Returns `{ "latest": "0.4.7", "download_url": "https://…" }`.
+/// Proxies GitHub Releases API with a 5-minute in-memory cache so the entire
+/// fleet doesn't hammer GitHub on every agent startup.
+async fn handle_agent_version(
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    const VALID_PLATFORMS: &[&str] = &[
+        "darwin-aarch64",
+        "linux-x86_64",
+        "linux-aarch64",
+        "windows-x86_64",
+    ];
+
+    let platform = match q.get("platform").map(|s| s.as_str()) {
+        Some(p) if VALID_PLATFORMS.contains(&p) => p.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Missing or invalid platform" })),
+            )
+                .into_response();
+        }
+    };
+
+    let now = now_ms();
+
+    // Fast path: serve from cache if still fresh.
+    {
+        let guard = RELEASE_CACHE.lock().unwrap();
+        if let Some(ref entry) = *guard {
+            if now.saturating_sub(entry.fetched_at_ms) < VERSION_CACHE_TTL_MS {
+                return version_json(&entry.tag_name, &entry.latest, &platform);
+            }
+        }
+    }
+
+    // Cache stale or cold — hit GitHub on a blocking thread.
+    let fetched = tokio::task::spawn_blocking(fetch_github_latest)
+        .await
+        .unwrap_or(None);
+
+    match fetched {
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Failed to fetch latest release from GitHub" })),
+        )
+            .into_response(),
+        Some((tag_name, latest)) => {
+            {
+                let mut guard = RELEASE_CACHE.lock().unwrap();
+                *guard = Some(GhReleaseCache {
+                    fetched_at_ms: now,
+                    latest:        latest.clone(),
+                    tag_name:      tag_name.clone(),
+                });
+            }
+            version_json(&tag_name, &latest, &platform)
+        }
+    }
+}
+
+fn version_json(tag_name: &str, latest: &str, platform: &str) -> Response {
+    let ext = if platform.starts_with("windows") { ".exe" } else { "" };
+    let download_url = format!(
+        "https://github.com/jeffgeiser/Wicklee/releases/download/{tag_name}/wicklee-agent-{platform}{ext}"
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "latest": latest, "download_url": download_url })),
+    )
+        .into_response()
+}
+
 // ── CORS middleware ───────────────────────────────────────────────────────────
 //
 // Injected directly into the response so Railway's proxy cannot strip the
@@ -1121,8 +1225,9 @@ async fn main() {
         .route("/api/pair/claim",    post(handle_claim))
         .route("/api/pair/activate", post(handle_activate))
         .route("/api/telemetry",    post(handle_telemetry))
-        .route("/api/fleet",         get(handle_fleet))
-        .route("/api/fleet/stream",  get(handle_fleet_stream))
+        .route("/api/fleet",          get(handle_fleet))
+        .route("/api/fleet/stream",   get(handle_fleet_stream))
+        .route("/api/agent/version",  get(handle_agent_version))
         .with_state(state)
         .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
 
@@ -1148,6 +1253,7 @@ async fn main() {
     println!("║  POST /api/telemetry                         ║");
     println!("║  GET  /api/fleet                             ║");
     println!("║  GET  /api/fleet/stream                      ║");
+    println!("║  GET  /api/agent/version                     ║");
     println!("║  Listening on {addr:<30} ║");
     println!("╚══════════════════════════════════════════════╝");
 
