@@ -1114,6 +1114,7 @@ async fn main() {
     println!("║  POST /api/auth/signup                       ║");
     println!("║  POST /api/auth/login                        ║");
     println!("║  GET  /api/auth/me                           ║");
+    println!("║  GET  /api/auth/stream-token                 ║");
     println!("║  POST /api/pair/claim                        ║");
     println!("║  POST /api/pair/activate                     ║");
     println!("║  POST /api/telemetry                         ║");
