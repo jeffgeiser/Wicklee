@@ -72,3 +72,7 @@ Write-Host ""
 Write-Host "  Note: Run wicklee in a standard PowerShell or Terminal window." -ForegroundColor Yellow
 Write-Host "        GPU and thermal metrics require no elevation on Windows." -ForegroundColor Yellow
 Write-Host ""
+Write-Host "  Run as a background service (auto-starts on boot):"
+Write-Dim  "     wicklee --install-service     # Windows SCM · sc create WickleeSentinel"
+Write-Dim  "     wicklee --uninstall-service   # remove the service"
+Write-Host ""

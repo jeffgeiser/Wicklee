@@ -95,3 +95,12 @@ if [[ "$(uname)" == "Darwin" ]]; then
   dim "     All other metrics (GPU, memory pressure, thermal) work without sudo."
   echo ""
 fi
+
+echo "  Run as a background service (auto-starts on boot):"
+if [[ "$(uname)" == "Darwin" ]]; then
+  dim "     sudo wicklee --install-service   # launchd · /Library/LaunchDaemons/"
+else
+  dim "     sudo wicklee --install-service   # systemd · /etc/systemd/system/"
+fi
+dim "     sudo wicklee --uninstall-service  # remove the service"
+echo ""

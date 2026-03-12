@@ -820,129 +820,350 @@ fn pairing_response(state: &PairingState) -> PairingStatusResponse {
     }
 }
 
+// ── Service Installation ──────────────────────────────────────────────────────
+
+async fn install_service() {
+    let exe = match std::env::current_exe() {
+        Ok(p)  => p,
+        Err(e) => { eprintln!("error: cannot determine executable path: {e}"); return; }
+    };
+    let exe_str = exe.to_string_lossy().into_owned();
+
+    #[cfg(target_os = "macos")]
+    {
+        let plist = format!(
+"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\"\n\
+  \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+    <key>Label</key>\n\
+    <string>dev.wicklee.agent</string>\n\
+    <key>ProgramArguments</key>\n\
+    <array>\n\
+        <string>{exe_str}</string>\n\
+    </array>\n\
+    <key>RunAtLoad</key>\n\
+    <true/>\n\
+    <key>KeepAlive</key>\n\
+    <true/>\n\
+    <key>StandardOutPath</key>\n\
+    <string>/var/log/wicklee.log</string>\n\
+    <key>StandardErrorPath</key>\n\
+    <string>/var/log/wicklee.log</string>\n\
+</dict>\n\
+</plist>\n"
+        );
+        let plist_path = "/Library/LaunchDaemons/dev.wicklee.agent.plist";
+        if let Err(e) = std::fs::write(plist_path, plist) {
+            eprintln!("error: cannot write {plist_path}: {e}");
+            eprintln!("       Run with sudo: sudo wicklee --install-service");
+            return;
+        }
+        let status = tokio::process::Command::new("launchctl")
+            .args(["load", "-w", plist_path])
+            .status().await;
+        match status {
+            Ok(s) if s.success() => {
+                println!("✓ Wicklee Sentinel installed as a launchd service.");
+                println!("  Starts automatically on boot (runs as root).");
+                println!("  Plist: {plist_path}");
+                println!("  Logs:  /var/log/wicklee.log");
+                println!("  To remove: sudo wicklee --uninstall-service");
+            }
+            Ok(s) => eprintln!("error: launchctl load exited with status {s}"),
+            Err(e) => eprintln!("error: launchctl: {e}"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let unit = format!(
+"[Unit]\n\
+Description=Wicklee Sentinel Agent\n\
+After=network.target\n\
+\n\
+[Service]\n\
+Type=simple\n\
+ExecStart={exe_str}\n\
+Restart=always\n\
+RestartSec=5\n\
+\n\
+[Install]\n\
+WantedBy=multi-user.target\n"
+        );
+        let unit_path = "/etc/systemd/system/wicklee.service";
+        if let Err(e) = std::fs::write(unit_path, unit) {
+            eprintln!("error: cannot write {unit_path}: {e}");
+            eprintln!("       Run with sudo: sudo wicklee --install-service");
+            return;
+        }
+        let _ = tokio::process::Command::new("systemctl")
+            .args(["daemon-reload"])
+            .status().await;
+        let status = tokio::process::Command::new("systemctl")
+            .args(["enable", "--now", "wicklee"])
+            .status().await;
+        match status {
+            Ok(s) if s.success() => {
+                println!("✓ Wicklee Sentinel installed as a systemd service.");
+                println!("  Starts now and automatically on every boot.");
+                println!("  Unit: {unit_path}");
+                println!("  To remove: sudo wicklee --uninstall-service");
+            }
+            Ok(s) => eprintln!("error: systemctl enable --now exited with status {s}"),
+            Err(e) => eprintln!("error: systemctl: {e}"),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = tokio::process::Command::new("sc")
+            .args(["create", "WickleeSentinel",
+                   "binPath=", &exe_str,
+                   "start=", "auto",
+                   "DisplayName=", "Wicklee Sentinel"])
+            .status().await;
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                eprintln!("error: sc create exited with status {s}");
+                eprintln!("       Run from an elevated (Administrator) prompt.");
+                return;
+            }
+            Err(e) => { eprintln!("error: sc: {e}"); return; }
+        }
+        let _ = tokio::process::Command::new("sc")
+            .args(["description", "WickleeSentinel", "Wicklee Sentinel Agent"])
+            .status().await;
+        let start = tokio::process::Command::new("sc")
+            .args(["start", "WickleeSentinel"])
+            .status().await;
+        match start {
+            Ok(s) if s.success() => {
+                println!("+ Wicklee Sentinel installed and started as a Windows service.");
+                println!("  To remove: wicklee --uninstall-service  (run as Administrator)");
+            }
+            Ok(s) => eprintln!("warning: sc start exited with status {s} — service registered but not started"),
+            Err(e) => eprintln!("error: sc start: {e}"),
+        }
+    }
+}
+
+async fn uninstall_service() {
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = "/Library/LaunchDaemons/dev.wicklee.agent.plist";
+        if !std::path::Path::new(plist_path).exists() {
+            eprintln!("Service not installed (plist not found: {plist_path}).");
+            return;
+        }
+        let _ = tokio::process::Command::new("launchctl")
+            .args(["unload", "-w", plist_path])
+            .status().await;
+        if let Err(e) = std::fs::remove_file(plist_path) {
+            eprintln!("error: cannot remove {plist_path}: {e}");
+            eprintln!("       Run with sudo: sudo wicklee --uninstall-service");
+            return;
+        }
+        println!("✓ Wicklee Sentinel service removed.");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let unit_path = "/etc/systemd/system/wicklee.service";
+        if !std::path::Path::new(unit_path).exists() {
+            eprintln!("Service not installed (unit not found: {unit_path}).");
+            return;
+        }
+        let _ = tokio::process::Command::new("systemctl")
+            .args(["stop", "wicklee"])
+            .status().await;
+        let _ = tokio::process::Command::new("systemctl")
+            .args(["disable", "wicklee"])
+            .status().await;
+        if let Err(e) = std::fs::remove_file(unit_path) {
+            eprintln!("error: cannot remove {unit_path}: {e}");
+            eprintln!("       Run with sudo: sudo wicklee --uninstall-service");
+            return;
+        }
+        let _ = tokio::process::Command::new("systemctl")
+            .args(["daemon-reload"])
+            .status().await;
+        println!("✓ Wicklee Sentinel service removed.");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = tokio::process::Command::new("sc")
+            .args(["stop", "WickleeSentinel"])
+            .status().await;
+        let del = tokio::process::Command::new("sc")
+            .args(["delete", "WickleeSentinel"])
+            .status().await;
+        match del {
+            Ok(s) if s.success() => println!("+ Wicklee Sentinel service removed."),
+            Ok(s) => eprintln!("error: sc delete exited with status {s}\n       Run from an elevated (Administrator) prompt."),
+            Err(e) => eprintln!("error: sc: {e}"),
+        }
+    }
+}
+
 // ── Startup Diagnostics ───────────────────────────────────────────────────────
 //
-// Runs once at boot and prints to stderr so you can see exactly which source
-// is available on this machine.  Safe to leave in production — it's just
-// informational stderr and adds < 2 s to startup.
+// Runs once at boot. Prints a clean bordered summary to stdout showing only
+// what is relevant on this platform. Silent absence means N/A — no SKIP lines.
 
-async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
-    eprintln!("──────────────────────────────────────────────");
-    eprintln!("[diag] Wicklee Sentinel — hardware source probe");
-    eprintln!("──────────────────────────────────────────────");
+async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16) {
+    // Format one 48-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
+    let row = |key: &str, val: &str| -> String {
+        let inner = format!("   {:<7}{}", key, val);
+        let capped = if inner.chars().count() <= 46 {
+            format!("{:<46}", inner)
+        } else {
+            inner.chars().take(43).collect::<String>() + "..."
+        };
+        format!("║{}║", capped)
+    };
+    let sep       = "╠══════════════════════════════════════════════╣";
+    let top       = "╔══════════════════════════════════════════════╗";
+    let bot       = "╚══════════════════════════════════════════════╝";
+    let blank_row = "║                                              ║";
 
-    // 1. sysctl thermal (Intel macOS key)
+    // ── Banner ────────────────────────────────────────────────────────────────
+    println!("{top}");
+    println!("{blank_row}");
+    println!("{}", row("", &format!("Wicklee Sentinel  ·  v{}", env!("CARGO_PKG_VERSION"))));
+    println!("{}", row("", &format!("http://localhost:{port}")));
+    println!("{blank_row}");
+    println!("{sep}");
+
+    // ── Identity ─────────────────────────────────────────────────────────────
+    println!("{}", row("Node", node_id));
+    println!("{}", row("Pairing", pairing_status));
+
+    // ── Platform rows (only what's relevant on this OS) ───────────────────────
+    let mut platform_rows: Vec<String> = Vec::new();
+
+    // macOS: pmset thermal + ioreg GPU util + powermetrics power
     #[cfg(target_os = "macos")]
     {
-        use sysctl::Sysctl;
-        match sysctl::Ctl::new("machdep.xcpm.cpu_thermal_level") {
-            Ok(ctl) => match ctl.value_string() {
-                Ok(v)  => eprintln!("[diag] sysctl thermal          OK  → level={}", v.trim()),
-                Err(e) => eprintln!("[diag] sysctl thermal          ERR → {}", e),
-            },
-            Err(e) => eprintln!("[diag] sysctl thermal          MISS → {} (expected on Apple Silicon)", e),
-        }
-    }
-    #[cfg(target_os = "linux")]
-    eprintln!("[diag] sysctl thermal          SKIP → macOS only (thermal via /sys/class/thermal)");
-    #[cfg(target_os = "windows")]
-    eprintln!("[diag] sysctl thermal          SKIP → not available on Windows (Phase 3: WMI)");
-
-    // 2. pmset -g therm (macOS only)
-    #[cfg(target_os = "macos")]
-    match tokio::process::Command::new("pmset").args(["-g", "therm"]).output().await {
-        Ok(out) => {
+        // pmset -g therm → CPU thermal throttle state
+        if let Ok(out) = tokio::process::Command::new("pmset")
+            .args(["-g", "therm"]).output().await
+        {
             let text = String::from_utf8_lossy(&out.stdout);
-            match parse_pmset_therm(&text) {
-                Some(state) => eprintln!("[diag] pmset thermal           OK  → {}", state),
-                None        => eprintln!("[diag] pmset thermal           MISS → no known key"),
+            if let Some(state) = parse_pmset_therm(&text) {
+                platform_rows.push(row("Thermal", &state));
             }
         }
-        Err(e) => eprintln!("[diag] pmset thermal           ERR → {}", e),
-    }
-    #[cfg(not(target_os = "macos"))]
-    eprintln!("[diag] pmset thermal           SKIP → macOS only");
 
-    // 2b. /sys/class/thermal (Linux only)
-    #[cfg(target_os = "linux")]
-    match harvest_linux_thermal() {
-        Some(state) => eprintln!("[diag] linux thermal           OK  → {}", state),
-        None        => eprintln!("[diag] linux thermal           MISS → /sys/class/thermal unavailable or no readable zones"),
-    }
-    #[cfg(not(target_os = "linux"))]
-    eprintln!("[diag] linux thermal           SKIP → Linux only");
-
-    // 3. ioreg IOAccelerator GPU utilization (macOS only)
-    #[cfg(target_os = "macos")]
-    match tokio::process::Command::new("ioreg").args(["-r", "-c", "IOAccelerator"]).output().await {
-        Ok(out) => {
+        // ioreg IOAccelerator → GPU utilization
+        if let Ok(out) = tokio::process::Command::new("ioreg")
+            .args(["-r", "-c", "IOAccelerator"]).output().await
+        {
             let text = String::from_utf8_lossy(&out.stdout);
-            match parse_ioreg_gpu(&text) {
-                Some(v) => eprintln!("[diag] ioreg GPU util          OK  → {}%", v),
-                None    => eprintln!("[diag] ioreg GPU util          MISS → no known key in IOAccelerator"),
+            if let Some(v) = parse_ioreg_gpu(&text) {
+                platform_rows.push(row("GPU", &format!("{v}%  (IOAccelerator)")));
             }
         }
-        Err(e) => eprintln!("[diag] ioreg GPU util          ERR → {}", e),
-    }
-    #[cfg(not(target_os = "macos"))]
-    eprintln!("[diag] ioreg GPU util          SKIP → macOS only");
 
-    // 4. powermetrics without sudo (macOS only)
-    #[cfg(target_os = "macos")]
-    match tokio::process::Command::new("powermetrics")
-        .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
-        .output()
-        .await
-    {
-        Ok(out) => {
-            if out.status.success() {
-                eprintln!("[diag] powermetrics            OK  → available");
-            } else {
-                eprintln!("[diag] powermetrics            MISS → requires root (cpu_power_w will be null)");
-            }
+        // powermetrics → CPU power draw (requires root)
+        match tokio::process::Command::new("powermetrics")
+            .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
+            .output().await
+        {
+            Ok(out) if out.status.success() =>
+                platform_rows.push(row("Power", "powermetrics  ✓  (root)")),
+            _ =>
+                platform_rows.push(row("Power", "powermetrics needs root for cpu_power_w")),
         }
-        Err(e) => eprintln!("[diag] powermetrics            ERR → {}", e),
     }
-    #[cfg(not(target_os = "macos"))]
-    eprintln!("[diag] powermetrics            SKIP → macOS only");
 
-    // 5. NVML / NVIDIA GPU
-    #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
-    match Nvml::init() {
-        Ok(nvml) => {
-            let count = nvml.device_count().unwrap_or(0);
-            eprintln!("[diag] NVML                    OK  → {} device{}", count, if count == 1 { "" } else { "s" });
-        }
-        Err(e) => eprintln!("[diag] NVML                    MISS → {} (nvidia_* fields will be null)", e),
-    }
-    #[cfg(not(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows")))]
-    eprintln!("[diag] NVML                    MISS → not supported on this platform (nvidia_* fields will be null)");
-
-    // 6. RAPL CPU power (Linux powercap interface — no sudo)
+    // Linux: NVML (glibc only) + RAPL CPU power
     #[cfg(target_os = "linux")]
     {
-        let found = RAPL_PATHS.iter().find(|(path, _)| read_rapl_uj(path).is_some());
-        if let Some((path, label)) = found {
-            // Take a live sample over 500 ms to confirm the counter is ticking.
-            if let Some(e1) = read_rapl_uj(path) {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                if let Some(e2) = read_rapl_uj(path) {
-                    if e2 > e1 {
-                        let power_w = (e2 - e1) as f64 / 500_000.0; // 500 ms = 500,000 µs
-                        eprintln!("[diag] RAPL power (linux)      OK  → {:.1}W (via {})", power_w, label);
-                    } else {
-                        eprintln!("[diag] RAPL power (linux)      OK  → path found (counter stalled — VM/paravirt?)");
+        // NVML — not available in musl builds
+        #[cfg(not(target_env = "musl"))]
+        match Nvml::init() {
+            Ok(nvml) => {
+                let count = nvml.device_count().unwrap_or(0);
+                if count > 0 {
+                    if let Ok(dev) = nvml.device_by_index(0) {
+                        let name = dev.name().unwrap_or_else(|_| "GPU".to_string());
+                        let temp = dev.temperature(TemperatureSensor::Gpu)
+                            .map(|t| format!("{t}°C"))
+                            .unwrap_or_else(|_| "?°C".to_string());
+                        let util = dev.utilization_rates()
+                            .map(|u| format!("{}%", u.gpu))
+                            .unwrap_or_else(|_| "?%".to_string());
+                        platform_rows.push(row("GPU", &format!("{name}  {temp}  {util}")));
+                        if let Ok(mem) = dev.memory_info() {
+                            let used  = mem.used  as f64 / 1_073_741_824.0;
+                            let total = mem.total as f64 / 1_073_741_824.0;
+                            platform_rows.push(row("VRAM", &format!("{used:.1} / {total:.1} GB")));
+                        }
+                        if let Ok(mw) = dev.power_usage() {
+                            platform_rows.push(row("GPU Pwr", &format!("{:.0}W", mw as f64 / 1000.0)));
+                        }
                     }
                 }
             }
-        } else {
-            eprintln!("[diag] RAPL power (linux)      MISS → /sys/class/powercap not found (cpu_power_w will be null)");
+            Err(_) => {} // no NVIDIA on this machine — silent
+        }
+
+        // RAPL CPU power (powercap, no sudo needed)
+        {
+            let found = RAPL_PATHS.iter().find(|(path, _)| read_rapl_uj(path).is_some());
+            if let Some((path, label)) = found {
+                if let Some(e1) = read_rapl_uj(path) {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    if let Some(e2) = read_rapl_uj(path) {
+                        let power_w = if e2 > e1 { (e2 - e1) as f64 / 500_000.0 } else { 0.0 };
+                        platform_rows.push(row("CPU Pwr", &format!("{power_w:.1}W  (RAPL/{label})")));
+                    }
+                }
+            }
         }
     }
-    #[cfg(not(target_os = "linux"))]
-    eprintln!("[diag] RAPL power (linux)      SKIP → Linux only");
 
-    // 7. Ollama runtime
+    // Windows: NVML GPU
+    #[cfg(target_os = "windows")]
+    match Nvml::init() {
+        Ok(nvml) => {
+            let count = nvml.device_count().unwrap_or(0);
+            if count > 0 {
+                if let Ok(dev) = nvml.device_by_index(0) {
+                    let name = dev.name().unwrap_or_else(|_| "GPU".to_string());
+                    let temp = dev.temperature(TemperatureSensor::Gpu)
+                        .map(|t| format!("{t}°C"))
+                        .unwrap_or_else(|_| "?°C".to_string());
+                    let util = dev.utilization_rates()
+                        .map(|u| format!("{}%", u.gpu))
+                        .unwrap_or_else(|_| "?%".to_string());
+                    platform_rows.push(row("GPU", &format!("{name}  {temp}  {util}")));
+                    if let Ok(mem) = dev.memory_info() {
+                        let used  = mem.used  as f64 / 1_073_741_824.0;
+                        let total = mem.total as f64 / 1_073_741_824.0;
+                        platform_rows.push(row("VRAM", &format!("{used:.1} / {total:.1} GB")));
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
+    if !platform_rows.is_empty() {
+        println!("{sep}");
+        for r in &platform_rows {
+            println!("{r}");
+        }
+    }
+
+    // ── Runtime (all platforms) ───────────────────────────────────────────────
+    println!("{sep}");
+
+    // Ollama
     {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
@@ -958,18 +1179,27 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
                 let json: serde_json::Value = resp.json().await.ok()?;
                 let name = json["models"].as_array()?.first()?["name"].as_str()?.to_string();
                 Some(format!("{} loaded", name))
-            }.await.unwrap_or_else(|| "no model loaded".to_string());
-            eprintln!("[diag] Ollama runtime          OK  → {}", model_hint);
+            }.await.unwrap_or_else(|| "running  (no model loaded)".to_string());
+            println!("{}", row("Ollama", &model_hint));
         } else {
-            eprintln!("[diag] Ollama runtime          MISS → not running on 127.0.0.1:11434");
+            println!("{}", row("Ollama", "not running on :11434"));
         }
     }
 
-    // 7. Node identity + pairing state
-    eprintln!("[diag] Node identity           OK  → {}", node_id);
-    eprintln!("[diag] Pairing state           OK  → {}", pairing_status);
+    // vLLM
+    {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap_or_default();
+        let running = client.get("http://127.0.0.1:8000/metrics")
+            .send().await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        println!("{}", row("vLLM", if running { "running on :8000" } else { "not running on :8000" }));
+    }
 
-    eprintln!("──────────────────────────────────────────────");
+    println!("{bot}");
 }
 
 // ── NVIDIA Harvester ──────────────────────────────────────────────────────────
@@ -1894,6 +2124,21 @@ async fn main() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--install-service") {
+        install_service().await;
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--uninstall-service") {
+        uninstall_service().await;
+        return;
+    }
+
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(7700);
+
     let pair_on_start = std::env::args().any(|a| a == "--pair");
     if pair_on_start {
         let code = generate_code();
@@ -1917,7 +2162,7 @@ async fn main() {
     }
 
     // Run diagnostics first so the output appears before the banner
-    run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }).await;
+    run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port).await;
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
@@ -1966,20 +2211,9 @@ async fn main() {
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(7700);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
         .expect(&format!("Failed to bind port {port}"));
-
-    println!("╔══════════════════════════════════════════════╗");
-    println!("║                                              ║");
-    println!("║   Wicklee Sentinel Active                    ║");
-    println!("║   http://localhost:{port:<26}║");
-    println!("║                                              ║");
-    println!("╚══════════════════════════════════════════════╝");
 
     // ── Self-update check ─────────────────────────────────────────────────────
     // Runs once after the server is bound. Spawned so axum::serve is not delayed.
