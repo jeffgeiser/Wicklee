@@ -1079,6 +1079,14 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
                 }
             }
 
+            // Validation log: confirm model name + tok/s are reaching shared state.
+            // Appears in agent stderr every 5 s while Ollama is running — remove once confirmed.
+            eprintln!(
+                "[ollama] cycle → model={} tps={}",
+                m.ollama_active_model.as_deref().unwrap_or("none"),
+                m.ollama_tokens_per_second.map_or("pending".to_string(), |t| format!("{:.1}", t)),
+            );
+
             if let Ok(mut guard) = shared_main.lock() { *guard = m; }
 
             // If Ollama stopped, reset and re-detect.
