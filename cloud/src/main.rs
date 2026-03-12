@@ -914,9 +914,15 @@ async fn handle_fleet_stream(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let stream_token = match params.get("token") {
-        Some(t) if !t.is_empty() => t.clone(),
-        _ => return (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Missing stream token" }))).into_response(),
+        Some(t) if !t.is_empty() => {
+            println!("[fleet-stream] request arrived token={}", &t[..8.min(t.len())]);
+            t.clone()
+        }
+        _ => {
+            println!("[fleet-stream] request arrived with NO token param");
+            return (StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Missing stream token" }))).into_response();
+        }
     };
 
     // Validate and consume the single-use token from SQLite.
