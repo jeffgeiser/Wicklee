@@ -630,23 +630,28 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * fleetKwhRate : null;
 
   // Tile 8 — IDLE FLEET COST / DAY: ∑ idle_watts × pue_i × 24h × rate_i
+  // "idle" = ollama_running !== true (covers false, null, undefined).
+  // Using ollama_running rather than ollama_tokens_per_second avoids false negatives
+  // when a node previously ran inference: the tok/s value lingers from the last probe
+  // even after Ollama has stopped, causing the old check to miss the node entirely.
   const idleFleetCostPerDay = (() => {
     const idle = effectiveMetrics.filter(m =>
-      (!m.ollama_tokens_per_second || m.ollama_tokens_per_second <= 0) &&
-      (m.cpu_power_w != null || m.nvidia_power_draw_w != null)
+      m.ollama_running !== true &&
+      (m.nvidia_power_draw_w != null || m.cpu_power_w != null)
     );
     if (idle.length === 0) return null;
     return idle.reduce((acc, m) => {
       const ns = getNodeSettings?.(m.node_id);
       const pue = ns?.pue ?? 1.0;
       const rate = ns?.kwhRate ?? fleetKwhRate;
-      const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+      // Prefer NVIDIA board power (dedicated GPU); fall back to Apple Silicon CPU power.
+      const watts = m.nvidia_power_draw_w ?? m.cpu_power_w ?? 0;
       return acc + watts * pue * 24 * (rate / 1000);
     }, 0);
   })();
   const idlePowerNodes = effectiveMetrics.filter(m =>
-    (m.cpu_power_w != null || m.nvidia_power_draw_w != null) &&
-    (!m.ollama_tokens_per_second || m.ollama_tokens_per_second <= 0)
+    (m.nvidia_power_draw_w != null || m.cpu_power_w != null) &&
+    m.ollama_running !== true
   );
   const avgPue = effectiveMetrics.length > 0
     ? effectiveMetrics.reduce((acc, m) => acc + (getNodeSettings?.(m.node_id)?.pue ?? 1.0), 0) / effectiveMetrics.length
