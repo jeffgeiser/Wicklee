@@ -181,6 +181,7 @@ const DetailBand: React.FC<{
   const nvidiaAvail    = m?.nvidia_vram_total_mb != null;
   const thermalAvail   = m?.thermal_state != null;
   const ollamaDetected = m?.ollama_running === true;
+  const vllmDetected   = m?.vllm_running   === true;
 
   return (
     <div className="border-t border-gray-100 dark:border-gray-800 grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-800 min-[860px]:grid-cols-3 min-[860px]:divide-y-0 min-[860px]:divide-x">
@@ -316,10 +317,31 @@ const DetailBand: React.FC<{
           </div>
 
           <div className="flex items-start gap-2">
-            <span className="text-[10px] text-gray-600 leading-none shrink-0 mt-0.5">—</span>
+            {vllmDetected
+              ? <CheckCircle size={10} className="text-green-400 shrink-0 mt-0.5" />
+              : <span className="text-[10px] text-gray-600 leading-none shrink-0 mt-0.5">—</span>
+            }
             <div>
               <p className="text-[10px] text-gray-600 dark:text-gray-400 leading-tight">vLLM</p>
-              <p className="text-[9px] text-gray-500">not detected</p>
+              {vllmDetected ? (
+                <>
+                  <p className="text-[9px] text-gray-500 truncate">
+                    {m?.vllm_model_name ?? 'detected'}
+                  </p>
+                  {m?.vllm_tokens_per_sec != null && (
+                    <p className="text-[9px] text-green-400 font-telin">
+                      {m.vllm_tokens_per_sec.toFixed(1)} tok/s
+                    </p>
+                  )}
+                  {m?.vllm_cache_usage_perc != null && (
+                    <p className="text-[9px] text-cyan-400 font-telin">
+                      Cache: {m.vllm_cache_usage_perc.toFixed(0)}%
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-[9px] text-gray-500">not detected</p>
+              )}
             </div>
           </div>
 

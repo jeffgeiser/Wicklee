@@ -69,6 +69,17 @@ struct MetricsPayload {
     ollama_tokens_per_second: Option<f32>,
     #[serde(default)]
     os: Option<String>,
+    // vLLM runtime
+    #[serde(default)]
+    vllm_running:          bool,
+    #[serde(default)]
+    vllm_model_name:       Option<String>,
+    #[serde(default)]
+    vllm_tokens_per_sec:   Option<f32>,
+    #[serde(default)]
+    vllm_cache_usage_perc: Option<f32>,
+    #[serde(default)]
+    vllm_requests_running: Option<u32>,
 }
 
 // ── Auth request / response types ────────────────────────────────────────────

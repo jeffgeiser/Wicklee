@@ -109,8 +109,12 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     dotState === 'online'  ? 'Online · last seen just now' :
     dotState === 'offline' ? `Unreachable · last seen ${fmtNodeAgo(lastSeenMs!)}` :
     'Pending · waiting for first report';
-  const tps      = m?.ollama_tokens_per_second ?? null;
-  const isActive = isOnline && tps != null && tps > 0;
+  // Combine Ollama and vLLM tok/s — both runtimes can run simultaneously.
+  const ollamaTps = m?.ollama_tokens_per_second ?? null;
+  const vllmTps   = m?.vllm_tokens_per_sec ?? null;
+  const tps       = ollamaTps != null && vllmTps != null ? ollamaTps + vllmTps
+                  : (ollamaTps ?? vllmTps);
+  const isActive  = isOnline && tps != null && tps > 0;
 
   // Thermal
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
@@ -143,10 +147,13 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : memPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // Model string
-  const modelStr = !isOnline ? '—'
-    : !m!.ollama_running ? 'No runtime'
-    : (m!.ollama_active_model ?? '—');
+  // Runtime detection — both can run simultaneously; prefer first available for model label
+  const hasOllama = isOnline && m?.ollama_running === true;
+  const hasVllm   = isOnline && m?.vllm_running   === true;
+  const modelStr  = !isOnline ? '—'
+    : hasOllama ? (m!.ollama_active_model ?? 'Ollama')
+    : hasVllm   ? (m!.vllm_model_name    ?? 'vLLM')
+    : 'No runtime';
 
   const V = `text-xs font-telin ${!isOnline ? 'text-gray-400 dark:text-gray-600' : ''}`;
 
@@ -208,11 +215,16 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 3. MODEL */}
-      <div className="min-w-0 overflow-hidden">
-        <p className={`${V} truncate ${!isOnline || !m?.ollama_running ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
+      {/* 3. MODEL — shows active runtime model name + vLLM cache usage when available */}
+      <div className="min-w-0 overflow-hidden flex flex-col gap-0.5">
+        <p className={`${V} truncate ${!isOnline || (!hasOllama && !hasVllm) ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
           {modelStr}
         </p>
+        {hasVllm && m?.vllm_cache_usage_perc != null && (
+          <p className="text-[9px] text-cyan-400 font-telin truncate leading-none">
+            Cache: {m.vllm_cache_usage_perc.toFixed(0)}%
+          </p>
+        )}
       </div>
 
       {/* 4. WES */}
@@ -311,7 +323,11 @@ const HexHive: React.FC<{ rows: NodeRowProps[] }> = ({ rows }) => {
         <div key={ri} className="flex gap-2.5" style={{ marginLeft: ri % 2 === 1 ? 24 : 0 }}>
           {gridRow.map(entry => {
             const m          = entry.metrics;
-            const tps        = m?.ollama_tokens_per_second ?? null;
+            const tps        = (() => {
+              const o = m?.ollama_tokens_per_second ?? null;
+              const v = m?.vllm_tokens_per_sec ?? null;
+              return o != null && v != null ? o + v : (o ?? v);
+            })();
             const isActive   = m != null && tps != null && tps > 0;
             const throttling = m?.thermal_state != null
               && ['serious', 'critical'].includes(m.thermal_state.toLowerCase());
@@ -570,11 +586,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // effectiveMetrics: handles localhost sentinel mode + hosted fleet mode uniformly
   const effectiveMetrics: SentinelMetrics[] = isLocalHost ? (sentinel ? [sentinel] : []) : liveMetrics;
 
-  // Tile 1 — THROUGHPUT: ∑ tok/s across actively-inferencing nodes
+  // Tile 1 — THROUGHPUT: ∑ tok/s across all inference-active nodes (Ollama + vLLM).
+  // Both runtimes are not mutually exclusive — a node can run both simultaneously.
   const hasAnyOllama = effectiveMetrics.some(m => m.ollama_running);
-  const tpsNodes     = effectiveMetrics.filter(m => m.ollama_running && m.ollama_tokens_per_second != null);
+  const hasAnyVllm   = effectiveMetrics.some(m => m.vllm_running);
+  const tpsNodes     = effectiveMetrics.filter(m =>
+    (m.ollama_running && m.ollama_tokens_per_second != null) ||
+    (m.vllm_running   && m.vllm_tokens_per_sec      != null)
+  );
   const fleetTps     = tpsNodes.length > 0
-    ? tpsNodes.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0), 0)
+    ? tpsNodes.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0), 0)
     : null;
 
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
@@ -599,7 +620,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Tiles 5-7 — WES leaderboard + fleet average
   interface WESEntry { nodeId: string; hostname: string; wes: number | null; tps: number | null; watts: number | null; thermalState: string | null; nullReason: string; }
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
-    const tps      = m.ollama_tokens_per_second ?? null;
+    const _ollamaTps = m.ollama_tokens_per_second ?? null;
+    const _vllmTps   = m.vllm_tokens_per_sec ?? null;
+    const tps        = _ollamaTps != null && _vllmTps != null ? _ollamaTps + _vllmTps
+                     : (_ollamaTps ?? _vllmTps);
     const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
     const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
     const watts    = hasWatts ? totalW : null;
@@ -774,7 +798,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           valueCls={fleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={fleetTps != null
             ? `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · sampled`
-            : hasAnyOllama ? 'sampling every 30s' : 'no inference runtime'}
+            : (hasAnyOllama || hasAnyVllm) ? 'sampling every 30s' : 'no inference runtime'}
           icon={Activity}
           iconCls="text-indigo-400"
         />
