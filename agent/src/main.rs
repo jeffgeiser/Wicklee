@@ -39,7 +39,7 @@ struct TagsResponse { models: Vec<ModelInfo> }
 #[derive(Serialize)]
 struct ModelInfo { name: String, size: u64 }
 
-// Ollama runtime metrics — populated when Ollama is detected on localhost:11434.
+// Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
 struct OllamaMetrics {
@@ -902,20 +902,20 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
             .timeout(Duration::from_secs(2))
             .build()
             .unwrap_or_default();
-        let running = client.get("http://localhost:11434/api/version")
+        let running = client.get("http://127.0.0.1:11434/api/version")
             .send().await
             .map(|r| r.status().is_success())
             .unwrap_or(false);
         if running {
             let model_hint = async {
-                let resp = client.get("http://localhost:11434/api/ps").send().await.ok()?;
+                let resp = client.get("http://127.0.0.1:11434/api/ps").send().await.ok()?;
                 let json: serde_json::Value = resp.json().await.ok()?;
                 let name = json["models"].as_array()?.first()?["name"].as_str()?.to_string();
                 Some(format!("{} loaded", name))
             }.await.unwrap_or_else(|| "no model loaded".to_string());
             eprintln!("[diag] Ollama runtime          OK  → {}", model_hint);
         } else {
-            eprintln!("[diag] Ollama runtime          MISS → not running on localhost:11434");
+            eprintln!("[diag] Ollama runtime          MISS → not running on 127.0.0.1:11434");
         }
     }
 
@@ -984,7 +984,8 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
 // ── Ollama Harvester ──────────────────────────────────────────────────────────
 //
-// Auto-detects Ollama on localhost:11434. No configuration required.
+// Auto-detects Ollama on 127.0.0.1:11434 (explicit IPv4 — avoids Windows resolving
+// localhost → ::1 while Ollama is bound to 127.0.0.1). No configuration required.
 //
 // Two concurrent tasks share the same Arc<Mutex<OllamaMetrics>>:
 //
@@ -998,8 +999,10 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
 /// Sends a 1-token generate request and returns tok/s from the timing stats.
 async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> {
-    let resp = client
-        .post("http://localhost:11434/api/generate")
+    // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
+    let url = "http://127.0.0.1:11434/api/generate";
+    let resp = match client
+        .post(url)
         .json(&serde_json::json!({
             "model":   model,
             "prompt":  " ",
@@ -1007,7 +1010,11 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
             "options": { "num_predict": 3 }
         }))
         .send()
-        .await.ok()?;
+        .await
+    {
+        Ok(r)  => { eprintln!("[ollama] probe {} → HTTP {}", url, r.status()); r }
+        Err(e) => { eprintln!("[ollama] probe {} → error: {}", url, e); return None; }
+    };
 
     if !resp.status().is_success() { return None; }
 
@@ -1039,11 +1046,13 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
             .unwrap_or_default();
 
         // Detection loop: retry every 10s until Ollama is up.
+        // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
         loop {
-            let up = client.get("http://localhost:11434/api/version")
-                .send().await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
+            let detect = client.get("http://127.0.0.1:11434/api/version").send().await;
+            let up = match &detect {
+                Ok(r)  => { eprintln!("[ollama] detect 127.0.0.1:11434 → HTTP {}", r.status()); r.status().is_success() }
+                Err(e) => { eprintln!("[ollama] detect 127.0.0.1:11434 → error: {}", e); false }
+            };
             if up { break; }
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
@@ -1058,7 +1067,7 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
 
             let mut m = OllamaMetrics { ollama_running: true, ollama_tokens_per_second: prev_tps, ..Default::default() };
 
-            if let Ok(resp) = client.get("http://localhost:11434/api/ps").send().await {
+            if let Ok(resp) = client.get("http://127.0.0.1:11434/api/ps").send().await {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
                     if let Some(first) = json["models"].as_array().and_then(|a| a.first()) {
                         m.ollama_active_model = first["name"].as_str().map(|s| s.to_string());
@@ -1073,7 +1082,7 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
             if let Ok(mut guard) = shared_main.lock() { *guard = m; }
 
             // If Ollama stopped, reset and re-detect.
-            let still_up = client.get("http://localhost:11434/api/version")
+            let still_up = client.get("http://127.0.0.1:11434/api/version")
                 .send().await
                 .map(|r| r.status().is_success())
                 .unwrap_or(false);
@@ -1081,7 +1090,7 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
                 if let Ok(mut guard) = shared_main.lock() { *guard = OllamaMetrics::default(); }
                 loop {
                     tokio::time::sleep(Duration::from_secs(10)).await;
-                    let up = client.get("http://localhost:11434/api/version")
+                    let up = client.get("http://127.0.0.1:11434/api/version")
                         .send().await
                         .map(|r| r.status().is_success())
                         .unwrap_or(false);
