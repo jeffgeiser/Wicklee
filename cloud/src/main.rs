@@ -159,16 +159,6 @@ struct JwksResponse {
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
-/// Single-use short-lived token for authenticating EventSource connections.
-/// EventSource cannot send custom headers, so we issue a UUID token via a
-/// normal authenticated request and the client passes it as a query param.
-struct StreamToken {
-    user_id:    String,
-    expires_ms: u64,
-}
-
-type StreamTokens = Arc<RwLock<HashMap<String, StreamToken>>>;
-
 #[derive(Clone)]
 struct AppState {
     /// Persistent store for users, sessions, and node pairing records.
@@ -177,8 +167,6 @@ struct AppState {
     metrics:        Arc<RwLock<HashMap<String, MetricsEntry>>>,
     /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
     clerk_keys:     Arc<RwLock<Vec<JwkKey>>>,
-    /// Single-use stream tokens for EventSource auth (60 s TTL).
-    stream_tokens:  StreamTokens,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -247,6 +235,16 @@ fn run_migrations(conn: &Connection) {
     // Add user_id column — links each node to the account that activated it.
     // Needed for per-user node counting to enforce the free-tier limit correctly.
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN user_id TEXT;");
+
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS stream_tokens (
+            token      TEXT PRIMARY KEY,
+            user_id    TEXT NOT NULL,
+            expires_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_stream_tokens_expires
+            ON stream_tokens(expires_ms);
+    ").expect("stream_tokens migration failed");
 
     // Add clerk_id column — links a Clerk identity (sub claim) to an internal user.
     let _ = conn.execute_batch("ALTER TABLE users ADD COLUMN clerk_id TEXT;");
@@ -491,11 +489,16 @@ async fn handle_stream_token(
     };
 
     let stream_token = Uuid::new_v4().to_string();
-    let expires_ms = now_ms() + 60_000;
-    state.stream_tokens.write().unwrap().insert(
-        stream_token.clone(),
-        StreamToken { user_id, expires_ms },
-    );
+    let expires_ms = (now_ms() + 60_000) as i64;
+    let db2 = state.db.clone();
+    let st2 = stream_token.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = db2.lock().unwrap();
+        conn.execute(
+            "INSERT INTO stream_tokens (token, user_id, expires_ms) VALUES (?1, ?2, ?3)",
+            params![st2, user_id, expires_ms],
+        ).ok();
+    }).await.unwrap();
 
     (StatusCode::OK, Json(serde_json::json!({ "stream_token": stream_token }))).into_response()
 }
@@ -916,16 +919,31 @@ async fn handle_fleet_stream(
             Json(serde_json::json!({ "error": "Missing stream token" }))).into_response(),
     };
 
-    // Validate and consume the single-use token.
-    let user_id = {
-        let mut tokens = state.stream_tokens.write().unwrap();
-        match tokens.remove(&stream_token) {
-            None => return (StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid stream token" }))).into_response(),
-            Some(st) if st.expires_ms < now_ms() => return (StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Stream token expired" }))).into_response(),
-            Some(st) => st.user_id,
+    // Validate and consume the single-use token from SQLite.
+    // Using spawn_blocking so the SELECT+DELETE are on the same connection/thread.
+    let now = now_ms() as i64;
+    let db_auth = state.db.clone();
+    let st_clone = stream_token.clone();
+    let user_id = match tokio::task::spawn_blocking(move || {
+        let conn = db_auth.lock().unwrap();
+        // Fetch the token row (validates existence and expiry in one shot).
+        let row: Option<String> = conn.query_row(
+            "SELECT user_id FROM stream_tokens WHERE token = ?1 AND expires_ms > ?2",
+            params![st_clone, now],
+            |r| r.get(0),
+        ).ok();
+        if let Some(ref uid) = row {
+            // Consume immediately — single-use.
+            conn.execute("DELETE FROM stream_tokens WHERE token = ?1", params![st_clone]).ok();
+            Some(uid.clone())
+        } else {
+            // Either token not found or already expired.
+            None
         }
+    }).await.unwrap() {
+        Some(uid) => uid,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
 
     // Load initial node set for this user.
@@ -1061,10 +1079,9 @@ async fn main() {
     let clerk_keys = Arc::new(RwLock::new(initial_keys));
 
     let state = AppState {
-        db:            Arc::new(Mutex::new(conn)),
-        metrics:       Arc::new(RwLock::new(seed_metrics)),
-        clerk_keys:    clerk_keys.clone(),
-        stream_tokens: Arc::new(RwLock::new(HashMap::new())),
+        db:         Arc::new(Mutex::new(conn)),
+        metrics:    Arc::new(RwLock::new(seed_metrics)),
+        clerk_keys: clerk_keys.clone(),
     };
 
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.
@@ -1083,6 +1100,20 @@ async fn main() {
             }
         });
     }
+
+    // Purge expired stream tokens every 5 minutes.
+    let db_cleanup = state.db.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(300)).await;
+            let db2 = db_cleanup.clone();
+            let now = now_ms() as i64;
+            tokio::task::spawn_blocking(move || {
+                let conn = db2.lock().unwrap();
+                conn.execute("DELETE FROM stream_tokens WHERE expires_ms < ?1", params![now]).ok();
+            }).await.ok();
+        }
+    });
 
     let app = Router::new()
         .route("/health",            get(handle_health))
