@@ -63,30 +63,27 @@ export function calculateTotalVramCapacityMb(metrics: SentinelMetrics[]): number
 }
 
 /**
- * Daily idle fleet cost in USD.
- * "Idle" = NOT actively inferring.
- * "Actively inferring" = ollama_running AND tok/s > 0 (a live probe returned data).
- * This covers nodes with no Ollama, Ollama running but waiting, and nodes between probes.
- * Power: nvidia_power_draw_w preferred (NVIDIA); falls back to cpu_power_w (Apple Silicon).
- * Formula: ∑ (idle_watts_i × pue_i) × 24h × (rate_$/kWh ÷ 1000)
- * Returns null when no idle node reports power data.
+ * Daily fleet power cost in USD.
+ * Covers all nodes that report power data (nvidia_power_draw_w or cpu_power_w).
+ * We intentionally do NOT filter by inference activity: ollama_tokens_per_second is a
+ * 30-second sampled probe value that persists from the last measurement, making any
+ * "is actively inferring" check unreliable — it would exclude the entire fleet.
+ * This represents the always-on infrastructure electricity cost.
+ * Power: nvidia_power_draw_w preferred (NVIDIA via NVML); falls back to cpu_power_w
+ * (Apple Silicon powermetrics or Linux RAPL).
+ * Formula: ∑ (watts_i × pue_i) × 24h × (rate_$/kWh ÷ 1000)
+ * Returns null when no node reports power data.
  */
 export function calculateIdleFleetCostPerDay(
   metrics: SentinelMetrics[],
   pueByNodeId: Record<string, number>,
   rateUsdPerKwh = ELECTRICITY_RATE_USD_PER_KWH,
 ): number | null {
-  const isActive = (m: SentinelMetrics) =>
-    m.ollama_running === true &&
-    m.ollama_tokens_per_second != null &&
-    m.ollama_tokens_per_second > 0;
-
-  const idleWithPower = metrics.filter(m =>
-    !isActive(m) &&
-    (m.nvidia_power_draw_w != null || m.cpu_power_w != null)
+  const withPower = metrics.filter(m =>
+    m.nvidia_power_draw_w != null || m.cpu_power_w != null
   );
-  if (idleWithPower.length === 0) return null;
-  return idleWithPower.reduce((acc, m) => {
+  if (withPower.length === 0) return null;
+  return withPower.reduce((acc, m) => {
     const watts = m.nvidia_power_draw_w ?? m.cpu_power_w ?? 0;
     const pue   = pueByNodeId[m.node_id] ?? 1.0;
     return acc + watts * pue * 24 * (rateUsdPerKwh / 1000);
