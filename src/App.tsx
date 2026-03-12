@@ -22,7 +22,6 @@ import SecurityView from './components/SecurityView';
 import APIKeysView from './components/APIKeysView';
 import PreferencesView from './components/PreferencesView';
 import SettingsView from './components/SettingsView';
-import SustainabilityView from './components/SustainabilityView';
 import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
 import AIProvidersView from './components/AIProvidersView';
@@ -392,8 +391,6 @@ const App: React.FC = () => {
           onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
           pairingInfo={pairingInfo}
         />;
-      case DashboardTab.SUSTAINABILITY:
-        return <SustainabilityView nodes={nodes} />;
       case DashboardTab.PROFILE:
         return <ProfileView currentUser={currentUser} />;
       case DashboardTab.SECURITY:
@@ -546,7 +543,8 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
       />
 
       <MobileTabBar activeTab={activeTab} setActiveTab={handleTabChange} />
-      <main className="flex-1 flex flex-col overflow-hidden">
+      {/* md:ml-16 — offset for collapsed sidebar rail (w-16 = 64px, fixed position) */}
+      <main className="flex-1 flex flex-col overflow-hidden md:ml-16">
         <Header
           activeTab={activeTab}
           tenants={MOCK_TENANTS}
@@ -557,6 +555,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
           setActiveTab={setActiveTab}
           theme={theme}
           onToggleTheme={toggleTheme}
+          connectionState={connectionState}
           pairingInfo={pairingInfo}
           onOpenPairing={isLocalHost ? () => setIsPairingModalOpen(true) : () => setIsAddNodeModalOpen(true)}
           isLocalHost={isLocalHost}
