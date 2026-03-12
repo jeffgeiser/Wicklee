@@ -56,10 +56,18 @@ export interface SentinelMetrics {
 export interface FleetEvent {
   id: string;
   ts: number; // Date.now() timestamp
-  type: 'node_online' | 'node_offline' | 'thermal_change';
+  type:
+    | 'node_online'
+    | 'node_offline'
+    | 'thermal_change'
+    | 'throttle_start'
+    | 'throttle_resolved'
+    | 'model_swap'
+    | 'power_anomaly'
+    | 'error';
   nodeId: string;
   hostname?: string;
-  /** For thermal_change: "Normal → Serious" */
+  /** Human-readable transition detail, e.g. "Normal → Serious" or "phi3:mini → llama3:8b" */
   detail?: string;
 }
 

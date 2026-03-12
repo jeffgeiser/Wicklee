@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import type { SentinelMetrics, FleetEvent, FleetNode, FleetStreamState, ConnectionState } from '../types';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -14,8 +14,43 @@ const CLOUD_URL = (() => {
 })();
 
 const STALE_THRESHOLD_MS = 30_000;
-const RETRY_MS = 5_000;
-const MAX_EVENTS = 50;
+const RETRY_MS           = 5_000;
+const MAX_EVENTS         = 50;
+/** Minimum duration a state must be maintained before its event is surfaced to the UI. */
+const SETTLE_MS          = 60_000;
+/** Power must change by this fraction (e.g. 0.3 = 30%) to trigger a power_anomaly. */
+const POWER_ANOMALY_THRESHOLD = 0.30;
+/** Minimum watts baseline below which power anomaly detection is suppressed (cold-start noise). */
+const POWER_ANOMALY_MIN_BASELINE_W = 10;
+
+// ── Pending-change buffer types ───────────────────────────────────────────────
+
+/**
+ * Tracks a single in-flight state transition waiting to settle.
+ *
+ * originalValue: value at the START of the settlement window.
+ * targetValue:   most-recently observed value (updated on each frame if still drifting).
+ * pendingAt:     timestamp when the original transition was first detected.
+ *                NOT reset when target updates — the window started at originalValue.
+ * detail:        human-readable description of the final transition (kept current).
+ */
+interface PendingChange {
+  type:           FleetEvent['type'];
+  pendingAt:      number;
+  hostname:       string;
+  originalValue:  string | null | boolean; // boolean for connectivity
+  targetValue:    string | null | boolean;
+  detail?:        string;
+}
+
+interface NodePending {
+  connectivity?: PendingChange;
+  thermal?:      PendingChange;
+  model?:        PendingChange;
+  power?:        PendingChange;
+}
+
+const uid = () => Math.random().toString(36).slice(2);
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
@@ -24,11 +59,11 @@ const FleetStreamContext = createContext<FleetStreamState | null>(null);
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 interface FleetStreamProviderProps {
-  children: React.ReactNode;
-  isSignedIn: boolean;
-  getToken: () => Promise<string | null>;
+  children:          React.ReactNode;
+  isSignedIn:        boolean;
+  getToken:          () => Promise<string | null>;
   /** Called on every SSE frame — App.tsx uses this to patch node hostnames. */
-  onNodesSnapshot?: (nodes: FleetNode[]) => void;
+  onNodesSnapshot?:  (nodes: FleetNode[]) => void;
 }
 
 export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
@@ -45,9 +80,13 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   const [transport, setTransport]           = useState<'sse' | null>(null);
   const [lastTelemetryMs, setLastTelemetryMs] = useState<number | null>(null);
 
-  // ── Refs for event detection (moved from Overview.tsx) ─────────────────────
+  // ── Observation refs (persist across SSE frames without triggering re-render) ─
   const prevLiveRef    = useRef<Record<string, boolean>>({});
   const prevThermalRef = useRef<Record<string, string | null>>({});
+  const prevModelRef   = useRef<Record<string, string | null>>({});
+  const prevPowerRef   = useRef<Record<string, number | null>>({});
+  /** Per-node settlement buffers. Each dimension is tracked independently. */
+  const pendingRef     = useRef<Record<string, NodePending>>({});
   const esRef          = useRef<EventSource | null>(null);
 
   // Stable ref for the snapshot callback so the SSE effect doesn't re-run.
@@ -95,60 +134,226 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
       es.onmessage = (ev) => {
         try {
           const fleet = JSON.parse(ev.data) as { nodes: FleetNode[] };
-          const now = Date.now();
+          const now   = Date.now();
 
-          const updatedMetrics: Record<string, SentinelMetrics> = {};
-          const updatedLastSeen: Record<string, number> = {};
-          const newEvents: FleetEvent[] = [];
+          const updatedMetrics:  Record<string, SentinelMetrics> = {};
+          const updatedLastSeen: Record<string, number>          = {};
+          const newEvents:       FleetEvent[]                    = [];
 
           for (const n of fleet.nodes) {
-            updatedLastSeen[n.node_id] = n.last_seen_ms;
+            const nodeId   = n.node_id;
+            const hostname = n.metrics?.hostname ?? nodeId;
+
+            updatedLastSeen[nodeId] = n.last_seen_ms;
 
             const isNowLive = n.metrics != null && (now - n.last_seen_ms) < STALE_THRESHOLD_MS;
-            const wasLive = prevLiveRef.current[n.node_id];
+            const wasLive   = prevLiveRef.current[nodeId];
 
             if (isNowLive && n.metrics) {
-              updatedMetrics[n.node_id] = n.metrics;
+              updatedMetrics[nodeId] = n.metrics;
+            }
 
-              if (wasLive === false) {
-                // Node came back online
-                newEvents.push({
-                  id: Math.random().toString(36).slice(2),
-                  ts: now,
-                  type: 'node_online',
-                  nodeId: n.node_id,
-                  hostname: n.metrics.hostname ?? n.node_id,
-                });
-              } else if (wasLive === true) {
-                // Check thermal change
-                const prevThermal = prevThermalRef.current[n.node_id];
-                const curThermal = n.metrics.thermal_state;
-                if (prevThermal !== undefined && prevThermal !== curThermal && curThermal != null) {
-                  newEvents.push({
-                    id: Math.random().toString(36).slice(2),
-                    ts: now,
-                    type: 'thermal_change',
-                    nodeId: n.node_id,
-                    hostname: n.metrics.hostname ?? n.node_id,
-                    detail: prevThermal != null ? `${prevThermal} → ${curThermal}` : curThermal ?? '',
-                  });
+            // ── Get or create this node's pending-change slot ─────────────
+            const np: NodePending = pendingRef.current[nodeId] ?? {};
+
+            // ── 1. CONNECTIVITY ───────────────────────────────────────────
+            if (wasLive !== undefined && isNowLive !== wasLive) {
+              // Observed a live-state transition on this frame.
+              const type: FleetEvent['type'] = isNowLive ? 'node_online' : 'node_offline';
+              if (!np.connectivity) {
+                // Fresh transition — open a new settlement window.
+                np.connectivity = {
+                  type,
+                  pendingAt:     now,
+                  hostname,
+                  originalValue: wasLive,
+                  targetValue:   isNowLive,
+                };
+              } else if (np.connectivity.targetValue !== isNowLive) {
+                // State flipped back (or to a third state).
+                // Per spec: if node ends the window in the ORIGINAL state → cancel.
+                if (isNowLive === np.connectivity.originalValue) {
+                  delete np.connectivity;
+                } else {
+                  // Different from both original and previous target — update target, keep window.
+                  np.connectivity.type        = type;
+                  np.connectivity.targetValue = isNowLive;
+                  np.connectivity.hostname    = hostname;
                 }
               }
-              prevThermalRef.current[n.node_id] = n.metrics.thermal_state;
-            } else if (!isNowLive && wasLive === true) {
-              // Node went offline
-              newEvents.push({
-                id: Math.random().toString(36).slice(2),
-                ts: now,
-                type: 'node_offline',
-                nodeId: n.node_id,
-                hostname: n.metrics?.hostname ?? n.node_id,
-              });
+              // If targetValue === isNowLive: same direction as existing pending — no action.
             }
-            prevLiveRef.current[n.node_id] = isNowLive;
+
+            // Check if connectivity has settled.
+            if (np.connectivity) {
+              const pc = np.connectivity;
+              if (isNowLive === pc.targetValue) {
+                if (now - pc.pendingAt >= SETTLE_MS) {
+                  newEvents.push({ id: uid(), ts: now, type: pc.type, nodeId, hostname: pc.hostname });
+                  delete np.connectivity;
+                }
+                // else: still in settlement window — wait.
+              } else {
+                // Current state no longer matches pending target; already handled update above.
+                delete np.connectivity;
+              }
+            }
+
+            // Remaining dimensions only apply when the node is live.
+            if (isNowLive && n.metrics) {
+              const curThermal = n.metrics.thermal_state ?? null;
+              const curModel   = n.metrics.ollama_active_model ?? null;
+              const curPower   = (n.metrics.nvidia_power_draw_w ?? n.metrics.cpu_power_w) ?? null;
+
+              const prevThermal = prevThermalRef.current[nodeId];
+              const prevModel   = prevModelRef.current[nodeId];
+              const prevPower   = prevPowerRef.current[nodeId];
+
+              // ── 2. THERMAL / THROTTLE ───────────────────────────────────
+              if (prevThermal !== undefined && prevThermal !== curThermal) {
+                const isThrottledNow = curThermal != null && ['serious', 'critical'].includes(curThermal.toLowerCase());
+                const wasThrottled   = prevThermal != null && ['serious', 'critical'].includes(prevThermal.toLowerCase());
+                const type: FleetEvent['type'] = isThrottledNow
+                  ? 'throttle_start'
+                  : wasThrottled ? 'throttle_resolved'
+                  : 'thermal_change';
+                const detail = prevThermal != null
+                  ? `${prevThermal} → ${curThermal ?? 'unknown'}`
+                  : (curThermal ?? '');
+
+                if (!np.thermal) {
+                  np.thermal = {
+                    type,
+                    pendingAt:     now,
+                    hostname,
+                    originalValue: prevThermal,
+                    targetValue:   curThermal,
+                    detail,
+                  };
+                } else if (np.thermal.targetValue !== curThermal) {
+                  if (curThermal === np.thermal.originalValue) {
+                    // Reverted to original — cancel.
+                    delete np.thermal;
+                  } else {
+                    // Further change — update target + detail, keep original window.
+                    np.thermal.type        = type;
+                    np.thermal.targetValue = curThermal;
+                    np.thermal.detail      = `${np.thermal.originalValue ?? 'unknown'} → ${curThermal ?? 'unknown'}`;
+                    np.thermal.hostname    = hostname;
+                  }
+                }
+              }
+
+              if (np.thermal) {
+                const pt = np.thermal;
+                if (curThermal === pt.targetValue && now - pt.pendingAt >= SETTLE_MS) {
+                  newEvents.push({ id: uid(), ts: now, type: pt.type, nodeId, hostname: pt.hostname, detail: pt.detail });
+                  delete np.thermal;
+                } else if (curThermal !== pt.targetValue) {
+                  // Already updated above; if target still differs, the new pending was set.
+                  // Only cancel here if we didn't set a new pending (i.e. reverted to original).
+                  if (!np.thermal || np.thermal.targetValue !== curThermal) delete np.thermal;
+                }
+              }
+
+              // ── 3. MODEL SWAP ─────────────────────────────────────────────
+              if (
+                prevModel !== undefined &&
+                prevModel !== curModel &&
+                curModel != null &&          // only log when a model is actually loaded
+                prevModel != null            // only log swaps, not initial model load
+              ) {
+                const detail = `${prevModel} → ${curModel}`;
+                if (!np.model) {
+                  np.model = {
+                    type:          'model_swap',
+                    pendingAt:     now,
+                    hostname,
+                    originalValue: prevModel,
+                    targetValue:   curModel,
+                    detail,
+                  };
+                } else if (np.model.targetValue !== curModel) {
+                  if (curModel === np.model.originalValue) {
+                    delete np.model;
+                  } else {
+                    np.model.targetValue = curModel;
+                    np.model.detail      = `${np.model.originalValue ?? 'unknown'} → ${curModel}`;
+                    np.model.hostname    = hostname;
+                  }
+                }
+              }
+
+              if (np.model) {
+                const pm = np.model;
+                if (curModel === pm.targetValue && now - pm.pendingAt >= SETTLE_MS) {
+                  newEvents.push({ id: uid(), ts: now, type: 'model_swap', nodeId, hostname: pm.hostname, detail: pm.detail });
+                  delete np.model;
+                } else if (curModel !== pm.targetValue && (!np.model || np.model.targetValue !== curModel)) {
+                  delete np.model;
+                }
+              }
+
+              // ── 4. POWER ANOMALY ──────────────────────────────────────────
+              if (
+                prevPower !== undefined &&
+                prevPower != null &&
+                curPower  != null &&
+                prevPower >= POWER_ANOMALY_MIN_BASELINE_W &&
+                Math.abs(curPower - prevPower) / prevPower >= POWER_ANOMALY_THRESHOLD
+              ) {
+                const direction = curPower > prevPower ? '↑' : '↓';
+                const detail    = `${prevPower.toFixed(0)}W ${direction} ${curPower.toFixed(0)}W`;
+                if (!np.power) {
+                  np.power = {
+                    type:          'power_anomaly',
+                    pendingAt:     now,
+                    hostname,
+                    originalValue: `${prevPower.toFixed(0)}`,
+                    targetValue:   `${curPower.toFixed(0)}`,
+                    detail,
+                  };
+                } else {
+                  // Update to latest reading.
+                  np.power.targetValue = `${curPower.toFixed(0)}`;
+                  np.power.detail      = `${np.power.originalValue}W ${direction} ${curPower.toFixed(0)}W`;
+                  np.power.hostname    = hostname;
+                }
+              } else if (np.power) {
+                // Power has normalised — cancel pending anomaly.
+                if (
+                  curPower == null ||
+                  prevPower == null ||
+                  prevPower < POWER_ANOMALY_MIN_BASELINE_W ||
+                  Math.abs(curPower - prevPower) / (prevPower || 1) < POWER_ANOMALY_THRESHOLD
+                ) {
+                  delete np.power;
+                }
+              }
+
+              if (np.power && now - np.power.pendingAt >= SETTLE_MS) {
+                const pp = np.power;
+                newEvents.push({ id: uid(), ts: now, type: 'power_anomaly', nodeId, hostname: pp.hostname, detail: pp.detail });
+                delete np.power;
+              }
+
+              // ── Advance observation refs ──────────────────────────────────
+              prevThermalRef.current[nodeId] = curThermal;
+              prevModelRef.current[nodeId]   = curModel;
+              prevPowerRef.current[nodeId]   = curPower;
+            }
+
+            // Save updated pending slot (or remove if empty).
+            if (Object.keys(np).length > 0) {
+              pendingRef.current[nodeId] = np;
+            } else {
+              delete pendingRef.current[nodeId];
+            }
+
+            prevLiveRef.current[nodeId] = isNowLive;
           }
 
-          // Batch state updates
+          // ── Batch state updates ─────────────────────────────────────────
           setLastSeenMsMap(prev => ({ ...prev, ...updatedLastSeen }));
 
           if (Object.keys(updatedMetrics).length > 0) {
@@ -160,7 +365,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             setFleetEvents(prev => [...newEvents, ...prev].slice(0, MAX_EVENTS));
           }
 
-          // Notify App.tsx so it can patch node hostnames
+          // Notify App.tsx so it can patch node hostnames.
           onNodesSnapshotRef.current?.(fleet.nodes);
         } catch { /* malformed frame */ }
       };
@@ -192,7 +397,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   }, []);
 
   // ── Derive connectionState ─────────────────────────────────────────────────
-  const nowMs = Date.now();
+  const nowMs    = Date.now();
   const hasNodes = Object.keys(allNodeMetrics).length > 0;
   const allStale = Object.keys(lastSeenMsMap).length > 0 &&
     Object.values(lastSeenMsMap).every((t: number) => nowMs - t > STALE_THRESHOLD_MS);
