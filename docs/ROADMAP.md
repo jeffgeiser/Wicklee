@@ -100,6 +100,14 @@
 - [x] Navigation restructure — single profile entry point lower left
 - [x] Profile dropdown cleanup — identity, Settings, Docs, Release notes, Sign out
 
+### UI Conventions — Telin Audit
+> `font-telin` (JetBrains Mono + `tabular-nums`) is the required class for all live numeric telemetry.
+> `font-mono` is for static strings only (code, keys, URLs). Wrong token = layout jitter at 10Hz.
+
+- [ ] **Telin Audit — existing components:** Sweep all 83+ `font-telin` usages and confirm zero regressions to bare `font-mono` on numeric values. Flag any `font-mono` on a live SSE-derived field as a bug.
+- [ ] **Telin gate — new Insight cards:** Model-Fit Score, Thermal Degradation Correlation, Power Anomaly, Memory Pressure Forecast, Tok/s Regression delta — all derived numeric scores must use `font-telin`. Enforce in PR review checklist.
+- [ ] **Telin gate — `font-sans` on numbers:** Catch any numeric telemetry value rendered in `font-sans` (Inter). Inter has no `tabular-nums` variant at the weights we use — layout shift guaranteed under load.
+
 ### Live Activity — New Event Types
 - [ ] Power anomaly detected/resolved
 - [ ] Model eviction predicted / Keep Warm action taken
