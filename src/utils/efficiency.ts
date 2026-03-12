@@ -44,22 +44,30 @@ export function calculateFleetHealthPct(metrics: SentinelMetrics[]): number | nu
 }
 
 /**
- * Total GPU / unified memory in use across the fleet, in MB.
- * Per node: uses nvidia_vram_used_mb when present (dedicated VRAM),
- * otherwise used_memory_mb (Apple Silicon unified memory).
+ * Total dedicated GPU VRAM in use across the fleet, in MB.
+ * Only counts nodes with NVIDIA VRAM reported by NVML (nvidia_vram_total_mb non-null
+ * and non-zero). Apple Silicon unified memory and CPU-only system RAM are excluded —
+ * they are not discrete VRAM and must not inflate the fleet VRAM tile.
  */
 export function calculateTotalVramMb(metrics: SentinelMetrics[]): number {
   return metrics.reduce((acc, m) =>
-    acc + (m.nvidia_vram_used_mb ?? m.used_memory_mb ?? 0), 0);
+    (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0)
+      ? acc + (m.nvidia_vram_used_mb ?? 0)
+      : acc,
+  0);
 }
 
 /**
- * Total GPU / unified memory capacity across the fleet, in MB.
- * Per node: uses nvidia_vram_total_mb when present, otherwise total_memory_mb.
+ * Total dedicated GPU VRAM capacity across the fleet, in MB.
+ * Only counts nodes with NVIDIA VRAM reported by NVML (nvidia_vram_total_mb non-null
+ * and non-zero). Apple Silicon and CPU-only nodes contribute 0 to this total.
  */
 export function calculateTotalVramCapacityMb(metrics: SentinelMetrics[]): number {
   return metrics.reduce((acc, m) =>
-    acc + (m.nvidia_vram_total_mb ?? m.total_memory_mb ?? 0), 0);
+    (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0)
+      ? acc + m.nvidia_vram_total_mb
+      : acc,
+  0);
 }
 
 /**
