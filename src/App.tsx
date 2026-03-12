@@ -245,14 +245,21 @@ const App: React.FC = () => {
       // as a query param so the backend can validate and open the stream.
       let streamToken: string;
       try {
+        console.log('[sse] fetching stream token...');
         const jwt = await getToken();
+        console.log('[sse] jwt:', jwt?.slice(0, 20));
         if (!jwt) { retryTimer = setTimeout(connect, 5000); return; }
         const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
           headers: { Authorization: `Bearer ${jwt}` },
         });
+        console.log('[sse] stream token response:', res.status);
         if (!res.ok) { retryTimer = setTimeout(connect, 5000); return; }
         streamToken = (await res.json()).stream_token;
-      } catch { retryTimer = setTimeout(connect, 5000); return; }
+        console.log('[sse] opening SSE with token:', streamToken?.slice(0, 8));
+      } catch (error) {
+        console.log('[sse] stream token fetch failed:', error);
+        retryTimer = setTimeout(connect, 5000); return;
+      }
 
       es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`);
       es.onmessage = (ev) => {
