@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Leaf, Key, Cloud, CloudLightning, Settings, HelpCircle, FileText, User as UserIcon, UserCog } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Cloud, CloudLightning, Settings, HelpCircle, FileText, User as UserIcon, UserCog } from 'lucide-react';
 import { useClerk } from '@clerk/clerk-react';
-import Logo from './Logo';
 import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -51,7 +50,7 @@ const ClerkAccountActions: React.FC<{
   );
 };
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange, connectionState = 'disconnected', theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
   const permissions = usePermissions(currentUser);
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -74,29 +73,26 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.AI_INSIGHTS, icon: Cpu, label: 'Insights', show: permissions.canRunAIAnalysis },
     { id: DashboardTab.AI_PROVIDERS, icon: Key, label: 'AI Key Vault', show: currentUser.isPro && !isLocalMode },
     { id: DashboardTab.TEAM, icon: Users, label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
-    { id: DashboardTab.SUSTAINABILITY, icon: Leaf, label: 'Sustainability', show: true },
+    // TODO Phase 5: Sustainability/Compliance tab — carbon footprint, sovereignty audit, power efficiency trend
   ];
 
-  const handleRoleToggle = (role: UserRole) => {
-    onUserChange({ ...currentUser, role });
-    if (activeTab === DashboardTab.TEAM && role !== 'Owner') {
-      setActiveTab(DashboardTab.OVERVIEW);
-    }
-  };
-
   return (
-    <aside className="hidden md:flex md:w-64 border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/50 flex-col transition-colors">
-      <div className="p-6">
-        <Logo className="text-xl" connectionState={connectionState} theme={theme} />
-        <p className="mt-1 text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold px-0.5">
-          Community Edition
-        </p>
-        <p className="mt-0.5 text-[10px] text-gray-400 dark:text-gray-600 px-0.5">
-          Free · up to 3 nodes
-        </p>
-      </div>
+    // ── Nav rail ──────────────────────────────────────────────────────────────
+    // Collapsed (default): 64px icon rail, fixed position so it never pushes content.
+    // Expanded (hover):    transitions to 256px, overlays the content area.
+    // group/nav drives label opacity so text appears only when expanded.
+    <aside className={[
+      'hidden md:flex fixed left-0 top-0 bottom-0 z-30 flex-col',
+      'w-16 hover:w-64',
+      'transition-[width] duration-200 ease-out',
+      'overflow-hidden',
+      'border-r border-gray-200 dark:border-gray-800',
+      'bg-white dark:bg-gray-900',
+      'group/nav',
+    ].join(' ')}>
 
-      <nav className="flex-1 px-3 space-y-1">
+      {/* Nav items */}
+      <nav className="flex-1 px-3 space-y-1 py-4 overflow-hidden">
         {items.filter(i => i.show).map((item) => (
           <button
             key={item.id}
@@ -107,8 +103,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent'
             }`}
           >
-            <item.icon className="w-4 h-4" />
-            <span className="flex-1 text-left">{item.label}</span>
+            <item.icon className="w-4 h-4 shrink-0" />
+            <span className="flex-1 text-left whitespace-nowrap opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">
+              {item.label}
+            </span>
           </button>
         ))}
       </nav>
@@ -136,21 +134,21 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 ) : (
                   <Cloud className={`w-4 h-4 shrink-0 ${isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
                 )}
-                <span className={`text-xs font-semibold ${isConnectedFleet ? 'text-green-400' : isPending ? 'text-amber-400' : 'text-gray-400'}`}>
+                <span className={`text-xs font-semibold whitespace-nowrap opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100 ${isConnectedFleet ? 'text-green-400' : isPending ? 'text-amber-400' : 'text-gray-400'}`}>
                   {isConnectedFleet ? 'Fleet Connected' : isPending ? 'Pairing…' : 'Sovereign Mode'}
                 </span>
               </div>
               {nodeId && (
-                <p className="mt-0.5 text-[10px] font-telin text-gray-500 pl-6 truncate">{nodeId}</p>
+                <p className="mt-0.5 text-[10px] font-telin text-gray-500 pl-6 truncate opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">{nodeId}</p>
               )}
               {!isConnectedFleet && !isPending && (
-                <p className="mt-0.5 text-[10px] text-indigo-400 pl-6">Connect →</p>
+                <p className="mt-0.5 text-[10px] text-indigo-400 pl-6 opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">Connect →</p>
               )}
             </button>
           );
         })()}
 
-        {/* Avatar / profile — dropdown opens upward */}
+        {/* Avatar / profile — dropdown opens upward; only reachable when nav is expanded */}
         <div className="relative" ref={avatarMenuRef}>
           <button
             onClick={() => setIsAvatarMenuOpen(v => !v)}
@@ -159,7 +157,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
             <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0 overflow-hidden">
               <UserIcon className="w-5 h-5 text-gray-600 dark:text-gray-300" />
             </div>
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate flex-1 text-left">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap truncate flex-1 text-left opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">
               {currentUser.fullName}
             </span>
           </button>

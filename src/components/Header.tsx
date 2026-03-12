@@ -1,6 +1,7 @@
 import React from 'react';
 import { Bell, Cloud, CloudLightning } from 'lucide-react';
-import { DashboardTab, PairingInfo, Tenant, User as UserType } from '../types';
+import { ConnectionState, DashboardTab, PairingInfo, Tenant, User as UserType } from '../types';
+import Logo from './Logo';
 
 interface HeaderProps {
   activeTab: DashboardTab;
@@ -15,9 +16,10 @@ interface HeaderProps {
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
   isLocalHost?: boolean;
+  connectionState?: ConnectionState;
 }
 
-const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing }) => {
+const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, theme, connectionState = 'disconnected' }) => {
   const titles: Record<string, string> = {
     [DashboardTab.TRACES]:       'Inference Traces',
     [DashboardTab.SCAFFOLDING]:  'Fleet Scaffolding',
@@ -32,11 +34,18 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing }
   };
 
   return (
-    <header className="h-16 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/20 backdrop-blur-md px-8 flex items-center justify-between sticky top-0 z-10 transition-colors">
-      <div className="flex items-center gap-6">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white min-w-[160px]">
-          {titles[activeTab] ?? ''}
-        </h2>
+    <header className="h-16 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10 transition-colors">
+      {/* Left: Logo (permanent) + page title */}
+      <div className="flex items-center gap-4">
+        <Logo className="text-xl shrink-0" connectionState={connectionState} theme={theme} />
+        {titles[activeTab] && (
+          <>
+            <span className="w-px h-5 bg-gray-200 dark:bg-gray-700 shrink-0" aria-hidden="true" />
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+              {titles[activeTab]}
+            </h2>
+          </>
+        )}
       </div>
 
       <div className="flex items-center gap-6">

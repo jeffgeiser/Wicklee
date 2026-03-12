@@ -142,7 +142,6 @@ export enum DashboardTab {
   SCAFFOLDING = 'scaffolding',
   AI_INSIGHTS = 'ai_insights',
   TEAM = 'team',
-  SUSTAINABILITY = 'sustainability',
   PROFILE = 'profile',
   SECURITY = 'security',
   API_KEYS = 'api_keys',
