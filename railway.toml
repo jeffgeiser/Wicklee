@@ -1,0 +1,11 @@
+# Railway config for the Wicklee frontend service (wicklee.dev).
+# The multi-stage Dockerfile builds the React app then serves it via nginx,
+# which proxies /api/* to the cloud backend.
+
+[build]
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath    = "/"
+healthcheckTimeout = 30
+restartPolicyType  = "ON_FAILURE"
