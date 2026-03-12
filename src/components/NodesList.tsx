@@ -5,6 +5,7 @@ import {
   Database, Wifi, Cpu, AlertTriangle,
   ExternalLink, CheckCircle, AlertCircle,
 } from 'lucide-react';
+import { useAuth } from '@clerk/clerk-react';
 import { NodeAgent, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
@@ -540,6 +541,7 @@ interface NodesListProps {
 const NodesList: React.FC<NodesListProps> = ({
   nodes, getNodeSettings, onNavigateToSettings,
 }) => {
+  const { getToken } = useAuth();
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
   const [allMetrics, setAllMetrics]     = useState<Record<string, SentinelMetrics>>({});
   const [lastSeenMap, setLastSeenMap]   = useState<Record<string, number>>({});
@@ -559,7 +561,7 @@ const NodesList: React.FC<NodesListProps> = ({
   // ── SSE ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     let retryTimer: ReturnType<typeof setTimeout>;
-    const connect = () => {
+    const connect = async () => {
       if (isLocalHost) {
         const es = new EventSource('/api/metrics');
         esRef.current = es;
@@ -572,34 +574,46 @@ const NodesList: React.FC<NodesListProps> = ({
           retryTimer = setTimeout(connect, 3000);
         };
       } else {
-        const es = new EventSource(`${CLOUD_URL}/api/fleet/stream`);
-        esRef.current = es;
-        es.onopen = () => setConnected(true);
-        es.onmessage = ev => {
-          try {
-            const fleet = JSON.parse(ev.data) as {
-              nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }>;
-            };
-            const updM: Record<string, SentinelMetrics> = {};
-            const updLS: Record<string, number> = {};
-            for (const n of fleet.nodes) {
-              updLS[n.node_id] = n.last_seen_ms;
-              if (n.metrics) updM[n.node_id] = n.metrics;
-            }
-            setLastSeenMap(prev => ({ ...prev, ...updLS }));
-            if (Object.keys(updM).length > 0)
-              setAllMetrics(prev => ({ ...prev, ...updM }));
-          } catch { /* ignore */ }
-        };
-        es.onerror = () => {
-          setConnected(false); es.close(); esRef.current = null;
-          retryTimer = setTimeout(connect, 3000);
-        };
+        // Fetch a short-lived stream token (same pattern as App.tsx)
+        try {
+          const jwt = await getToken();
+          if (!jwt) { retryTimer = setTimeout(connect, 5000); return; }
+          const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
+            headers: { Authorization: `Bearer ${jwt}` },
+          });
+          if (!res.ok) { retryTimer = setTimeout(connect, 5000); return; }
+          const { stream_token: streamToken } = await res.json();
+          const es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`);
+          esRef.current = es;
+          es.onopen = () => setConnected(true);
+          es.onmessage = ev => {
+            try {
+              const fleet = JSON.parse(ev.data) as {
+                nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }>;
+              };
+              const updM: Record<string, SentinelMetrics> = {};
+              const updLS: Record<string, number> = {};
+              for (const n of fleet.nodes) {
+                updLS[n.node_id] = n.last_seen_ms;
+                if (n.metrics) updM[n.node_id] = n.metrics;
+              }
+              setLastSeenMap(prev => ({ ...prev, ...updLS }));
+              if (Object.keys(updM).length > 0)
+                setAllMetrics(prev => ({ ...prev, ...updM }));
+            } catch { /* ignore */ }
+          };
+          es.onerror = () => {
+            setConnected(false); es.close(); esRef.current = null;
+            retryTimer = setTimeout(connect, 5000);
+          };
+        } catch {
+          retryTimer = setTimeout(connect, 5000);
+        }
       }
     };
     connect();
     return () => { esRef.current?.close(); clearTimeout(retryTimer); };
-  }, []);
+  }, [getToken]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

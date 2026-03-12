@@ -932,15 +932,24 @@ async fn handle_fleet_stream(
     let st_clone = stream_token.clone();
     let user_id = match tokio::task::spawn_blocking(move || {
         let conn = db_auth.lock().unwrap();
+
+        // Diagnostic: how many tokens exist in the table right now?
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM stream_tokens", [], |r| r.get(0)
+        ).unwrap_or(-1);
+        println!("[fleet-stream] stream_tokens row count={}", count);
+
         // Fetch the token row (validates existence and expiry in one shot).
         // Do NOT delete here — EventSource may retry after a proxy 502,
         // and the token is already time-limited to 60 s.  The background
         // cleanup task purges expired tokens every 5 minutes.
-        conn.query_row(
+        let row = conn.query_row(
             "SELECT user_id FROM stream_tokens WHERE token = ?1 AND expires_ms > ?2",
             params![st_clone, now],
             |r| r.get::<_, String>(0),
-        ).ok()
+        ).ok();
+        println!("[fleet-stream] token lookup: {:?} (now_ms={})", &row, now);
+        row
     }).await.unwrap() {
         Some(uid) => uid,
         None => return (StatusCode::UNAUTHORIZED,

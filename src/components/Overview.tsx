@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info } from 'lucide-react';
+import { useAuth } from '@clerk/clerk-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, WES_TOOLTIP } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
@@ -398,6 +399,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 
 // ── Main component ─────────────────────────────────────────────────────────────
 const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPairing, onAddNode, onTelemetryUpdate, onConnectionStateChange, getNodeSettings, fleetKwhRate = 0.12 }) => {
+  const { getToken } = useAuth();
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState<'ws' | 'sse' | null>(null);
@@ -426,11 +428,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  const CLOUD_SSE_URL = (() => {
+  const CLOUD_URL = (() => {
     const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-    const base = !v ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
+    return !v ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
       : v.startsWith('http') ? v : `https://${v}`;
-    return `${base}/api/fleet/stream`;
   })();
 
   const pushHistoryPoint = useCallback((data: SentinelMetrics) => {
@@ -503,10 +504,19 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
 
       connectWS();
     } else {
-      const connectCloudSSE = () => {
-        const es = new EventSource(CLOUD_SSE_URL);
-        esRef.current = es;
-        es.onopen = () => { setTransport('sse'); setConnected(true); };
+      const connectCloudSSE = async () => {
+        // Fetch a short-lived stream token (same pattern as App.tsx)
+        try {
+          const jwt = await getToken();
+          if (!jwt) { retrySse = setTimeout(connectCloudSSE, 5000); return; }
+          const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
+            headers: { Authorization: `Bearer ${jwt}` },
+          });
+          if (!res.ok) { retrySse = setTimeout(connectCloudSSE, 5000); return; }
+          const { stream_token: streamToken } = await res.json();
+          const es = new EventSource(`${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`);
+          esRef.current = es;
+          es.onopen = () => { setTransport('sse'); setConnected(true); };
         es.onmessage = (ev) => {
           try {
             const fleet = JSON.parse(ev.data) as { nodes: Array<{ node_id: string; last_seen_ms: number; metrics: SentinelMetrics | null }> };
@@ -560,8 +570,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
           setConnected(false);
           es.close();
           esRef.current = null;
-          retrySse = setTimeout(connectCloudSSE, 3000);
+          retrySse = setTimeout(connectCloudSSE, 5000);
         };
+        } catch {
+          retrySse = setTimeout(connectCloudSSE, 5000);
+        }
       };
       connectCloudSSE();
     }
@@ -572,7 +585,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, isPro, pairingInfo, onOpenPa
       wsRef.current?.close();
       esRef.current?.close();
     };
-  }, [handleMetrics, pushHistoryPoint, CLOUD_SSE_URL]);
+  }, [handleMetrics, pushHistoryPoint, CLOUD_URL, getToken]);
 
   // Close metric dropdown on outside click
   useEffect(() => {
