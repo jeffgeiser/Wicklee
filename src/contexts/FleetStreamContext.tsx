@@ -8,9 +8,9 @@ const isLocalHost =
 
 const CLOUD_URL = (() => {
   const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-  return !v
-    ? 'https://vibrant-fulfillment-production-62c0.up.railway.app'
-    : v.startsWith('http') ? v : `https://${v}`;
+  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  if (v === '/') return '';   // same-origin proxy mode — nginx routes /api/*
+  return v.startsWith('http') ? v : `https://${v}`;
 })();
 
 const STALE_THRESHOLD_MS = 30_000;
