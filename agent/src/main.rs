@@ -1037,18 +1037,17 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 //
 //   Main task (5s):  GET /api/ps — active model name, size, quantization.
 //
-//   Probe task (30s): POST /api/generate with num_predict=20 — reads eval_rate
-//     (tok/s) from the final streaming JSON line returned by Ollama.
-//     eval_rate is Ollama's own sustained-generation measurement and is far more
-//     accurate than a derived eval_count/eval_duration ratio, especially on NVIDIA
-//     hardware where GPU ramp-up inflates short-sample latency.
-//     num_predict=20 ensures NVIDIA nodes reach steady-state speed before Ollama
-//     reports eval_rate. The 30s probe interval makes the added overhead negligible.
+//   Probe task (30s): POST /api/generate with stream:false, num_predict:20.
+//     Non-streaming responses contain eval_count (tokens generated) and
+//     eval_duration (nanoseconds) but NOT eval_rate. tok/s is derived as:
+//         tps = eval_count / (eval_duration / 1_000_000_000)
+//     num_predict:20 ensures the GPU reaches sustained generation speed before
+//     the measurement is taken. The 30s probe interval makes the overhead negligible.
 //     NOTE: /metrics Prometheus endpoint does not exist in Ollama ≤ v0.17.7.
 
-/// Fires a 20-token generate probe and returns eval_rate (tok/s) from the Ollama
-/// response. eval_rate is the authoritative sustained generation speed reported
-/// directly by Ollama — do not recalculate from eval_count / eval_duration.
+/// Fires a non-streaming 20-token generate probe and returns tok/s derived from
+/// eval_count / eval_duration returned by Ollama. Non-streaming responses do not
+/// include eval_rate, so tok/s is calculated from the raw timing fields.
 async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> {
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
     let url = "http://127.0.0.1:11434/api/generate";
@@ -1057,7 +1056,7 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
         .json(&serde_json::json!({
             "model":   model,
             "prompt":  " ",
-            "stream":  true,
+            "stream":  false,
             "options": { "num_predict": 20 }
         }))
         .send()
@@ -1071,14 +1070,16 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
 
     let text = resp.text().await.ok()?;
 
-    // The final non-empty JSON line has done:true + eval_rate (tok/s, f64).
-    // eval_rate is Ollama's own measurement — use it directly.
-    for line in text.lines().rev() {
-        if line.is_empty() { continue; }
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-            if json["done"].as_bool() != Some(true) { continue; }
-            if let Some(rate) = json["eval_rate"].as_f64() {
-                if rate > 0.0 { return Some(rate as f32); }
+    // Non-streaming response is a single JSON object with eval_count (u64, tokens
+    // generated) and eval_duration (u64, nanoseconds). Derive tok/s from these.
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let (Some(count), Some(dur_ns)) = (
+            json["eval_count"].as_u64(),
+            json["eval_duration"].as_u64(),
+        ) {
+            if count > 0 && dur_ns > 0 {
+                let tps = count as f64 / (dur_ns as f64 / 1_000_000_000.0);
+                if tps > 0.0 { return Some(tps as f32); }
             }
         }
     }
