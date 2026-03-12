@@ -64,7 +64,8 @@ export function calculateTotalVramCapacityMb(metrics: SentinelMetrics[]): number
 
 /**
  * Daily idle fleet cost in USD.
- * "Idle" = nodes not actively producing tokens.
+ * "Idle" = ollama_running !== true (covers false, null, undefined).
+ * Power: nvidia_power_draw_w preferred (NVIDIA); falls back to cpu_power_w (Apple Silicon).
  * Formula: ∑ (idle_watts_i × pue_i) × 24h × (rate_$/kWh ÷ 1000)
  * Returns null when no idle node reports power data.
  */
@@ -74,12 +75,12 @@ export function calculateIdleFleetCostPerDay(
   rateUsdPerKwh = ELECTRICITY_RATE_USD_PER_KWH,
 ): number | null {
   const idleWithPower = metrics.filter(m =>
-    (!m.ollama_tokens_per_second || m.ollama_tokens_per_second <= 0) &&
-    (m.cpu_power_w != null || m.nvidia_power_draw_w != null)
+    m.ollama_running !== true &&
+    (m.nvidia_power_draw_w != null || m.cpu_power_w != null)
   );
   if (idleWithPower.length === 0) return null;
   return idleWithPower.reduce((acc, m) => {
-    const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+    const watts = m.nvidia_power_draw_w ?? m.cpu_power_w ?? 0;
     const pue   = pueByNodeId[m.node_id] ?? 1.0;
     return acc + watts * pue * 24 * (rateUsdPerKwh / 1000);
   }, 0);
