@@ -439,6 +439,78 @@ fn start_rapl_harvester() -> Arc<Mutex<Option<f32>>> {
     shared
 }
 
+// ── Linux thermal state (/sys/class/thermal) ──────────────────────────────────
+//
+// Reads every thermal_zone*/temp file under /sys/class/thermal, each of which
+// contains a temperature in millidegrees Celsius.  Takes the maximum across all
+// zones, then maps to the four-state scale used by the macOS pmset path:
+//
+//   < 70 °C  → "Normal"
+//   70–79 °C → "Elevated"
+//   80–89 °C → "Serious"
+//   ≥  90 °C → "Critical"
+//
+// Returns None when:
+//   • /sys/class/thermal does not exist (pre-4.9 kernels, some containers)
+//   • No thermal_zone* directories are present
+//   • All temp files fail to read or parse (permissions, no hwmon driver)
+// Never panics.
+
+#[cfg(target_os = "linux")]
+fn harvest_linux_thermal() -> Option<String> {
+    let thermal_dir = std::path::Path::new("/sys/class/thermal");
+    if !thermal_dir.exists() { return None; }
+
+    let mut max_temp_c: Option<f64> = None;
+
+    let entries = std::fs::read_dir(thermal_dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("thermal_zone") { continue; }
+
+        let temp_path = entry.path().join("temp");
+        let Ok(raw) = std::fs::read_to_string(&temp_path) else { continue; };
+        let Ok(milli_c): Result<i64, _> = raw.trim().parse() else { continue; };
+        let temp_c = milli_c as f64 / 1000.0;
+
+        max_temp_c = Some(max_temp_c.map_or(temp_c, |prev: f64| prev.max(temp_c)));
+    }
+
+    let temp = max_temp_c?;
+    Some(match temp {
+        t if t < 70.0 => "Normal",
+        t if t < 80.0 => "Elevated",
+        t if t < 90.0 => "Serious",
+        _              => "Critical",
+    }.to_string())
+}
+
+/// Returns a shared `Option<String>` updated every 5 s with the Linux thermal state.
+/// Stays `None` on non-Linux targets and when /sys/class/thermal is unavailable.
+fn start_linux_thermal_harvester() -> Arc<Mutex<Option<String>>> {
+    let shared = Arc::new(Mutex::new(None::<String>));
+
+    #[cfg(target_os = "linux")]
+    {
+        let shared_clone = Arc::clone(&shared);
+        tokio::spawn(async move {
+            // Bail early if the sysfs interface doesn't exist on this kernel/container.
+            if !std::path::Path::new("/sys/class/thermal").exists() { return; }
+
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                let state = harvest_linux_thermal();
+                if let Ok(mut guard) = shared_clone.lock() {
+                    *guard = state;
+                }
+            }
+        });
+    }
+
+    shared
+}
+
 /// Memory pressure via `vm_stat` — no sudo required.
 ///
 /// Formula (matches Activity Monitor "Used" definition):
@@ -744,6 +816,15 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str) {
     }
     #[cfg(not(target_os = "macos"))]
     eprintln!("[diag] pmset thermal           SKIP → macOS only");
+
+    // 2b. /sys/class/thermal (Linux only)
+    #[cfg(target_os = "linux")]
+    match harvest_linux_thermal() {
+        Some(state) => eprintln!("[diag] linux thermal           OK  → {}", state),
+        None        => eprintln!("[diag] linux thermal           MISS → /sys/class/thermal unavailable or no readable zones"),
+    }
+    #[cfg(not(target_os = "linux"))]
+    eprintln!("[diag] linux thermal           SKIP → Linux only");
 
     // 3. ioreg IOAccelerator GPU utilization (macOS only)
     #[cfg(target_os = "macos")]
@@ -1097,10 +1178,11 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
 /// the JSON string to every active WebSocket subscriber.
 /// The broadcast channel has capacity 64 — lagged subscribers simply skip frames.
 fn start_metrics_broadcaster(
-    apple_metrics:  Arc<Mutex<AppleSiliconMetrics>>,
-    nvidia_metrics: Arc<Mutex<NvidiaMetrics>>,
-    ollama_metrics: Arc<Mutex<OllamaMetrics>>,
-    rapl_metrics:   Arc<Mutex<Option<f32>>>,
+    apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
+    nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
+    ollama_metrics:        Arc<Mutex<OllamaMetrics>>,
+    rapl_metrics:          Arc<Mutex<Option<f32>>>,
+    linux_thermal_metrics: Arc<Mutex<Option<String>>>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -1132,10 +1214,11 @@ fn start_metrics_broadcaster(
             let used      = sys.used_memory();
             let available = total.saturating_sub(used);
 
-            let apple      = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let nvidia     = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let ollama     = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let rapl_power = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
+            let apple         = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let nvidia        = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let ollama        = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
+            let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
@@ -1154,7 +1237,8 @@ fn start_metrics_broadcaster(
                 pcpu_power_w:            apple.pcpu_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
-                thermal_state:           apple.thermal_state,
+                // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
+                thermal_state:           apple.thermal_state.or(linux_thermal),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
@@ -1299,10 +1383,11 @@ async fn handle_tags() -> Json<TagsResponse> {
 }
 
 async fn handle_metrics(
-    axum::extract::Extension(apple_metrics):  axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
-    axum::extract::Extension(nvidia_metrics): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
-    axum::extract::Extension(ollama_metrics): axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
-    axum::extract::Extension(rapl_metrics):   axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
+    axum::extract::Extension(apple_metrics):         axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
+    axum::extract::Extension(nvidia_metrics):        axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
+    axum::extract::Extension(ollama_metrics):        axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
+    axum::extract::Extension(rapl_metrics):          axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
+    axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<String>>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -1332,10 +1417,11 @@ async fn handle_metrics(
             let used      = sys.used_memory();
             let available = total.saturating_sub(used);
 
-            let apple      = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let nvidia     = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let ollama     = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let rapl_power = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
+            let apple         = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let nvidia        = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let ollama        = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
+            let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -1354,7 +1440,8 @@ async fn handle_metrics(
                 pcpu_power_w:            apple.pcpu_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
-                thermal_state:           apple.thermal_state,
+                // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
+                thermal_state:           apple.thermal_state.or(linux_thermal),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
@@ -1466,15 +1553,17 @@ async fn main() {
     // Run diagnostics first so the output appears before the banner
     run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }).await;
 
-    let apple_metrics  = start_metrics_harvester();
-    let nvidia_metrics = start_nvidia_harvester();
-    let ollama_metrics = start_ollama_harvester();
-    let rapl_metrics   = start_rapl_harvester();
-    let broadcast_tx   = start_metrics_broadcaster(
+    let apple_metrics         = start_metrics_harvester();
+    let nvidia_metrics        = start_nvidia_harvester();
+    let ollama_metrics        = start_ollama_harvester();
+    let rapl_metrics          = start_rapl_harvester();
+    let linux_thermal_metrics = start_linux_thermal_harvester();
+    let broadcast_tx          = start_metrics_broadcaster(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         Arc::clone(&ollama_metrics),
         Arc::clone(&rapl_metrics),
+        Arc::clone(&linux_thermal_metrics),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -1499,6 +1588,7 @@ async fn main() {
         .layer(axum::extract::Extension(nvidia_metrics))
         .layer(axum::extract::Extension(ollama_metrics))
         .layer(axum::extract::Extension(rapl_metrics))
+        .layer(axum::extract::Extension(linux_thermal_metrics))
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
