@@ -6,6 +6,7 @@ import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapaci
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
+import { useNodeRollingMetrics, useRollingBuffer } from '../hooks/useRollingMetrics';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
@@ -115,6 +116,14 @@ interface NodeRowProps {
 const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0 }) => {
   const isOnline = m !== null;
 
+  // Rolling-average smoothing (5-sample window, display-layer only).
+  // Buffers are reset synchronously when the node transitions offline.
+  const { pushOne, resetAll } = useNodeRollingMetrics();
+  const wasOnlineRef = useRef(true);
+  if (!isOnline && wasOnlineRef.current) resetAll();
+  wasOnlineRef.current = isOnline;
+  const tsMs = m?.timestamp_ms ?? 0;
+
   // 3-state reachability dot
   const dotState: 'online' | 'offline' | 'pending' =
     lastSeenMs != null
@@ -125,18 +134,26 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     dotState === 'online'  ? 'Online · last seen just now' :
     dotState === 'offline' ? `Unreachable · last seen ${fmtNodeAgo(lastSeenMs!)}` :
     'Pending · waiting for first report';
-  const tps      = m?.ollama_tokens_per_second ?? null;
+
+  // Combine Ollama and vLLM tok/s — both runtimes can run simultaneously.
+  const rawOllamaTps = m?.ollama_tokens_per_second ?? null;
+  const rawVllmTps   = m?.vllm_tokens_per_sec ?? null;
+  const rawTps       = rawOllamaTps != null && rawVllmTps != null ? rawOllamaTps + rawVllmTps
+                     : (rawOllamaTps ?? rawVllmTps);
+  // Smoothed tok/s (5-sample rolling average)
+  const tps      = pushOne('tps', rawTps, tsMs);
   const isActive = isOnline && tps != null && tps > 0;
 
-  // Thermal
+  // Thermal — not smoothed (state machine, not a continuous signal)
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalStr = m?.thermal_state ?? nvThermal?.label ?? null;
   const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
   const thermalWarn = thermalStr != null && !['normal', 'nominal'].includes(thermalStr.toLowerCase());
 
-  // Power
-  const totalPowerW = m ? (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0) : 0;
+  // Power — hasPower is an availability flag (raw); totalPowerW is smoothed for display
   const hasPower    = m ? (m.cpu_power_w != null || m.nvidia_power_draw_w != null) : false;
+  const rawTotalW   = m ? (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0) : null;
+  const totalPowerW = pushOne('watts', hasPower ? rawTotalW : null, tsMs) ?? 0;
 
   // WES — only when actively inferencing
   const wes = isActive ? computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue) : null;
@@ -159,10 +176,13 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : memPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // Model string
-  const modelStr = !isOnline ? '—'
-    : !m!.ollama_running ? 'No runtime'
-    : (m!.ollama_active_model ?? '—');
+  // Runtime detection — both can run simultaneously; prefer first available for model label
+  const hasOllama = isOnline && m?.ollama_running === true;
+  const hasVllm   = isOnline && m?.vllm_running   === true;
+  const modelStr  = !isOnline ? '—'
+    : hasOllama ? (m!.ollama_active_model ?? 'Ollama')
+    : hasVllm   ? (m!.vllm_model_name    ?? 'vLLM')
+    : 'No runtime';
 
   // VRAM % — NVIDIA only; Apple Silicon unified memory is architecturally distinct → show —
   const vramPctRaw = hasNvidia
@@ -266,11 +286,16 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 3. MODEL */}
-      <div className="min-w-0 overflow-hidden">
-        <p className={`${V} truncate ${!isOnline || !m?.ollama_running ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
+      {/* 3. MODEL — shows active runtime model name + vLLM cache usage when available */}
+      <div className="min-w-0 overflow-hidden flex flex-col gap-0.5">
+        <p className={`${V} truncate ${!isOnline || (!hasOllama && !hasVllm) ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
           {modelStr}
         </p>
+        {hasVllm && m?.vllm_cache_usage_perc != null && (
+          <p className="text-[9px] text-cyan-400 font-telin truncate leading-none">
+            Cache: {m.vllm_cache_usage_perc.toFixed(0)}%
+          </p>
+        )}
       </div>
 
       {/* 4. WES */}
@@ -392,7 +417,11 @@ const HexHive: React.FC<{ rows: NodeRowProps[] }> = ({ rows }) => {
         <div key={ri} className="flex gap-2.5" style={{ marginLeft: ri % 2 === 1 ? 24 : 0 }}>
           {gridRow.map(entry => {
             const m          = entry.metrics;
-            const tps        = m?.ollama_tokens_per_second ?? null;
+            const tps        = (() => {
+              const o = m?.ollama_tokens_per_second ?? null;
+              const v = m?.vllm_tokens_per_sec ?? null;
+              return o != null && v != null ? o + v : (o ?? v);
+            })();
             const isActive   = m != null && tps != null && tps > 0;
             const throttling = m?.thermal_state != null
               && ['serious', 'critical'].includes(m.thermal_state.toLowerCase());
@@ -581,6 +610,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
+  // Fleet-level rolling-average buffers (5-sample window, display-layer only).
+  // Placed here (before the early returns below) so hooks are always called
+  // unconditionally per the Rules of Hooks.
+  const fleetTpsBuf     = useRollingBuffer(); // Tile 1: fleet throughput
+  const wattPer1kBuf    = useRollingBuffer(); // Tile 6: W / 1k tokens
+  const costPer1kBuf    = useRollingBuffer(); // Tile 7: $ / 1k tokens
+  const fleetWesBuf     = useRollingBuffer(); // Tile 5 + Fleet Intelligence WES card
+  const costPer1kNewBuf = useRollingBuffer(); // Fleet Intelligence cost card
+
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
   const transport = isLocalHost ? localTransport : cloudTransport;
@@ -717,11 +755,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // effectiveMetrics: handles localhost sentinel mode + hosted fleet mode uniformly
   const effectiveMetrics: SentinelMetrics[] = isLocalHost ? (sentinel ? [sentinel] : []) : liveMetrics;
 
-  // Tile 1 — THROUGHPUT: ∑ tok/s across actively-inferencing nodes
+  // Tile 1 — THROUGHPUT: ∑ tok/s across all inference-active nodes (Ollama + vLLM).
+  // Both runtimes are not mutually exclusive — a node can run both simultaneously.
   const hasAnyOllama = effectiveMetrics.some(m => m.ollama_running);
-  const tpsNodes     = effectiveMetrics.filter(m => m.ollama_running && m.ollama_tokens_per_second != null);
+  const hasAnyVllm   = effectiveMetrics.some(m => m.vllm_running);
+  const tpsNodes     = effectiveMetrics.filter(m =>
+    (m.ollama_running && m.ollama_tokens_per_second != null) ||
+    (m.vllm_running   && m.vllm_tokens_per_sec      != null)
+  );
   const fleetTps     = tpsNodes.length > 0
-    ? tpsNodes.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0), 0)
+    ? tpsNodes.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0), 0)
     : null;
 
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
@@ -746,7 +789,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Tiles 5-7 — WES leaderboard + fleet average
   interface WESEntry { nodeId: string; hostname: string; wes: number | null; tps: number | null; watts: number | null; thermalState: string | null; nullReason: string; }
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
-    const tps      = m.ollama_tokens_per_second ?? null;
+    const _ollamaTps = m.ollama_tokens_per_second ?? null;
+    const _vllmTps   = m.vllm_tokens_per_sec ?? null;
+    const tps        = _ollamaTps != null && _vllmTps != null ? _ollamaTps + _vllmTps
+                     : (_ollamaTps ?? _vllmTps);
     const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
     const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
     const watts    = hasWatts ? totalW : null;
@@ -855,6 +901,19 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   })();
   const tokensPerWattVal = calculateTokensPerWatt(fleetTps, totalPowerOfTpsNodes);
 
+  // ── Rolling-average display values ──────────────────────────────────────────
+  // Use the highest timestamp_ms across all reporting nodes as the dedup key so
+  // that each SSE frame is pushed exactly once even across React strict-mode
+  // double-renders.
+  const fleetTs = effectiveMetrics.length > 0
+    ? Math.max(...effectiveMetrics.map(m => m.timestamp_ms))
+    : 0;
+  const displayFleetTps     = fleetTpsBuf.push(fleetTps,         fleetTs);
+  const displayWattPer1k    = wattPer1kBuf.push(wattPer1k,       fleetTs);
+  const displayCostPer1k    = costPer1kBuf.push(costPer1k,       fleetTs);
+  const displayFleetAvgWES  = fleetWesBuf.push(fleetAvgWES,      fleetTs);
+  const displayCostPer1kNew = costPer1kNewBuf.push(costPer1kTokensNew, fleetTs);
+
   // ── SSE connection indicator (3-state) ──────────────────────────────────────
   const sseNow = Date.now();
 
@@ -917,11 +976,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* 1. THROUGHPUT */}
         <InsightTile
           label="Throughput"
-          value={fleetTps != null ? `${fleetTps.toFixed(1)} tok/s` : '—'}
-          valueCls={fleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
+          value={displayFleetTps != null ? `${displayFleetTps.toFixed(1)} tok/s` : '—'}
+          valueCls={displayFleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={fleetTps != null
             ? isLocalMode ? 'sampled every 30s' : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · sampled`
-            : hasAnyOllama ? 'sampling every 30s' : 'no inference runtime'}
+            : (hasAnyOllama || hasAnyVllm) ? 'sampling every 30s' : 'no inference runtime'}
           icon={Activity}
           iconCls="text-indigo-400"
         />
@@ -985,8 +1044,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* 5. AVG WES / NODE WES */}
         <InsightTile
           label={isLocalMode ? 'Node WES' : 'Avg WES'}
-          value={formatWES(fleetAvgWES)}
-          valueCls={wesColorClass(fleetAvgWES)}
+          value={formatWES(displayFleetAvgWES)}
+          valueCls={wesColorClass(displayFleetAvgWES)}
           valueTitle={WES_TOOLTIP}
           sub={fleetAvgWES != null
             ? isLocalMode
@@ -1000,8 +1059,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* 6. WATTAGE / 1K TKN */}
         <InsightTile
           label="Wattage / 1k Tkn"
-          value={wattPer1k != null ? `${wattPer1k.toFixed(1)} W` : '—'}
-          valueCls={wattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
+          value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
+          valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub="per 1k tokens"
           icon={Zap}
           iconCls="text-emerald-400"
@@ -1010,8 +1069,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* 7. COST / 1K TOKENS */}
         <InsightTile
           label="Cost / 1k Tokens"
-          value={costPer1k != null ? `$${costPer1k.toFixed(4)}` : '—'}
-          valueCls={costPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
+          value={displayCostPer1k != null ? `$${displayCostPer1k.toFixed(4)}` : '—'}
+          valueCls={displayCostPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={`at $${fleetKwhRate}/kWh`}
           icon={DollarSign}
           iconCls="text-cyan-400"
@@ -1388,16 +1447,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               label="Cost Efficiency"
               sub={
                 <p className="text-[10px] text-gray-600 leading-tight">
-                  {costPer1kTokensNew != null
+                  {displayCostPer1kNew != null
                     ? `${tpsNodes.length} active node${tpsNodes.length !== 1 ? 's' : ''} · per-node PUE`
                     : 'no active inference'}
                 </p>
               }
             >
-              <p className={`text-xl font-bold font-telin leading-none ${costPer1kTokensNew != null ? 'text-cyan-400' : 'text-gray-600'}`}>
-                {costPer1kTokensNew != null ? `$${costPer1kTokensNew.toFixed(4)}` : '—'}
+              <p className={`text-xl font-bold font-telin leading-none ${displayCostPer1kNew != null ? 'text-cyan-400' : 'text-gray-600'}`}>
+                {displayCostPer1kNew != null ? `$${displayCostPer1kNew.toFixed(4)}` : '—'}
               </p>
-              {costPer1kTokensNew != null && <p className="text-[10px] text-gray-500 mt-0.5">/1k tokens</p>}
+              {displayCostPer1kNew != null && <p className="text-[10px] text-gray-500 mt-0.5">/1k tokens</p>}
             </FleetCard>
 
             {/* 2. Fleet Avg WES
@@ -1408,13 +1467,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               label="Fleet Avg WES"
               sub={
                 <p className="text-[10px] text-gray-600">
-                  {fleetAvgWES != null ? `avg across ${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''}` : 'no active inference'}
+                  {displayFleetAvgWES != null ? `avg across ${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''}` : 'no active inference'}
                 </p>
               }
             >
               <p
-                className={`text-xl font-bold font-telin leading-none ${wesColorClass(fleetAvgWES)}`}
-                title={fleetAvgWES != null && fleetAvgWES < 10
+                className={`text-xl font-bold font-telin leading-none ${wesColorClass(displayFleetAvgWES)}`}
+                title={displayFleetAvgWES != null && displayFleetAvgWES < 10
                   ? (() => {
                       const firstRanked = rankedWES[0];
                       const m = effectiveMetrics.find(x => x.node_id === firstRanked?.nodeId);
@@ -1423,7 +1482,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     })()
                   : WES_TOOLTIP}
               >
-                {formatWES(fleetAvgWES)}
+                {formatWES(displayFleetAvgWES)}
               </p>
             </FleetCard>
 

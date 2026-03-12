@@ -52,6 +52,17 @@ struct OllamaMetrics {
     ollama_tokens_per_second: Option<f32>,
 }
 
+// vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
+// All fields are Option/bool-default so the payload serialises cleanly when absent.
+#[derive(Serialize, Clone, Default)]
+struct VllmMetrics {
+    vllm_running:          bool,
+    vllm_model_name:       Option<String>,
+    vllm_tokens_per_sec:   Option<f32>,
+    vllm_cache_usage_perc: Option<f32>,
+    vllm_requests_running: Option<u32>,
+}
+
 // NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
 // All fields are Option so the payload serialises cleanly as null on other platforms.
 #[derive(Serialize, Clone, Default)]
@@ -120,6 +131,17 @@ struct MetricsPayload {
     /// Sustained tok/s from 30s probe (eval_rate field from Ollama). None until first probe completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_tokens_per_second: Option<f32>,
+    // vLLM runtime (null/false when vLLM not running)
+    #[serde(default)]
+    vllm_running:          bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_model_name:       Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_tokens_per_sec:   Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_cache_usage_perc: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_requests_running: Option<u32>,
     /// Compile-time OS — "macOS" | "Linux" | "Windows". Cannot be inferred incorrectly.
     os: String,
     /// Drain-on-send event log. Normally empty; populated when background tasks
@@ -1168,6 +1190,111 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
     shared
 }
 
+// ── vLLM Harvester ──────────────────────────────────────────────────────────────────────────────
+//
+// Auto-detects vLLM on localhost:8000 via its Prometheus /metrics endpoint.
+// Called on a 2 s tick. Each call is a single GET with a 500 ms timeout.
+// No full Prometheus parser: lines are matched by metric-name prefix.
+
+/// Probe vLLM once; returns (running, model_name, tok/s, cache_pct, req_count).
+/// Never panics on malformed input; returns (false, …) on any connection failure.
+async fn harvest_vllm() -> (bool, Option<String>, Option<f32>, Option<f32>, Option<u32>) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(500))
+        .build()
+    {
+        Ok(c)  => c,
+        Err(_) => return (false, None, None, None, None),
+    };
+
+    let resp = match client.get("http://localhost:8000/metrics").send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return (false, None, None, None, None),
+    };
+
+    let text = match resp.text().await {
+        Ok(t)  => t,
+        Err(_) => return (true, None, None, None, None),
+    };
+
+    let mut model_name:       Option<String> = None;
+    let mut tokens_per_sec:   Option<f32>    = None;
+    let mut cache_usage_perc: Option<f32>    = None;
+    let mut requests_running: Option<u32>    = None;
+
+    for line in text.lines() {
+        // Skip Prometheus comment / metadata lines.
+        if line.starts_with('#') { continue; }
+
+        // Metric name = everything before the first '{' (labels) or first ' ' (no labels).
+        let metric_name = if let Some(brace) = line.find('{') {
+            &line[..brace]
+        } else if let Some(space) = line.find(' ') {
+            &line[..space]
+        } else {
+            continue;
+        };
+
+        // Numeric value = last whitespace-separated token on the line.
+        let value: Option<f32> = line.split_whitespace().last()
+            .and_then(|s| s.parse().ok());
+
+        // Extract model_name="..." from the label string (first occurrence wins).
+        if model_name.is_none() {
+            if let Some(start) = line.find("model_name=\"") {
+                let rest = &line[start + 12..];
+                if let Some(end) = rest.find('"') {
+                    model_name = Some(rest[..end].to_string());
+                }
+            }
+        }
+
+        match metric_name.trim() {
+            "vllm:avg_generation_throughput_toks_per_s" => {
+                tokens_per_sec = value;
+            }
+            "vllm:gpu_cache_usage_perc" => {
+                // vLLM reports 0.0–1.0; multiply by 100 for percentage.
+                cache_usage_perc = value.map(|v| v * 100.0);
+            }
+            "vllm:num_requests_running" => {
+                requests_running = value.and_then(|v| {
+                    if v >= 0.0 && v < u32::MAX as f32 { Some(v as u32) } else { None }
+                });
+            }
+            _ => {}
+        }
+    }
+
+    (true, model_name, tokens_per_sec, cache_usage_perc, requests_running)
+}
+
+/// Spawns a 2 s polling loop that calls harvest_vllm() and updates shared state.
+/// Follows the same Arc<Mutex<T>> pattern as start_ollama_harvester().
+fn start_vllm_harvester() -> Arc<Mutex<VllmMetrics>> {
+    let shared = Arc::new(Mutex::new(VllmMetrics::default()));
+    let shared_clone = Arc::clone(&shared);
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+            let (running, model, tps, cache, reqs) = harvest_vllm().await;
+            if let Ok(mut guard) = shared_clone.lock() {
+                *guard = VllmMetrics {
+                    vllm_running:          running,
+                    vllm_model_name:       model,
+                    vllm_tokens_per_sec:   tps,
+                    vllm_cache_usage_perc: cache,
+                    vllm_requests_running: reqs,
+                };
+            }
+        }
+    });
+
+    shared
+}
+
 // ── Background Harvester ──────────────────────────────────────────────────────
 
 fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
@@ -1229,6 +1356,7 @@ fn start_metrics_broadcaster(
     ollama_metrics:        Arc<Mutex<OllamaMetrics>>,
     rapl_metrics:          Arc<Mutex<Option<f32>>>,
     linux_thermal_metrics: Arc<Mutex<Option<String>>>,
+    vllm_metrics:          Arc<Mutex<VllmMetrics>>,
     live_events:           Arc<Mutex<Vec<LiveActivityEvent>>>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
@@ -1264,6 +1392,7 @@ fn start_metrics_broadcaster(
             let apple         = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let nvidia        = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let ollama        = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let vllm          = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
 
@@ -1302,6 +1431,11 @@ fn start_metrics_broadcaster(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                vllm_running:          vllm.vllm_running,
+                vllm_model_name:       vllm.vllm_model_name,
+                vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
+                vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
+                vllm_requests_running: vllm.vllm_requests_running,
                 os: {
                     #[cfg(target_os = "macos")]   { "macOS".to_string() }
                     #[cfg(target_os = "linux")]   { "Linux".to_string() }
@@ -1442,6 +1576,7 @@ async fn handle_metrics(
     axum::extract::Extension(ollama_metrics):        axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
     axum::extract::Extension(rapl_metrics):          axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
     axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<String>>>>,
+    axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -1474,6 +1609,7 @@ async fn handle_metrics(
             let apple         = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let nvidia        = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let ollama        = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let vllm          = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
 
@@ -1506,6 +1642,11 @@ async fn handle_metrics(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                vllm_running:          vllm.vllm_running,
+                vllm_model_name:       vllm.vllm_model_name,
+                vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
+                vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
+                vllm_requests_running: vllm.vllm_requests_running,
                 os: {
                     #[cfg(target_os = "macos")]   { "macOS".to_string() }
                     #[cfg(target_os = "linux")]   { "Linux".to_string() }
@@ -1782,6 +1923,7 @@ async fn main() {
     let ollama_metrics        = start_ollama_harvester();
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
+    let vllm_metrics          = start_vllm_harvester();
 
     // Shared event queue for drain-on-send live activity entries (update notifications etc.).
     let live_events: Arc<Mutex<Vec<LiveActivityEvent>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1792,6 +1934,7 @@ async fn main() {
         Arc::clone(&ollama_metrics),
         Arc::clone(&rapl_metrics),
         Arc::clone(&linux_thermal_metrics),
+        Arc::clone(&vllm_metrics),
         Arc::clone(&live_events),
     );
 
@@ -1818,6 +1961,7 @@ async fn main() {
         .layer(axum::extract::Extension(ollama_metrics))
         .layer(axum::extract::Extension(rapl_metrics))
         .layer(axum::extract::Extension(linux_thermal_metrics))
+        .layer(axum::extract::Extension(vllm_metrics))
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
