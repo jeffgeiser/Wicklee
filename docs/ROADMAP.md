@@ -70,7 +70,35 @@
 - [ ] **"Why is my WES low?" tooltip** — inline calculation breakdown: tok/s ÷ Watts ÷ Penalty = WES, with Thermal Cost % and recommended action.
 - [ ] **`wes_config.json`** — configurable penalty thresholds per platform. Sane defaults ship tuned for standard deployments. Operators can override for unusual hardware or environments.
 
+### Insights Tab v1 — The Intelligence Hub
+
+> Full spec and wireframe: `docs/INSIGHTS.md`. This is the canonical reference for all card designs, tier gating, and section layout.
+
+- [ ] **`InsightsTab.tsx` shell** — Global Status Rail + 3-section grid (`InsightsSection` component). Replaces any existing placeholder tab content.
+- [ ] **`InsightsGlobalStatusRail.tsx`** — full-width bar: nominal state (green pulse + ALL SYSTEMS NOMINAL + stats ticker) / active state (full amber/red bg + alert rows + anchor links). Always pinned.
+- [ ] **`InsightsLockedCard.tsx`** — gate wrapper: blurred body, lock icon, tier badge, upgrade CTA. No mock data.
+- [ ] **`InsightsLiteCard.tsx`** — partial-data wrapper for Community views of Pro/Team cards (reduced data density + "Unlock full view →" CTA).
+
+**Section 1 — Operational Signals (Community)**
+- [ ] **Alert Trio** (`ThermalDegradationCard`, `PowerAnomalyCard`, `MemoryExhaustionCard`) — stacked dormant list, expands in-place on fire. Dormant state: compact ~32px bar with current reading + green dot. Fire state: full split-graph card.
+- [ ] **Model Fit Score card** — Lite at Community (score label only); full card at Pro+ (history chart, recommendation).
+- [ ] **WES Leaderboard card** — Lite at Community (top-3 rank only, no sparklines); full at Pro+.
+- [ ] **Inference Density live** — existing `HexHive.tsx` embedded in the third Health Indicator slot. Always visible at all tiers.
+
+**Section 2 — Automation & Cost (Pro)**
+- [ ] **Model Eviction card** — countdown timer `EVICTION IN MM:SS`; KEEP WARM toggle (Pro+); locked shell for Community with upgrade copy.
+- [ ] **Idle Resource Cost card** — dollar ticker `-$X.XX / Day (Idle)`; locked shell for Community.
+
+**Section 3 — Analytics & Forensics (Team / Enterprise)**
+- [ ] **Efficiency Regression card** — 7-day baseline; collecting state with circular progress bar `4/7 days`; locked shell for Pro-.
+- [ ] **Memory Forecast, Quant ROI, Cold Start, Fleet Thermal Diversity** — locked Team shells with upgrade copy.
+- [ ] **Inference Density historical** — locked shell showing hive thumbnail + "Unlock Peak-Hour Analysis →"; full unlock at Team (shares component with live HexHive).
+- [ ] **Sovereignty Audit** — locked Enterprise shell.
+
 ### Local Intelligence Tab — Free Tier Insight Cards
+
+> Cards below are the per-insight logic layer. UI scaffolding is owned by Insights Tab v1 above. See `docs/INSIGHTS.md` for derivation formulas and alerting specs.
+
 - [ ] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded.
 - [ ] **Thermal Degradation Correlation:** Named insight card when thermal state transition + tok/s drop detected simultaneously. Shows before/after tok/s, causal chain, recommendation.
 - [ ] **Power Anomaly Detection:** Fires when board power exceeds 2× session baseline or when power/GPU utilization ratio is anomalous. Flags runaway processes invisible to standard monitoring.
