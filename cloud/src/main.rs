@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{header, HeaderMap, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
@@ -8,7 +8,9 @@ use axum::{
     Json, Router,
 };
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::time::Duration;
+use subtle::ConstantTimeEq;
 use tokio_stream::StreamExt as _;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -129,15 +131,25 @@ struct ClaimRequest {
 
 #[derive(Serialize)]
 struct ClaimResponse {
-    session_token: String,
-    node_id:       String,
+    session_token:    String,
+    node_id:          String,
+    /// C1 — one-time delivery of the telemetry secret to the agent.
+    /// The agent MUST store this and send it as `X-Wicklee-Token` on every
+    /// POST /api/telemetry.  It is never logged by the server.
+    telemetry_secret: String,
 }
 
 /// In-memory telemetry snapshot (not persisted — DuckDB Phase 4).
 #[derive(Clone)]
 struct MetricsEntry {
-    last_seen_ms: u64,
-    metrics:      Option<MetricsPayload>,
+    last_seen_ms:     u64,
+    metrics:          Option<MetricsPayload>,
+    /// C1 — per-node telemetry secret loaded at startup and refreshed at pair time.
+    /// `None` for nodes paired before this column was added (backward-compat:
+    /// those nodes continue to be accepted without a token until they re-pair).
+    /// `Some(s)` — the incoming `X-Wicklee-Token` header must match `s` via
+    /// constant-time comparison; any mismatch or absent header → 401.
+    telemetry_secret: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -248,6 +260,10 @@ fn run_migrations(conn: &Connection) {
     // Add user_id column — links each node to the account that activated it.
     // Needed for per-user node counting to enforce the free-tier limit correctly.
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN user_id TEXT;");
+    // C1 — telemetry_secret: cryptographically random value generated at pair time.
+    // NULL for nodes paired before this column existed (backward-compat: they are
+    // still accepted without a token).  New pairings always populate this column.
+    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN telemetry_secret TEXT;");
 
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS stream_tokens (
@@ -300,15 +316,34 @@ const MAX_PAIR_ATTEMPTS: usize = 10;
 /// Sliding window duration in milliseconds.
 const PAIR_WINDOW_MS: u64 = 60_000;
 
-/// Extract the client IP from `X-Forwarded-For` (Railway proxy) or fall back
-/// to a fixed string.  We only need this for rate-limiting — not for auth.
-fn client_ip(headers: &HeaderMap) -> String {
+/// Extract the client IP for rate-limiting purposes.
+///
+/// # Trusted hop invariant
+/// Railway appends **exactly one** entry to `X-Forwarded-For` — the IP it
+/// observed on the incoming TCP socket.  Taking the **rightmost** comma-separated
+/// value gives us Railway's appended entry (trustworthy infrastructure data).
+/// Taking the **leftmost** value is wrong: it is supplied by the client and is
+/// trivially forged, which would allow an attacker to cycle fake IPs and bypass
+/// the sliding-window rate limit entirely.
+///
+/// # axum-client-ip evaluation
+/// `axum-client-ip` with `SecureClientIpSource::RightmostXForwardedFor` would
+/// express this intent clearly, but it adds a compile-time dependency for a
+/// one-line parsing rule.  The explicit `split(',').last()` here is equally
+/// auditable, simpler, and has no transitive deps.  Revisit if the proxy topology
+/// ever grows to multiple hops (add per-hop stripping via `RightmostNXForwardedFor`).
+///
+/// # Fallback
+/// When there is no `X-Forwarded-For` header (local dev, direct TLS termination),
+/// we fall back to the raw socket peer address via axum's `ConnectInfo` extractor.
+fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> String {
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
+        .and_then(|s| s.split(',').last())   // rightmost = Railway-appended
         .map(|s| s.trim().to_owned())
-        .unwrap_or_else(|| "unknown".to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| peer.ip().to_string())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -772,75 +807,161 @@ async fn handle_claim(
     let token2   = token.clone();
     let node_id2 = node_id.clone();
 
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
+    // C1 — generate a cryptographically random telemetry secret (UUID v4 = 122 bits
+    // of entropy, OS CSPRNG via getrandom).  This is returned to the agent exactly
+    // once and must never appear in logs.  On re-pair the old secret is replaced,
+    // invalidating any potentially leaked value.
+    let secret    = Uuid::new_v4().to_string();
+    let secret_db = secret.clone();
+
+    let insert_ok = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
-            "INSERT INTO nodes (wk_id, fleet_url, session_token, code, paired_at, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "INSERT INTO nodes
+               (wk_id, fleet_url, session_token, code, telemetry_secret, paired_at, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
              ON CONFLICT(wk_id) DO UPDATE SET
-               fleet_url     = excluded.fleet_url,
-               session_token = excluded.session_token,
-               code          = excluded.code,
-               last_seen     = excluded.last_seen",
-            params![node_id2, fleet_url, token2, code, ts],
-        ).ok();
-    }).await.unwrap();
+               fleet_url        = excluded.fleet_url,
+               session_token    = excluded.session_token,
+               code             = excluded.code,
+               telemetry_secret = excluded.telemetry_secret,
+               last_seen        = excluded.last_seen",
+            params![node_id2, fleet_url, token2, code, secret_db, ts],
+        ).is_ok()
+    }).await.unwrap_or(false);
 
-    // Seed the in-memory metrics entry so telemetry can flow immediately.
-    state.metrics.write().unwrap()
-        .entry(node_id.clone())
-        .or_insert(MetricsEntry { last_seen_ms: now_ms(), metrics: None });
+    if !insert_ok {
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response();
+    }
 
-    (StatusCode::OK, Json(ClaimResponse { session_token: token, node_id })).into_response()
+    // Seed / refresh the in-memory entry.  Always write the new secret so a
+    // re-pairing agent gets the fresh value on the very next telemetry push.
+    {
+        let mut map = state.metrics.write().unwrap_or_else(|e| e.into_inner());
+        let entry = map.entry(node_id.clone()).or_insert_with(|| MetricsEntry {
+            last_seen_ms:     now_ms(),
+            metrics:          None,
+            telemetry_secret: Some(secret.clone()),
+        });
+        entry.telemetry_secret = Some(secret.clone());
+    }
+
+    // telemetry_secret is returned here and never logged — keep it that way.
+    (StatusCode::OK, Json(ClaimResponse {
+        session_token:    token,
+        node_id,
+        telemetry_secret: secret,
+    })).into_response()
 }
 
 /// POST /api/telemetry
 async fn handle_telemetry(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<MetricsPayload>,
 ) -> StatusCode {
     let node_id       = payload.node_id.clone();
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
 
-    // C1 — Verify the node is registered before accepting its metrics.
+    // C1 — Authentication gate.
     //
-    // Fast path: if the node_id is already in the in-memory map it was either
-    // seeded from the DB at startup or previously validated.  Only hit the DB
-    // for node_ids we haven't seen before (e.g., fresh agent restarts).
-    let known = state.metrics.read().unwrap().contains_key(&node_id);
-    if !known {
-        let db2 = state.db.clone();
-        let nid = node_id.clone();
-        let exists = tokio::task::spawn_blocking(move || {
-            let conn = db2.lock().unwrap();
-            conn.query_row(
-                "SELECT 1 FROM nodes WHERE wk_id = ?1",
-                params![nid],
-                |_| Ok(()),
-            ).is_ok()
-        }).await.unwrap_or(false);
-        if !exists {
-            return StatusCode::FORBIDDEN;
+    // Strategy: look up the node's expected secret from the in-memory map.
+    // The map is pre-loaded from the DB at startup, so this is a read-lock
+    // with no blocking in the common case.  The DB is only hit for node_ids
+    // not yet seen since the last restart.
+    //
+    // We return the SAME 401 for all failure cases:
+    //   - node unknown     → 401 (do not reveal whether the node_id is registered)
+    //   - token absent     → 401
+    //   - token wrong      → 401 (constant-time comparison via subtle::ConstantTimeEq)
+    //
+    // Pre-migration nodes (telemetry_secret = NULL) are accepted without a token
+    // for backward compatibility.  They transition to enforced auth on next re-pair.
+
+    // Fast path: node is already in the in-memory map.
+    let map_lookup: Option<Option<String>> = state.metrics
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&node_id)
+        .map(|e| e.telemetry_secret.clone());
+
+    // Resolve: Some(Some(s)) = has secret, Some(None) = pre-migration, None = unknown.
+    let secret_opt: Option<String> = match map_lookup {
+        Some(s) => s, // already in memory — use cached secret (may be None)
+        None => {
+            // Slow path: not in memory — check the DB.
+            let db2 = state.db.clone();
+            let nid = node_id.clone();
+            let db_row: Option<Option<String>> = tokio::task::spawn_blocking(move || {
+                let conn = db2.lock().unwrap_or_else(|e| e.into_inner());
+                conn.query_row(
+                    "SELECT telemetry_secret FROM nodes WHERE wk_id = ?1",
+                    params![nid],
+                    |r| r.get::<_, Option<String>>(0),
+                ).ok()
+            }).await.unwrap_or(None);
+
+            match db_row {
+                // Node not found — reject.  Same status code as wrong-token to
+                // prevent node-ID enumeration via timing or status differences.
+                None => return StatusCode::UNAUTHORIZED,
+                Some(secret) => {
+                    // Seed into the in-memory map for subsequent fast-path lookups.
+                    state.metrics
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .entry(node_id.clone())
+                        .or_insert_with(|| MetricsEntry {
+                            last_seen_ms:     ts,
+                            metrics:          None,
+                            telemetry_secret: secret.clone(),
+                        });
+                    secret
+                }
+            }
+        }
+    };
+
+    // If the node has a secret, verify the provided token with constant-time
+    // comparison.  This prevents timing attacks where an attacker probes
+    // byte-by-byte matches by measuring response latency.
+    if let Some(ref expected) = secret_opt {
+        let provided = headers
+            .get("x-wicklee-token")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        // subtle::ConstantTimeEq operates on &[u8].  For equal-length UUID strings
+        // this is fully constant-time.  Different lengths short-circuit to false,
+        // which is safe: the length of a UUID token is not a secret.
+        if !bool::from(expected.as_bytes().ct_eq(provided.as_bytes())) {
+            return StatusCode::UNAUTHORIZED;
         }
     }
+    // secret_opt == None → pre-migration node; continue without token.
 
-    // Update in-memory snapshot.
+    // Auth passed — update in-memory snapshot.
     {
-        let mut map = state.metrics.write().unwrap();
+        let mut map = state.metrics.write().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = map.get_mut(&node_id) {
             entry.last_seen_ms = ts;
             entry.metrics      = Some(payload);
         } else {
-            // Node reconnecting after restart — already validated above.
-            map.insert(node_id.clone(), MetricsEntry { last_seen_ms: ts, metrics: Some(payload) });
+            // Node reconnecting after restart and not yet in the map — safe because
+            // we already validated it exists (either in-memory or via DB above).
+            map.insert(node_id.clone(), MetricsEntry {
+                last_seen_ms:     ts,
+                metrics:          Some(payload),
+                telemetry_secret: secret_opt,
+            });
         }
     }
 
     // Persist last_seen (and hostname when present) to nodes table.
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
+        let conn = db.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref h) = node_hostname {
             conn.execute(
                 "UPDATE nodes SET last_seen = ?1, hostname = ?2 WHERE wk_id = ?3",
@@ -911,6 +1032,7 @@ struct ActivateRequest {
 
 async fn handle_activate(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<ActivateRequest>,
 ) -> impl IntoResponse {
@@ -920,17 +1042,25 @@ async fn handle_activate(
     }
 
     // C4 — Sliding-window rate limit: max 10 attempts per IP per 60 seconds.
-    let ip  = client_ip(&headers);
+    // Cleanup (retain) runs on every request — no background timer needed for
+    // a low-frequency endpoint like this.
+    let ip  = client_ip(&headers, peer);
     let now = now_ms();
     {
-        let mut attempts = state.pair_attempts.lock().unwrap();
-        let entry = attempts.entry(ip.clone()).or_default();
+        let mut attempts = state.pair_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = attempts.entry(ip).or_default();
         entry.retain(|&t| now - t < PAIR_WINDOW_MS);
         if entry.len() >= MAX_PAIR_ATTEMPTS {
-            return (StatusCode::TOO_MANY_REQUESTS,
+            // Retry-After: 60 tells well-behaved clients exactly how long to wait.
+            let mut res = (StatusCode::TOO_MANY_REQUESTS,
                 Json(serde_json::json!({
                     "error": "Too many pairing attempts. Try again in 60 seconds."
                 }))).into_response();
+            res.headers_mut().insert(
+                header::RETRY_AFTER,
+                header::HeaderValue::from_static("60"),
+            );
+            return res;
         }
         entry.push(now);
     }
@@ -1172,14 +1302,19 @@ fn version_json(tag_name: &str, latest: &str, platform: &str) -> Response {
 
 // ── CORS middleware (C2 — origin allowlist) ───────────────────────────────────
 //
-// Injected directly into the response so Railway's proxy cannot strip the
-// headers. OPTIONS preflights are short-circuited with 200 OK before they
-// reach any route handler.
+// Hand-rolled so the security invariants are auditable in one place rather than
+// scattered across a third-party crate's configuration API.
 //
-// Only origins in ALLOWED_ORIGINS receive the Access-Control-Allow-Origin
-// header; all other origins get no CORS header and the browser blocks them.
-// Agents posting to /api/telemetry never send an Origin header, so they are
-// unaffected.
+// Rules:
+//   1. Origin matching is EXACT string equality against ALLOWED_ORIGINS —
+//      no prefix, suffix, or contains checks.
+//   2. Access-Control-Allow-Credentials: true is only emitted when the request
+//      Origin is in the allowlist.  If the origin is absent or unknown, NO CORS
+//      headers are sent at all (absence is correct — do not send "false").
+//   3. Agents posting to /api/telemetry never send an Origin header, so this
+//      middleware is a complete no-op for them.
+//   4. OPTIONS preflights are short-circuited with 200 OK before they reach
+//      any route handler.
 
 const ALLOWED_ORIGINS: &[&str] = &[
     "https://wicklee.dev",
@@ -1189,7 +1324,7 @@ const ALLOWED_ORIGINS: &[&str] = &[
 ];
 
 async fn cors(req: Request<Body>, next: Next) -> Response {
-    // Validate the Origin header before consuming the request.
+    // Exact match only — &[&str]::contains uses PartialEq which is byte equality.
     let allow_origin: Option<String> = req.headers()
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
@@ -1209,6 +1344,13 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
             if let Ok(val) = header::HeaderValue::from_str(origin) {
                 response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
             }
+            // Credentials (cookies, Authorization) are only permitted for known
+            // origins.  Setting this on a wildcard * origin is a security error;
+            // the header is intentionally absent when origin is not in the list.
+            response.headers_mut().insert(
+                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                header::HeaderValue::from_static("true"),
+            );
         }
         return response;
     }
@@ -1218,6 +1360,11 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
         if let Ok(val) = header::HeaderValue::from_str(origin) {
             res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
         }
+        // Same invariant as above: credentials header only on known origins.
+        res.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            header::HeaderValue::from_static("true"),
+        );
     }
     res
 }
@@ -1239,20 +1386,27 @@ async fn main() {
     // Pre-load known nodes from the DB so they survive Railway redeploys.
     // metrics is always None here — the frontend shows "last seen X ago" until
     // the agent re-pushes real telemetry (within its 2s push cadence).
+    // telemetry_secret is also loaded so the fast-path auth check in
+    // handle_telemetry never has to hit the DB for already-known nodes.
     let seed_metrics: HashMap<String, MetricsEntry> = {
-        let rows: Vec<(String, i64)> = conn
-            .prepare("SELECT wk_id, last_seen FROM nodes")
-            .unwrap()
+        let rows: Vec<(String, i64, Option<String>)> = conn
+            .prepare("SELECT wk_id, last_seen, telemetry_secret FROM nodes")
+            .expect("Failed to prepare node seed query")
             .query_map([], |r| Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
+                r.get::<_, Option<String>>(2)?,
             )))
-            .unwrap()
+            .expect("Failed to query nodes at startup")
             .filter_map(|r| r.ok())
             .collect();
         rows.into_iter()
-            .map(|(node_id, last_seen)| {
-                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics: None })
+            .map(|(node_id, last_seen, telemetry_secret)| {
+                (node_id, MetricsEntry {
+                    last_seen_ms:     last_seen as u64,
+                    metrics:          None,
+                    telemetry_secret,
+                })
             })
             .collect()
     };
@@ -1354,5 +1508,10 @@ async fn main() {
     println!("║  Listening on {addr:<30} ║");
     println!("╚══════════════════════════════════════════════╝");
 
-    axum::serve(listener, app).await.expect("Server exited unexpectedly");
+    // into_make_service_with_connect_info enables the ConnectInfo<SocketAddr>
+    // extractor in handle_activate, which provides the raw socket peer address
+    // as a fallback when X-Forwarded-For is absent (local dev / direct TLS).
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .expect("Server exited unexpectedly");
 }

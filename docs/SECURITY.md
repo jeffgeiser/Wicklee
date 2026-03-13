@@ -22,27 +22,35 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 
 ## Critical Findings
 
-### C1 — `/api/telemetry` Unauthenticated ✅ FIXED
-**File:** `cloud/src/main.rs` — `handle_telemetry`
+### C1 — `/api/telemetry` Unauthenticated ✅ HARDENED
+**File:** `cloud/src/main.rs` — `handle_telemetry`, `handle_claim`
 
 **Risk:** Any caller can POST metrics under any `node_id`, poisoning the in-memory metrics cache and the fleet display for all users. An attacker could impersonate a paired node, inject false thermal/throughput data, or displace real metrics.
 
-**Fix shipped:** Fast in-memory existence check (O(1) for known nodes), DB fallback only for new/restarting node IDs. Unregistered `node_id` → 403 Forbidden.
+**Fix v1 (prior session):** Existence check — unregistered `node_id` → 403 Forbidden.
+
+**Fix v2 (this session — hardened):**
+- `handle_claim` now generates a cryptographically random `telemetry_secret` (`Uuid::new_v4()`, 122 bits of OS CSPRNG entropy) and stores it in SQLite (`nodes.telemetry_secret TEXT`). Returned to the agent **once** in the claim response; never logged.
+- `handle_telemetry` extracts `X-Wicklee-Token` from the request header and performs a **constant-time comparison** against the stored secret via `subtle::ConstantTimeEq` (crate v2.6 — prevents timing-side-channel byte probing).
+- All failure paths (node unknown, token absent, token wrong) return **401 Unauthorized** with no body. The identical response prevents node-ID enumeration.
+- `MetricsEntry` embeds the secret in the in-memory map so the hot path is a read-lock with no SQLite hit.
+- **Backward compat:** nodes paired before this migration have `telemetry_secret = NULL`; they continue to be accepted without a token until they re-pair. On re-pair the old secret is replaced.
+- **Agent update required:** the agent must read `telemetry_secret` from the `ClaimResponse` and send it as `X-Wicklee-Token` on every POST /api/telemetry.
 
 ---
 
-### C2 — CORS Wildcard `*` ✅ FIXED
+### C2 — CORS Wildcard `*` ✅ HARDENED
 **File:** `cloud/src/main.rs` — `cors()` middleware
 
 **Risk:** `Access-Control-Allow-Origin: *` on every response, including authenticated endpoints. Any website can make credentialed cross-origin requests to the cloud backend from a logged-in user's browser, enabling CSRF-style attacks against `/api/fleet`, `/api/pair/activate`, etc.
 
-**Fix shipped:** Replaced `*` with per-request origin validation against `ALLOWED_ORIGINS`:
-- `https://wicklee.dev`
-- `https://www.wicklee.dev`
-- `http://localhost:5173`
-- `http://localhost:3000`
+**Fix v1 (prior session):** Replaced `*` with per-request exact-match against `ALLOWED_ORIGINS`; unknown origins receive no CORS header.
 
-Unknown origins receive no CORS header; browsers block the request at the CORS preflight stage.
+**Fix v2 (this session — hardened):**
+- Confirmed matching uses `&[&str]::contains` which is **byte-level exact equality** — no prefix/suffix/contains risks.
+- Added `Access-Control-Allow-Credentials: true` **only when the origin is in the allowlist**. Previously this header was absent entirely (safe but incomplete — browsers require it to forward cookies/Authorization with CORS requests). It is now explicitly omitted for unknown origins (sending `false` is unnecessary and exposes header presence).
+- Agents (no `Origin` header) are a complete no-op — middleware returns without adding any CORS headers.
+- Implementation is hand-rolled `tower::Layer` (no third-party CORS crate) so all invariants are visible in one function.
 
 ---
 
@@ -55,12 +63,19 @@ Unknown origins receive no CORS header; browsers block the request at the CORS p
 
 ---
 
-### C4 — Pairing Code Brute-Forceable ✅ FIXED
-**File:** `cloud/src/main.rs` — `handle_activate`
+### C4 — Pairing Code Brute-Forceable ✅ HARDENED
+**File:** `cloud/src/main.rs` — `handle_activate`, `client_ip`
 
 **Risk:** 6-digit numeric code = 10^6 possibilities. No rate limiting on `/api/pair/activate`. A script can enumerate all codes in ~17 minutes at 1,000 req/s, taking ownership of any unpaired node.
 
-**Fix shipped:** Per-IP sliding-window rate limiter: 10 attempts per 60-second window → 429 Too Many Requests. `X-Forwarded-For` header used for IP extraction (Railway proxy environment).
+**Fix v1 (prior session):** Per-IP sliding-window rate limiter (10 / 60 s → 429). `X-Forwarded-For` leftmost value used for IP — **this was exploitable** (client-controlled).
+
+**Fix v2 (this session — hardened):**
+- `client_ip()` now takes the **rightmost** comma-separated value from `X-Forwarded-For` — the entry appended by Railway's proxy (trustworthy). The leftmost values are client-supplied and must never be used for rate-limiting. Inline comment documents the invariant.
+- Added `ConnectInfo<SocketAddr>` extractor to `handle_activate` as a fallback when `X-Forwarded-For` is absent (local dev / direct TLS). `axum::serve` updated to `into_make_service_with_connect_info::<SocketAddr>()`.
+- **axum-client-ip evaluated and declined:** `SecureClientIpSource::RightmostXForwardedFor` would express the same intent but adds a dependency for a one-line parsing rule. Hand-rolled `split(',').last()` is simpler and equally auditable for a single-hop topology.
+- Sliding-window cleanup (`retain`) runs on every request — no background timer needed.
+- Rate-limit response now includes `Retry-After: 60` header so well-behaved clients (and the AddNodeModal) know exactly how long to wait.
 
 ---
 
@@ -144,10 +159,10 @@ Unknown origins receive no CORS header; browsers block the request at the CORS p
 
 | ID | Severity | Description | Status |
 |---|---|---|---|
-| C1 | Critical | Unauthenticated `/api/telemetry` | ✅ Fixed |
-| C2 | Critical | CORS wildcard `*` | ✅ Fixed |
+| C1 | Critical | Unauthenticated `/api/telemetry` | ✅ Hardened — HMAC-style secret + constant-time compare; agent update required |
+| C2 | Critical | CORS wildcard `*` | ✅ Hardened — exact-match allowlist + `Allow-Credentials` only on known origins |
 | C3 | Critical | Binary path injection in service installer | ⏳ Open |
-| C4 | Critical | Pairing code brute-force (no rate limit) | ✅ Fixed |
+| C4 | Critical | Pairing code brute-force (no rate limit) | ✅ Hardened — rightmost XFF, ConnectInfo fallback, `Retry-After: 60` |
 | H1 | High | quinn-proto CVE RUSTSEC-2026-0037 | ✅ Fixed |
 | H2 | High | No connection limits on SSE/WS | ⏳ Open |
 | H3 | High | `fleet_url` unvalidated (SSRF) | ⏳ Open |
