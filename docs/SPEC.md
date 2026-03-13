@@ -145,6 +145,8 @@ wicklee-agent (single Rust binary, ~700KB)
     └── frontend/dist/           → Compiled React/Tailwind SPA, baked in at build time
 ```
 
+**Service Installer (`--install-service`):** The binary path written into the systemd unit (Linux) or launchd plist (macOS) is validated by `validate_binary_path()` before any file is written. POSIX allowlist: `[a-zA-Z0-9/_.-]` — rejects shell metacharacters, XML metacharacters, spaces, and null bytes. Windows: drive letter + `[a-zA-Z0-9\\/._- ]`. Path traversal (`..`) rejected on all platforms regardless of position. On invalid path: installer aborts with a clear error and writes nothing.
+
 ---
 
 ## Agent ↔ Cloud Payload Sync Rule
@@ -277,12 +279,12 @@ wicklee-cloud (Rust + Axum, deployed on Railway)
 │   └── Scheduled cleanup task       → purge expired stream_tokens every 5 minutes
 │
 ├── Pairing
-│   ├── POST /api/pair/claim       → generate 6-digit code, store with account; returns telemetry_secret (one-time delivery)
+│   ├── POST /api/pair/claim       → generate 6-digit code, store with account; returns telemetry_secret (one-time delivery); fleet_url scheme-checked (http/https only) + SSRF ranges blocked (169.254/100.64/0.x/240+)
 │   └── POST /api/pair/activate    → agent calls this on first pairing; stores node
 │
 ├── Telemetry
 │   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms; X-Wicklee-Token: <telemetry_secret> required
-│   └── GET  /api/fleet/stream?token=  → SSE stream to browser; token = stream_token from /api/auth/stream-token
+│   └── GET  /api/fleet/stream?token=  → SSE stream to browser; token = stream_token from /api/auth/stream-token; 10 conns/IP (429) · 1 000 total (503); RAII guard decrements on disconnect
 │
 └── Storage
     ├── SQLite (rusqlite, bundled)  → users, sessions, nodes (persistent via Railway volume)
