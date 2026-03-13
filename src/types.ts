@@ -149,6 +149,13 @@ export interface FleetStreamState {
   allNodeMetrics: Record<string, SentinelMetrics>;
   /** Per-node last_seen_ms from the SSE stream. */
   lastSeenMsMap: Record<string, number>;
+  /**
+   * Session-scoped per-node peak tok/s high-water mark.
+   * Resets on model swap so the baseline stays relevant to the loaded model.
+   * Used by consumers to estimate total hardware throughput when the Ollama
+   * probe is depressed (background inference) or null (inference lockup).
+   */
+  peakTpsMap: Record<string, number>;
   /** Detected fleet events (online/offline/thermal), newest first, max 50. */
   fleetEvents: FleetEvent[];
   /** Whether the EventSource is currently connected. */
