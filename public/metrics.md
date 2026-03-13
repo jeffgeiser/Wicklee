@@ -132,11 +132,11 @@ The energy cost of generating 1,000 tokens on this node right now. Lower is more
 
 ---
 
-### COST/1K TOKENS
+### COST/1M TOKENS
 
-**Formula:** `W/1K TKN × (kWh_rate / 1000)`
+**Formula:** `(W/1K TKN × (kWh_rate / 1000)) × 1000`
 
-Dollar cost of generating 1,000 tokens based on your configured electricity rate (default $0.12/kWh). Scales to $/1M tokens in the sub-label for readability. Configure your electricity rate in Settings → Cost & Energy for accurate figures.
+Dollar cost of generating 1 million tokens based on your configured electricity rate (default $0.12/kWh). Shown per-million so you can compare directly against cloud API pricing (e.g. GPT-4o at ~$5/1M). Configure your electricity rate in Settings → Cost & Energy for accurate figures.
 
 ---
 

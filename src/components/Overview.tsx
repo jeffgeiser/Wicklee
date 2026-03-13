@@ -1246,22 +1246,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-emerald-400"
         />
 
-        {/* 7. COST / 1K TOKENS — sub2 shows the per-million equivalent so operators
-            can compare directly against cloud API pricing without mental arithmetic. */}
+        {/* 7. COST / 1M TOKENS — shown per-million so operators can compare directly
+            against cloud API pricing (e.g. GPT-4o at ~$5/1M) without mental arithmetic. */}
         <InsightTile
           label={
             <MetricTooltip
               metricId="cost-1k"
-              name="COST/1K TOKENS"
-              oneLiner="Dollar cost of 1,000 tokens based on your configured kWh rate."
+              name="COST / 1M TOKENS"
+              oneLiner="Dollar cost of 1 million tokens based on your configured kWh rate."
             >
-              Cost / 1k Tokens
+              Cost / 1M Tokens
             </MetricTooltip>
           }
-          value={displayCostPer1k != null ? `$${displayCostPer1k.toFixed(4)}` : '—'}
+          value={displayCostPer1k != null ? `$${(displayCostPer1k * 1000).toFixed(2)}` : '—'}
           valueCls={displayCostPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={`at $${fleetKwhRate}/kWh`}
-          sub2={displayCostPer1k != null ? `≈ $${(displayCostPer1k * 1000).toFixed(2)} / 1M tokens` : undefined}
           icon={DollarSign}
           iconCls="text-cyan-400"
         />
