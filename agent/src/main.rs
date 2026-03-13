@@ -1514,10 +1514,11 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
 
             let Some(model) = model else { continue; };
 
-            if let Some(tps) = probe_ollama_tps(&probe_client, &model).await {
-                if let Ok(mut guard) = shared_probe.lock() {
-                    guard.ollama_tokens_per_second = Some(tps);
-                }
+            // Always write the result — None on failure clears a stale value so
+            // the dashboard shows "—" rather than carrying forward an old reading.
+            let new_tps = probe_ollama_tps(&probe_client, &model).await;
+            if let Ok(mut guard) = shared_probe.lock() {
+                guard.ollama_tokens_per_second = new_tps;
             }
         }
     });
