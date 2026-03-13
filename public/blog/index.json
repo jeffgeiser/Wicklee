@@ -1,4 +1,4 @@
 {
-  "_agent_note": "Machine-readable blog manifest. GET /blog/index.json to enumerate all published posts. Each slug maps to /blog/{slug}.md — standard markdown with optional YAML frontmatter (title, date, description, tags). To publish a new post: add the .md file to /public/blog/ and add its slug to the posts array below (newest first).",
+  "_agent_note": "Machine-readable blog manifest. GET /blog/index.json to enumerate all published posts. Each slug maps to /blog/{slug}.md — standard markdown with optional YAML frontmatter (title, date, description, tags). Auto-generated at build/dev time from public/blog/*.md — do not edit manually.",
   "posts": []
 }
