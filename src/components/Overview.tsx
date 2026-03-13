@@ -7,7 +7,7 @@ import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapaci
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
-import { useNodeRollingMetrics, useRollingBuffer } from '../hooks/useRollingMetrics';
+import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
@@ -714,12 +714,19 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Fleet-level rolling-average buffers (5-sample window, display-layer only).
   // Placed here (before the early returns below) so hooks are always called
   // unconditionally per the Rules of Hooks.
-  const fleetTpsBuf     = useRollingBuffer(); // Tile 1: fleet throughput
-  const wattPer1kBuf    = useRollingBuffer(); // Tile 6: W / 1k tokens
-  const costPer1kBuf    = useRollingBuffer(); // Tile 7: $ / 1k tokens
-  const fleetWesBuf     = useRollingBuffer(); // Tile 5 + Fleet Intelligence WES card
-  const costPer1kNewBuf = useRollingBuffer(); // Fleet Intelligence cost card
-  const fleetWattsBuf   = useRollingBuffer(); // Fleet Intelligence Tokens Per Watt card
+  // Volatile metrics (tok/s-derived): longer window (12) damps 30-s probe noise
+  // while still updating visibly across ~2 probe cycles (~60 s).
+  // Steadier metrics (raw watts, power cost): default node window (8) is fine.
+  const fleetTpsBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 1: fleet throughput
+  const wattPer1kBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 6: W / 1k tokens — tok/s-derived
+  const costPer1kBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 7: $ / 1M — tok/s-derived
+  const fleetWesBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 5 + Fleet Intelligence WES card
+  const costPer1kNewBuf = useRollingBuffer(FLEET_ROLLING_WINDOW); // Fleet Intelligence cost card
+  const fleetWattsBuf   = useRollingBuffer();                     // Fleet Intelligence Tokens Per Watt (watts-only, steadier)
+
+  // Per-node cost rolling average — keyed by nodeId, managed via Map ref so
+  // hook count doesn't grow with fleet size (hooks must be called unconditionally).
+  const nodeCostBufsRef = useRef<Map<string, { buf: number[]; lastTs: number }>>(new Map());
 
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
@@ -935,7 +942,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : counts.total;
 
   // Tiles 5-7 — WES leaderboard + fleet average
-  interface WESEntry { nodeId: string; hostname: string; wes: number | null; tps: number | null; watts: number | null; thermalState: string | null; nullReason: string; }
+  interface WESEntry { nodeId: string; hostname: string; wes: number | null; tps: number | null; watts: number | null; thermalState: string | null; nullReason: string; costPer1mRaw: number | null; kwhRate: number; }
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
     const _ollamaTps = m.ollama_tokens_per_second ?? null;
     const _vllmTps   = m.vllm_tokens_per_sec ?? null;
@@ -944,10 +951,17 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
     const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
     const watts    = hasWatts ? totalW : null;
-    const pue      = getNodeSettings?.(m.node_id)?.pue ?? 1.0;
+    const ns       = getNodeSettings?.(m.node_id);
+    const pue      = ns?.pue ?? 1.0;
+    const kwhRate  = ns?.kwhRate ?? fleetKwhRate;
     const wes      = computeWES(tps, watts, m.thermal_state, pue);
     const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
-    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason };
+    // Raw $/1M: (watts × PUE × kWh_rate / 1000) / (tok/s × 3600 / 1e6)
+    // Simplified: (watts × pue × kwhRate / 1000) / (tps × 3.6)
+    const costPer1mRaw = (tps != null && tps > 0 && watts != null)
+      ? ((watts * pue * kwhRate / 1000) / (tps * 3.6))
+      : null;
+    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason, costPer1mRaw, kwhRate };
   });
   const pueValues = effectiveMetrics.map(m => getNodeSettings?.(m.node_id)?.pue ?? 1.0);
   const hasPerNodePueDiversity = new Set(pueValues).size > 1;
@@ -963,6 +977,31 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const efficiencyRatio = rankedWES.length >= 2
     ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes! : null;
 
+  // ── Per-node cost rolling average ───────────────────────────────────────────
+  // Smooth each node's raw $/1M over NODE_ROLLING_WINDOW samples using the
+  // Map-based ref so no hook count grows with fleet size.
+  const costEntries = wesEntries.map(e => {
+    const m   = effectiveMetrics.find(x => x.node_id === e.nodeId);
+    const ts  = m?.timestamp_ms ?? 0;
+    if (!nodeCostBufsRef.current.has(e.nodeId)) {
+      nodeCostBufsRef.current.set(e.nodeId, { buf: [], lastTs: 0 });
+    }
+    const state = nodeCostBufsRef.current.get(e.nodeId)!;
+    const raw   = e.costPer1mRaw;
+    if (raw != null && isFinite(raw)) {
+      if (!(ts > 0 && ts <= state.lastTs)) {
+        if (ts > 0) state.lastTs = ts;
+        state.buf = state.buf.length < NODE_ROLLING_WINDOW
+          ? [...state.buf, raw]
+          : [...state.buf.slice(1), raw];
+      }
+    }
+    const costPer1m = state.buf.length > 0
+      ? state.buf.reduce((a, c) => a + c, 0) / state.buf.length
+      : null;
+    return { ...e, costPer1m };
+  });
+
   // ── Thermal diversity ───────────────────────────────────────────────────────
   const thermalCounts: Record<string, number> = {};
   effectiveMetrics.forEach(m => {
@@ -973,15 +1012,19 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const hasThrottling  = Object.keys(thermalCounts).some(s => ['serious', 'critical'].includes(s.toLowerCase()));
 
   // ── Best Route Now ──────────────────────────────────────────────────────────
-  const activeEntries = wesEntries.filter(e => e.tps != null && e.tps > 0);
-  const sortedByTps   = [...activeEntries].sort((a, b) => (b.tps ?? 0) - (a.tps ?? 0));
-  const sortedByWes   = [...activeEntries].filter(e => e.wes != null).sort((a, b) => (b.wes ?? 0) - (a.wes ?? 0));
-  const bestLatNode   = sortedByTps[0] ?? null;
-  const bestEffNode   = sortedByWes[0] ?? null;
-  const sameNode      = bestLatNode != null && bestEffNode != null && bestLatNode.nodeId === bestEffNode.nodeId;
-  const tpsDelta      = !sameNode && bestLatNode && bestEffNode && (bestEffNode.tps ?? 0) > 0
+  const activeEntries    = wesEntries.filter(e => e.tps != null && e.tps > 0);
+  const sortedByTps      = [...activeEntries].sort((a, b) => (b.tps ?? 0) - (a.tps ?? 0));
+  const sortedByWes      = [...activeEntries].filter(e => e.wes != null).sort((a, b) => (b.wes ?? 0) - (a.wes ?? 0));
+  const bestLatNode      = sortedByTps[0] ?? null;
+  const bestEffNode      = sortedByWes[0] ?? null;
+  // Cost signal — cheapest $/1M among active nodes with power data
+  const activeCostEntries = costEntries.filter(e => e.tps != null && e.tps > 0 && e.costPer1m != null);
+  const sortedByCost      = [...activeCostEntries].sort((a, b) => (a.costPer1m ?? Infinity) - (b.costPer1m ?? Infinity));
+  const bestCostNode      = sortedByCost[0] ?? null;
+  const sameNode          = bestLatNode != null && bestEffNode != null && bestLatNode.nodeId === bestEffNode.nodeId;
+  const tpsDelta          = !sameNode && bestLatNode && bestEffNode && (bestEffNode.tps ?? 0) > 0
     ? (bestLatNode.tps ?? 0) / bestEffNode.tps! : null;
-  const wesDelta      = !sameNode && bestEffNode?.wes != null && (bestLatNode?.wes ?? 0) > 0
+  const wesDelta          = !sameNode && bestEffNode?.wes != null && (bestLatNode?.wes ?? 0) > 0
     ? bestEffNode.wes / bestLatNode!.wes! : null;
 
   // Tile 6 — WATTAGE / 1K TKN: total power ÷ fleet throughput × 1000
@@ -1765,7 +1808,81 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               )}
             </FleetCard>
 
-            {/* 5. Best Route Now — spans both columns */}
+            {/* 5. Node Cost / 1M — ranked per-node breakdown, spans both columns.
+                Active nodes sorted cheapest-first; idle nodes grouped at bottom.
+                Visibility threshold: only renders when ≥1 node has power data. */}
+            {costEntries.some(e => e.costPer1mRaw != null || e.tps == null || e.tps <= 0) && (
+              <FleetCard label="Node Cost / 1M Tokens" className="col-span-2">
+                {(() => {
+                  const active = costEntries
+                    .filter(e => e.tps != null && e.tps > 0)
+                    .sort((a, b) => {
+                      // Nodes with cost data first (cheapest → most expensive), then no-power-data nodes
+                      if (a.costPer1m != null && b.costPer1m != null) return a.costPer1m - b.costPer1m;
+                      if (a.costPer1m != null) return -1;
+                      if (b.costPer1m != null) return 1;
+                      return 0;
+                    });
+                  const idle = costEntries.filter(e => e.tps == null || e.tps <= 0);
+
+                  if (active.length === 0 && idle.length === 0) {
+                    return <p className="text-sm font-telin text-gray-600">— no nodes online</p>;
+                  }
+
+                  return (
+                    <div className="space-y-1.5 w-full">
+                      {active.map((e, i) => {
+                        const isChampion = i === 0 && e.costPer1m != null;
+                        const costStr    = e.costPer1m != null
+                          ? `$${e.costPer1m.toFixed(2)}`
+                          : '— no power data';
+                        const costCls    = e.costPer1m == null
+                          ? 'text-gray-600'
+                          : isChampion
+                          ? 'text-green-400'
+                          : 'text-cyan-400';
+                        return (
+                          <div key={e.nodeId} className="flex items-center gap-2 min-w-0">
+                            <span className="text-[9px] uppercase tracking-widest text-gray-500 w-4 shrink-0 text-right">
+                              {e.costPer1m != null ? `${i + 1}.` : '—'}
+                            </span>
+                            <span className="text-xs font-bold font-telin text-gray-200 truncate flex-1 min-w-0">
+                              {e.hostname !== e.nodeId ? e.hostname : e.nodeId}
+                            </span>
+                            <span className={`text-xs font-telin font-semibold shrink-0 ${costCls}`}>
+                              {costStr}
+                            </span>
+                            {e.costPer1m != null && (
+                              <span className="text-[10px] text-gray-600 shrink-0">/1M</span>
+                            )}
+                            {e.tps != null && (
+                              <span className="text-[10px] font-telin text-gray-500 shrink-0 w-16 text-right">
+                                {e.tps.toFixed(1)} tok/s
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {idle.length > 0 && (
+                        <div className={`${active.length > 0 ? 'border-t border-gray-800 pt-1.5 mt-1' : ''} space-y-1`}>
+                          {idle.map(e => (
+                            <div key={e.nodeId} className="flex items-center gap-2 min-w-0">
+                              <span className="text-[9px] uppercase tracking-widest text-gray-700 w-4 shrink-0">—</span>
+                              <span className="text-xs font-telin text-gray-600 truncate flex-1 min-w-0">
+                                {e.hostname !== e.nodeId ? e.hostname : e.nodeId}
+                              </span>
+                              <span className="text-[10px] font-telin text-gray-700 shrink-0">idle</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </FleetCard>
+            )}
+
+            {/* 6. Best Route Now — spans both columns */}
             <FleetCard label="Best Route Now" className="col-span-2">
               {activeEntries.length === 0 ? (
                 <p className="text-sm font-telin text-gray-600">— no active inference</p>
@@ -1775,7 +1892,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                   <span className="text-sm font-bold font-telin text-gray-200">{activeEntries[0].nodeId}</span>
                   <span className="text-xs text-gray-500">(only active node)</span>
                 </div>
-              ) : sameNode ? (
+              ) : sameNode && bestCostNode == null ? (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">→</span>
                   <span className="text-sm font-bold font-telin text-gray-200">{bestLatNode!.nodeId}</span>
@@ -1797,6 +1914,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     <span className="text-sm font-bold font-telin text-gray-200">{bestEffNode!.nodeId}</span>
                     <span className={`text-xs font-telin ml-auto ${wesColorClass(bestEffNode!.wes)}`}>WES {formatWES(bestEffNode!.wes)}</span>
                   </div>
+                  {/* Cost route — always shown when ≥2 active nodes have power data */}
+                  {bestCostNode != null && activeCostEntries.length >= 2 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Cost</span>
+                      <span className="text-xs text-gray-400">→</span>
+                      <span className="text-sm font-bold font-telin text-gray-200">{bestCostNode.nodeId}</span>
+                      <span className="text-xs font-telin text-cyan-400 ml-auto">${bestCostNode.costPer1m!.toFixed(2)}/1M</span>
+                    </div>
+                  )}
                   {/* Delta line */}
                   {(tpsDelta != null || wesDelta != null) && (
                     <p className="text-[10px] text-gray-600 pt-0.5">
