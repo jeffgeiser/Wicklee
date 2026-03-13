@@ -54,12 +54,18 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 
 ---
 
-### C3 — Binary Path Injection in Service Installer
+### C3 — Binary Path Injection in Service Installer ✅ FIXED
 **File:** `agent/src/main.rs` — `--install-service` handler (macOS plist / Linux systemd unit)
 
 **Risk:** The binary path written into the plist/systemd unit is derived from `std::env::current_exe()` without sanitization. A binary installed at a path containing shell metacharacters (`;`, `&`, `$(...)`, etc.) could enable command injection when the service manager reloads the unit file.
 
-**Status:** OPEN — not fixed this session. Mitigation: the installer already requires `sudo`; attack surface is limited to local privilege escalation, not remote. Fix: validate that the binary path contains only safe characters (`[a-zA-Z0-9/_.-]`) and reject with a clear error if not.
+**Fix:**
+- `validate_binary_path(path: &str) -> Result<(), String>` added directly above `install_service()`.
+- **POSIX allowlist:** `[a-zA-Z0-9/_.-]` only — covers all normal Unix install paths; rejects spaces, shell metacharacters, XML-significant chars, and null bytes.
+- **Windows allowlist:** drive letter + `:` + `[a-zA-Z0-9\\/._- ]` — spaces permitted (common in `Program Files` paths); colon only in the drive-letter position.
+- `..` path traversal components rejected on all platforms regardless of where they appear.
+- `install_service()` calls `validate_binary_path()` immediately after resolving the exe path. On failure: prints a clear error explaining the issue and the fix (move binary to a clean path), then returns without writing any file. Nothing is touched until the path is proven safe.
+- Platform-conditional via `#[cfg]` so the correct character set is enforced per OS at compile time.
 
 ---
 
@@ -92,30 +98,50 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 
 ---
 
-### H2 — No Connection Limits on SSE/WebSocket
-**File:** `cloud/src/main.rs` — `handle_fleet_stream`; `agent/src/main.rs` — WS handler
+### H2 — No Connection Limits on SSE/WebSocket ✅ FIXED
+**File:** `cloud/src/main.rs` — `handle_fleet_stream`
 
 **Risk:** No per-IP or total connection cap on SSE or WebSocket endpoints. A single IP can open thousands of connections, exhausting Tokio task memory and Railway's connection limit, causing denial-of-service for all users.
 
-**Status:** OPEN. Fix: Tower middleware `ConcurrencyLimit` or a per-IP atomic counter in `AppState`. Planned for Phase 4A hardening sprint.
+**Fix:**
+- `SseConnStream<S>` — RAII wrapper struct that implements `Stream` (delegating `poll_next`) and `Drop` (decrementing both counters). Fires on clean stream completion **and** abrupt client disconnect via Axum task cancellation.
+- `MAX_SSE_TOTAL = 1_000` — global atomic cap (`Arc<AtomicUsize>` in `AppState`). Uses `Relaxed` ordering; accuracy over time is sufficient, strict sequencing not required.
+- `MAX_SSE_PER_IP = 10` — per-source-IP cap (`Arc<Mutex<HashMap<String, usize>>>` in `AppState`). Map entries evicted when count reaches zero to prevent unbounded growth. IP extracted via the existing `client_ip()` helper (rightmost XFF / ConnectInfo fallback — same as C4).
+- On per-IP limit: **429 Too Many Requests** with descriptive message.
+- On global limit: **503 Service Unavailable**.
+- Per-IP incremented first; rolled back atomically if the global cap rejects the connection — no counter leakage.
+- `handle_fleet_stream` now accepts `ConnectInfo<SocketAddr>` and `HeaderMap` for IP extraction (consistent with `handle_activate`).
 
 ---
 
-### H3 — `fleet_url` Unvalidated (SSRF)
+### H3 — `fleet_url` Unvalidated (SSRF) ✅ FIXED
 **File:** `cloud/src/main.rs` — `handle_claim`
 
 **Risk:** The agent supplies `fleet_url` during the pair/claim call and it is stored verbatim. If the cloud backend ever follows this URL (e.g., for health checks or webhook callbacks), an attacker can supply `http://169.254.169.254/latest/meta-data/` (AWS IMDS) or internal Railway service addresses — classic SSRF.
 
-**Status:** OPEN. The current backend does not follow `fleet_url`, so no immediate exploit. Fix: validate that `fleet_url` matches `https://<railway-domain>` or reject non-HTTPS/non-allowlisted URLs at claim time.
+**Fix:**
+- `validate_fleet_url(url: &str) -> Result<(), &'static str>` added in `cloud/src/main.rs`.
+- Scheme check: must be `http://` or `https://` — rejects `file://`, `ftp://`, `javascript:`, `data:`, and all other vectors at the parse stage.
+- SSRF-dangerous IP ranges blocked: `169.254.x.x` (link-local / AWS IMDS / Railway metadata), `100.64.x.x` (IANA shared address space / CGN), `0.x.x.x` (reserved), `240–255.x.x.x` (reserved/experimental/broadcast).
+- RFC-1918 private ranges (`10.x`, `172.16–31.x`, `192.168.x`) intentionally **not** blocked — agents legitimately run on LAN hosts and the URL is only opened in the operator's own browser.
+- Max length 2048 bytes; null bytes and ASCII control characters rejected.
+- `handle_claim` calls `validate_fleet_url()` before any DB write; invalid URLs → **400 Bad Request** with the specific rejection reason.
+- `parse_ipv4_host()` helper does textual dotted-decimal parsing — no std dependency on `std::net::Ipv4Addr` to keep the code self-contained.
 
 ---
 
-### H4 — `innerHTML` in LandingPage.tsx
+### H4 — Direct DOM Mutation in LandingPage.tsx ✅ FIXED
 **File:** `src/components/LandingPage.tsx`
 
-**Risk:** Uses `dangerouslySetInnerHTML` to render blog/marketing content. If the content source is ever user-controlled or fetched from an external URL, this becomes a stored XSS vector.
+**Risk:** Copy buttons used `document.getElementById` + `btn.innerHTML = '<span>…SVG…</span>'` to show a "Copied!" confirmation. Although the injected HTML was hardcoded (not user-supplied), the pattern bypassed React's virtual DOM, created an XSS surface if the content ever became dynamic, and violated React's reconciliation model (direct mutation causes stale vdom state on the next render cycle).
 
-**Status:** OPEN. Content is currently static/hardcoded. Risk is low until dynamic content is added. Fix: replace `dangerouslySetInnerHTML` with a sanitized Markdown renderer (e.g., `react-markdown` with `rehype-sanitize`) before accepting any user-supplied content.
+**Fix:**
+- Added `{ useState }` to the React import.
+- Added `{ Check }` to the lucide-react import.
+- Two `useState` hooks: `[copiedMac, setCopiedMac]` and `[copiedWin, setCopiedWin]` at the top of the `LandingPage` component.
+- Click handlers: `setCopied*(true)` + `setTimeout(() => setCopied*(false), 2000)` — idiomatic React state pattern.
+- Button content rendered from state: `{copied ? <><Check .../> Copied!</> : <><Copy .../> Copy</>}` — no DOM mutation, no XSS surface, correct reconciliation.
+- `id="copy-install-btn"` and `id="copy-install-win-btn"` removed (no longer needed).
 
 ---
 
@@ -161,14 +187,14 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 |---|---|---|---|
 | C1 | Critical | Unauthenticated `/api/telemetry` | ✅ Hardened — HMAC-style secret + constant-time compare; agent update required |
 | C2 | Critical | CORS wildcard `*` | ✅ Hardened — exact-match allowlist + `Allow-Credentials` only on known origins |
-| C3 | Critical | Binary path injection in service installer | ⏳ Open |
+| C3 | Critical | Binary path injection in service installer | ✅ Fixed — `validate_binary_path()` allowlist; aborts before writing any file |
 | C4 | Critical | Pairing code brute-force (no rate limit) | ✅ Hardened — rightmost XFF, ConnectInfo fallback, `Retry-After: 60` |
 | H1 | High | quinn-proto CVE RUSTSEC-2026-0037 | ✅ Fixed |
-| H2 | High | No connection limits on SSE/WS | ⏳ Open |
-| H3 | High | `fleet_url` unvalidated (SSRF) | ⏳ Open |
-| H4 | High | `dangerouslySetInnerHTML` in LandingPage | ⏳ Open |
+| H2 | High | No connection limits on SSE/WS | ✅ Fixed — `SseConnStream` RAII guard; 10/IP + 1000 total; 429/503 on breach |
+| H3 | High | `fleet_url` unvalidated (SSRF) | ✅ Fixed — `validate_fleet_url()`; scheme + SSRF-IP checks; 400 on rejection |
+| H4 | High | DOM mutation / XSS surface in LandingPage | ✅ Fixed — replaced `btn.innerHTML` with React `useState`; no DOM mutation |
 | H5 | High | Silent catch on pairing API calls | ⏳ Partial |
 
 ---
 
-*Audit conducted March 12, 2026. Next full audit: after Phase 4A ships.*
+*Audit conducted March 12, 2026. C3/H2/H3/H4 fixed March 12, 2026. Next full audit: after Phase 4A ships.*
