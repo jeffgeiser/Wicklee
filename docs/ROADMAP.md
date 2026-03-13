@@ -229,7 +229,7 @@
 - [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
 - [ ] **Keep Warm Toggle (Paid):** Wicklee sends silent ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity.
 - [ ] **CSV / JSON Export:** Any metric, any time range, any node.
-- [ ] **Cold Start Detection:** GPU spike + memory jump + elevated TTFT = cold start event. Requires TTFT data from Sentinel Proxy or vLLM metrics.
+- [ ] **Hardware-Detected Cold Start:** GPU spike + VRAM jump pattern = cold start event. Detects model load transitions from hardware signals alone — no proxy or TTFT measurement required. Labeled "Hardware-Detected" in UI to distinguish from future request-layer timing (Sentinel Proxy, Phase 5).
 - [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
 - [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
 - [ ] **Product Hunt launch**

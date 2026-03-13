@@ -438,7 +438,7 @@ Wicklee is the only tool that owns both hardware telemetry and inference runtime
 | Model-to-Hardware Fit Score | VRAM/unified memory, thermal state | model size, quantization |
 | Power Anomaly Detection | `nvidia_board_power_w` vs `nvidia_gpu_util_percent` | inference activity context |
 | Quantization ROI | power draw, thermal state | tok/s at Q4 vs Q8 |
-| Cold Start Detection | GPU spike, memory pressure jump | TTFT on request #1 |
+| Hardware-Detected Cold Start | GPU spike + VRAM jump | model load → first tok/s transition |
 
 ### Insight Delivery Surfaces
 
