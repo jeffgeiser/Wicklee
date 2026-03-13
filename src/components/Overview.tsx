@@ -11,6 +11,7 @@ import { useNodeRollingMetrics, useRollingBuffer } from '../hooks/useRollingMetr
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
+import MetricTooltip from './MetricTooltip';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -38,7 +39,7 @@ const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
 
 // ── Insight Engine tile — uniform across all 8 fleet-header cells ────────────
 interface InsightTileProps {
-  label: string;
+  label: React.ReactNode;
   value: string;
   valueCls?: string;
   valueTitle?: string;
@@ -51,7 +52,7 @@ interface InsightTileProps {
 const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, valueTitle, sub, sub2, icon: Icon, iconCls }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between h-[116px]">
     <div className="flex items-start justify-between gap-2">
-      <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">{label}</p>
+      <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">{label}</div>
       <Icon size={13} className={iconCls ?? 'text-gray-400 dark:text-gray-600'} />
     </div>
     <div>
@@ -99,12 +100,77 @@ const FleetStatusHeader: React.FC = () => (
     <p className={`${FS_HDR} hidden md:block`}>MEMORY</p>
     <p className={`${FS_HDR} hidden md:block`}>VRAM</p>
     <p className={FS_HDR}>MODEL</p>
-    <p className={FS_HDR}>WES</p>
-    <p className={FS_HDR}>TOK/S</p>
-    <p className={`${FS_HDR} hidden md:block`}>TOK/W</p>
-    <p className={`${FS_HDR} hidden md:block`}>WATTS</p>
-    <p className={`${FS_HDR} hidden md:block`}>GPU%</p>
-    <p className={`${FS_HDR} hidden sm:block`}>THERMAL</p>
+    <MetricTooltip
+      metricId="wes"
+      name="WES — Wicklee Efficiency Score"
+      oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
+      ranges={[
+        { threshold: '> 50',  color: 'green',  label: 'Excellent · Apple Silicon territory' },
+        { threshold: '10–50', color: 'amber',  label: 'Good · efficient GPU at load' },
+        { threshold: '< 10',  color: 'red',    label: 'Fair / Poor · throttling or CPU inference' },
+      ]}
+    >
+      <p className={FS_HDR}>WES</p>
+    </MetricTooltip>
+    <MetricTooltip
+      metricId="tok-s"
+      name="TOK/S — Tokens Per Second"
+      oneLiner="Raw inference throughput sampled every 30 s."
+      ranges={[
+        { threshold: '> 50',  color: 'green', label: 'Fast · responsive for interactive use' },
+        { threshold: '10–50', color: 'amber', label: 'Moderate · usable, not snappy' },
+        { threshold: '< 10',  color: 'red',   label: 'Slow · model may be too large' },
+      ]}
+    >
+      <p className={FS_HDR}>TOK/S</p>
+    </MetricTooltip>
+    <MetricTooltip
+      metricId="tok-w"
+      name="TOK/W — Tokens Per Watt"
+      oneLiner="Energy efficiency without thermal penalty. Higher = better."
+      wrapperClassName="hidden md:block"
+    >
+      <p className={FS_HDR}>TOK/W</p>
+    </MetricTooltip>
+    <MetricTooltip
+      metricId="watts"
+      name="WATTS — Board Power"
+      oneLiner="Total power draw of inference hardware in watts."
+      ranges={[
+        { threshold: '< 15W',   color: 'green', label: 'Low draw · Apple Silicon or idle' },
+        { threshold: '15–150W', color: 'amber', label: 'Moderate · GPU under load' },
+        { threshold: '> 150W',  color: 'red',   label: 'High draw · monitor for cost' },
+      ]}
+      wrapperClassName="hidden md:block"
+    >
+      <p className={FS_HDR}>WATTS</p>
+    </MetricTooltip>
+    <MetricTooltip
+      metricId="gpu-pct"
+      name="GPU% — GPU Utilization"
+      oneLiner="Percentage of GPU compute capacity currently in use."
+      ranges={[
+        { threshold: '60–95%', color: 'green', label: 'Healthy inference load' },
+        { threshold: '95–100%', color: 'amber', label: 'Saturated · may queue requests' },
+        { threshold: '< 30%',  color: 'amber', label: 'Underutilized · check runtime config' },
+      ]}
+      wrapperClassName="hidden md:block"
+    >
+      <p className={FS_HDR}>GPU%</p>
+    </MetricTooltip>
+    <MetricTooltip
+      metricId="thermal"
+      name="THERMAL STATE"
+      oneLiner="OS thermal condition. Drives the WES penalty multiplier."
+      ranges={[
+        { threshold: 'Normal',  color: 'green', label: '1.0× penalty — within design limits' },
+        { threshold: 'Fair',    color: 'amber', label: '1.25× penalty — mild throttling' },
+        { threshold: 'Serious', color: 'red',   label: '2.0× penalty — active throttling' },
+      ]}
+      wrapperClassName="hidden sm:block"
+    >
+      <p className={FS_HDR}>THERMAL</p>
+    </MetricTooltip>
     <div />
   </div>
 );
@@ -475,13 +541,13 @@ const HexHive: React.FC<{ rows: NodeRowProps[] }> = ({ rows }) => {
 
 // ── Fleet Intelligence card wrapper ───────────────────────────────────────────
 const FleetCard: React.FC<{
-  label: string;
+  label: React.ReactNode;
   children: React.ReactNode;
   sub?: React.ReactNode;
   className?: string;
 }> = ({ label, children, sub, className = '' }) => (
   <div className={`bg-gray-800/50 border border-gray-700/40 rounded-xl p-4 flex flex-col gap-2 ${className}`}>
-    <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none">{label}</p>
+    <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none">{label}</div>
     <div className="flex-1">{children}</div>
     {sub && <div className="mt-auto">{sub}</div>}
   </div>
@@ -1136,7 +1202,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {/* 5. AVG WES / NODE WES */}
         <InsightTile
-          label={isLocalMode ? 'Node WES' : 'Avg WES'}
+          label={
+            <MetricTooltip
+              metricId="wes"
+              name="WES — Wicklee Efficiency Score"
+              oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
+              ranges={[
+                { threshold: '> 50',  color: 'green', label: 'Excellent · Apple Silicon' },
+                { threshold: '10–50', color: 'amber', label: 'Good · efficient GPU at load' },
+                { threshold: '< 10',  color: 'red',   label: 'Fair / Poor · throttling' },
+              ]}
+            >
+              {isLocalMode ? 'Node WES' : 'Avg WES'}
+            </MetricTooltip>
+          }
           value={formatWES(displayFleetAvgWES)}
           valueCls={wesColorClass(displayFleetAvgWES)}
           valueTitle={WES_TOOLTIP}
@@ -1151,7 +1230,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {/* 6. WATTAGE / 1K TKN */}
         <InsightTile
-          label="Wattage / 1k Tkn"
+          label={
+            <MetricTooltip
+              metricId="w-1k"
+              name="W/1K TKN — Wattage Per 1K Tokens"
+              oneLiner="Energy cost of generating 1,000 tokens right now."
+            >
+              Wattage / 1k Tkn
+            </MetricTooltip>
+          }
           value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
           valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub="per 1k tokens"
@@ -1162,7 +1249,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* 7. COST / 1K TOKENS — sub2 shows the per-million equivalent so operators
             can compare directly against cloud API pricing without mental arithmetic. */}
         <InsightTile
-          label="Cost / 1k Tokens"
+          label={
+            <MetricTooltip
+              metricId="cost-1k"
+              name="COST/1K TOKENS"
+              oneLiner="Dollar cost of 1,000 tokens based on your configured kWh rate."
+            >
+              Cost / 1k Tokens
+            </MetricTooltip>
+          }
           value={displayCostPer1k != null ? `$${displayCostPer1k.toFixed(4)}` : '—'}
           valueCls={displayCostPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={`at $${fleetKwhRate}/kWh`}
@@ -1552,7 +1647,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 : `$${displayCostPer1M.toFixed(3)}`;
               return (
                 <FleetCard
-                  label="Cost Efficiency"
+                  label={
+                    <MetricTooltip
+                      metricId="cost-efficiency"
+                      name="COST EFFICIENCY — $/1M Tokens"
+                      oneLiner="Fleet-level cost per million tokens at current draw and throughput."
+                    >
+                      Cost Efficiency
+                    </MetricTooltip>
+                  }
                   sub={
                     <p className="text-[10px] text-gray-600 leading-tight">
                       {displayCostPer1M != null
@@ -1574,7 +1677,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 Phase 4A: ranked leaderboard with trend lines and regression detection moves to Insights tab.
                 Do not migrate the live aggregate — only the historical/interpretive layer goes to Insights. */}
             <FleetCard
-              label="Fleet Avg WES"
+              label={
+                <MetricTooltip
+                  metricId="fleet-avg-wes"
+                  name="FLEET AVG WES"
+                  oneLiner="Average WES score across all online nodes."
+                  ranges={[
+                    { threshold: '> 50',  color: 'green', label: 'Excellent fleet efficiency' },
+                    { threshold: '10–50', color: 'amber', label: 'Good · typical GPU fleet' },
+                    { threshold: '< 10',  color: 'red',   label: 'Poor · thermal or CPU inference' },
+                  ]}
+                >
+                  Fleet Avg WES
+                </MetricTooltip>
+              }
               sub={
                 <p className="text-[10px] text-gray-600">
                   {displayFleetAvgWES != null ? `avg across ${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''}` : 'no active inference'}
@@ -1600,7 +1716,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 tps ÷ watts. Inputs are smoothed fleet-total values so this
                 matches what the per-node column rows would sum to on a single-node setup. */}
             <FleetCard
-              label="Tokens Per Watt"
+              label={
+                <MetricTooltip
+                  metricId="tokens-per-watt"
+                  name="TOKENS PER WATT (Fleet)"
+                  oneLiner="Fleet-wide energy efficiency — tok/s per watt across all nodes."
+                >
+                  Tokens Per Watt
+                </MetricTooltip>
+              }
               sub={
                 <p className="text-[10px] text-gray-600 leading-tight">
                   {displayTokPerKW != null

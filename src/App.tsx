@@ -24,6 +24,7 @@ import PreferencesView from './components/PreferencesView';
 import SettingsView from './components/SettingsView';
 import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
+import MetricsPage from './pages/MetricsPage';
 import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
 import AddNodeModal from './components/AddNodeModal';
@@ -336,6 +337,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
     return <SignUpPage onNavigate={navigate} />;
   }
 
+  // Metrics reference route — public, no auth required
+  if (currentPath === '/metrics') {
+    return <MetricsPage onNavigate={navigate} />;
+  }
+
   // Blog routes — public, no auth required
   if (currentPath === '/blog' || currentPath === '/blog/') {
     return (
@@ -473,6 +479,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
         generatePairingCode={generatePairingCode}
         disconnectFleet={disconnectFleet}
         renderContent={renderContent}
+        navigate={navigate}
       />
     </FleetStreamProvider>
   );
@@ -534,6 +541,7 @@ interface DashboardShellProps {
   generatePairingCode: () => void;
   disconnectFleet: () => void;
   renderContent: () => React.ReactNode;
+  navigate: (path: string) => void;
 }
 
 const DashboardShell: React.FC<DashboardShellProps> = (props) => {
@@ -545,7 +553,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
     isUpgradeModalOpen, setIsUpgradeModalOpen, handleUpgrade,
     isPairingModalOpen, setIsPairingModalOpen,
     isAddNodeModalOpen, setIsAddNodeModalOpen, handleNodeAdded,
-    generatePairingCode, disconnectFleet, renderContent,
+    generatePairingCode, disconnectFleet, renderContent, navigate,
   } = props;
 
   return (
@@ -579,6 +587,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
         isLocalHost={isLocalHost}
         pairingInfo={pairingInfo}
         onOpenPairing={() => setIsPairingModalOpen(true)}
+        onNavigate={navigate}
       />
 
       <MobileTabBar activeTab={activeTab} setActiveTab={handleTabChange} />

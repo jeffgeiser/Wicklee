@@ -26,6 +26,10 @@
 - Tools: wicklee_fleet_status, wicklee_best_route,
          wicklee_wes_scores, wicklee_node_metrics
 
+## Metrics Reference
+- /metrics — interactive metrics reference page
+- /metrics.md — raw Markdown version of the metrics reference (machine-readable)
+
 ## Docs
 - /docs/install — installation guide
 - /docs/wes — WES formula and methodology

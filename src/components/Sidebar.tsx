@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Cloud, CloudLightning, Settings, HelpCircle, FileText, User as UserIcon, UserCog } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Cloud, CloudLightning, Settings, BookOpen, Github, User as UserIcon, UserCog } from 'lucide-react';
 import { useClerk } from '@clerk/clerk-react';
 import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
@@ -19,6 +19,7 @@ interface SidebarProps {
   isLocalHost?: boolean;
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
+  onNavigate?: (path: string) => void;
 }
 
 // ── Clerk-dependent account actions — rendered ONLY in non-agent (cloud) builds ─
@@ -50,7 +51,7 @@ const ClerkAccountActions: React.FC<{
   );
 };
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing, onNavigate }) => {
   const permissions = usePermissions(currentUser);
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -190,6 +191,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                   <Settings className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   Settings
                 </button>
+                <button
+                  onClick={() => { onNavigate?.('/metrics'); setIsAvatarMenuOpen(false); }}
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                >
+                  <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  Metrics Reference
+                </button>
                 <a
                   href="https://github.com/jeffgeiser/Wicklee#readme"
                   target="_blank"
@@ -197,18 +205,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                   onClick={() => setIsAvatarMenuOpen(false)}
                   className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                 >
-                  <HelpCircle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                  Documentation
-                </a>
-                <a
-                  href="https://github.com/jeffgeiser/Wicklee/releases"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => setIsAvatarMenuOpen(false)}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
-                >
-                  <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                  Release notes
+                  <Github className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  GitHub
                 </a>
               </div>
 
