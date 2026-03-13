@@ -3,6 +3,11 @@
 /* Class-based dark mode — toggled by adding .dark to <html> */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* 1px base font bump — scales all rem-based text up from 16px → 17px */
+html {
+  font-size: 17px;
+}
+
 @theme {
   --font-family-sans: 'Inter', sans-serif;
   --font-family-mono: 'JetBrains Mono', monospace;
