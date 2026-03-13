@@ -1289,23 +1289,23 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-amber-400"
         />
 
-        {/* 6. ENERGY / 1K TKN — Joules consumed to produce 1,000 tokens.
-            Formula: (totalPowerW / fleetTps) × 1000 → W/(tok/s) × 1k = J/k·tok.
-            Previously mislabelled as "W" (Watts); Joules is the correct unit for
-            energy-per-output-unit. Cost/1M derives from this via ÷3,600,000 × kWhRate. */}
+        {/* 6. WATTAGE / 1K TKN — Power draw normalised to 1,000 tokens/s of capacity.
+            Formula: (totalPowerW / fleetTps) × 1000 → W per (k·tok/s).
+            Equivalent to J/k·tok (same ratio, power framing preferred by convention).
+            Cost/1M derives from this via × kWhRate ÷ 3,600,000 (J→kWh conversion). */}
         <InsightTile
           label={
             <MetricTooltip
               metricId="w-1k"
-              name="J/1K TKN — Joules Per 1K Tokens"
-              oneLiner="Energy needed to generate 1,000 tokens at current fleet throughput and power draw."
+              name="W/1K TKN — Wattage Per 1K Tokens"
+              oneLiner="Watts of sustained power draw per 1,000 tok/s of fleet throughput. Lower = more efficient."
             >
-              Energy / 1k Tkn
+              Wattage / 1k Tkn
             </MetricTooltip>
           }
-          value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} J` : '—'}
+          value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
           valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub="Joules per 1k tokens"
+          sub="per 1k tokens"
           icon={Zap}
           iconCls="text-emerald-400"
         />
