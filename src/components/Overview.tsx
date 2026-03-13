@@ -107,9 +107,9 @@ const FleetStatusHeader: React.FC = () => (
       name="WES — Wicklee Efficiency Score"
       oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
       ranges={[
-        { threshold: '> 50',  color: 'green',  label: 'Excellent · Apple Silicon territory' },
-        { threshold: '10–50', color: 'amber',  label: 'Good · efficient GPU at load' },
-        { threshold: '< 10',  color: 'red',    label: 'Fair / Poor · throttling or CPU inference' },
+        { threshold: '> 10', color: 'green',  label: 'Excellent · efficient inference hardware' },
+        { threshold: '1–10', color: 'amber',  label: 'Good · typical GPU at load' },
+        { threshold: '< 1',  color: 'red',    label: 'Fair / Poor · throttling or CPU inference' },
       ]}
     >
       <p className={FS_HDR}>WES</p>
@@ -905,10 +905,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     const kwhRate  = ns?.kwhRate ?? fleetKwhRate;
     const wes      = computeWES(tps, watts, m.thermal_state, pue);
     const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
-    // Raw $/1M: (watts × PUE × kWh_rate / 1000) / (tok/s × 3600 / 1e6)
-    // Simplified: (watts × pue × kwhRate / 1000) / (tps × 3.6)
+    // Raw $/1M tokens: ($/hr facility cost) / (M tokens/hr throughput)
+    //   $/hr         = watts × pue × kwhRate / 1000   (W → kW → $/hr)
+    //   M tokens/hr  = tps × 3600 / 1,000,000 = tps × 0.0036
+    //   $/1M         = (watts × pue × kwhRate / 1000) / (tps × 0.0036)
+    //                = (watts × pue × kwhRate) / (tps × 3.6)
     const costPer1mRaw = (tps != null && tps > 0 && watts != null)
-      ? ((watts * pue * kwhRate / 1000) / (tps * 3.6))
+      ? ((watts * pue * kwhRate) / (tps * 3.6))
       : null;
     return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason, costPer1mRaw, kwhRate };
   });
@@ -1200,9 +1203,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               name="WES — Wicklee Efficiency Score"
               oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
               ranges={[
-                { threshold: '> 50',  color: 'green', label: 'Excellent · Apple Silicon' },
-                { threshold: '10–50', color: 'amber', label: 'Good · efficient GPU at load' },
-                { threshold: '< 10',  color: 'red',   label: 'Fair / Poor · throttling' },
+                { threshold: '> 10', color: 'green', label: 'Excellent · efficient inference hardware' },
+                { threshold: '1–10', color: 'amber', label: 'Good · typical GPU at load' },
+                { threshold: '< 1',  color: 'red',   label: 'Fair / Poor · throttling' },
               ]}
             >
               {isLocalMode ? 'Node WES' : 'Avg WES'}
@@ -1674,9 +1677,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                   name="FLEET AVG WES"
                   oneLiner="Average WES score across all online nodes."
                   ranges={[
-                    { threshold: '> 50',  color: 'green', label: 'Excellent fleet efficiency' },
-                    { threshold: '10–50', color: 'amber', label: 'Good · typical GPU fleet' },
-                    { threshold: '< 10',  color: 'red',   label: 'Poor · thermal or CPU inference' },
+                    { threshold: '> 10', color: 'green', label: 'Excellent fleet efficiency' },
+                    { threshold: '1–10', color: 'amber', label: 'Good · typical GPU fleet' },
+                    { threshold: '< 1',  color: 'red',   label: 'Poor · thermal or CPU inference' },
                   ]}
                 >
                   Fleet Avg WES
