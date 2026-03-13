@@ -3,7 +3,7 @@ export interface NodeAgent {
   id: string;
   hostname: string;
   ip: string;
-  status: 'online' | 'offline' | 'degraded';
+  status: 'online' | 'offline' | 'degraded' | 'unreachable' | 'idle';
   gpuTemp: number | null;
   vramUsed: number | null;
   vramTotal: number | null;
