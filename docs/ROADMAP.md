@@ -30,10 +30,11 @@
 
 **Inference Runtime**
 - Ollama integration: auto-detect `localhost:11434`, model name, quantization, size
-- 30-second sampled tok/s probe via `/api/generate` (num_predict=3)
+- 20-token scheduled tok/s probe via `/api/generate` (num_predict=20) — pure generation phase (`eval_count ÷ eval_duration`), isolated from prompt load time. Dynamic scheduling: probe skipped when GPU util ≥ 40% (estimation covers the gap).
+- Throughput estimation: `Peak_TPS × GPU_Utilization%` fills the gap when probe is skipped or fails. Session-scoped peak resets on model swap. Applied to TOK/S, WES, Cost/1M, and fleet totals.
 - Wattage/1K TKN: live calculation from board power ÷ tok/s
-- Cost/1K TKN: wattage × configurable kWh rate (default $0.13)
-- vLLM integration: Prometheus `/metrics` at `localhost:8000` — real tok/s (no 30s probe), model name, KV cache utilisation %, requests running; 2s poll; `#[serde(skip_serializing_if)]` keeps JSON compact when not running
+- Cost/1M TKN: `(watts × pue × kwhRate) / (tps × 3.6)` — per-million for direct cloud API comparison
+- vLLM integration: Prometheus `/metrics` at `localhost:8000` — passive scrape of `avg_generation_throughput_toks_per_s` (no synthetic tokens), model name, KV cache utilisation %, requests running; 2s poll
 
 **UI**
 - Fleet Overview: 6 real-time summary cards (all live data, no mock values)
@@ -74,8 +75,8 @@
 
 > Full spec and wireframe: `docs/INSIGHTS.md`. This is the canonical reference for all card designs, tier gating, and section layout.
 
-- [ ] **`InsightsTab.tsx` shell** — Global Status Rail + 3-section grid (`InsightsSection` component). Replaces any existing placeholder tab content.
-- [ ] **`InsightsGlobalStatusRail.tsx`** — full-width bar: nominal state (green pulse + ALL SYSTEMS NOMINAL + stats ticker) / active state (full amber/red bg + alert rows + anchor links). Always pinned.
+- [x] **`InsightsTab.tsx` shell** — Global Status Rail + 3-section grid (`InsightsSection` component). Replaces any existing placeholder tab content.
+- [x] **`InsightsGlobalStatusRail.tsx`** — full-width bar: nominal state (green pulse + ALL SYSTEMS NOMINAL + stats ticker) / active state (full amber/red bg + alert rows + anchor links). Always pinned.
 - [ ] **`InsightsLockedCard.tsx`** — gate wrapper: blurred body, lock icon, tier badge, upgrade CTA. No mock data.
 - [ ] **`InsightsLiteCard.tsx`** — partial-data wrapper for Community views of Pro/Team cards (reduced data density + "Unlock full view →" CTA).
 
@@ -83,7 +84,7 @@
 - [ ] **Alert Trio** (`ThermalDegradationCard`, `PowerAnomalyCard`, `MemoryExhaustionCard`) — stacked dormant list, expands in-place on fire. Dormant state: compact ~32px bar with current reading + green dot. Fire state: full split-graph card.
 - [ ] **Model Fit Score card** — Lite at Community (score label only); full card at Pro+ (history chart, recommendation).
 - [ ] **WES Leaderboard card** — Lite at Community (top-3 rank only, no sparklines); full at Pro+.
-- [ ] **Inference Density live** — existing `HexHive.tsx` embedded in the third Health Indicator slot. Always visible at all tiers.
+- [x] **Inference Density live** — existing `HexHive.tsx` embedded in the third Health Indicator slot. Always visible at all tiers.
 
 **Section 2 — Automation & Cost (Pro)**
 - [ ] **Model Eviction card** — countdown timer `EVICTION IN MM:SS`; KEEP WARM toggle (Pro+); locked shell for Community with upgrade copy.
@@ -151,7 +152,7 @@
 - [x] **Raw Markdown route** — every post served at `/blog/[slug]` (rendered) and `/blog/[slug].md` (raw text). Agents fetch the `.md` directly.
 - [x] **Path-based routing** — `currentPath` state + `navigate()` + `popstate` listener in App.tsx. Blog routes bypass auth entirely.
 - [x] **Blog nav link** — "Blog" added to LandingPage nav between Documentation and GitHub.
-- [ ] **First post content:** `wes-the-mpg-for-local-ai-inference.md` — WES formula, live fleet data, four-node comparison table, IPW academic citation (arXiv:2511.07885). *(placeholder live, full article pending)*
+- [ ] **First post content:** Drop any `.md` into `/public/blog/` — Vite plugin auto-generates `index.json` at build time. Suggested first post: WES formula, live fleet data, four-node comparison table, IPW academic citation (arXiv:2511.07885). Blog listing at `/blog`, profile menu entry added.
 
 ### Launch Prep
 - [ ] Fix mock data on localhost fleet overview cards
