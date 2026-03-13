@@ -511,8 +511,10 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
     };
 
     let mut val = Validation::new(Algorithm::RS256);
-    val.validate_aud = false; // Clerk uses azp, not aud
-    val.leeway = 60;          // 60s leeway for clock skew
+    val.validate_exp = true;  // explicit — jsonwebtoken v9 default; stated to prevent silent
+                              // regression if the crate ever changes its default behaviour
+    val.validate_aud = false; // Clerk uses azp claim, not aud
+    val.leeway = 60;          // 60s clock-skew tolerance; safe — Clerk JWTs expire in 1h
 
     for jwk in &candidates {
         match DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
@@ -1332,8 +1334,15 @@ async fn handle_fleet_stream(
         ).ok()
     }).await.unwrap() {
         Some(uid) => uid,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
+        None => {
+            // L3 — log auth failures so abuse is detectable in Railway logs.
+            // Log only the first 8 chars of the token (UUID prefix) — enough for
+            // correlation without exposing a usable credential fragment.
+            let tok_pfx = &stream_token[..stream_token.len().min(8)];
+            eprintln!("[auth] SSE 401 — invalid or expired stream token (prefix={tok_pfx})");
+            return (StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response();
+        }
     };
 
     // H2 — Enforce per-IP and global SSE connection caps BEFORE allocating any

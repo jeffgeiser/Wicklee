@@ -206,10 +206,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const nodeTokPerWatt = (isActive && hasPower && totalPowerW > 0)
     ? tps! / totalPowerW
     : null;
-  // Audit log: confirms per-node smoothed inputs feeding the TOK/W column.
-  // Remove after field verification.
-  console.log('[tok/W audit] table row', nodeId, { tps, totalPowerW, nodeTokPerWatt });
-
   // GPU% — Apple Silicon via IOKit/AGX, NVIDIA via NVML
   const gpuPct = isOnline
     ? (m!.nvidia_gpu_utilization_percent ?? m!.gpu_utilization_percent ?? null)
@@ -987,10 +983,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const displayTokPerKW = (displayFleetTps != null && displayFleetWatts != null && displayFleetWatts > 0)
     ? displayFleetTps / displayFleetWatts
     : null;
-  // Audit log: confirms smoothed fleet-level inputs feeding the Fleet Intelligence card.
-  // Remove after field verification.
-  console.log('[tok/W audit] fleet card', { displayFleetTps, displayFleetWatts, displayTokPerKW });
-
   // ── SSE connection indicator (3-state) ──────────────────────────────────────
   const sseNow = Date.now();
 

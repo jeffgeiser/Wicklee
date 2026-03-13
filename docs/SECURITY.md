@@ -168,13 +168,13 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 | ID | Location | Issue | Status |
 |---|---|---|---|
 | L1 | `cloud/src/main.rs` | `/api/auth/signup` and `/api/auth/login` are dead routes — Clerk handles auth. No rate limits on them, but they reject all calls. | Dead code; remove in cleanup sprint |
-| L2 | `cloud/src/main.rs` | `stream_tokens` table cleanup runs every 5 min; no index on `expires_ms`. At scale (>10k tokens) this becomes a full table scan. | Add `CREATE INDEX idx_stream_tokens_expires ON stream_tokens(expires_ms)` |
-| L3 | `cloud/src/main.rs` | `handle_fleet_stream` logs nothing on auth failure. Silent 401s make abuse detection impossible. | Add structured log line on auth failure |
+| L2 | `cloud/src/main.rs` | `stream_tokens` table cleanup runs every 5 min; no index on `expires_ms`. At scale (>10k tokens) this becomes a full table scan. | ✅ Fixed — `CREATE INDEX IF NOT EXISTS idx_stream_tokens_expires ON stream_tokens(expires_ms)` already in schema migration |
+| L3 | `cloud/src/main.rs` | `handle_fleet_stream` logs nothing on auth failure. Silent 401s make abuse detection impossible. | ✅ Fixed — `eprintln!("[auth] SSE 401 — invalid or expired stream token (prefix=…)")` on auth failure; token prefix only (not full credential) |
 | L4 | `agent/src/main.rs` | `--install-service` writes the launchd plist with `NSAllowsArbitraryLoads = false` but doesn't set `NSAppTransportSecurity` explicitly. Benign on macOS 11+ but worth documenting. | Documentation only |
 | L5 | `src/utils/wes.ts` | `THERMAL_PENALTY` for `serious` and `critical` are both `2.0`. Planned WES v2 changes `serious` to `1.75`. This is a known tracked inconsistency. | Fix in WES v2 sprint |
-| L6 | `src/components/Overview.tsx` | `console.log('[tok/W audit]...')` left in production code. | Remove before Show HN |
+| L6 | `src/components/Overview.tsx` | `console.log('[tok/W audit]...')` left in production code. | ✅ Fixed — both tok/W audit log calls removed (table row + fleet card) |
 | L7 | `agent/Cargo.toml` | `self_update` 0.41 is listed as `default-features = false` but `quinn` is still in the lock file. Confirm whether QUIC is actually needed or if a lighter update crate would eliminate the dependency entirely. | Investigate in binary-size sprint |
-| L8 | `cloud/src/main.rs` | JWT validation uses `Validation::new(Algorithm::RS256)` without setting `validate_exp = true` explicitly. Confirm the default includes expiry validation. | Audit jsonwebtoken defaults |
+| L8 | `cloud/src/main.rs` | JWT validation uses `Validation::new(Algorithm::RS256)` without setting `validate_exp = true` explicitly. Confirm the default includes expiry validation. | ✅ Fixed — `val.validate_exp = true` now explicit; `leeway = 60` documented as intentional clock-skew tolerance (Clerk JWTs expire in 1h) |
 | L9 | `src/components/NodesList.tsx` | `allLive.filter(m => m.cpu_power_w != null)` used to detect Apple Silicon. Heuristic is fragile — `cpu_power_w` can be null on Linux too. | Use `chip_name` + `gpu_name` heuristic (already done in `NodeHardwarePanel`) |
 
 ---
@@ -206,4 +206,4 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 
 ---
 
-*Audit conducted March 12, 2026. C3/H2/H3/H4 fixed March 12, 2026. H5 fixed March 12, 2026. All High findings resolved. Next full audit: after Phase 4A ships.*
+*Audit conducted March 12, 2026. C3/H2/H3/H4 fixed March 12, 2026. H5 fixed March 12, 2026. L2/L3/L6/L8 fixed March 12, 2026. All Critical and High findings resolved. Next full audit: after Phase 4A ships.*
