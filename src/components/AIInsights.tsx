@@ -45,6 +45,8 @@ import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
 import InsightsLockedCard from './insights/InsightsLockedCard';
 import InsightsLiteCard   from './insights/InsightsLiteCard';
+import HexHive from './shared/HexHive';
+import type { HexHiveRow } from './shared/HexHive';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -207,7 +209,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const memFiredAtRef     = useRef<number | null>(null);
 
   // Fleet data from SSE context
-  const { allNodeMetrics } = useFleetStream();
+  const { allNodeMetrics, lastSeenMsMap } = useFleetStream();
 
   const { getNodeSettings } = useSettings();
 
@@ -278,6 +280,17 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const effectiveNodes: SentinelMetrics[] = isLocalHost && localSentinel
     ? [localSentinel]
     : Object.values(allNodeMetrics);
+
+  // ── HexHive rows ──────────────────────────────────────────────────────────
+
+  const hiveRows: HexHiveRow[] = isLocalHost && localSentinel
+    ? [{ nodeId: localSentinel.node_id, hostname: localSentinel.hostname ?? localSentinel.node_id, metrics: localSentinel }]
+    : Object.entries(allNodeMetrics).map(([nodeId, metrics]) => ({
+        nodeId,
+        hostname: metrics.hostname ?? nodeId,
+        metrics,
+        lastSeenMs: lastSeenMsMap[nodeId],
+      }));
 
   // ── Tier 1 conditions (fleet-wide) ────────────────────────────────────────
 
@@ -592,7 +605,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
               </InsightsLiteCard>
             )}
 
-            {/* Inference Density — live HexHive placeholder */}
+            {/* Inference Density — live HexHive */}
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
               <div className="flex items-center gap-2">
                 <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -600,12 +613,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
                   Inference Density
                 </span>
               </div>
-              <div className="flex items-center justify-center h-16 text-gray-700">
-                <div className="text-center">
-                  <Activity className="w-6 h-6 mx-auto mb-1 opacity-30" />
-                  <p className="text-[10px] text-gray-700 uppercase tracking-widest">HexHive — Phase 3A</p>
-                </div>
-              </div>
+              <HexHive rows={hiveRows} />
             </div>
 
           </div>
@@ -763,7 +771,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
                   <BrainCircuit className="w-8 h-8 text-white" />
                 </div>
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                  Local Intelligence
+                  Fleet Analysis
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 max-w-lg mb-8">
                   Powered by your local Ollama model — fleet data never leaves your network.
