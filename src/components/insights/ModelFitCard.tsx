@@ -51,11 +51,16 @@ interface ModelFitCardProps {
   node:   SentinelMetrics;
   /** Fleet mode (wicklee.dev): show node ID + hostname as a header band above the card. */
   showNodeHeader?: boolean;
+  /**
+   * When true, the outer bg/border/rounded wrapper is omitted so the card
+   * content composes cleanly inside InsightCard without double-nesting.
+   */
+  bare?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeader = false }) => {
+const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeader = false, bare = false }) => {
   const cfg       = SCORE_CONFIG[result.score];
   const ScoreIcon = cfg.icon;
 
@@ -73,9 +78,9 @@ const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeade
   const usedBarPct  = Math.min((otherUsedGb       / result.totalGb) * 100, 100 - modelBarPct);
   // Free segment fills whatever remains (via flex, no explicit width needed)
 
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-
+  // Inner content block — shared between bare and standard renders
+  const innerContent = (
+    <>
       {/* ── Fleet mode header: node ID + hostname ─────────────────────────── */}
       {showNodeHeader && (
         <div className="px-5 py-2.5 border-b border-gray-800 bg-gray-800/40 flex items-center justify-between gap-3">
@@ -183,6 +188,15 @@ const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeade
         </div>
 
       </div>
+    </>
+  );
+
+  // bare=true: skip the outer card shell — InsightCard provides the wrapper
+  if (bare) return innerContent;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+      {innerContent}
     </div>
   );
 };
