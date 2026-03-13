@@ -178,6 +178,8 @@ struct AppState {
     metrics:        Arc<RwLock<HashMap<String, MetricsEntry>>>,
     /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
     clerk_keys:     Arc<RwLock<Vec<JwkKey>>>,
+    /// C4 — per-IP pairing attempt timestamps for sliding-window rate limiting.
+    pair_attempts:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -289,6 +291,24 @@ fn is_dev_account(email: &str) -> bool {
     std::env::var("DEV_ACCOUNT_EMAIL")
         .map(|e| e.trim().to_lowercase() == email.trim().to_lowercase())
         .unwrap_or(false)
+}
+
+// ── Rate-limit constants (C4) ─────────────────────────────────────────────────
+
+/// Max pairing-code attempts per IP within the sliding window.
+const MAX_PAIR_ATTEMPTS: usize = 10;
+/// Sliding window duration in milliseconds.
+const PAIR_WINDOW_MS: u64 = 60_000;
+
+/// Extract the client IP from `X-Forwarded-For` (Railway proxy) or fall back
+/// to a fixed string.  We only need this for rate-limiting — not for auth.
+fn client_ip(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -783,6 +803,28 @@ async fn handle_telemetry(
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
 
+    // C1 — Verify the node is registered before accepting its metrics.
+    //
+    // Fast path: if the node_id is already in the in-memory map it was either
+    // seeded from the DB at startup or previously validated.  Only hit the DB
+    // for node_ids we haven't seen before (e.g., fresh agent restarts).
+    let known = state.metrics.read().unwrap().contains_key(&node_id);
+    if !known {
+        let db2 = state.db.clone();
+        let nid = node_id.clone();
+        let exists = tokio::task::spawn_blocking(move || {
+            let conn = db2.lock().unwrap();
+            conn.query_row(
+                "SELECT 1 FROM nodes WHERE wk_id = ?1",
+                params![nid],
+                |_| Ok(()),
+            ).is_ok()
+        }).await.unwrap_or(false);
+        if !exists {
+            return StatusCode::FORBIDDEN;
+        }
+    }
+
     // Update in-memory snapshot.
     {
         let mut map = state.metrics.write().unwrap();
@@ -790,7 +832,7 @@ async fn handle_telemetry(
             entry.last_seen_ms = ts;
             entry.metrics      = Some(payload);
         } else {
-            // Accept telemetry even if the node reconnects after a restart.
+            // Node reconnecting after restart — already validated above.
             map.insert(node_id.clone(), MetricsEntry { last_seen_ms: ts, metrics: Some(payload) });
         }
     }
@@ -875,6 +917,22 @@ async fn handle_activate(
     if body.code.len() != 6 || !body.code.chars().all(|c| c.is_ascii_digit()) {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
+    }
+
+    // C4 — Sliding-window rate limit: max 10 attempts per IP per 60 seconds.
+    let ip  = client_ip(&headers);
+    let now = now_ms();
+    {
+        let mut attempts = state.pair_attempts.lock().unwrap();
+        let entry = attempts.entry(ip.clone()).or_default();
+        entry.retain(|&t| now - t < PAIR_WINDOW_MS);
+        if entry.len() >= MAX_PAIR_ATTEMPTS {
+            return (StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({
+                    "error": "Too many pairing attempts. Try again in 60 seconds."
+                }))).into_response();
+        }
+        entry.push(now);
     }
 
     // Auth is required — a node must always be owned by an account.
@@ -1112,28 +1170,55 @@ fn version_json(tag_name: &str, latest: &str, platform: &str) -> Response {
         .into_response()
 }
 
-// ── CORS middleware ───────────────────────────────────────────────────────────
+// ── CORS middleware (C2 — origin allowlist) ───────────────────────────────────
 //
 // Injected directly into the response so Railway's proxy cannot strip the
 // headers. OPTIONS preflights are short-circuited with 200 OK before they
 // reach any route handler.
+//
+// Only origins in ALLOWED_ORIGINS receive the Access-Control-Allow-Origin
+// header; all other origins get no CORS header and the browser blocks them.
+// Agents posting to /api/telemetry never send an Origin header, so they are
+// unaffected.
+
+const ALLOWED_ORIGINS: &[&str] = &[
+    "https://wicklee.dev",
+    "https://www.wicklee.dev",
+    "http://localhost:5173",   // Vite dev server
+    "http://localhost:3000",   // alternate dev port
+];
 
 async fn cors(req: Request<Body>, next: Next) -> Response {
+    // Validate the Origin header before consuming the request.
+    let allow_origin: Option<String> = req.headers()
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .filter(|o| ALLOWED_ORIGINS.contains(o))
+        .map(|o| o.to_owned());
+
+    // Short-circuit OPTIONS preflights — never reach route handlers.
     if req.method() == Method::OPTIONS {
-        return (
+        let mut response = (
             StatusCode::OK,
             [
-                (header::ACCESS_CONTROL_ALLOW_ORIGIN,  "*"),
                 (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS"),
                 (header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type, authorization"),
             ],
         ).into_response();
+        if let Some(ref origin) = allow_origin {
+            if let Ok(val) = header::HeaderValue::from_str(origin) {
+                response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
+            }
+        }
+        return response;
     }
 
     let mut res = next.run(req).await;
-    let h = res.headers_mut();
-    h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        header::HeaderValue::from_static("*"));
+    if let Some(ref origin) = allow_origin {
+        if let Ok(val) = header::HeaderValue::from_str(origin) {
+            res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
+        }
+    }
     res
 }
 
@@ -1191,9 +1276,10 @@ async fn main() {
     let clerk_keys = Arc::new(RwLock::new(initial_keys));
 
     let state = AppState {
-        db:         Arc::new(Mutex::new(conn)),
-        metrics:    Arc::new(RwLock::new(seed_metrics)),
-        clerk_keys: clerk_keys.clone(),
+        db:            Arc::new(Mutex::new(conn)),
+        metrics:       Arc::new(RwLock::new(seed_metrics)),
+        clerk_keys:    clerk_keys.clone(),
+        pair_attempts: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.

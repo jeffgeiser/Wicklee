@@ -4,6 +4,128 @@
 
 ---
 
+## March 12, 2026 — Security Hardening, Install Polish, Fleet Count Unification 🔒
+
+**The Goal:** Pre-Show HN security pass. Full codebase audit across dead code, performance, correctness, and security. Ship the highest-priority fixes. Document everything in `docs/SECURITY.md`. Unify all node count displays behind a single hook.
+
+---
+
+### Install Script & Landing Page Polish ✅
+
+**`install.sh` + `public/install.ps1`:**
+- Success block replaced with version-dynamic output: `✓ Wicklee agent installed successfully (vX.X.X)`
+- Recommended next step shown inline: `sudo wicklee --install-service`
+- Fallback `sudo wicklee` shown beneath it
+- PowerShell: version extracted via `wicklee --version`, falls back to release tag
+
+**`src/components/LandingPage.tsx`:**
+- Install section split into macOS/Linux (`curl`) + Windows (`irm`) blocks with separate copy buttons
+- `--install-service` inline comment: `← runs on every boot`
+- URL updated from `https://get.wicklee.dev` → `https://wicklee.dev/install.sh`
+
+**`README.md`:**
+- Replaced stale "curl install script coming soon" stub with live commands
+- Added **Service Management** table: macOS/Linux/Windows rows for install/remove/status
+
+---
+
+### Dashboard Polish ✅ (commit `2f217a1`)
+
+**`NodesList.tsx` — Management tab restructure:**
+- `HarvesterHealth`: compact 2-column grid instead of full-width stacked
+- `TelemetryRelayStatus`: slim single-row pill (was prominent card)
+- Section order: HarvesterHealth → tiles → table → TelemetryRelayStatus → CTA
+- VERSION column: shows `VITE_AGENT_VERSION` for local node
+- RAPL hint: `sudo wicklee --install-service`
+
+**`Overview.tsx` + `NodeHardwarePanel.tsx`:**
+- `DiagnosticRail`: 5-sample rolling-average buffers (cpu/gpu/mem/power) moved before early `!s` return — Rules of Hooks fix
+- Fleet Preview CTA: hidden when `pairingInfo.status === 'connected'`; copy → "Monitor from anywhere"
+- Apple Silicon VRAM tile: shows `— / Unified Memory` instead of blank when `nvidia_vram_total_mb` is null
+
+**`TracesView.tsx`:** Auto-sync dot — gray (no data) / green+pulse (receiving) / red (error)
+
+**`Sidebar.tsx`:** Fleet Connected pill collapsed state = icon centered only; text fades in on hover via `group-hover/nav`
+
+---
+
+### AddNodeModal — 3-Step Wizard ✅ (commit `be8068f`)
+
+Full rewrite of `AddNodeModal.tsx` (cloud-side, wicklee.dev) as a guided 3-step flow:
+- **Step 1:** Install agent — `curl` command + `--install-service` recommended, macOS/Linux only
+- **Step 2:** Open `localhost:7700`, find the 6-digit code
+- **Step 3:** Existing digit-by-digit pairing code input
+
+Added `StepDots` component, `CopyBtn`, `CmdRow` sub-components. `useEffect` resets state on modal open. `autoFocus` on first digit in step 3. `max-w-md` (was `max-w-sm`).
+
+---
+
+### Full Security Audit ✅
+
+Four-category audit across cloud Rust backend, agent Rust code, and frontend TypeScript:
+1. Dead code
+2. Performance
+3. Correctness risks
+4. Security (injection, auth bypass, DoS, info disclosure, CORS, SSE token, CVEs)
+
+**Tools run:** `cargo audit` (cloud + agent), `npm audit`
+
+Results:
+- npm audit: **0 vulnerabilities**
+- cargo audit (cloud): **0 vulnerabilities**
+- cargo audit (agent): **1 CVE** (quinn-proto 0.11.13, RUSTSEC-2026-0037, CVSS 8.7)
+
+Full findings documented in `docs/SECURITY.md`. Fixes for C1/C2/C4/H1 shipped this session.
+
+---
+
+### Security Fixes ✅ (commit — this session)
+
+**H1 — quinn-proto CVE (RUSTSEC-2026-0037):**
+- `cargo update -p quinn-proto` in `agent/` → 0.11.13 → **0.11.14** (patched)
+
+**C2 — CORS wildcard → origin allowlist:**
+- `cloud/src/main.rs` CORS middleware: `Access-Control-Allow-Origin: *` replaced with per-request origin validation against `ALLOWED_ORIGINS` allowlist (`wicklee.dev`, `www.wicklee.dev`, `localhost:5173`, `localhost:3000`)
+- Unknown origins receive no CORS header — browser blocks the request
+
+**C1 — `/api/telemetry` unauthenticated:**
+- Added node_id existence check: fast in-memory lookup first (O(1) for known nodes), DB fallback only for new/restarting nodes
+- Unregistered node_ids → **403 Forbidden**
+- Prevents fake metric injection from arbitrary node IDs
+
+**C4 — Pairing code brute-force:**
+- Added per-IP sliding-window rate limiter to `handle_activate`
+- 10 attempts per IP per 60-second window → **429 Too Many Requests**
+- `client_ip()` helper: reads `X-Forwarded-For` (Railway proxy) with direct IP fallback
+- `pair_attempts: Arc<Mutex<HashMap<String, Vec<u64>>>>` added to `AppState`
+
+---
+
+### `useFleetCounts` — Single Source of Truth ✅ (commit `efd0ba8`)
+
+**Problem:** FLEET NODES tile used `effectiveMetrics.length` (SSE-derived, can lag), NodesList used `enriched.filter(e => e.isOnline).length` (client-side time check). Both diverged from each other and from the registered `NodeAgent[]` array.
+
+**Fix:** `src/hooks/useFleetCounts.ts` — a single `useMemo` hook returning `{ total, online, unreachable, idle }` from the live `NodeAgent[]` array. One hook, one source, zero divergence.
+
+**`NodeAgent.status`** extended: `'online' | 'offline' | 'degraded' | 'unreachable' | 'idle'` — type-safe and forward-compatible with backend status values.
+
+**Replaced in:**
+- `Overview.tsx`: FLEET NODES tile + Fleet Status header pill
+- `NodesList.tsx`: Connectivity tile, status-filter tab badges, footer counts
+
+---
+
+### What Was Learned
+
+- **Rules of Hooks is non-negotiable** — moving 4 `useRollingBuffer()` calls before the `if (!s) return` in `DiagnosticRail` was a correctness fix, not an optimization. React will silently misbehave otherwise.
+- **CORS `*` is a pre-auth header, not a post-auth one** — it lets any origin send credentials. The fix is per-request echo of allowed origins, which is standard practice.
+- **Telemetry without auth is effectively an open write endpoint** — even without user impact today, it's a data integrity risk and a DoS vector once traffic scales.
+- **Rate limiting pairing codes is table stakes** — 10^6 codes with no limit = brute-forceable in minutes with a fast connection.
+- **cargo audit isolation** — no workspace-level `Cargo.lock` in this repo; audits must be run from `cloud/` and `agent/` subdirectories separately.
+- **Single source of truth for UI state** — count divergence between tiles is a trust-eroding class of bug. One hook eliminates the category.
+
+---
+
 ## March 12, 2026 — Rolling Smoothing, Nav Polish, Cloud Version Endpoint 🔧
 
 **The Goal:** Eliminate metric jitter in the dashboard display, fix nav visual regressions after the rail refactor, and ship a version endpoint to the cloud backend.
