@@ -1036,11 +1036,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? bestEffNode.wes / bestLatNode!.wes! : null;
 
   // Tile 6 — WATTAGE / 1K TKN: total power ÷ fleet throughput × 1000
+  // wattPowerNodes exposed so the tile subtitle can show the contributing node count.
+  const wattPowerNodes = (fleetTps != null && fleetTps >= MIN_COST_TPS)
+    ? tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null)
+    : [];
   const wattPer1k = (() => {
     if (fleetTps == null || fleetTps < MIN_COST_TPS) return null;
-    const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
-    if (powerNodes.length === 0) return null;
-    const totalPowerW = powerNodes.reduce((acc, m) =>
+    if (wattPowerNodes.length === 0) return null;
+    const totalPowerW = wattPowerNodes.reduce((acc, m) =>
       acc + (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0), 0);
     return (totalPowerW / fleetTps) * 1000;
   })();
@@ -1305,7 +1308,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           }
           value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
           valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub="per 1k tokens"
+          sub={wattPowerNodes.length > 0
+            ? `${wattPowerNodes.length} node${wattPowerNodes.length !== 1 ? 's' : ''} · per 1k tokens`
+            : 'per 1k tokens'}
           icon={Zap}
           iconCls="text-emerald-400"
         />
