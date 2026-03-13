@@ -1,9 +1,28 @@
 import { useRef } from 'react';
 
-const ROLLING_WINDOW = 5;
+/**
+ * Smoothing windows — two tiers:
+ *
+ *  NODE_ROLLING_WINDOW (8)   — per-node row metrics (tps, watts, gpu%).
+ *    Responsive enough to track fast hardware changes while suppressing
+ *    single-probe noise.
+ *
+ *  FLEET_ROLLING_WINDOW (12) — top-of-page fleet InsightTiles (fleet tok/s,
+ *    fleet WES, $/1M, W/1k). These are the most visible numbers and the
+ *    most volatile (tok/s is only sampled every 30 s), so a longer window
+ *    keeps them calm without losing the live feel across ~2 probe cycles.
+ *
+ *  Steadier fleet metrics (raw watts, power-cost cards) use the node
+ *  window (8) since they don't need extra damping.
+ */
+export const NODE_ROLLING_WINDOW  = 8;
+export const FLEET_ROLLING_WINDOW = 12;
+
+/** @deprecated use NODE_ROLLING_WINDOW or FLEET_ROLLING_WINDOW */
+const ROLLING_WINDOW = NODE_ROLLING_WINDOW;
 
 /**
- * Generic 5-sample rolling-average buffer.
+ * Generic rolling-average buffer.
  *
  * push(value, tsMs)
  *   • Null/undefined/NaN values are skipped — buffer unchanged, current mean returned.
@@ -13,7 +32,7 @@ const ROLLING_WINDOW = 5;
  *
  * reset()  — clears the buffer (call when the node goes offline).
  */
-export function useRollingBuffer(window: number = ROLLING_WINDOW) {
+export function useRollingBuffer(window: number = NODE_ROLLING_WINDOW) {
   const state = useRef<{ buf: number[]; lastTs: number }>({ buf: [], lastTs: 0 });
 
   function push(value: number | null | undefined, tsMs = 0): number | null {
