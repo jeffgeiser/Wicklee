@@ -208,6 +208,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const powerFiredAtRef   = useRef<number | null>(null);
   const memFiredAtRef     = useRef<number | null>(null);
 
+  // ── Per-node activity tracking for Mission Control (fleet) ────────────────
+  // Mirrors the Cockpit's lastActiveTsMs / firstMessageTs / hadAnyActivity
+  // refs, but keyed by node_id so they work across an entire fleet.
+  const nodeLastActiveMsRef = useRef<Record<string, number>>({});
+  const nodeSessionStartRef = useRef<Record<string, number>>({});
+  const nodeHadActivityRef  = useRef<Record<string, boolean>>({});
+
   // Fleet data from SSE context
   const { allNodeMetrics, lastSeenMsMap } = useFleetStream();
 
@@ -275,6 +282,26 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     };
   }, []);
 
+  // ── Fleet activity tracking (Mission Control only) ────────────────────────
+  // On every SSE frame, update per-node session-start / last-active / had-activity
+  // refs so Section 2 cards can fire for fleet nodes, not just Cockpit.
+  useEffect(() => {
+    if (isLocalHost) return; // Cockpit tracks via the local SSE effect above
+    const nowMs = Date.now();
+    for (const [nodeId, nm] of Object.entries(allNodeMetrics)) {
+      // Initialize session start & last-active on first sight of a node
+      if (nodeSessionStartRef.current[nodeId] === undefined) {
+        nodeSessionStartRef.current[nodeId] = nowMs;
+        nodeLastActiveMsRef.current[nodeId] = nowMs;
+      }
+      const toks = (nm.ollama_tokens_per_second ?? 0) + (nm.vllm_tokens_per_sec ?? 0);
+      if (toks > 0) {
+        nodeLastActiveMsRef.current[nodeId] = nowMs;
+        nodeHadActivityRef.current[nodeId]  = true;
+      }
+    }
+  }, [allNodeMetrics]);
+
   // ── Effective node list ────────────────────────────────────────────────────
 
   const effectiveNodes: SentinelMetrics[] = isLocalHost && localSentinel
@@ -332,17 +359,41 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   if (powerFiring && powerFiredAtRef.current === null) powerFiredAtRef.current = now;
   if (!powerFiring) powerFiredAtRef.current = null;
 
-  // ── Tier 2 conditions (Cockpit only for now) ───────────────────────────────
+  // ── Tier 2 conditions ─────────────────────────────────────────────────────
 
-  const m = localSentinel; // convenience alias
+  const m = localSentinel; // convenience alias (Cockpit)
 
+  // Cockpit: single-node conditions from local SSE tracking
   const tier2EvictionActive = isLocalHost &&
     m?.ollama_running === true &&
     m?.ollama_active_model != null &&
-    (now - lastActiveTsMs) >= (5 * 60 * 1_000);
+    (now - lastActiveTsMs) >= (3 * 60 * 1_000); // warn at 3 min (card shows 2 min remaining)
 
   const sessionMs        = firstMessageTsRef.current ? now - firstMessageTsRef.current : 0;
   const tier2IdleActive  = isLocalHost && !hadAnyActivity && sessionMs >= 60 * 60 * 1_000 && m != null;
+
+  // Mission Control: per-node conditions from fleet tracking refs.
+  // ModelEviction proxy: no tok/s for ≥ 3 min with a model loaded.
+  // IdleResource: node online ≥ 1 hr with zero inference this session.
+  const fleetEvictionNodes: SentinelMetrics[] = !isLocalHost
+    ? effectiveNodes.filter(n =>
+        n.ollama_running === true &&
+        n.ollama_active_model != null &&
+        nodeLastActiveMsRef.current[n.node_id] !== undefined &&
+        (now - nodeLastActiveMsRef.current[n.node_id]) >= 3 * 60 * 1_000
+      )
+    : [];
+
+  const fleetIdleNodes: SentinelMetrics[] = !isLocalHost
+    ? effectiveNodes.filter(n => {
+        const watts        = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+        if (watts == null) return false;
+        const sessionStart = nodeSessionStartRef.current[n.node_id];
+        if (!sessionStart) return false;
+        const hadActivity  = nodeHadActivityRef.current[n.node_id] ?? false;
+        return !hadActivity && (now - sessionStart) >= 60 * 60 * 1_000;
+      })
+    : [];
 
   // ── Fleet stats for Status Rail ───────────────────────────────────────────
 
@@ -628,17 +679,41 @@ Format as Markdown with a "Strategic Optimization" header.`,
 
             {/* Model Eviction */}
             {canViewInsight(5) ? (
-              tier2EvictionActive && m ? (
-                <div id="insight-model-eviction">
-                  <ModelEvictionCard node={m} lastActiveTsMs={lastActiveTsMs} />
+              isLocalHost ? (
+                // Cockpit: single-node, local SSE tracking
+                tier2EvictionActive && m ? (
+                  <div id="insight-model-eviction">
+                    <ModelEvictionCard node={m} lastActiveTsMs={lastActiveTsMs} />
+                  </div>
+                ) : (
+                  <Section2NominalRow
+                    icon={<Cpu className="w-4 h-4" />}
+                    label="Model Eviction"
+                    status={m?.ollama_active_model
+                      ? `${m.ollama_active_model} active — no eviction predicted`
+                      : 'No model loaded'}
+                  />
+                )
+              ) : fleetEvictionNodes.length > 0 ? (
+                // Mission Control: one card per eviction-predicted node
+                <div className="space-y-3">
+                  {fleetEvictionNodes.map(n => (
+                    <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
+                      <ModelEvictionCard
+                        node={n}
+                        lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now}
+                        showNodeHeader={fleetEvictionNodes.length > 1}
+                      />
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <Section2NominalRow
                   icon={<Cpu className="w-4 h-4" />}
                   label="Model Eviction"
-                  status={m?.ollama_active_model
-                    ? `${m.ollama_active_model} active — no eviction predicted`
-                    : 'No model loaded'}
+                  status={effectiveNodes.some(n => n.ollama_active_model)
+                    ? 'Models active — no eviction predicted'
+                    : 'No models loaded'}
                 />
               )
             ) : (
@@ -652,15 +727,43 @@ Format as Markdown with a "Strategic Optimization" header.`,
 
             {/* Idle Resource Cost */}
             {canViewInsight(6) ? (
-              tier2IdleActive && m ? (
-                <div id="insight-idle-resource">
-                  <IdleResourceCard
-                    node={m}
-                    sessionStartMs={firstMessageTsRef.current!}
-                    hadAnyActivity={hadAnyActivity}
-                    kwhRate={localSettings.kwhRate}
-                    pue={localSettings.pue}
+              isLocalHost ? (
+                // Cockpit: single-node, local SSE tracking
+                tier2IdleActive && m ? (
+                  <div id="insight-idle-resource">
+                    <IdleResourceCard
+                      node={m}
+                      sessionStartMs={firstMessageTsRef.current!}
+                      hadAnyActivity={hadAnyActivity}
+                      kwhRate={localSettings.kwhRate}
+                      pue={localSettings.pue}
+                    />
+                  </div>
+                ) : (
+                  <Section2NominalRow
+                    icon={<Zap className="w-4 h-4" />}
+                    label="Idle Resource Cost"
+                    status="No idle overhead detected"
                   />
+                )
+              ) : fleetIdleNodes.length > 0 ? (
+                // Mission Control: one card per idle node
+                <div className="space-y-3">
+                  {fleetIdleNodes.map(n => {
+                    const ns = getNodeSettings(n.node_id);
+                    return (
+                      <div key={n.node_id} id={`insight-idle-resource-${n.node_id}`}>
+                        <IdleResourceCard
+                          node={n}
+                          sessionStartMs={nodeSessionStartRef.current[n.node_id] ?? now}
+                          hadAnyActivity={nodeHadActivityRef.current[n.node_id] ?? false}
+                          kwhRate={ns.kwhRate}
+                          pue={ns.pue}
+                          showNodeHeader={fleetIdleNodes.length > 1}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <Section2NominalRow
