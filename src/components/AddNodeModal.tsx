@@ -137,15 +137,30 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
         },
         body: JSON.stringify({ code }),
       });
-      const data = await res.json();
       if (!res.ok) {
-        setError(data.error || 'Code not found. Make sure the agent is running and try again.');
+        // Parse server message opportunistically — non-JSON bodies (nginx error pages, etc.)
+        // must not throw here and fall through to the generic catch.
+        let serverMsg: string | undefined;
+        try { serverMsg = (await res.json() as { error?: string }).error; } catch { /* non-JSON body */ }
+        const retryAfter = res.headers.get('Retry-After');
+        setError(
+          res.status === 429 ? `Too many attempts — try again in ${retryAfter ?? '60'}s.` :
+          res.status === 401 ? 'Session expired. Sign out and sign back in to continue.' :
+          res.status === 402 ? 'Node limit reached. Upgrade to Team Edition to pair unlimited nodes.' :
+          res.status >= 500  ? 'Wicklee is temporarily unavailable. Please try again shortly.' :
+          (serverMsg ?? 'Pairing failed. Check the code and try again.')
+        );
         return;
       }
       setSuccess(true);
       setTimeout(() => { onNodeAdded(); onClose(); }, 1500);
-    } catch {
-      setError('Unable to reach the cloud backend. Check your connection and try again.');
+    } catch (err) {
+      // TypeError = network failure (fetch couldn't connect); anything else = Clerk / runtime error.
+      setError(
+        err instanceof TypeError
+          ? 'Cannot reach the Wicklee backend. Check your connection and try again.'
+          : 'Authentication error. Sign out and sign back in to continue.'
+      );
     } finally {
       setLoading(false);
     }

@@ -145,12 +145,21 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 
 ---
 
-### H5 — Silent `catch {}` on Pairing API Calls
+### H5 — Silent `catch {}` on Pairing API Calls ✅ FIXED
 **File:** `src/components/AddNodeModal.tsx` — `handleSubmit`
 
-**Risk:** Network errors and unexpected HTTP status codes are swallowed by bare `catch {}` blocks, surfacing "Unable to reach the cloud backend" for all error types including auth failures, 429 rate limiting, and 402 payment required. Users receive no actionable error message; security-relevant failures (e.g., rate limit hit) are invisible.
+**Risk:** Network errors and unexpected HTTP status codes were swallowed by bare `catch {}` blocks, surfacing "Unable to reach the cloud backend" for all error types including auth failures, 429 rate limiting, and 402 payment required. Users received no actionable error message; security-relevant failures (e.g., rate limit hit) were invisible. Additionally, `res.json()` was called before `!res.ok` — a non-JSON error body (nginx 502 HTML, Railway 503 page) would throw directly to the generic catch, bypassing the HTTP-status-aware path entirely.
 
-**Status:** PARTIALLY MITIGATED — the error message is shown in the UI. Fix: surface the HTTP status code in the error message for 401/402/429 cases.
+**Fix:**
+- `res.ok` is checked first. JSON parsing on the error path is wrapped in its own `try/catch` — non-JSON bodies (nginx error pages, Railway health pages) no longer throw to the outer catch.
+- Status-specific, actionable error messages:
+  - `429` → `"Too many attempts — try again in Xs."` (`Retry-After` header value read and surfaced to the user)
+  - `401` → `"Session expired. Sign out and sign back in to continue."`
+  - `402` → `"Node limit reached. Upgrade to Team Edition to pair unlimited nodes."`
+  - `5xx` → `"Wicklee is temporarily unavailable. Please try again shortly."`
+  - Other non-200 → server-supplied `data.error` message, or a safe fallback
+- `catch (err)` now distinguishes error type: `TypeError` = network failure (fetch couldn't connect); anything else = Clerk session / runtime error. Two different messages, both actionable.
+- JSON parse on the success path eliminated — the response body is unused on 200, so the parse was gratuitous.
 
 ---
 
@@ -193,8 +202,8 @@ Full codebase audit conducted pre-Show HN. Four categories: dead code, performan
 | H2 | High | No connection limits on SSE/WS | ✅ Fixed — `SseConnStream` RAII guard; 10/IP + 1000 total; 429/503 on breach |
 | H3 | High | `fleet_url` unvalidated (SSRF) | ✅ Fixed — `validate_fleet_url()`; scheme + SSRF-IP checks; 400 on rejection |
 | H4 | High | DOM mutation / XSS surface in LandingPage | ✅ Fixed — replaced `btn.innerHTML` with React `useState`; no DOM mutation |
-| H5 | High | Silent catch on pairing API calls | ⏳ Partial |
+| H5 | High | Silent catch on pairing API calls | ✅ Fixed — status-specific messages (429/401/402/5xx); `Retry-After` surfaced; TypeError vs auth error distinguished |
 
 ---
 
-*Audit conducted March 12, 2026. C3/H2/H3/H4 fixed March 12, 2026. Next full audit: after Phase 4A ships.*
+*Audit conducted March 12, 2026. C3/H2/H3/H4 fixed March 12, 2026. H5 fixed March 12, 2026. All High findings resolved. Next full audit: after Phase 4A ships.*
