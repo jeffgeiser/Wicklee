@@ -296,6 +296,37 @@
 
 ---
 
+## Alerting Tiers — Pricing Consideration *(for future design)*
+
+> Alerting capability is the clearest paywall signal in the monitoring space.
+> The table below proposes a four-tier alerting model for consideration when Phase 4A
+> notifications ship. Key design intent: the $9 Prosumer tier creates a meaningful
+> "unattended monitoring" entry point between free and the full Team integration layer.
+
+| Tier | Price | Alerting Capability | Rationale |
+|---|---|---|---|
+| Community | $0/mo | None — dashboard only | Encourages keeping the tab open. Zero friction to try. |
+| Prosumer | $9/mo | Email only | Covers individuals with small clusters who want overnight / unattended monitoring without a Slack workspace. Makes $9 the obvious "middle path" upgrade. |
+| Team | $29/mo | Slack + PagerDuty | Integrates with professional on-call rotations. Meaningful step up for teams running production workloads. |
+| Enterprise | $199/mo | Webhooks + Custom | Automated failover, custom infrastructure responses, SIEM integration. Enterprise buying motion — procurement-friendly. |
+
+**Open questions for design phase:**
+- Does Prosumer get email-only for *all* alert types, or only thermal/power (not tok/s regression)?
+- Does the $9 tier get a node cap (e.g., up to 5 nodes) or match Team (unlimited)?
+- Email provider for Prosumer tier: Resend (current infra path) or Postmark?
+- Should "email digest" (daily summary) be Community/free to drive activation, with real-time email reserved for Prosumer+?
+
+**Tier Structure impact:**
+The Prosumer tier ($9) sits between Community and Team in the existing table above.
+When this ships, add a Prosumer column to the Tier Structure table with:
+- Nodes: up to 5 (TBD)
+- Alerting: email only
+- History: session only (no 90-day DuckDB)
+- Agent API: 60 req/min (same as Community)
+- Price: $9/mo
+
+---
+
 ## The Agent-Native Vision
 
 > Most SaaS is built for a human who logs in, reads a dashboard, and makes a decision.
