@@ -271,37 +271,37 @@
 
 ## Tier Structure
 
-| | Community | Team | Enterprise |
-|---|---|---|---|
-| Nodes | Up to 3 | Unlimited | Unlimited |
-| Local dashboard | ✅ Full | ✅ Full | ✅ Full |
-| Live metrics (all) | ✅ Full | ✅ Full | ✅ Full |
-| Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full |
-| WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full |
-| Fleet Intelligence panel | ✅ View | ✅ Full + alerts | ✅ Full |
-| Agent API v1 | ✅ 60 req/min | ✅ 600 req/min | ✅ Unlimited |
-| `/api/v1/route/best` | ✅ | ✅ | ✅ |
-| Local Intelligence (session) | ✅ Free cards | ✅ Full + alerts | ✅ Full |
-| Local Intelligence (trend-based) | ❌ | ✅ Paid | ✅ Full |
-| Insights AI (morning briefing) | ❌ | ✅ | ✅ |
-| `/api/v1/insights/latest` | ❌ | ✅ | ✅ |
-| Keep Warm toggle | ❌ | ✅ | ✅ |
-| 90-day history | ❌ | ✅ | ✅ |
-| Slack / PagerDuty | ❌ | ✅ | ✅ |
-| MCP server tools | ❌ | ✅ | ✅ |
-| Sovereignty audit log | ✅ View | ✅ View | ✅ Signed export |
-| Sentinel Proxy routing | ❌ | ❌ | ✅ |
-| Sovereign Mode (no cloud) | ❌ | ❌ | ✅ |
-| Price | Free | ~$29/mo | ~$199/mo |
+| | Community (Free) | Prosumer | Team | Enterprise |
+|---|---|---|---|---|
+| Nodes | Up to 3 | Up to 10 | Unlimited | Unlimited |
+| Local dashboard | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| Live metrics (all) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| Fleet Intelligence panel | ✅ View | ✅ View | ✅ Full + alerts | ✅ Full |
+| Agent API v1 | ✅ 60 req/min | ✅ 60 req/min | ✅ 600 req/min | ✅ Unlimited |
+| `/api/v1/route/best` | ✅ | ✅ | ✅ | ✅ |
+| Local Intelligence (session) | ✅ Session only | ✅ Session only | ✅ Full + alerts | ✅ Full |
+| Local Intelligence (trend-based) | ❌ | ✅ 7-day | ✅ 90-day | ✅ Full |
+| Insights AI (morning briefing) | ❌ | ❌ | ✅ | ✅ |
+| `/api/v1/insights/latest` | ❌ | ❌ | ✅ | ✅ |
+| Keep Warm toggle | ❌ | ❌ | ✅ | ✅ |
+| Metric history | Session only | 7-day | 90-day | 90-day |
+| Email alerts | ❌ | ✅ | ✅ | ✅ |
+| Slack / PagerDuty | ❌ | ❌ | ✅ | ✅ |
+| MCP server tools | ❌ | ❌ | ✅ | ✅ |
+| Sovereignty audit log | ✅ View | ✅ View | ✅ View | ✅ Signed export |
+| Sentinel Proxy routing | ❌ | ❌ | ❌ | ✅ |
+| Sovereign / Airgapped mode | ❌ | ❌ | ❌ | ✅ |
+| Price | Free | ~$9/mo | ~$29/mo | ~$199/mo |
 
 ---
 
-## Alerting Tiers — Pricing Consideration *(for future design)*
+## Alerting Tiers
 
 > Alerting capability is the clearest paywall signal in the monitoring space.
-> The table below proposes a four-tier alerting model for consideration when Phase 4A
-> notifications ship. Key design intent: the $9 Prosumer tier creates a meaningful
-> "unattended monitoring" entry point between free and the full Team integration layer.
+> Key design intent: the $9 Prosumer tier creates a meaningful "unattended monitoring"
+> entry point between free and the full Team integration layer.
 
 | Tier | Price | Alerting Capability | Rationale |
 |---|---|---|---|
@@ -312,18 +312,8 @@
 
 **Open questions for design phase:**
 - Does Prosumer get email-only for *all* alert types, or only thermal/power (not tok/s regression)?
-- Does the $9 tier get a node cap (e.g., up to 5 nodes) or match Team (unlimited)?
 - Email provider for Prosumer tier: Resend (current infra path) or Postmark?
 - Should "email digest" (daily summary) be Community/free to drive activation, with real-time email reserved for Prosumer+?
-
-**Tier Structure impact:**
-The Prosumer tier ($9) sits between Community and Team in the existing table above.
-When this ships, add a Prosumer column to the Tier Structure table with:
-- Nodes: up to 5 (TBD)
-- Alerting: email only
-- History: session only (no 90-day DuckDB)
-- Agent API: 60 req/min (same as Community)
-- Price: $9/mo
 
 ---
 
