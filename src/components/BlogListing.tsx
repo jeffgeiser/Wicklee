@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import Logo from './Logo';
-import { POST_SLUGS } from '../blog/registry';
 import {
   parseFrontmatter, slugToTitle, stripMarkdown, formatDate,
 } from '../utils/parseFrontmatter';
@@ -33,9 +32,22 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
     let cancelled = false;
 
     const fetchAll = async () => {
+      // Fetch the manifest — /blog/index.json is the single source of truth.
+      // To publish a new post: add slug to index.json + drop the .md in /public/blog/.
+      let slugs: string[] = [];
+      try {
+        const idx = await fetch('/blog/index.json');
+        if (idx.ok) {
+          const data = await idx.json();
+          slugs = Array.isArray(data.posts) ? data.posts : [];
+        }
+      } catch {
+        slugs = [];
+      }
+
       const results: PostCard[] = [];
 
-      for (const slug of POST_SLUGS) {
+      for (const slug of slugs) {
         try {
           const res = await fetch(`/blog/${slug}.md`);
           if (!res.ok) continue;
