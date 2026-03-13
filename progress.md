@@ -155,7 +155,74 @@ Full Settings page with Fleet Defaults (electricity rate, currency, PUE) and per
 
 ---
 
+### Insights Hub — Shell + HexHive
+*2 commits — 9e29449 ← 2adbcd5*
+
+Built the Insights tab from the `docs/INSIGHTS.md` spec.
+
+1. **Insights Hub shell** (`2adbcd5`) — `InsightsTab.tsx` with Global Status Rail (nominal green-pulse / active amber-red state), 3-section grid, `InsightsSection` component. Section 1: Operational Signals (Community). Section 2: Automation & Cost (Pro, locked shell). Section 3: Analytics & Forensics (Team, locked shell). Health Indicators row: Thermal Health, Power Efficiency, Memory Pressure. All data live from `useFleetStream()`.
+
+2. **HexHive wired** (`9e29449`) — Live HexHive embedded in third Health Indicator slot (Inference Density). Heading cleanup pass across all Insights section headers.
+
+---
+
+### Measurement Accuracy — Probe Scheduling + Throughput Estimation
+*3 commits — cc787e4 ← bc70fc8 ← 5b045a6*
+
+End-to-end fix for the accuracy problem where Ollama probe readings depressed (or failed) during active inference, making TOK/S, WES, and Cost/1M all underreport true hardware throughput.
+
+**1. Three bug fixes** (`5b045a6`):
+- **Cost/1M formula** — extra `/1000` in numerator was producing $0.00 per node. Correct formula: `(watts × pue × kwhRate) / (tps × 3.6)`.
+- **WES tooltip thresholds** — 3 `MetricTooltip` instances in `Overview.tsx` showed `> 50 / 10–50 / < 10` but `wesColorClass()` uses `> 10 / 1–10 / < 1`. All 3 fixed.
+- **Ollama stale tps** — `if let Some(tps)` guard skipped the state write on probe failure, leaving stale readings indefinitely. Fixed: `let new_tps = ...; guard.ollama_tokens_per_second = new_tps` always writes (None on failure clears stale value).
+
+**2. Throughput estimation** (`bc70fc8`, frontend only):
+- `src/types.ts` — added `peakTpsMap: Record<string, number>` to `FleetStreamState`.
+- `src/contexts/FleetStreamContext.tsx` — `peakTpsRef` and `peakModelRef` track per-node session high-water mark. Resets on model swap. Exposed as `peakTpsMap` snapshot in `useMemo`.
+- `src/components/Overview.tsx` — `estimateTps(rawTps, peak, gpuUtil)` helper:
+  - `rawTps + (peak × gpuFrac)` when probe got a reading (add background load estimate)
+  - `peak × gpuFrac` when probe failed/skipped (lockup: infer from GPU alone)
+  - `rawTps` as-is when no peak yet established
+  - Applied to: `FleetStatusRow` tps → wes → cost/1M chain; `wesEntries`; `tpsNodes` filter + `fleetTps`.
+
+**3. Dynamic probe scheduling** (`cc787e4`, agent):
+- `GPU_LOAD_THRESHOLD_PCT: f32 = 40.0` constant.
+- `start_ollama_harvester()` accepts `Arc<Mutex<AppleSiliconMetrics>>` and `Arc<Mutex<NvidiaMetrics>>`.
+- Probe task reads GPU util (NVIDIA first, Apple fallback). If `gpu_util ≥ 40%`: skip probe, write `None` explicitly, log. CPU-only nodes (no GPU sensor) always probe.
+- Probe comment-only cleanup for vLLM: explains why `avg_generation_throughput_toks_per_s` is preferred over latency-inverse formula.
+
+---
+
+### Docs — Throughput Measurement Section
+*2 commits — fbb8003 ← 9bb6bc2*
+
+Added **Throughput Measurement** section to both documentation surfaces:
+- `public/metrics.md` — new `## Throughput Measurement` section with Ollama scheduled probe, vLLM passive scrape, and Estimation Gap formula. Fixed two stale "3-token probe" references.
+- `src/pages/MetricsPage.tsx` — matching section in the live React metrics page, styled to match the existing indigo-border card layout with `<code>` inline styling and the formula block. Fixed stale references in Performance Probe bullet and TOK/S MetricCard.
+
+---
+
+### Blog — Manifest-Driven Discovery + Auto-Generation
+*2 commits — 99a8ddc ← 31c774b*
+
+Replaced the hardcoded TypeScript `POST_SLUGS` registry with a fully automated system.
+
+**Manifest-driven discovery** (`31c774b`):
+- `public/blog/index.json` — single source of truth. `_agent_note` field documents the format for LLM/agent consumers.
+- `src/components/BlogListing.tsx` — fetches `/blog/index.json` at runtime instead of importing `POST_SLUGS`. Graceful fallback to empty array on fetch failure.
+- `src/blog/registry.ts` — deprecated stub (empty array, kept to avoid stale-import errors).
+- `src/components/Sidebar.tsx` — Blog entry added to profile dropdown (Newspaper icon, between Metrics Reference and GitHub). `Newspaper` added to lucide import.
+- Deleted `public/blog/wes-the-mpg-for-local-ai-inference.md` (placeholder content).
+
+**Auto-generation via Vite plugin** (`99a8ddc`):
+- `vite.config.ts` — `blogIndexPlugin()` reads all `*.md` files from `public/blog/`, extracts `date` frontmatter for sorting (newest first), writes `public/blog/index.json`.
+- Runs at `buildStart` (vite build) and `configureServer` (vite dev).
+- Publishing workflow: drop `.md` file → commit → Railway builds → manifest auto-regenerated. No TypeScript edits required.
+
+---
+
 ## Phase Status
 
 - **Phase 1** ✅ — Sentinel agent, SSE/WS telemetry, Apple Silicon + NVIDIA metrics, embedded frontend
 - **Phase 2** 🔄 — NVIDIA/NVML support ✅, Fleet Connect ✅, pairing-state-driven UI mode ✅, Settings page ✅
+- **Phase 3A** 🔄 — Insights Hub shell ✅, HexHive ✅, Throughput Estimation ✅, Probe Scheduling ✅, Blog infrastructure ✅ · Insight cards, WES v2, Launch Prep pending
