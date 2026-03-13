@@ -88,6 +88,10 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   /** Per-node settlement buffers. Each dimension is tracked independently. */
   const pendingRef     = useRef<Record<string, NodePending>>({});
   const esRef          = useRef<EventSource | null>(null);
+  /** Per-node tok/s high-water mark (session-scoped, resets on model swap). */
+  const peakTpsRef     = useRef<Record<string, number>>({});
+  /** Tracks the active model per node to detect swaps that should reset the peak. */
+  const peakModelRef   = useRef<Record<string, string | null>>({});
 
   // Stable ref for the snapshot callback so the SSE effect doesn't re-run.
   const onNodesSnapshotRef = useRef(onNodesSnapshot);
@@ -337,6 +341,25 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                 delete np.power;
               }
 
+              // ── 5. PEAK TPS ───────────────────────────────────────────────
+              // Track per-node tok/s high-water mark for throughput estimation.
+              // Covers both Ollama and vLLM; reset on model swap so the baseline
+              // stays relevant to the currently loaded model.
+              const rawTpsForPeak   = (n.metrics.ollama_tokens_per_second ?? n.metrics.vllm_tokens_per_sec) ?? null;
+              const curModelForPeak = n.metrics.ollama_active_model ?? n.metrics.vllm_model_name ?? null;
+
+              if (peakModelRef.current[nodeId] !== undefined &&
+                  peakModelRef.current[nodeId] !== curModelForPeak) {
+                // Model changed — old peak is irrelevant to the new model.
+                delete peakTpsRef.current[nodeId];
+              }
+              peakModelRef.current[nodeId] = curModelForPeak;
+
+              if (rawTpsForPeak != null && rawTpsForPeak > 0 &&
+                  rawTpsForPeak > (peakTpsRef.current[nodeId] ?? 0)) {
+                peakTpsRef.current[nodeId] = rawTpsForPeak;
+              }
+
               // ── Advance observation refs ──────────────────────────────────
               prevThermalRef.current[nodeId] = curThermal;
               prevModelRef.current[nodeId]   = curModel;
@@ -414,6 +437,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   const value = useMemo<FleetStreamState>(() => ({
     allNodeMetrics,
     lastSeenMsMap,
+    // Snapshot the peak ref on every render — since allNodeMetrics changes every
+    // SSE frame, the memo always re-runs and peaks stay current without extra state.
+    peakTpsMap: { ...peakTpsRef.current },
     fleetEvents,
     connected,
     transport,

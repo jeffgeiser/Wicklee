@@ -17,6 +17,35 @@ import type { HexHiveRow } from './shared/HexHive';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
+/**
+ * Estimated total hardware tok/s, accounting for background inference.
+ *
+ * The Ollama probe fires every 30 s. If a user inference is already running,
+ * the probe may get a depressed reading (queued behind the job, GPU thermally
+ * loaded) or None (inference lockup). peak × gpuUtil estimates the throughput
+ * the background job is consuming, giving a more accurate picture of what the
+ * hardware is actually doing.
+ *
+ * Formula (as specified in throughput estimation design):
+ *   probe succeeded → probe_tps + (peak × gpu_util%)   [add background load]
+ *   probe failed    → peak × gpu_util%                  [infer from GPU load]
+ *   no peak yet     → raw probe value as-is             [no history to estimate from]
+ *
+ * @param rawTps  Measured probe value (already smoothed); null = lockup
+ * @param peak    Session high-water mark for this node+model (from peakTpsMap)
+ * @param gpuUtil 0–100 GPU utilisation — nvidia_gpu_utilization_percent or gpu_utilization_percent
+ */
+function estimateTps(
+  rawTps:  number | null,
+  peak:    number | null,
+  gpuUtil: number | null,
+): number | null {
+  if (peak == null) return rawTps;                             // no history yet — use raw as-is
+  const frac = (gpuUtil ?? 0) / 100;
+  if (rawTps == null) return frac > 0 ? peak * frac : null;   // lockup: infer from GPU load
+  return rawTps + (peak * frac);                              // probe got something: add background
+}
+
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
 // Controls Cockpit vs Mission Control rendering mode. Never derived from runtime auth state.
 const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
@@ -184,9 +213,11 @@ interface NodeRowProps {
   metrics: SentinelMetrics | null;
   lastSeenMs?: number;
   pue?: number;
+  /** Session peak tok/s for this node — from peakTpsMap in FleetStreamContext. */
+  peakTps?: number;
 }
 
-const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0 }) => {
+const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps }) => {
   const isOnline = m !== null;
 
   // Rolling-average smoothing (5-sample window, display-layer only).
@@ -213,9 +244,14 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const rawVllmTps   = m?.vllm_tokens_per_sec ?? null;
   const rawTps       = rawOllamaTps != null && rawVllmTps != null ? rawOllamaTps + rawVllmTps
                      : (rawOllamaTps ?? rawVllmTps);
-  // Smoothed tok/s (5-sample rolling average)
-  const tps      = pushOne('tps', rawTps, tsMs);
-  const isActive = isOnline && tps != null && tps > 0;
+  // GPU utilisation used for throughput estimation (covers both NVIDIA and Apple Silicon)
+  const gpuPctForEst = m?.nvidia_gpu_utilization_percent ?? m?.gpu_utilization_percent ?? null;
+  // Smoothed probe reading, then apply throughput estimation. When the probe
+  // is depressed (background inference) or null (lockup), estimateTps fills
+  // the gap using the session peak × GPU utilisation.
+  const smoothedTps  = pushOne('tps', rawTps, tsMs);
+  const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst);
+  const isActive     = isOnline && tps != null && tps > 0;
 
   // Thermal — not smoothed (state machine, not a continuous signal)
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
@@ -637,6 +673,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
+    peakTpsMap,
     fleetEvents,
     connected: cloudConnected,
     transport: cloudTransport,
@@ -858,16 +895,26 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // effectiveMetrics: handles localhost sentinel mode + hosted fleet mode uniformly
   const effectiveMetrics: SentinelMetrics[] = isLocalHost ? (sentinel ? [sentinel] : []) : liveMetrics;
 
-  // Tile 1 — THROUGHPUT: ∑ tok/s across all inference-active nodes (Ollama + vLLM).
+  // Tile 1 — THROUGHPUT: ∑ estimated tok/s across inference-active nodes (Ollama + vLLM).
   // Both runtimes are not mutually exclusive — a node can run both simultaneously.
+  // tpsNodes includes nodes with a live raw reading OR a peak+GPU estimate (covers lockup case).
   const hasAnyOllama = effectiveMetrics.some(m => m.ollama_running);
   const hasAnyVllm   = effectiveMetrics.some(m => m.vllm_running);
-  const tpsNodes     = effectiveMetrics.filter(m =>
-    (m.ollama_running && m.ollama_tokens_per_second != null) ||
-    (m.vllm_running   && m.vllm_tokens_per_sec      != null)
-  );
+  const tpsNodes     = effectiveMetrics.filter(m => {
+    const hasRaw = (m.ollama_running && m.ollama_tokens_per_second != null) ||
+                   (m.vllm_running   && m.vllm_tokens_per_sec      != null);
+    if (hasRaw) return true;
+    // Include nodes where peak + GPU utilisation gives a meaningful estimate.
+    const peak = peakTpsMap[m.node_id] ?? null;
+    const gpu  = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
+    return peak != null && (gpu ?? 0) > 0;
+  });
   const fleetTps     = tpsNodes.length > 0
-    ? tpsNodes.reduce((acc, m) => acc + (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0), 0)
+    ? tpsNodes.reduce((acc, m) => {
+        const rawCombined = (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0) || null;
+        const gpu         = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
+        return acc + (estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpu) ?? 0);
+      }, 0)
     : null;
 
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
@@ -895,8 +942,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
     const _ollamaTps = m.ollama_tokens_per_second ?? null;
     const _vllmTps   = m.vllm_tokens_per_sec ?? null;
-    const tps        = _ollamaTps != null && _vllmTps != null ? _ollamaTps + _vllmTps
-                     : (_ollamaTps ?? _vllmTps);
+    const rawCombined = _ollamaTps != null && _vllmTps != null ? _ollamaTps + _vllmTps
+                      : (_ollamaTps ?? _vllmTps);
+    const gpuUtil = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
+    const tps     = estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpuUtil);
     const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
     const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
     const watts    = hasWatts ? totalW : null;
@@ -1104,13 +1153,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? `SSE connected · ${localNodeId} live`
     : `SSE connected · ${reachableNodeIds.join(' ')} all live`;
 
-  // Build Fleet Status row data
+  // Build Fleet Status row data — include peakTps so each row can estimate throughput.
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [{
         nodeId: sentinel.node_id,
         hostname: sentinel.hostname ?? sentinel.node_id,
         metrics: sentinel,
         pue: getNodeSettings?.(sentinel.node_id)?.pue ?? 1.0,
+        peakTps: peakTpsMap[sentinel.node_id],
       }] : [])
     : nodes.map(n => ({
         nodeId: n.id,
@@ -1118,6 +1168,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         metrics: allNodeMetrics[n.id] ?? null,
         lastSeenMs: lastSeenMsMap[n.id],
         pue: getNodeSettings?.(n.id)?.pue ?? 1.0,
+        peakTps: peakTpsMap[n.id],
       }));
 
   return (

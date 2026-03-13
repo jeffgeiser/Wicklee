@@ -1586,6 +1586,13 @@ async fn harvest_vllm() -> (bool, Option<String>, Option<f32>, Option<f32>, Opti
         }
 
         match metric_name.trim() {
+            // vllm:avg_generation_throughput_toks_per_s is a direct tok/s gauge emitted
+            // by vLLM. Preferred over a latency-inverse formula (1/inter_token_latency)
+            // because: (a) vLLM exposes latency only as a histogram (no scalar field),
+            // and (b) aggregate generation throughput is the right signal for fleet
+            // monitoring — not per-request delivery speed seen by a single consumer.
+            // On endpoint failure the caller returns (false, None, …) so tokens_per_sec
+            // stays None, clearing any stale value in shared state.
             "vllm:avg_generation_throughput_toks_per_s" => {
                 tokens_per_sec = value;
             }
