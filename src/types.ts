@@ -92,12 +92,30 @@ export interface TraceRecord {
 
 export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
 
+/**
+ * Subscription tier stored in Clerk publicMetadata.tier.
+ * Community = free, Pro = $9/mo, Team = $29/mo, Enterprise = $199/mo.
+ */
+export type SubscriptionTier = 'community' | 'pro' | 'team' | 'enterprise';
+
+/**
+ * Insights capability level derived from SubscriptionTier.
+ * Controls which insight cards render vs. show locked shells.
+ *   live_session  = Community  (real-time only, no history)
+ *   persistent    = Pro        (7-day history, persistent cards)
+ *   trend         = Team       (90-day history, trend analysis)
+ *   predictive    = Enterprise (custom scope, compliance artifacts)
+ */
+export type InsightsTier = 'live_session' | 'persistent' | 'trend' | 'predictive';
+
 export interface User {
   id: string;
   email: string;
   fullName: string;
   role: UserRole;
   isPro?: boolean;
+  /** Subscription tier from Clerk publicMetadata.tier — defaults to 'community' */
+  tier?: SubscriptionTier;
 }
 
 export interface Tenant {

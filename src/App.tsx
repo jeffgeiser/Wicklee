@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { version } from '../package.json';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/clerk-react';
-import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType } from './types';
+import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier } from './types';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import Sidebar from './components/Sidebar';
@@ -179,7 +179,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   // Prevents EmptyFleetState from flashing on page refresh while auth resolves.
   const [nodesLoading, setNodesLoading] = useState(!isLocalHost);
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
-  // Build currentUser from Clerk user data (or LOCAL_USER for localhost)
+  // Build currentUser from Clerk user data (or LOCAL_USER for localhost).
+  // tier is read from Clerk publicMetadata.tier — set this in the Clerk
+  // Dashboard (Users → select user → Metadata → Public) to gate features.
+  // Valid values: "community" | "pro" | "team" | "enterprise"
+  const clerkTier = (user?.publicMetadata?.tier as SubscriptionTier | undefined) ?? 'community';
   const currentUser: UserType = isLocalHost
     ? LOCAL_USER
     : {
@@ -187,7 +191,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
         email: user?.primaryEmailAddress?.emailAddress ?? '',
         fullName: user?.fullName ?? '',
         role: 'Owner',
-        isPro: false,
+        isPro: clerkTier !== 'community',
+        tier: clerkTier,
       };
   const [byokMode, setByokMode] = useState(false);
   const [userApiKey, setUserApiKey] = useState('');
@@ -389,10 +394,12 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
         return permissions.canViewScaffolding ? <ScaffoldingView /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.AI_INSIGHTS:
         return permissions.canRunAIAnalysis ? (
-          <AIInsights 
-            nodes={nodes} 
-            userApiKey={byokMode ? userApiKey : undefined} 
+          <AIInsights
+            nodes={nodes}
+            userApiKey={byokMode ? userApiKey : undefined}
             onNavigateToSecurity={() => setActiveTab(DashboardTab.SECURITY)}
+            insightsTier={permissions.insightsTier}
+            canViewInsight={permissions.canViewInsight}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
