@@ -4,6 +4,245 @@
 
 ---
 
+## March 13, 2026 — Metrics Reference, Hover Tooltips & Docs Cleanup 📖
+
+**The Goal:** Give operators a permanent reference for every metric Wicklee surfaces. Build a hover-tooltip system so metric labels are self-explaining in context. Formalize the four-tier pricing model in ROADMAP. Clean up SPEC/ROADMAP inconsistencies introduced by the proxy-dependent metrics design.
+
+---
+
+### Four-Tier Subscription Structure ✅ (commit `d257bf6`)
+
+Formalized the subscription model from 3 tiers to 4 in `docs/ROADMAP.md`:
+
+| Tier | Price | Nodes | History | Alerts |
+|---|---|---|---|---|
+| Community (Free) | $0 | Up to 3 | 24 h | — |
+| Prosumer | $9/mo | Up to 10 | 7 days | Email |
+| Team | $29/mo | Unlimited | 90 days | Slack / PagerDuty |
+| Enterprise | $199/mo | Unlimited | Sovereign / airgapped | Signed audits |
+
+Removed stale "Tier Structure impact" planning block from Alerting Tiers section — now formalized in the table.
+
+---
+
+### SPEC / ROADMAP Inconsistency Cleanup ✅ (commits `7a43bc0`, `e08a705`)
+
+Two substantive changes based on a doc review:
+
+**Cold Start → Hardware-Detected Cold Start:**
+- Old: required `TTFT on request #1` — proxy-dependent, incompatible with zero-intercept privacy
+- New: `model load → first tok/s transition` — detected via GPU spike + VRAM jump in the hardware stream, no proxy required
+- Updated in both SPEC.md Intelligence Architecture table and ROADMAP Phase 4B
+
+**Rate limiting removed from Agent API plan:**
+- Per-tier req/min limits require a proxy or API gateway layer — not implementable without breaking the sovereign architecture
+- Removed `Rate limiting — Community: 60 req/min. Team: 600 req/min.` from Phase 3B todo list
+- Collapsed req/min column values in the Tier Structure table
+
+---
+
+### Metrics Reference Page ✅ (commit `9dc9a49`) — 7 files, +834 lines
+
+A full documentation page and hover-tooltip system covering every metric Wicklee surfaces.
+
+**`src/pages/MetricsPage.tsx`** — three-section reference page:
+- **Node Metrics** (10 cards): WES, TOK/S, TOK/W, WATTS, GPU%, MEMORY, VRAM, THERMAL STATE, W/1K TKN, COST/1K TOKENS
+- **Fleet Metrics** (4 cards): FLEET AVG WES, COST EFFICIENCY, TOKENS PER WATT (Fleet), FLEET HEALTH
+- **Configuration** (2 cards): PUE, MODEL FIT SCORE
+- Each card: name, formula (where applicable, `font-mono` indigo block), description, color-coded range dots, "If this is low / high" action guidance
+- Deep-link anchors (`id` + `scroll-mt-24`) for URL-addressable references
+- Sticky top nav with Back button + ExternalLink to `/metrics.md`
+- Route: `/metrics` — public, no auth, works in both agent and cloud builds
+
+**`src/components/MetricTooltip.tsx`** — hover card component:
+- 400 ms delay via `useRef<setTimeout>` — not intrusive on casual mouse movement
+- Touch-device guard: `window.matchMedia('(hover: hover)')` — never fires on touch-only devices
+- `pointer-events-none` on the tooltip card; `pointer-events-auto` on the "Full reference →" link only — prevents mouseleave flicker when cursor enters the tooltip
+- Compact range table (max 3 entries via `slice(0, 3)`)
+- `wrapperClassName` prop for responsive visibility classes (e.g. `hidden md:block`)
+
+**`src/components/Overview.tsx`** — 12 metric labels wrapped:
+- `InsightTile.label` and `FleetCard.label` widened from `string` to `React.ReactNode`; render element changed from `<p>` to `<div>` to accept block children without invalid HTML nesting
+- **6 Fleet Status column headers**: WES, TOK/S, TOK/W (hidden md:block), WATTS (hidden md:block), GPU% (hidden md:block), THERMAL (hidden sm:block) — `wrapperClassName` carries the responsive class so the visibility logic stays in one place
+- **3 InsightTile labels**: Node/Avg WES (tile 5), Wattage/1k Tkn (tile 6), Cost/1k Tokens (tile 7)
+- **3 FleetCard labels**: Cost Efficiency, Fleet Avg WES, Tokens Per Watt
+
+**`src/components/Sidebar.tsx`** — profile drop-up cleanup:
+- Removed: Documentation (→ GitHub README), Release Notes (→ GitHub releases)
+- Added: **Metrics Reference** (button → `onNavigate('/metrics')`) · **GitHub** (external link)
+- `onNavigate?: (path: string) => void` added to `SidebarProps`
+
+**`src/App.tsx`**:
+- `/metrics` route added before auth check (same pattern as blog routes)
+- `navigate` threaded into `DashboardShellProps` and destructured in `DashboardShell` — was previously undefined at the Sidebar call site (caught by `tsc --noEmit`)
+
+**`public/metrics.md`** — static Markdown version served at `/metrics.md`:
+- Machine-readable by agents and LLMs; identical content to the interactive page
+- Linked from page header ("Raw Markdown for agents") and `public/llms.txt`
+
+**`public/llms.txt`** — `## Metrics Reference` section added:
+- `/metrics` — interactive metrics reference page
+- `/metrics.md` — raw Markdown version (machine-readable)
+
+---
+
+### "How Wicklee Works: Synchronous Observation" ✅ (commit `62fdf3d`)
+
+New first section on the Metrics Reference page and in `metrics.md` — conceptual context before the metric definitions.
+
+Four pillars documented:
+1. **Hardware Harvester (10 Hz)** — NVML / IOReg / RAPL queries that capture micro-spikes 1-minute scrapers miss
+2. **Performance Probe (30 s)** — 3-token automated pulse to local API, no request traffic intercepted
+3. **Local Interpretation** — Conditional Insights: Power Anomaly, Thermal Degradation
+4. **Zero-Intercept Privacy** — no proxy, no prompt visibility, sovereign boundary preserved
+
+Visual treatment: `bg-gray-900 border border-indigo-500/20 rounded-2xl` card with indigo dot bullets — matches MetricCard range style but indigo accent border distinguishes conceptual content from metric-data cards.
+
+---
+
+### What Was Learned
+
+- **`tsc --noEmit` catches prop threading bugs instantly** — `navigate` was referenced inside `DashboardShell` without being in scope. TypeScript caught it in one pass; added to `DashboardShellProps` and threaded cleanly.
+- **`React.ReactNode` labels need `<div>` wrappers, not `<p>`** — a `<div>` (MetricTooltip's outer element) inside a `<p>` is invalid HTML. Changing label renders from `<p>` to `<div>` preserves visual identity while accepting block children.
+- **`wrapperClassName` solves the responsive tooltip problem** — column headers like TOK/W are `hidden md:block`. Moving the visibility class to the MetricTooltip wrapper keeps the `<p>` inside clean and puts the responsive logic in the one right place.
+- **Proxy-dependent metrics are a spec smell** — any metric that requires request interception is incompatible with zero-intercept privacy. Hardware-observable equivalents (GPU spike, VRAM jump) should be the default design for all future inference metrics.
+- **`/metrics.md` as a machine-readable contract** — static Markdown at a predictable URL is the lowest-friction way to make documentation consumable by agents. No API, no auth, no parsing complexity.
+
+---
+
+### Code Shipped (commits `d257bf6` → `62fdf3d`)
+
+| Commit | Description | Files |
+|---|---|---|
+| `d257bf6` | docs: formalize 4-tier subscription structure in ROADMAP | 1 file |
+| `7a43bc0` | docs: Hardware-Detected Cold Start, remove proxy-dependent metrics | 2 files |
+| `e08a705` | docs: remove rate limiting from Agent API plan | 1 file |
+| `9dc9a49` | feat: Metrics Reference page, MetricTooltip, 12 label wraps | 7 files, +834 |
+| `62fdf3d` | docs: add Synchronous Observation section to Metrics Reference | 2 files, +50 |
+
+---
+
+## March 13, 2026 — Insights Tab Rationalization & Model Fit Score 🧠
+
+**The Goal:** Replace the Insights tab's placeholder structure with a real three-tier card hierarchy as defined in SPEC.md. Ship Model-to-Hardware Fit Score as the first live insight card. All conditions computed at render time from live SSE data — no backend changes.
+
+---
+
+### Model-to-Hardware Fit Score ✅ (commit `8970420`)
+
+The first live Insight card. Answers "Is this hardware a good match for the model currently loaded?"
+
+**`src/utils/modelFit.ts`** — pure compute function, no React imports, no side effects:
+- Returns `FitResult | null` — null when no model loaded or data insufficient
+- NVIDIA nodes use VRAM headroom; Apple Silicon / CPU nodes use system RAM
+- Scoring: **Good** (fits + >20% headroom + Normal/null thermal) · **Fair** (fits + 10–20% headroom OR Fair thermal) · **Poor** (no fit OR <10% headroom OR Serious/Critical)
+- Reason strings at each branch — human-readable, `toFixed(1)` on all GB values
+
+**`src/components/insights/ModelFitCard.tsx`** — visual card:
+- Score badge: CheckCircle2 (green) / AlertTriangle (amber) / XCircle (red)
+- Hardware identity line: chip_name or gpu_name + total GB + "VRAM" vs "unified memory"
+- Three-segment memory bar: model (indigo) · other used (gray) · free (dark)
+- `font-telin` on all numeric values
+- `showNodeHeader` prop for fleet mode (node ID + hostname + live dot)
+- `bare` prop added later to compose cleanly inside InsightCard
+
+**`src/components/Overview.tsx` — MODEL column fit dot:**
+- Colored 1.5px dot (green/amber/red) next to model name
+- `title` attribute shows full reason string on hover
+- Only rendered when `ollama_model_size_gb != null`
+
+**`src/components/AIInsights.tsx` (initial):**
+- Local SSE connection pattern (mirrors Overview.tsx)
+- Local mode: ModelFitCard at top when model loaded, `NoModelPlaceholder` otherwise
+- Cloud mode: one ModelFitCard per node with model loaded, stacked with node headers
+
+---
+
+### Tooltip float precision fix ✅ (commit `bdf49dd`)
+
+`modelSizeGb` was interpolated raw in the "doesn't fit" reason string — leaked full float precision into tooltips (e.g. `2.561380386352539GB`). Fixed to `modelSizeGb.toFixed(1)` — consistent with headroomGb already on the same line.
+
+---
+
+### Insights Tab Architecture documented ✅ (commit `32cfbba`)
+
+Added `## Insights Tab — Architecture & Card Hierarchy` section to `docs/SPEC.md`:
+- Core principle: live triage feed, empty tab = positive signal
+- Two contexts: localhost:7700 (single node, operator present) vs wicklee.dev (fleet, remote)
+- Three-tier card hierarchy with conditions, copy patterns, dismiss rules
+- ASCII layout diagrams for both contexts
+- Implementation rules: all cards computed at render time, sessionStorage dismiss, no mock data
+
+---
+
+### Insights Tab Full Rationalization ✅ (commit `128627b`) — 10 files, +1,077/−153
+
+The structural overhaul that puts all pieces in the correct hierarchy from the start.
+
+**New shared infrastructure:**
+- **`src/hooks/useInsightDismiss.ts`** — sessionStorage-backed dismiss hook. Key format: `insight-dismissed:<cardId>:<nodeId>`. Tier 1 cards never call it.
+- **`src/components/insights/InsightCard.tsx`** — base card shell. Left border (red/amber/green), severity icon, title row, optional ✕ dismiss button (Tier 2 only). Returns null when dismissed.
+
+**Tier 1 — Active Alerts (undismissable, red border):**
+| Card | Condition |
+|---|---|
+| `ThermalDegradationCard` | `thermal_state` Serious/Critical — shows est. tok/s loss (50% for Serious/Critical) |
+| `MemoryExhaustionCard` | Headroom < 10% + model loaded — NVIDIA uses VRAM, others use system RAM |
+| `PowerAnomalyCard` | Watts > 2× session baseline OR (watts > 50 && GPU < 20%) — baseline = rolling avg of first 10 readings |
+
+**Tier 2 — Insights (per-session dismiss, amber/red border):**
+| Card | Condition |
+|---|---|
+| `ModelFitInsightCard` | `ollama_model_size_gb != null` — wraps `ModelFitCard(bare)` inside InsightCard; poor score → red border |
+| `ModelEvictionCard` | Model loaded + no tok/s activity ≥ 5 min — warns 2 min before eviction; Keep Warm locked (Phase 4B) |
+| `IdleResourceCard` | No inference all session + uptime ≥ 1hr — shows `$X.XX/hr` idle cost using `getNodeSettings().kwhRate × PUE` |
+
+**Three-section layout (both builds):**
+
+*localhost:7700:*
+```
+Section 1: Active Alerts — Tier 1 cards or "✓ All systems nominal"
+Section 2: Insights — Tier 2 cards (hidden entirely when all dismissed)
+Section 3: Local AI Analysis — Ollama CTA, unchanged
+```
+
+*wicklee.dev:*
+```
+Section 1: Active Alerts — Tier 1 per node or "✓ Fleet nominal · N nodes"
+Section 2: Insights — ModelFitInsightCard per node with model loaded
+Section 3: Fleet Intelligence — Phase 3A placeholders (lock icon)
+```
+
+**Section 2 visibility:** sessionStorage checked at render time on every SSE frame (1Hz). Section header disappears within 1s of last active Tier 2 card being dismissed.
+
+**Fleet mode notes:** Power anomaly uses high-W+low-GPU condition only (no per-node baseline). Eviction and Idle cards skip fleet mode (require per-node time tracking not yet available).
+
+**`ModelFitCard.tsx` — `bare` prop:** Skips the outer `bg/border/rounded` wrapper so the card composes inside InsightCard without double nesting. All existing usages unaffected.
+
+---
+
+### What Was Learned
+
+- **Empty state as a positive signal, not a broken state** — "✓ All systems nominal" is calm and reassuring, not celebratory. The Insights tab should feel like a security guard who's bored because nothing is happening.
+- **Section 2 visibility without reactive sessionStorage** — reading sessionStorage at render time (not as React state) works cleanly because SSE frames arrive at 1Hz. The 1-second delay before the section header disappears is imperceptible.
+- **`bare` prop pattern for composable cards** — rather than duplicating visual logic in two places, a single `bare` prop lets the existing card content compose inside a different outer shell. Keeps ModelFitCard's visual logic in one place.
+- **Power baseline in a ref, not state** — accumulating the first 10 watt readings in a `useRef<number[]>` avoids re-renders during accumulation. A single `useState` flip at length === 10 triggers the one render that matters.
+- **Fleet mode power anomaly simplification** — without per-node session baselines, the "2× baseline" condition is meaningless for fleet mode. The high-W+low-GPU condition fires independently and is more actionable at fleet scale anyway.
+- **Tier 1 cards and the dismiss hook** — InsightCard calls `useInsightDismiss` unconditionally but only returns null when `tier === 2 && dismissed`. Tier 1 cards get the hook call for free; the guard prevents any behavior change.
+
+---
+
+### Code Shipped (commits `8970420` → `128627b`)
+
+| Commit | Description | Files |
+|---|---|---|
+| `8970420` | Model-to-Hardware Fit Score — first live Insight card | 4 files, +541 |
+| `bdf49dd` | Fix modelSizeGb float precision in tooltip | 1 file |
+| `32cfbba` | docs: Insights Tab architecture in SPEC.md | 1 file, +115 |
+| `128627b` | Rationalize Insights tab — 3-section hierarchy | 10 files, +1,077/−153 |
+
+---
+
 ## March 12, 2026 — Security Hardening, Install Polish, Fleet Count Unification 🔒
 
 **The Goal:** Pre-Show HN security pass. Full codebase audit across dead code, performance, correctness, and security. Ship the highest-priority fixes. Document everything in `docs/SECURITY.md`. Unify all node count displays behind a single hook.
