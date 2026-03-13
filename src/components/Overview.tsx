@@ -7,6 +7,7 @@ import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer } from '../hooks/useRollingMetrics';
+import { useFleetCounts } from '../hooks/useFleetCounts';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 
@@ -794,6 +795,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     : cloudMetrics;
   const lastSeenMsMap = cloudLastSeen;
 
+  // Single source of truth for all registered-node counts.
+  // Must be called before any early returns (Rules of Hooks).
+  const counts = useFleetCounts(nodes);
+
   // While the initial fleet fetch is in-flight (nodesLoading), show a blank
   // loading screen rather than EmptyFleetState — avoids the "Add your first node"
   // flash on every page refresh for users who already have nodes paired.
@@ -845,8 +850,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const vramCapacityGB = (totalVramCapacityMb / 1024).toFixed(1);
 
   // Tile 4 — FLEET NODES: online / total
-  const fleetLiveCount  = effectiveMetrics.length;
-  const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : nodes.length;
+  // fleetLiveCount  — nodes with status 'online' (single source via useFleetCounts)
+  // fleetTotalCount — all registered nodes (single source via useFleetCounts)
+  const fleetLiveCount  = isLocalHost ? effectiveMetrics.length : counts.online;
+  const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : counts.total;
 
   // Tiles 5-7 — WES leaderboard + fleet average
   interface WESEntry { nodeId: string; hostname: string; wes: number | null; tps: number | null; watts: number | null; thermalState: string | null; nullReason: string; }
@@ -1180,7 +1187,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               </span>
             ) : (
               <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
-                {isLocalHost ? (sentinel ? '1' : '0') : nodes.length} node{(isLocalHost ? (sentinel ? 1 : 0) : nodes.length) !== 1 ? 's' : ''}
+                {isLocalHost ? (sentinel ? '1' : '0') : counts.total} node{(isLocalHost ? (sentinel ? 1 : 0) : counts.total) !== 1 ? 's' : ''}
               </span>
             )}
           </div>

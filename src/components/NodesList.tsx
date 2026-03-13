@@ -10,6 +10,7 @@ import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { useFleetStream } from '../contexts/FleetStreamContext';
+import { useFleetCounts } from '../hooks/useFleetCounts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -697,6 +698,10 @@ const NodesList: React.FC<NodesListProps> = ({
   const lastSeenMap = cloudLastSeen;
   const connected = isLocalHost ? localConnected : cloudConnected;
 
+  // Single source of truth for all node counts.
+  // Must be called before any early returns (Rules of Hooks).
+  const counts = useFleetCounts(nodes);
+
   // ── SSE (local only) ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!isLocalHost) return;
@@ -900,8 +905,8 @@ const NodesList: React.FC<NodesListProps> = ({
     return { node, metrics, lastSeenMs: ls, isOnline, isFlagged, idx };
   });
 
-  const onlineCount  = enriched.filter(e => e.isOnline).length;
-  const offlineCount = enriched.filter(e => !e.isOnline).length;
+  // onlineCount / offlineCount removed — all display counts now derive from
+  // useFleetCounts (counts.online, counts.total) for a single source of truth.
   const flaggedCount = enriched.filter(e => e.isFlagged).length;
   const allLive      = enriched.filter(e => e.isOnline).map(e => e.metrics!);
 
@@ -980,11 +985,11 @@ const NodesList: React.FC<NodesListProps> = ({
           tooltip="Paired = telemetry sent to wicklee.dev cloud. Local = agent running without cloud connection."
         >
           <p className="text-base font-bold font-telin text-gray-900 dark:text-white leading-none">
-            {onlineCount} Paired  ·  0 Local
+            {counts.online} Paired  ·  0 Local
           </p>
-          {offlineCount > 0
+          {(counts.total - counts.online) > 0
             ? <p className="text-[10px] text-amber-500 mt-1">
-                {offlineCount} node{offlineCount !== 1 ? 's' : ''} offline
+                {counts.total - counts.online} node{(counts.total - counts.online) !== 1 ? 's' : ''} offline
               </p>
             : <p className="text-[10px] text-gray-500 mt-1">all nodes reachable</p>
           }
@@ -1090,7 +1095,7 @@ const NodesList: React.FC<NodesListProps> = ({
       {/* ── Status filter tabs ─────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 flex-wrap">
         {(['all', 'online', 'offline'] as StatusFilter[]).map(f => {
-          const count  = f === 'all' ? nodes.length : f === 'online' ? onlineCount : offlineCount;
+          const count  = f === 'all' ? counts.total : f === 'online' ? counts.online : (counts.total - counts.online);
           const active = statusFilter === f;
           return (
             <button
@@ -1175,9 +1180,9 @@ const NodesList: React.FC<NodesListProps> = ({
       {/* ── Footer ─────────────────────────────────────────────────────────── */}
       <p className="text-[11px] text-gray-600 text-center pt-1">
         <span className="text-gray-400 font-semibold">
-          {onlineCount} node{onlineCount !== 1 ? 's' : ''} online
+          {counts.online} node{counts.online !== 1 ? 's' : ''} online
         </span>
-        {' '}· {nodes.length} total
+        {' '}· {counts.total} total
         {selectedNodes.size > 0 && (
           <span className="text-indigo-400"> · {selectedNodes.size} selected</span>
         )}
