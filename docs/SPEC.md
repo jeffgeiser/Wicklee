@@ -139,7 +139,7 @@ wicklee-agent (single Rust binary, ~700KB)
 │   └── GET localhost:8000/metrics    → Prometheus text → tok/s, model name, KV cache %, requests running
 │
 ├── Cloud Relay (when paired)
-│   └── POST /api/telemetry      → push MetricsPayload to wicklee.dev cloud backend
+│   └── POST /api/telemetry      → push MetricsPayload to wicklee.dev; X-Wicklee-Token: <telemetry_secret> required
 │
 └── Static Assets (rust-embed)
     └── frontend/dist/           → Compiled React/Tailwind SPA, baked in at build time
@@ -277,11 +277,11 @@ wicklee-cloud (Rust + Axum, deployed on Railway)
 │   └── Scheduled cleanup task       → purge expired stream_tokens every 5 minutes
 │
 ├── Pairing
-│   ├── POST /api/pair/claim       → generate 6-digit code, store with account
+│   ├── POST /api/pair/claim       → generate 6-digit code, store with account; returns telemetry_secret (one-time delivery)
 │   └── POST /api/pair/activate    → agent calls this on first pairing; stores node
 │
 ├── Telemetry
-│   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms
+│   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms; X-Wicklee-Token: <telemetry_secret> required
 │   └── GET  /api/fleet/stream?token=  → SSE stream to browser; token = stream_token from /api/auth/stream-token
 │
 └── Storage
@@ -289,7 +289,9 @@ wicklee-cloud (Rust + Axum, deployed on Railway)
     └── DuckDB (Phase 4A)          → time-series metric history, 90-day retention
 ```
 
-**Rate limits:** POST /api/pair/activate (10/5min). Auth rate limiting is handled by Clerk.
+**Rate limits:** `POST /api/pair/activate` — 10 attempts / 60s per IP; 429 includes `Retry-After: 60` header. IP extracted from rightmost `X-Forwarded-For` value (Railway-appended, not client-controlled). Auth rate limiting handled by Clerk.
+
+**CORS:** Origin checked against exact-match allowlist; `Access-Control-Allow-Credentials: true` set only for known origins. Agent requests (no `Origin` header) receive no CORS headers.
 
 ---
 
