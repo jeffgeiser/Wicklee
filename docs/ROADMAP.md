@@ -177,7 +177,6 @@
   ```
 - [ ] **API key generation** — Settings → Account & Data
 - [ ] **API docs at `/docs/api`** — human and agent readable
-- [ ] **Rate limiting** — Community: 60 req/min. Team: 600 req/min.
 
 ### Sovereignty
 - [ ] **Sovereignty Tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network.
@@ -279,7 +278,7 @@
 | Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
 | WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
 | Fleet Intelligence panel | ✅ View | ✅ View | ✅ Full + alerts | ✅ Full |
-| Agent API v1 | ✅ 60 req/min | ✅ 60 req/min | ✅ 600 req/min | ✅ Unlimited |
+| Agent API v1 | ✅ | ✅ | ✅ | ✅ |
 | `/api/v1/route/best` | ✅ | ✅ | ✅ | ✅ |
 | Local Intelligence (session) | ✅ Session only | ✅ Session only | ✅ Full + alerts | ✅ Full |
 | Local Intelligence (trend-based) | ❌ | ✅ 7-day | ✅ 90-day | ✅ Full |
