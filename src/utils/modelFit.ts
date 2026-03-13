@@ -1,0 +1,121 @@
+/**
+ * Model-to-Hardware Fit Score
+ *
+ * Answers: "Is this hardware a good match for the model currently loaded?"
+ *
+ * All inputs come from the live SSE payload — no new data sources required.
+ * This is a pure render-time computation with no side effects.
+ *
+ * Scoring:
+ *   Good  — model fits AND headroom > 20% AND thermal Normal or null
+ *   Fair  — model fits AND (headroom 10–20% OR thermal Fair)
+ *   Poor  — model does not fit OR headroom < 10% OR thermal Serious/Critical
+ */
+
+import type { SentinelMetrics } from '../types';
+
+export type FitScore = 'good' | 'fair' | 'poor';
+
+export interface FitResult {
+  score:        FitScore;
+  /** Current free memory as % of total (before model load). e.g. 34.2 */
+  headroomPct:  number;
+  /** Free GB. e.g. 2.8 */
+  headroomGb:   number;
+  /** Model size in GB from payload. e.g. 2.0 */
+  modelSizeGb:  number;
+  /** Total memory capacity in GB (VRAM for NVIDIA, system RAM for Apple Silicon). e.g. 8.0 */
+  totalGb:      number;
+  /** True when VRAM was used instead of system RAM. */
+  isNvidia:     boolean;
+  /** Raw thermal_state string, or null if unavailable. */
+  thermalState: string | null;
+  /** Human-readable explanation of the score. */
+  reason:       string;
+}
+
+/**
+ * Compute the Model-to-Hardware Fit Score for a node.
+ *
+ * Returns null when:
+ *   - No Ollama model is loaded (ollama_model_size_gb is null/absent)
+ *   - Required memory fields are unavailable (NVIDIA node with null vram_used)
+ *   - Total memory is zero or negative (malformed payload)
+ */
+export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
+  const modelSizeGb = node.ollama_model_size_gb ?? null;
+  if (modelSizeGb == null) return null;
+
+  const totalMemMb   = node.total_memory_mb;
+  const availMemMb   = node.available_memory_mb;
+  const thermalState = node.thermal_state ?? null;
+  const vramTotalMb  = node.nvidia_vram_total_mb ?? null;
+  const vramUsedMb   = node.nvidia_vram_used_mb  ?? null;
+
+  const modelSizeMb = modelSizeGb * 1024;
+
+  // NVIDIA nodes use dedicated VRAM; Apple Silicon / CPU nodes use system RAM.
+  const isNvidia = vramTotalMb != null && vramTotalMb > 0;
+
+  const totalMb = isNvidia ? vramTotalMb! : totalMemMb;
+
+  // usedMb: for NVIDIA, requires vramUsedMb from NVML; for others, derived from available.
+  const usedMb: number | null = isNvidia
+    ? vramUsedMb                        // null when NVML didn't report VRAM in use
+    : totalMemMb - availMemMb;          // always computable on non-NVIDIA nodes
+
+  // Guard: can't score without a used-memory figure, or with degenerate total.
+  if (usedMb == null) return null;
+  if (totalMb <= 0)   return null;
+
+  const headroomMb  = totalMb - usedMb;
+  const headroomPct = (headroomMb / totalMb) * 100;
+  const headroomGb  = headroomMb / 1024;
+  const totalGb     = totalMb    / 1024;
+
+  // Does the model fit in the current free headroom?
+  const modelFitsMb = modelSizeMb < headroomMb;
+
+  // Thermal classification
+  const thermalLower    = thermalState?.toLowerCase() ?? null;
+  const isThermalSevere = thermalLower != null && ['serious', 'critical'].includes(thermalLower);
+  const isThermalFair   = thermalLower === 'fair';
+
+  // ── Scoring (evaluated in Poor → Fair → Good priority order) ───────────────
+
+  let score:  FitScore;
+  let reason: string;
+
+  if (!modelFitsMb || headroomPct < 10 || isThermalSevere) {
+    // Poor ─────────────────────────────────────────────────────────────────────
+    score = 'poor';
+    if (isThermalSevere) {
+      reason = 'Serious thermal state — inference efficiency significantly degraded';
+    } else if (!modelFitsMb) {
+      reason = `Model size (${modelSizeGb}GB) exceeds available memory (${headroomGb.toFixed(1)}GB free)`;
+    } else {
+      // headroomPct < 10% but model technically fits — dangerously low headroom
+      reason = `Only ${headroomPct.toFixed(0)}% memory free — insufficient headroom for stable inference`;
+    }
+
+  } else if (headroomPct <= 20 || isThermalFair) {
+    // Fair ─────────────────────────────────────────────────────────────────────
+    // Condition: model fits AND (headroom 10–20% OR thermal Fair)
+    score = 'fair';
+    if (isThermalFair && headroomPct > 20) {
+      // Thermal Fair is the sole disqualifier from Good
+      reason = `Model fits but thermal state is ${thermalState} — monitor closely`;
+    } else {
+      // Tight memory (headroom 10–20%), with or without Fair thermal
+      reason = `Model fits but memory headroom is tight (${headroomPct.toFixed(0)}%)`;
+    }
+
+  } else {
+    // Good ─────────────────────────────────────────────────────────────────────
+    // Condition: model fits AND headroom > 20% AND thermal Normal or null
+    score  = 'good';
+    reason = `Model fits with ${headroomPct.toFixed(0)}% memory headroom · ${thermalState ?? 'Normal'} thermal`;
+  }
+
+  return { score, headroomPct, headroomGb, modelSizeGb, totalGb, isNvidia, thermalState, reason };
+}

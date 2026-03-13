@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu } from 'lucide-react';
 import { computeWES, formatWES, wesColorClass } from '../utils/wes';
+import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
@@ -188,6 +189,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : hasVllm   ? (m!.vllm_model_name    ?? 'vLLM')
     : 'No runtime';
 
+  // Model Fit Score — computed at render time from live SSE payload, no new data required.
+  // Only computed when Ollama is running and metrics are present.
+  const fitResult = (hasOllama && m) ? computeModelFitScore(m) : null;
+
   // VRAM % — NVIDIA only; Apple Silicon unified memory is architecturally distinct → show —
   const vramPctRaw = hasNvidia
     ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
@@ -289,11 +294,24 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 3. MODEL — shows active runtime model name + vLLM cache usage when available */}
+      {/* 3. MODEL — model name + fit score dot + vLLM cache usage when available */}
       <div className="min-w-0 overflow-hidden flex flex-col gap-0.5">
-        <p className={`${V} truncate ${!isOnline || (!hasOllama && !hasVllm) ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
-          {modelStr}
-        </p>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <p className={`${V} truncate ${!isOnline || (!hasOllama && !hasVllm) ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
+            {modelStr}
+          </p>
+          {/* Fit score dot — colored indicator with full reason in tooltip */}
+          {fitResult && (
+            <span
+              className={`shrink-0 inline-block w-1.5 h-1.5 rounded-full ${
+                fitResult.score === 'good' ? 'bg-green-400' :
+                fitResult.score === 'fair' ? 'bg-amber-400' :
+                'bg-red-400'
+              }`}
+              title={fitResult.reason}
+            />
+          )}
+        </div>
         {hasVllm && m?.vllm_cache_usage_perc != null && (
           <p className="text-[9px] text-cyan-400 font-telin truncate leading-none">
             Cache: {m.vllm_cache_usage_perc.toFixed(0)}%
