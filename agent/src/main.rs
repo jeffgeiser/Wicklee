@@ -822,12 +822,116 @@ fn pairing_response(state: &PairingState) -> PairingStatusResponse {
 
 // ── Service Installation ──────────────────────────────────────────────────────
 
+/// C3 — Validates that a binary path is safe to embed in service descriptors.
+///
+/// launchd plists, systemd unit files, and Windows sc.exe descriptors are text
+/// formats that the respective service managers parse with their own rules.
+/// Embedding a path with shell metacharacters, XML-significant characters, or
+/// newlines can silently corrupt the descriptor or enable local privilege
+/// escalation when the service manager reloads it.
+///
+/// **Allowed (POSIX):** `[a-zA-Z0-9/_.-]` only.  Covers every normal Unix
+/// install path (`/usr/local/bin/wicklee`, `/opt/wicklee/bin/wicklee`, etc.).
+///
+/// **Allowed (Windows):** drive letter + `:` + `[\\/a-zA-Z0-9_.- ]` only.
+/// Spaces are common in Windows paths (`C:\Program Files\…`); they are handled
+/// by quoting at the call site rather than here.
+///
+/// The check rejects `.` components and path traversal (`..`) unconditionally
+/// regardless of platform, and enforces a sensible maximum path length.
+///
+/// If validation fails, `install_service` prints a clear human-readable error
+/// and aborts rather than writing a potentially broken service descriptor.
+#[cfg(not(target_os = "windows"))]
+fn validate_binary_path(path: &str) -> Result<(), String> {
+    if path.is_empty() || path.len() > 4096 {
+        return Err(format!(
+            "binary path length {} is out of range (1–4096 bytes)", path.len()
+        ));
+    }
+    if !path.starts_with('/') {
+        return Err("binary path must be absolute (must start with '/')".to_string());
+    }
+    // Reject ".." components wherever they appear.
+    if path.split('/').any(|component| component == "..") {
+        return Err("binary path must not contain path traversal ('..') components".to_string());
+    }
+    // Byte-level allowlist: [a-zA-Z0-9/_.-]
+    // '/' is the POSIX path separator; '_', '.', '-' appear in common binary names.
+    // Everything else (spaces, semicolons, shell expansions, XML metacharacters,
+    // newlines, null bytes, …) is rejected.
+    for (i, b) in path.bytes().enumerate() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
+            | b'/' | b'_' | b'.' | b'-' => {}
+            _ => return Err(format!(
+                "binary path contains unsafe byte 0x{b:02X} at index {i} — \
+                 only [a-zA-Z0-9/_.-] are permitted in service paths; \
+                 move the binary to a simpler path and re-run --install-service"
+            )),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn validate_binary_path(path: &str) -> Result<(), String> {
+    if path.is_empty() || path.len() > 4096 {
+        return Err(format!(
+            "binary path length {} is out of range (1–4096 bytes)", path.len()
+        ));
+    }
+    let bytes = path.as_bytes();
+    // Must start with <DriveLetter>:\ or <DriveLetter>:/
+    if bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || (bytes[2] != b'\\' && bytes[2] != b'/')
+    {
+        return Err(
+            "Windows binary path must be absolute — expected format: C:\\...\\wicklee.exe"
+                .to_string(),
+        );
+    }
+    // Reject ".." anywhere.
+    for component in path.split(['\\', '/']) {
+        if component == ".." {
+            return Err("binary path must not contain path traversal ('..') components".to_string());
+        }
+    }
+    // Byte-level allowlist for the rest of the path.
+    // Spaces allowed (common in "Program Files"); colon only as drive separator (already
+    // validated at byte 1).  All shell-significant and XML-significant characters rejected.
+    for (i, b) in bytes.iter().enumerate().skip(3) {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
+            | b'\\' | b'/' | b'_' | b'.' | b'-' | b' ' => {}
+            _ => return Err(format!(
+                "binary path contains unsafe byte 0x{b:02X} at index {i} — \
+                 only [a-zA-Z0-9\\\\/._- ] are permitted in Windows service paths"
+            )),
+        }
+    }
+    Ok(())
+}
+
 async fn install_service() {
     let exe = match std::env::current_exe() {
         Ok(p)  => p,
         Err(e) => { eprintln!("error: cannot determine executable path: {e}"); return; }
     };
     let exe_str = exe.to_string_lossy().into_owned();
+
+    // C3 — Validate before embedding in any service descriptor.
+    // An attacker who installs the binary at a path with shell metacharacters
+    // could inject commands executed when the service manager reloads the unit.
+    // Abort with a clear error rather than writing a potentially dangerous file.
+    if let Err(msg) = validate_binary_path(&exe_str) {
+        eprintln!("error: cannot install service — unsafe binary path: {msg}");
+        eprintln!("       Move the wicklee binary to a path using only [a-zA-Z0-9/_.-]");
+        eprintln!("       (e.g. /usr/local/bin/wicklee) and re-run --install-service.");
+        return;
+    }
 
     #[cfg(target_os = "macos")]
     {

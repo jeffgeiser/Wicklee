@@ -9,7 +9,11 @@ use axum::{
 };
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::Duration;
+use futures_util::Stream;
 use subtle::ConstantTimeEq;
 use tokio_stream::StreamExt as _;
 use rusqlite::{params, Connection};
@@ -180,6 +184,67 @@ struct JwksResponse {
     keys: Vec<JwkKey>,
 }
 
+// ── H2 — SSE connection limits ────────────────────────────────────────────────
+//
+// Without caps, a single IP can open thousands of EventSource connections,
+// each pinning a Tokio task and a broadcast receiver.  At scale that exhausts
+// both task memory and Railway's connection table.
+//
+// Two guards:
+//   MAX_SSE_TOTAL   — global hard cap; prevents memory exhaustion regardless of
+//                     how many IPs are involved.
+//   MAX_SSE_PER_IP  — per-IP cap; one legitimate user needs at most ~3 tabs.
+//                     10 is generous enough for power users / tests.
+//
+// Both counters are decremented via `SseConnStream::drop`, which fires on both
+// clean stream completion and abrupt client disconnect — Axum drops the stream
+// task as soon as the TCP write side detects the client is gone.
+
+/// Global ceiling on concurrent `/api/fleet/stream` connections.
+const MAX_SSE_TOTAL:  usize = 1_000;
+/// Per-source-IP ceiling on concurrent `/api/fleet/stream` connections.
+const MAX_SSE_PER_IP: usize = 10;
+
+/// RAII wrapper around an SSE stream that decrements both the global and
+/// per-IP SSE connection counters when the stream is dropped.
+///
+/// This is the canonical Rust approach to "cleanup on async cancellation":
+/// implement `Drop` on a wrapper that holds the resource handles.  The Axum
+/// runtime drops the stream task when the client disconnects, so `Drop` fires
+/// reliably regardless of whether the stream ended naturally or the TCP
+/// connection was reset.
+struct SseConnStream<S> {
+    inner:  S,
+    total:  Arc<AtomicUsize>,
+    per_ip: Arc<Mutex<HashMap<String, usize>>>,
+    ip:     String,
+}
+
+impl<S: Stream + Unpin> Stream for SseConnStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl<S> Drop for SseConnStream<S> {
+    fn drop(&mut self) {
+        // Decrement global counter.  fetch_sub on Relaxed is fine — there are
+        // no loads that need to observe the decrement in a happens-before sense;
+        // we only need the value to be monotonically accurate over time.
+        self.total.fetch_sub(1, Ordering::Relaxed);
+
+        // Decrement per-IP counter and evict the entry when it reaches zero
+        // to keep the map from growing unbounded.
+        let mut map = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = map.get_mut(&self.ip) {
+            if *c > 0 { *c -= 1; }
+            if *c == 0 { map.remove(&self.ip); }
+        }
+    }
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -192,6 +257,10 @@ struct AppState {
     clerk_keys:     Arc<RwLock<Vec<JwkKey>>>,
     /// C4 — per-IP pairing attempt timestamps for sliding-window rate limiting.
     pair_attempts:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
+    /// H2 — Total live SSE connection count (across all IPs).
+    sse_total:      Arc<AtomicUsize>,
+    /// H2 — Per-IP live SSE connection counts; entry removed when it reaches 0.
+    sse_per_ip:     Arc<Mutex<HashMap<String, usize>>>,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -782,6 +851,89 @@ async fn handle_me(
     }
 }
 
+// ── H3 — fleet_url SSRF validation ────────────────────────────────────────────
+//
+// `fleet_url` is supplied by the agent at pair time and stored in SQLite.  It is
+// returned to the browser as a navigation link to the agent's local dashboard.
+// The cloud backend does NOT currently follow this URL, but we validate it now
+// because:
+//   (a) Future features (health checks, webhook callbacks) would follow it.
+//   (b) Storing an IMDS-targeting URL creates a loaded gun for any future code.
+//   (c) The validation cost is zero — it runs once per pair, not per request.
+//
+// Rules:
+//   1. Scheme must be `http://` or `https://` — rejects `file://`, `ftp://`,
+//      `javascript:`, `data:`, and every other vector.
+//   2. The URL must not target SSRF-dangerous addresses:
+//        169.254.x.x  — link-local / AWS IMDS endpoint
+//        100.64.x.x   — shared address space (CGNAT / Railway internal fabric)
+//        0.x.x.x      — reserved
+//        240-255.x.x.x — reserved / experimental
+//   3. Max 2 048 bytes, no null bytes or ASCII control characters.
+//   4. Intentionally does NOT reject private RFC-1918 ranges (10.x, 172.16–31.x,
+//      192.168.x) because agents legitimately run on LAN hosts and the URL is
+//      only ever opened by the operator in their own browser.
+
+/// Parse a dotted-decimal IPv4 host string.  Returns `None` for hostnames.
+fn parse_ipv4_host(host: &str) -> Option<[u8; 4]> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() != 4 { return None; }
+    Some([
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+        parts[3].parse().ok()?,
+    ])
+}
+
+fn validate_fleet_url(url: &str) -> Result<(), &'static str> {
+    // Length + control-character guard.
+    if url.len() > 2048 {
+        return Err("fleet_url exceeds maximum length (2048 bytes)");
+    }
+    if url.bytes().any(|b| b == 0 || b < 0x20) {
+        return Err("fleet_url contains null bytes or ASCII control characters");
+    }
+
+    // Scheme check — must be http:// or https://.
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or("fleet_url must use http:// or https:// scheme")?;
+
+    // Extract the host component (before the first '/' or ':' after the scheme).
+    let host_port = rest.split('/').next().unwrap_or("");
+    let host = host_port.split(':').next().unwrap_or("").to_lowercase();
+    if host.is_empty() {
+        return Err("fleet_url is missing a host");
+    }
+
+    // SSRF-dangerous address check.  Only applies when the host is a raw IPv4
+    // address; hostnames are accepted (DNS resolution happens in the browser, not
+    // on the server, so there is no SSRF surface at this stage).
+    if let Some([a, b, c, _d]) = parse_ipv4_host(&host) {
+        // 169.254.x.x — AWS IMDS, Azure IMDS, Railway metadata service
+        if a == 169 && b == 254 {
+            return Err("fleet_url targets a link-local / IMDS address (169.254.x.x)");
+        }
+        // 100.64.x.x — IANA shared address space; used internally by some cloud providers
+        if a == 100 && b == 64 {
+            return Err("fleet_url targets shared address space (100.64.x.x)");
+        }
+        // 0.x.x.x — IANA reserved
+        if a == 0 {
+            return Err("fleet_url targets a reserved address (0.x.x.x)");
+        }
+        // 240–255.x.x.x — IANA reserved / experimental / broadcast
+        if a >= 240 {
+            let _ = c; // suppress unused warning on the destructure
+            return Err("fleet_url targets a reserved/experimental address (240–255.x.x.x)");
+        }
+    }
+
+    Ok(())
+}
+
 // ── Fleet handlers ────────────────────────────────────────────────────────────
 
 /// POST /api/pair/claim
@@ -796,6 +948,14 @@ async fn handle_claim(
     if body.node_id.is_empty() || body.fleet_url.is_empty() {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "node_id and fleet_url are required" }))).into_response();
+    }
+
+    // H3 — Reject fleet_urls that could be used as SSRF gadgets if the backend
+    // ever follows them (health checks, webhook callbacks, etc.).  Validates
+    // scheme, blocks SSRF-dangerous IP ranges, and enforces a length cap.
+    if let Err(msg) = validate_fleet_url(&body.fleet_url) {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg }))).into_response();
     }
 
     let token    = mint_node_token(&body.node_id);
@@ -1137,9 +1297,14 @@ async fn handle_activate(
 /// GET /api/fleet/stream — SSE stream pushing fleet snapshots every 2 s.
 /// Auth: single-use stream token via ?token=<uuid> (issued by /api/auth/stream-token).
 /// EventSource cannot send Authorization headers, so we use a short-lived UUID token.
+///
+/// H2: enforces MAX_SSE_PER_IP and MAX_SSE_TOTAL connection caps.  Both counters
+/// are decremented via `SseConnStream::drop` when the client disconnects.
 async fn handle_fleet_stream(
-    State(state): State<AppState>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state):      State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers:           HeaderMap,
+    Query(params):     Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let stream_token = match params.get("token") {
         Some(t) if !t.is_empty() => t.clone(),
@@ -1170,6 +1335,44 @@ async fn handle_fleet_stream(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
+
+    // H2 — Enforce per-IP and global SSE connection caps BEFORE allocating any
+    // async resources for this connection.
+    //
+    // Increment per-IP first so we can roll it back cleanly if the global cap
+    // is exceeded.  Both counters are decremented by `SseConnStream::drop`,
+    // which fires when the client disconnects or the stream task is cancelled.
+    let ip = client_ip(&headers, peer);
+
+    // Per-IP check.
+    {
+        let mut map = state.sse_per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        let slot = map.entry(ip.clone()).or_insert(0);
+        if *slot >= MAX_SSE_PER_IP {
+            return (StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({
+                    "error": format!("Too many SSE connections from this IP (limit: {MAX_SSE_PER_IP})")
+                }))).into_response();
+        }
+        *slot += 1;
+    }
+
+    // Global cap — fetch_add returns the *previous* value; if it was already
+    // at the limit, roll back the per-IP increment and reject.
+    let prev_total = state.sse_total.fetch_add(1, Ordering::Relaxed);
+    if prev_total >= MAX_SSE_TOTAL {
+        state.sse_total.fetch_sub(1, Ordering::Relaxed);
+        {
+            let mut map = state.sse_per_ip.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(c) = map.get_mut(&ip) {
+                if *c > 0 { *c -= 1; }
+                if *c == 0 { map.remove(&ip); }
+            }
+        }
+        return (StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Server at maximum SSE connection capacity" })))
+            .into_response();
+    }
 
     // Load initial node set for this user.
     let db = state.db.clone();
@@ -1217,7 +1420,17 @@ async fn handle_fleet_stream(
         Ok::<_, Infallible>(Event::default().data(data))
     });
 
-    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+    // Wrap with SseConnStream so both counters are decremented when the
+    // client disconnects, regardless of whether the stream ended cleanly
+    // or the TCP connection was reset.
+    let guarded = SseConnStream {
+        inner:  stream,
+        total:  state.sse_total.clone(),
+        per_ip: state.sse_per_ip.clone(),
+        ip,
+    };
+
+    Sse::new(guarded).keep_alive(KeepAlive::default()).into_response()
 }
 
 /// GET /health — trivial liveness probe, no DB dependency.
@@ -1434,6 +1647,8 @@ async fn main() {
         metrics:       Arc::new(RwLock::new(seed_metrics)),
         clerk_keys:    clerk_keys.clone(),
         pair_attempts: Arc::new(Mutex::new(HashMap::new())),
+        sse_total:     Arc::new(AtomicUsize::new(0)),
+        sse_per_ip:    Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.

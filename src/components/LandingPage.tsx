@@ -1,5 +1,5 @@
-import React from 'react';
-import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Database, Thermometer, Github, Copy, AlertTriangle, Flame, MemoryStick, TrendingDown, Eye, ShieldCheck, BarChart3, Snowflake } from 'lucide-react';
+import React, { useState } from 'react';
+import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Database, Thermometer, Github, Copy, Check, AlertTriangle, Flame, MemoryStick, TrendingDown, Eye, ShieldCheck, BarChart3, Snowflake } from 'lucide-react';
 import Logo from './Logo';
 
 interface LandingPageProps {
@@ -105,6 +105,12 @@ const metricCards = [
 ];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
+  // H4 — Use React state for copy-button feedback instead of direct DOM
+  // mutation via btn.innerHTML.  The old pattern bypassed React's virtual DOM,
+  // caused unnecessary re-renders of sibling nodes, and created a surface for
+  // XSS if the originalText variable ever held non-static content.
+  const [copiedMac, setCopiedMac] = useState(false);
+  const [copiedWin, setCopiedWin] = useState(false);
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 selection:bg-blue-600 selection:text-white">
       {/* Background Decor */}
@@ -204,20 +210,15 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <button
                 onClick={() => {
                   navigator.clipboard.writeText('curl -fsSL https://wicklee.dev/install.sh | sh');
-                  const btn = document.getElementById('copy-install-btn');
-                  if (btn) {
-                    const originalText = btn.innerHTML;
-                    btn.innerHTML = '<span class="text-green-400 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check"><path d="M20 6 9 17l-5-5"/></svg> Copied!</span>';
-                    setTimeout(() => {
-                      btn.innerHTML = originalText;
-                    }, 2000);
-                  }
+                  setCopiedMac(true);
+                  setTimeout(() => setCopiedMac(false), 2000);
                 }}
-                id="copy-install-btn"
                 className="shrink-0 self-end sm:self-auto p-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
               >
-                <Copy className="w-4 h-4" />
-                Copy
+                {copiedMac
+                  ? <><Check className="w-4 h-4 text-green-400" /><span className="text-green-400">Copied!</span></>
+                  : <><Copy className="w-4 h-4" />Copy</>
+                }
               </button>
             </div>
             {/* Windows */}
@@ -230,20 +231,15 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <button
                 onClick={() => {
                   navigator.clipboard.writeText('irm https://wicklee.dev/install.ps1 | iex');
-                  const btn = document.getElementById('copy-install-win-btn');
-                  if (btn) {
-                    const originalText = btn.innerHTML;
-                    btn.innerHTML = '<span class="text-green-400 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check"><path d="M20 6 9 17l-5-5"/></svg> Copied!</span>';
-                    setTimeout(() => {
-                      btn.innerHTML = originalText;
-                    }, 2000);
-                  }
+                  setCopiedWin(true);
+                  setTimeout(() => setCopiedWin(false), 2000);
                 }}
-                id="copy-install-win-btn"
                 className="shrink-0 self-end sm:self-auto p-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
               >
-                <Copy className="w-4 h-4" />
-                Copy
+                {copiedWin
+                  ? <><Check className="w-4 h-4 text-green-400" /><span className="text-green-400">Copied!</span></>
+                  : <><Copy className="w-4 h-4" />Copy</>
+                }
               </button>
             </div>
           </div>
