@@ -165,15 +165,13 @@ The OS-level assessment of hardware thermal condition. macOS: read from pmset (s
 
 ---
 
-### J/1K TKN — Energy Per 1K Tokens
+### W/1K TKN — Wattage Per 1K Tokens
 
 **Formula:** `(Watts / tok/s) × 1000`
 
-**Unit:** Joules per 1,000 tokens.
+**Unit:** W per (k·tok/s) — watts of sustained power draw per 1,000 tokens/second of throughput.
 
-The energy required to generate 1,000 tokens at current fleet throughput and power draw. Lower is more energy-efficient. This is an energy metric (Joules), not a power metric (Watts) — the distinction matters for the cost formula below.
-
-> _Previously labelled "WATTAGE / 1K TKN · W" — renamed and relabelled in March 2026. Watts is a rate; Joules is energy-per-output. `W / (tok/s) = W·s/tok = J/tok`._
+How much power the fleet sustains per unit of inference capacity. Lower is more efficient. The ratio `W / (tok/s)` is mathematically equivalent to J/tok (joules per token) — same number, power framing. The cost formula uses this equivalence to derive $/1M (see COST/1M TOKENS below).
 
 ---
 
