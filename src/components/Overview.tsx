@@ -68,6 +68,13 @@ const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
   latency: Math.floor(Math.random() * 100) + 200,
 }));
 
+// Minimum tok/s required before a cost sample enters any rolling buffer.
+// During Ollama startup the probe may read ~0.001 tok/s while GPU power is
+// already at full draw — producing $/1M spikes in the thousands that take
+// minutes to flush from the rolling window. 0.1 tok/s blocks ramp-up noise
+// while still allowing genuinely slow/quantized models.
+const MIN_COST_TPS = 0.1;
+
 // ── Insight Engine tile — uniform across all 8 fleet-header cells ────────────
 interface InsightTileProps {
   label: React.ReactNode;
@@ -989,7 +996,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     }
     const state = nodeCostBufsRef.current.get(e.nodeId)!;
     const raw   = e.costPer1mRaw;
-    if (raw != null && isFinite(raw)) {
+    if (raw != null && isFinite(raw) && e.tps != null && e.tps >= MIN_COST_TPS) {
       if (!(ts > 0 && ts <= state.lastTs)) {
         if (ts > 0) state.lastTs = ts;
         state.buf = state.buf.length < NODE_ROLLING_WINDOW
@@ -1030,7 +1037,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   // Tile 6 — WATTAGE / 1K TKN: total power ÷ fleet throughput × 1000
   const wattPer1k = (() => {
-    if (fleetTps == null || fleetTps <= 0) return null;
+    if (fleetTps == null || fleetTps < MIN_COST_TPS) return null;
     const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
     if (powerNodes.length === 0) return null;
     const totalPowerW = powerNodes.reduce((acc, m) =>
@@ -1083,7 +1090,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       return acc + watts * pue * rate / 1000;
     }, 0);
   })();
-  const costPer1kTokensNew = calculateCostPer1kTokens(fleetTps, fleetHourlyCostUsd);
+  // Gate on MIN_COST_TPS: near-zero tok/s during Ollama ramp-up produces
+  // enormous $/1M values that contaminate the rolling buffer for minutes.
+  const costPer1kTokensNew = (fleetTps != null && fleetTps >= MIN_COST_TPS)
+    ? calculateCostPer1kTokens(fleetTps, fleetHourlyCostUsd)
+    : null;
 
   const totalPowerOfTpsNodes = (() => {
     const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
