@@ -84,23 +84,16 @@ fi
 # ── Success ───────────────────────────────────────────────────────────────────
 
 echo ""
-green "  ✓ wicklee installed successfully."
+green "  ✓ Wicklee agent installed successfully (${LATEST_TAG})"
 echo ""
-echo "     Run:        wicklee"
-echo "     Dashboard:  http://localhost:7700"
+echo "  Start monitoring your node:"
 echo ""
-
-if [[ "$(uname)" == "Darwin" ]]; then
-  echo "  💡 macOS tip: run \`sudo wicklee\` to unlock CPU power draw metrics."
-  dim "     All other metrics (GPU, memory pressure, thermal) work without sudo."
-  echo ""
-fi
-
-echo "  Run as a background service (auto-starts on boot):"
-if [[ "$(uname)" == "Darwin" ]]; then
-  dim "     sudo wicklee --install-service   # launchd · /Library/LaunchDaemons/"
-else
-  dim "     sudo wicklee --install-service   # systemd · /etc/systemd/system/"
-fi
-dim "     sudo wicklee --uninstall-service  # remove the service"
+bold "  Recommended — runs on every boot:"
+bold "    sudo wicklee --install-service"
+echo ""
+echo "  Or run manually:"
+bold "    sudo wicklee"
+echo ""
+echo "  Your dashboard:     http://localhost:7700"
+echo "  Pair with your fleet: https://wicklee.dev"
 echo ""

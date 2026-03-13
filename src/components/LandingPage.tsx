@@ -193,30 +193,59 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       <section className="max-w-3xl mx-auto px-4 sm:px-8 pb-16 sm:pb-32 relative z-10">
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-2xl relative group overflow-hidden">
           <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 relative z-10">
-            <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
-              <p className="text-zinc-500 whitespace-nowrap"># One-line install — works on Linux and macOS</p>
-              <p className="text-white whitespace-nowrap">curl -fsSL https://get.wicklee.dev | sh</p>
-              <p className="text-zinc-500 whitespace-nowrap"># Then run: wicklee start</p>
+          <div className="relative z-10 space-y-4">
+            {/* macOS / Linux */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+              <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
+                <p className="text-zinc-500 whitespace-nowrap"># macOS &amp; Linux</p>
+                <p className="text-white whitespace-nowrap">curl -fsSL https://wicklee.dev/install.sh | sh</p>
+                <p className="text-zinc-500 whitespace-nowrap"># Then: sudo wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
+              </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText('curl -fsSL https://wicklee.dev/install.sh | sh');
+                  const btn = document.getElementById('copy-install-btn');
+                  if (btn) {
+                    const originalText = btn.innerHTML;
+                    btn.innerHTML = '<span class="text-green-400 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check"><path d="M20 6 9 17l-5-5"/></svg> Copied!</span>';
+                    setTimeout(() => {
+                      btn.innerHTML = originalText;
+                    }, 2000);
+                  }
+                }}
+                id="copy-install-btn"
+                className="shrink-0 self-end sm:self-auto p-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
+              >
+                <Copy className="w-4 h-4" />
+                Copy
+              </button>
             </div>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText('curl -fsSL https://get.wicklee.dev | sh');
-                const btn = document.getElementById('copy-install-btn');
-                if (btn) {
-                  const originalText = btn.innerHTML;
-                  btn.innerHTML = '<span class="text-green-400 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check"><path d="M20 6 9 17l-5-5"/></svg> Copied!</span>';
-                  setTimeout(() => {
-                    btn.innerHTML = originalText;
-                  }, 2000);
-                }
-              }}
-              id="copy-install-btn"
-              className="shrink-0 self-end sm:self-auto p-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
-            >
-              <Copy className="w-4 h-4" />
-              Copy
-            </button>
+            {/* Windows */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 pt-3 border-t border-zinc-800">
+              <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
+                <p className="text-zinc-500 whitespace-nowrap"># Windows (PowerShell)</p>
+                <p className="text-white whitespace-nowrap">irm https://wicklee.dev/install.ps1 | iex</p>
+                <p className="text-zinc-500 whitespace-nowrap"># Then: wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
+              </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText('irm https://wicklee.dev/install.ps1 | iex');
+                  const btn = document.getElementById('copy-install-win-btn');
+                  if (btn) {
+                    const originalText = btn.innerHTML;
+                    btn.innerHTML = '<span class="text-green-400 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check"><path d="M20 6 9 17l-5-5"/></svg> Copied!</span>';
+                    setTimeout(() => {
+                      btn.innerHTML = originalText;
+                    }, 2000);
+                  }
+                }}
+                id="copy-install-win-btn"
+                className="shrink-0 self-end sm:self-auto p-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold whitespace-nowrap"
+              >
+                <Copy className="w-4 h-4" />
+                Copy
+              </button>
+            </div>
           </div>
         </div>
       </section>

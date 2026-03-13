@@ -488,9 +488,11 @@ const MgmtRow: React.FC<{
           </span>
         </div>
 
-        {/* Agent Version — not yet reported by agent */}
+        {/* Agent Version */}
         <div className="overflow-hidden">
-          <span className="text-xs font-telin text-gray-600">—</span>
+          <span className="text-xs font-telin text-gray-500">
+            {isLocal ? ((import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? '—') : '—'}
+          </span>
         </div>
 
         {/* Coverage */}
@@ -544,48 +546,34 @@ const MgmtRow: React.FC<{
   );
 };
 
-// ── Telemetry Relay Status — agent build localhost view ───────────────────────
+// ── Telemetry Relay Status — slim single-row ──────────────────────────────────
 // Shows whether this node is relaying telemetry to wicklee.dev (paired) or
 // operating in Sovereign Mode with no outbound data (unpaired / disconnected).
 const TelemetryRelayStatus: React.FC<{ pairingInfo: PairingInfo | null | undefined }> = ({ pairingInfo }) => {
   const isRelaying = pairingInfo?.status === 'connected';
   const isPending  = pairingInfo?.status === 'pending';
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl px-5 py-4 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <Radio className={`w-4 h-4 shrink-0 ${isRelaying ? 'text-green-400' : isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
-        <div>
-          <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-none mb-1">
-            Telemetry Relay
-          </p>
-          {isRelaying ? (
-            <p className="text-sm font-semibold text-green-400">
-              Relaying to wicklee.dev ✓
-            </p>
-          ) : isPending ? (
-            <p className="text-sm font-semibold text-amber-400">
-              Pairing in progress…
-            </p>
-          ) : (
-            <p className="text-sm font-semibold text-gray-300">
-              Sovereign Mode — No outbound telemetry
-            </p>
-          )}
-          {pairingInfo?.node_id && (
-            <p className="text-[10px] font-telin text-gray-500 mt-0.5">{pairingInfo.node_id}</p>
-          )}
-        </div>
-      </div>
-      {!isRelaying && !isPending && (
-        <a
-          href="https://wicklee.dev"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border border-indigo-500/30 hover:border-indigo-500/60 text-indigo-400 hover:text-indigo-300 text-xs font-medium rounded-xl transition-all"
-        >
-          Connect to Fleet
-          <ExternalLink className="w-3 h-3" />
-        </a>
+    <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+      <Radio className={`w-3.5 h-3.5 shrink-0 ${isRelaying ? 'text-green-400' : isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
+      {isRelaying ? (
+        <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
+          Relaying to <span className="text-green-400 font-semibold">wicklee.dev ✓</span>
+          {pairingInfo?.node_id && <span className="text-gray-600 font-telin"> · {pairingInfo.node_id}</span>}
+        </p>
+      ) : isPending ? (
+        <p className="text-xs font-medium text-amber-400">Pairing in progress…</p>
+      ) : (
+        <p className="text-xs font-medium text-gray-500 dark:text-gray-500">
+          Sovereign Mode — no outbound telemetry
+          <a
+            href="https://wicklee.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-2 text-indigo-400 hover:text-indigo-300 transition-colors"
+          >
+            Connect →
+          </a>
+        </p>
       )}
     </div>
   );
@@ -600,7 +588,7 @@ const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metric
   const isNvidia = m?.nvidia_vram_total_mb != null;
   const isLinux  = m?.nvidia_power_draw_w != null || (!isApple && m?.cpu_power_w != null);
 
-  type HEntry = { label: string; ok: boolean | null; detail?: string };
+  type HEntry = { label: string; ok: boolean | null; detail?: string; detailMono?: boolean };
   const entries: HEntry[] = [
     {
       label: 'NVML (NVIDIA GPU)',
@@ -610,7 +598,8 @@ const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metric
     {
       label: 'RAPL (Linux CPU power)',
       ok: m == null ? null : isLinux && m.cpu_power_w != null,
-      detail: isLinux && m?.cpu_power_w != null ? 'Active' : isNvidia ? 'Not applicable' : 'Unavailable — run with sudo',
+      detail: isLinux && m?.cpu_power_w != null ? 'Active' : isNvidia ? 'Not applicable' : 'Unavailable · sudo wicklee --install-service',
+      detailMono: !(isLinux && m?.cpu_power_w != null) && !isNvidia,
     },
     {
       label: 'IOKit / AGX (Apple)',
@@ -636,26 +625,29 @@ const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metric
 
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden">
-      <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
-        <Activity className="w-4 h-4 text-gray-400" />
-        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Harvester Health</h3>
+      <div className="px-5 py-2.5 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
+        <Activity className="w-3.5 h-3.5 text-gray-400" />
+        <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-widest">Harvester Health</h3>
       </div>
-      <div className="divide-y divide-gray-100 dark:divide-gray-800">
-        {entries.map(({ label, ok, detail }) => (
-          <div key={label} className="flex items-center gap-3 px-5 py-3">
+      <div className="grid grid-cols-2 divide-x divide-gray-100 dark:divide-gray-800">
+        {entries.map(({ label, ok, detail, detailMono }) => (
+          <div key={label} className="flex items-start gap-2.5 px-4 py-1.5">
             {ok == null ? (
-              <span className="w-2 h-2 rounded-full bg-gray-500 shrink-0" />
+              <span className="w-2 h-2 rounded-full bg-gray-500 shrink-0 mt-1" />
             ) : ok ? (
-              <CheckCircle size={14} className="text-green-400 shrink-0" />
+              <CheckCircle size={13} className="text-green-400 shrink-0 mt-0.5" />
             ) : (
-              <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center">
+              <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center mt-0.5">
                 <span className="text-[10px] text-gray-500">—</span>
               </span>
             )}
-            <p className="text-xs font-medium text-gray-700 dark:text-gray-300 w-44 shrink-0">{label}</p>
-            <p className={`text-[11px] font-telin ${ok ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}>
-              {detail ?? (ok == null ? 'awaiting data' : ok ? 'Active' : 'Not detected')}
-            </p>
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium text-gray-700 dark:text-gray-300 leading-tight">{label}</p>
+              <p className={`text-[10px] leading-tight mt-0.5 truncate ${detailMono ? 'font-mono' : 'font-telin'} ${ok ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}
+                 title={detail ?? (ok == null ? 'awaiting data' : ok ? 'Active' : 'Not detected')}>
+                {detail ?? (ok == null ? 'awaiting data' : ok ? 'Active' : 'Not detected')}
+              </p>
+            </div>
           </div>
         ))}
       </div>
@@ -789,9 +781,6 @@ const NodesList: React.FC<NodesListProps> = ({
 
     return (
       <div className="space-y-6">
-        {/* ── Telemetry Relay Status ──────────────────────────────────────────── */}
-        <TelemetryRelayStatus pairingInfo={pairingInfo} />
-
         {/* ── Harvester Health ────────────────────────────────────────────────── */}
         <HarvesterHealth metrics={m} />
 
@@ -861,6 +850,9 @@ const NodesList: React.FC<NodesListProps> = ({
             onNavigateToSettings={onNavigateToSettings}
           />
         </div>
+
+        {/* ── Telemetry Relay Status ──────────────────────────────────────────── */}
+        <TelemetryRelayStatus pairingInfo={pairingInfo} />
 
         {/* CTA */}
         <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">

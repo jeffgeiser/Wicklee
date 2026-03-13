@@ -88,7 +88,10 @@ export const HardwareDetailPanel: React.FC<{
   const gpuUtilStr    = m.gpu_utilization_percent != null ? `${m.gpu_utilization_percent.toFixed(0)}%` : null;
   const memPressStr   = m.memory_pressure_percent != null ? `${m.memory_pressure_percent.toFixed(0)}%` : null;
   const nvidiaGpuStr  = m.nvidia_gpu_utilization_percent != null ? `${m.nvidia_gpu_utilization_percent.toFixed(0)}%` : null;
-  const nvidiaVramStr = m.nvidia_vram_used_mb != null && m.nvidia_vram_total_mb != null
+  const chip          = (m.chip_name ?? m.gpu_name ?? '').toLowerCase();
+  const isAppleSilicon = chip.includes('apple') || /\bm[1-4]\b/.test(chip) || m.memory_pressure_percent != null;
+
+  const nvidiaVramStr = m.nvidia_vram_used_mb != null && (m.nvidia_vram_total_mb ?? 0) > 0
     ? `${(m.nvidia_vram_used_mb / 1024).toFixed(1)} GB` : null;
   const nvidiaVramTotal = m.nvidia_vram_total_mb != null ? `of ${(m.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
   const nvidiaTempStr   = m.nvidia_gpu_temp_c   != null ? `${m.nvidia_gpu_temp_c}°C` : null;
@@ -289,7 +292,10 @@ export const HardwareDetailPanel: React.FC<{
               value={effectiveGpuStr ?? '—'}
               dim={!effectiveGpuStr}
             />
-            {nvidiaVramStr && <HudTile label="VRAM Used" value={nvidiaVramStr} sub={nvidiaVramTotal ?? undefined} />}
+            {nvidiaVramStr
+              ? <HudTile label="VRAM Used" value={nvidiaVramStr} sub={nvidiaVramTotal ?? undefined} />
+              : isAppleSilicon && <HudTile label="VRAM" value="—" sub="Unified Memory" dim />
+            }
             {nvidiaTempStr  && <HudTile label="GPU Temp"    value={nvidiaTempStr} />}
             {nvidiaPowerStr && <HudTile label="Board Power" value={nvidiaPowerStr} />}
           </div>

@@ -547,6 +547,12 @@ const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls })
 );
 
 const DiagnosticRail: React.FC<{ sentinel: SentinelMetrics | null; transport: 'ws' | 'sse' | null }> = ({ sentinel: s, transport }) => {
+  // 5-sample rolling-average buffers — must be called before any early returns (Rules of Hooks)
+  const cpuBuf   = useRollingBuffer();
+  const gpuBuf   = useRollingBuffer();
+  const memBuf   = useRollingBuffer();
+  const powerBuf = useRollingBuffer();
+
   if (!s) {
     return (
       <div className="py-10 text-center text-sm text-gray-500">
@@ -555,12 +561,21 @@ const DiagnosticRail: React.FC<{ sentinel: SentinelMetrics | null; transport: 'w
     );
   }
 
-  const cpuPct  = s.cpu_usage_percent;
-  const gpuPct  = s.nvidia_gpu_utilization_percent ?? s.gpu_utilization_percent ?? null;
-  const memPct  = s.memory_pressure_percent
+  const tsMs = s.timestamp_ms;
+
+  const cpuRaw  = s.cpu_usage_percent;
+  const cpuPct  = cpuBuf.push(cpuRaw, tsMs) ?? cpuRaw;
+
+  const gpuRaw  = s.nvidia_gpu_utilization_percent ?? s.gpu_utilization_percent ?? null;
+  const gpuPct  = gpuBuf.push(gpuRaw, tsMs) ?? gpuRaw;
+
+  const memRaw  = s.memory_pressure_percent
     ?? (s.total_memory_mb > 0 ? (s.used_memory_mb / s.total_memory_mb) * 100 : null);
-  const powerW  = (s.cpu_power_w ?? 0) + (s.nvidia_power_draw_w ?? 0);
-  const hasPow  = s.cpu_power_w != null || s.nvidia_power_draw_w != null;
+  const memPct  = memBuf.push(memRaw, tsMs) ?? memRaw;
+
+  const powerRaw = (s.cpu_power_w ?? 0) + (s.nvidia_power_draw_w ?? 0);
+  const powerW   = powerBuf.push(powerRaw, tsMs) ?? powerRaw;
+  const hasPow   = s.cpu_power_w != null || s.nvidia_power_draw_w != null;
 
   const utilCls = (pct: number) =>
     pct > 90 ? { text: 'text-red-400', bar: 'bg-red-400' } :
@@ -1447,26 +1462,28 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
       {/* ── Fleet Intelligence (cloud) / Fleet Preview CTA (agent) ──────────── */}
       {isLocalMode ? (
-        // ── Fleet Preview CTA — points user to Mission Control for fleet-level analytics
-        <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
-              Manage your entire AI fleet
-            </p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Track all nodes, WES leaderboards, thermal fleet health, and cross-node routing from the Mission Control dashboard.
-            </p>
+        // ── Fleet Preview CTA — only show when not yet paired with Fleet View
+        pairingInfo?.status !== 'connected' && (
+          <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-gray-200">
+                Monitor from anywhere
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Pair this node with Fleet View to monitor it remotely and see all your machines in one dashboard.
+              </p>
+            </div>
+            <a
+              href="https://wicklee.dev"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 flex items-center gap-2 px-4 py-2 border border-indigo-500/40 hover:border-indigo-500/70 text-indigo-400 hover:text-indigo-300 text-sm font-semibold rounded-xl transition-all"
+            >
+              Open Fleet Dashboard
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
-          <a
-            href="https://wicklee.dev"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="shrink-0 flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
-          >
-            Open Mission Control
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        </div>
+        )
       ) : (
       // ── Fleet Intelligence — full analytics section (cloud / Mission Control only)
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">

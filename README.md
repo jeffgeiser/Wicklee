@@ -10,12 +10,51 @@ Wicklee is a single Rust binary that installs on any inference node — Ollama, 
 
 ## Install
 
+**macOS &amp; Linux:**
+
 ```bash
-# Coming soon — curl install script
-# For now, build from source (see below)
+curl -fsSL https://wicklee.dev/install.sh | sh
 ```
 
-> `sudo` is required only to copy the binary to `/usr/local/bin`. The agent runs without elevated permissions.
+**Windows (PowerShell):**
+
+```powershell
+irm https://wicklee.dev/install.ps1 | iex
+```
+
+Then start monitoring — **recommended** (auto-starts on every boot):
+
+```bash
+# macOS / Linux
+sudo wicklee --install-service
+
+# Windows (PowerShell, as Administrator)
+wicklee --install-service
+```
+
+Or run manually (exits when you close the terminal):
+
+```bash
+# macOS / Linux
+sudo wicklee
+
+# Windows
+wicklee
+```
+
+Dashboard opens at **http://localhost:7700**.
+
+---
+
+## Service Management
+
+| Action | macOS / Linux | Windows |
+|---|---|---|
+| Install service | `sudo wicklee --install-service` | `wicklee --install-service` |
+| Remove service | `sudo wicklee --uninstall-service` | `wicklee --uninstall-service` |
+| Check status (macOS) | `sudo launchctl list \| grep wicklee` | — |
+| Check status (Linux) | `systemctl status wicklee` | — |
+| Check status (Windows) | — | `sc query WickleeSentinel` |
 
 ---
 
