@@ -1808,11 +1808,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               )}
             </FleetCard>
 
-            {/* 5. Node Cost / 1M — ranked per-node breakdown, spans both columns.
-                Active nodes sorted cheapest-first; idle nodes grouped at bottom.
-                Visibility threshold: only renders when ≥1 node has power data. */}
+            {/* 5. Node Cost / 1M — half-width, pairs with Best Route Now below */}
             {costEntries.some(e => e.costPer1mRaw != null || e.tps == null || e.tps <= 0) && (
-              <FleetCard label="Node Cost / 1M Tokens" className="col-span-2">
+              <FleetCard label="Node Cost / 1M Tokens">
                 {(() => {
                   const active = costEntries
                     .filter(e => e.tps != null && e.tps > 0)
@@ -1882,8 +1880,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               </FleetCard>
             )}
 
-            {/* 6. Best Route Now — spans both columns */}
-            <FleetCard label="Best Route Now" className="col-span-2">
+            {/* 6. Best Route Now — half-width, pairs with Node Cost / 1M */}
+            <FleetCard label="Best Route Now">
               {activeEntries.length === 0 ? (
                 <p className="text-sm font-telin text-gray-600">— no active inference</p>
               ) : activeEntries.length === 1 ? (
