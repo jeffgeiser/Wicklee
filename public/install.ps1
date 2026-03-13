@@ -60,19 +60,24 @@ if ($userPath -notlike "*$InstallDir*") {
 
 # ── Success ───────────────────────────────────────────────────────────────────
 
+$InstalledVersion = ''
+try { $InstalledVersion = (& $BinPath --version 2>&1) -replace '^wicklee\s*', '' } catch {}
+if (-not $InstalledVersion) { $InstalledVersion = $ReleaseTag }
+
 Write-Host ""
-Write-Green "  + wicklee installed successfully."
+Write-Green "  + Wicklee agent installed successfully ($InstalledVersion)"
 Write-Host ""
-Write-Host "     Run:        wicklee"
-Write-Host "     Dashboard:  http://localhost:7700"
+Write-Host "  Start monitoring your node:"
+Write-Host ""
+Write-Host "  Recommended — runs on every boot:" -ForegroundColor White
+Write-Host "    wicklee --install-service" -ForegroundColor White
+Write-Host ""
+Write-Host "  Or run manually:"
+Write-Host "    wicklee" -ForegroundColor White
+Write-Host ""
+Write-Host "  Your dashboard:       http://localhost:7700"
+Write-Host "  Pair with your fleet: https://wicklee.dev"
 Write-Host ""
 Write-Dim  "  Installed to: $BinPath"
 Write-Dim  "  PATH updated for current user (restart your shell to pick it up)."
-Write-Host ""
-Write-Host "  Note: Run wicklee in a standard PowerShell or Terminal window." -ForegroundColor Yellow
-Write-Host "        GPU and thermal metrics require no elevation on Windows." -ForegroundColor Yellow
-Write-Host ""
-Write-Host "  Run as a background service (auto-starts on boot):"
-Write-Dim  "     wicklee --install-service     # Windows SCM · sc create WickleeSentinel"
-Write-Dim  "     wicklee --uninstall-service   # remove the service"
 Write-Host ""

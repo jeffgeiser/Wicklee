@@ -126,24 +126,24 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
           return (
             <button
               onClick={onOpenPairing}
-              className={`w-full px-4 py-3 rounded-xl border text-left transition-all mb-2 ${borderClass}`}
+              className={`w-full flex items-center justify-center group-hover/nav:justify-start group-hover/nav:gap-2 group-hover/nav:px-4 py-2.5 rounded-xl border transition-all mb-2 ${borderClass}`}
             >
-              <div className="flex items-center gap-2">
-                {isConnectedFleet ? (
-                  <CloudLightning className="w-4 h-4 text-green-400 shrink-0" />
-                ) : (
-                  <Cloud className={`w-4 h-4 shrink-0 ${isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
-                )}
-                <span className={`text-xs font-semibold whitespace-nowrap opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100 ${isConnectedFleet ? 'text-green-400' : isPending ? 'text-amber-400' : 'text-gray-400'}`}>
+              {isConnectedFleet ? (
+                <CloudLightning className="w-4 h-4 text-green-400 shrink-0" />
+              ) : (
+                <Cloud className={`w-4 h-4 shrink-0 ${isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
+              )}
+              <div className="opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100 min-w-0 text-left">
+                <p className={`text-xs font-semibold whitespace-nowrap leading-tight ${isConnectedFleet ? 'text-green-400' : isPending ? 'text-amber-400' : 'text-gray-400'}`}>
                   {isConnectedFleet ? 'Fleet Connected' : isPending ? 'Pairing…' : 'Sovereign Mode'}
-                </span>
+                </p>
+                {nodeId && (
+                  <p className="text-[10px] font-telin text-gray-500 truncate">{nodeId}</p>
+                )}
+                {!isConnectedFleet && !isPending && (
+                  <p className="text-[10px] text-indigo-400">Connect →</p>
+                )}
               </div>
-              {nodeId && (
-                <p className="mt-0.5 text-[10px] font-telin text-gray-500 pl-6 truncate opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">{nodeId}</p>
-              )}
-              {!isConnectedFleet && !isPending && (
-                <p className="mt-0.5 text-[10px] text-indigo-400 pl-6 opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">Connect →</p>
-              )}
             </button>
           );
         })()}

@@ -88,7 +88,7 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes, tenantId }) => {
           <span className="text-xs text-gray-500 flex items-center gap-1">
             <Clock className="w-3 h-3" /> Auto-syncing (5s)
           </span>
-          <div className={`w-2 h-2 rounded-full ${error ? 'bg-red-500' : 'bg-blue-600'} animate-pulse`}></div>
+          <div className={`w-2 h-2 rounded-full ${error ? 'bg-red-500' : traces.length > 0 ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></div>
         </div>
       </div>
 
