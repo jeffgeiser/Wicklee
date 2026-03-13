@@ -37,8 +37,12 @@ function formatDuration(ms: number): string {
 
 interface Props {
   node:            SentinelMetrics;
-  sessionStartMs:  number;
-  hadAnyActivity:  boolean;
+  /**
+   * Timestamp of the last tok/s > 0 observation for this node.
+   * Initialised to session-start time (or node-first-seen time for fleet nodes)
+   * so that a node that never infers counts as "idle since first seen".
+   */
+  lastActiveTsMs:  number;
   kwhRate:         number;
   pue:             number;
   showNodeHeader?: boolean;
@@ -48,20 +52,19 @@ interface Props {
 
 const IdleResourceCard: React.FC<Props> = ({
   node,
-  sessionStartMs,
-  hadAnyActivity,
+  lastActiveTsMs,
   kwhRate,
   pue,
   showNodeHeader = false,
 }) => {
-  const sessionMs = Date.now() - sessionStartMs;
-
-  // Guard: must be running ≥1 hour with zero inference activity
-  if (hadAnyActivity || sessionMs < ONE_HOUR_MS) return null;
+  // Guard: must have had no inference activity for ≥ 60 continuous minutes.
+  // Fires even if the node was active earlier — the clock resets on each tok/s > 0.
+  const idleMs = Date.now() - lastActiveTsMs;
+  if (idleMs < ONE_HOUR_MS) return null;
 
   const watts        = idleWatts(node);
   const titleSuffix  = showNodeHeader ? ` · ${node.node_id}` : '';
-  const duration     = formatDuration(sessionMs);
+  const duration     = formatDuration(idleMs);
 
   // Idle cost per hour: watts × PUE × (kwhRate / 1000)
   const costPerHr    = watts != null
@@ -80,8 +83,7 @@ const IdleResourceCard: React.FC<Props> = ({
 
         {/* ── Duration line ────────────────────────────────────────────────── */}
         <p className="text-sm text-gray-400">
-          No inference activity detected this session.{' '}
-          Online for{' '}
+          No inference activity for{' '}
           <span className="font-telin text-gray-300">{duration}</span>.
         </p>
 
