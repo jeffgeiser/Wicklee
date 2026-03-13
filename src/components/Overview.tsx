@@ -850,9 +850,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const vramCapacityGB = (totalVramCapacityMb / 1024).toFixed(1);
 
   // Tile 4 — FLEET NODES: online / total
-  // fleetLiveCount  — nodes with status 'online' (single source via useFleetCounts)
   // fleetTotalCount — all registered nodes (single source via useFleetCounts)
-  const fleetLiveCount  = isLocalHost ? effectiveMetrics.length : counts.online;
+  // fleetLiveCount  — set below, after reachableNodeIds is computed
   const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : counts.total;
 
   // Tiles 5-7 — WES leaderboard + fleet average
@@ -1002,6 +1001,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? []
     : Object.keys(lastSeenMsMap).filter(id => sseNow - (lastSeenMsMap[id] ?? 0) <= NODE_REACHABLE_MS);
   const localNodeStale = isLocalHost && sentinel != null && sseNow - (sentinel.timestamp_ms ?? 0) > NODE_REACHABLE_MS;
+
+  // fleetLiveCount — uses lastSeenMsMap reachability (same logic as SSE indicator) so the
+  // FLEET NODES tile stays consistent with the amber "unreachable" indicators in the UI.
+  // counts.online is NOT used here because the backend sets status='online' at pair time and
+  // never reverts it, so it would always equal counts.total regardless of actual liveness.
+  const fleetLiveCount = isLocalHost ? effectiveMetrics.length : reachableNodeIds.length;
   const localNodeId = sentinel?.hostname ?? 'local node';
 
   const sseState: 'green' | 'amber' | 'red' = !connected
