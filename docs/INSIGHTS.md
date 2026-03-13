@@ -321,115 +321,136 @@ WES is thermally-honest tok/watt. When a node is healthy, WES ≈ tok/watt. When
 
 ## UI Tab Organization
 
-### 1. The Firing Strip (The Pulse)
+### 1. The Global Status Rail
 
-A slim full-width banner pinned at the top of the Insights tab. It has two distinct states.
+A full-width bar with a 1px bottom border — always pinned at the top of the Insights tab, never hidden. Two distinct states.
 
-#### Active State — when one or more insights are firing
+#### Nominal State — fleet healthy, no insights firing
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  ██ ⚡ THERMAL DEGRADATION — WK-C133 — 3 min ago  |  POWER ANOMALY — WK-A07 — 11 min ago  │
-└─────────────────────────────────────────────────────────────────┘
-```
-- Background: `red-950` with `border-b border-red-700/50`
-- Left strip: 4px solid red or amber depending on severity
-- Text: `font-telin text-xs uppercase tracking-widest` — alert name · node · elapsed time
-- Animation: subtle pulse/vibration (`animate-pulse` on the left strip)
-- Multiple alerts render as inline rows separated by a pipe `|`
-- Each alert is a link that anchor-scrolls to its card in the grid below
-- Dismissible per-alert (sessionStorage for Community; server-side dismiss for Pro+)
-
-#### Nominal State — when no insights are firing
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  ● ALL SYSTEMS NOMINAL   ·  12 nodes  ·  4.2k tok/s  ·  2.1 WES  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  ●  ALL SYSTEMS NOMINAL          FLEET WES: 42.1  ·  NODES: 3   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 - Background: `gray-900` with `border-b border-gray-800`
-- Left strip: 4px solid with a gentle green glow pulse (`shadow-[0_0_6px_rgba(34,197,94,0.5)]`)
-- "ALL SYSTEMS NOMINAL" in `font-telin text-xs tracking-widest text-gray-400`
-- Fleet stats subtext (node count · fleet tok/s · WES) in `font-telin text-xs text-gray-600`
-- The strip is always present — it never disappears entirely. The nominal state signals the system is alive and watching.
+- Left: pulsing green dot (`animate-pulse text-green-500`) + `"ALL SYSTEMS NOMINAL"` in `font-telin text-xs tracking-widest text-gray-400`
+- Center / right: stats ticker — `FLEET WES: 42.1 · REACHABLE NODES: 3` in `font-telin text-xs text-gray-600`
+- The rail is always present. The nominal state is the proof the system is watching.
+
+#### Active State — one or more insights firing
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  █  THERMAL THROTTLING DETECTED ON WK-1EFC  |  POWER ANOMALY — WK-A07 — 11 min ago  │
+└──────────────────────────────────────────────────────────────────┘
+```
+- Background changes to `amber-950` (warning) or `red-950` (critical) — full-width, not a side strip
+- High-contrast white text: `font-telin text-xs uppercase tracking-widest text-white`
+- Alert format: `INSIGHT NAME — NODE-ID — elapsed time` — multiple alerts separated by ` | `
+- Each alert is an anchor link scrolling to its card in the grid below
+- `animate-pulse` on the background or a left accent bar for urgency
+- Dismissible per-alert: sessionStorage for Community; server-side for Pro+
 
 ---
 
-### 2. The Grid (The Intelligence Hub)
+### 2. The Grid: "The Triage of Intelligence"
 
-Below the Firing Strip, a **3-column responsive grid** divided into three named sections. Cards are **never hidden** from lower-tier users — locked tiers render as teaser cards showing name, icon, one-liner, and upgrade CTA. Locked cards are pushed to the bottom of their section on mobile.
+Below the Status Rail, a **3-column responsive grid** in three named sections representing the user's data "depth." Cards are **never hidden** — lower-tier users always see every card; locked cards render as teaser shells with upgrade CTA.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  [FIRING STRIP — always visible]                                 │
+│  [GLOBAL STATUS RAIL — always visible]                           │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  SECTION A — LIVE INTELLIGENCE  [Community]                      │
+│  SECTION 1 — OPERATIONAL SIGNALS  [Community]                    │
+│                                                                  │
+│  Alert Trio — stacked dormant list (expands on fire):            │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  🌡  Thermal Degradation    ●  Monitoring   68°C peak    │    │
+│  ├──────────────────────────────────────────────────────────┤    │
+│  │  ⚡  Power Anomaly           ●  Monitoring   142W        │    │
+│  ├──────────────────────────────────────────────────────────┤    │
+│  │  🧠  Memory Exhaustion       ●  Monitoring   71% VRAM   │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  Health Indicators — always full cards (3-col):                  │
 │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │ 🌡 Thermal     │  │ ⚡ Power        │  │ 🧠 Memory      │      │
-│  │ Degradation    │  │ Anomaly        │  │ Exhaustion     │      │
-│  │ [Community]    │  │ [Community]    │  │ [Community]    │      │
-│  └────────────────┘  └────────────────┘  └────────────────┘      │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │ 🎯 Model Fit   │  │ 📊 WES Peer    │  │ 🌐 Fleet       │      │
-│  │ Score          │  │ Leaderboard    │  │ Thermal Div    │      │
-│  │ [lite/Pro]     │  │ [lite/Pro]     │  │ [lite/Team]    │      │
+│  │ 🎯 Model Fit   │  │ 📊 WES         │  │ 🔬 Inference   │      │
+│  │ Score          │  │ Leaderboard    │  │ Density (live) │      │
+│  │ [lite → Pro]   │  │ [lite → Pro]   │  │ [HexHive]      │      │
 │  └────────────────┘  └────────────────┘  └────────────────┘      │
 │                                                                  │
-│  SECTION B — ADVISORY INTELLIGENCE  [Pro]                        │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │ 🔄 Model       │  │ 💤 Idle        │  │ 📉 Efficiency  │      │
-│  │ Eviction       │  │ Resource Cost  │  │ Regression     │      │
-│  │ [Pro]          │  │ [Pro]          │  │ [lock: Team]   │      │
-│  └────────────────┘  └────────────────┘  └────────────────┘      │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │ 💾 Memory      │  │ ⚖️ Quant ROI   │  │ 🚀 Cold Start  │      │
-│  │ Forecast       │  │                │  │                │      │
-│  │ [lock: Team]   │  │ [lock: Team]   │  │ [lock: Team]   │      │
-│  └────────────────┘  └────────────────┘  └────────────────┘      │
+├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  SECTION C — ADVANCED OPERATIONS  [Team / Enterprise]            │
-│  ┌────────────────┐  ┌────────────────┐                          │
-│  │ 🔬 Inference   │  │ 🛡 Sovereignty  │                          │
-│  │ Density        │  │ Audit          │                          │
-│  │ [Team]         │  │ [lock: Ent.]   │                          │
-│  └────────────────┘  └────────────────┘                          │
+│  SECTION 2 — AUTOMATION & COST  [Pro]                            │
+│  ┌────────────────────────┐  ┌────────────────────────┐          │
+│  │ 🔄 Model Eviction      │  │ 💤 Idle Resource Cost  │          │
+│  │ EVICTION IN 02:45      │  │ -$1.42 / Day (Idle)    │          │
+│  │ [KEEP WARM ⚙]  [Pro]   │  │ [lock: Pro CTA]        │          │
+│  └────────────────────────┘  └────────────────────────┘          │
+│                                                                  │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  SECTION 3 — ANALYTICS & FORENSICS  [Team / Enterprise]          │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
+│  │ 📉 Efficiency  │  │ 💾 Memory      │  │ ⚖️ Quant ROI   │      │
+│  │ Regression     │  │ Forecast       │  │                │      │
+│  │ ████░░░ 4/7d   │  │ [lock: Team]   │  │ [lock: Team]   │      │
+│  └────────────────┘  └────────────────┘  └────────────────┘      │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
+│  │ 🚀 Cold Start  │  │ 🌐 Fleet       │  │ 🔬 Inference   │      │
+│  │                │  │ Thermal Div    │  │ Density (hist) │      │
+│  │ [lock: Team]   │  │ [lock: Team]   │  │ [hive thumb]   │      │
+│  └────────────────┘  └────────────────┘  └────────────────┘      │
+│  ┌────────────────┐                                               │
+│  │ 🛡 Sovereignty  │                                              │
+│  │ Audit           │                                             │
+│  │ [lock: Ent.]    │                                             │
+│  └────────────────┘                                              │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-#### Section A — Live Intelligence (anchor: Community)
+#### Section 1 — Operational Signals (Community)
 
-The six permanently visible cards that form the "home row" of the tab. Always rendered. Three are Community-native; three appear as lite/teaser views for lower tiers with full unlock above.
+**Alert Trio (Thermal, Power, Memory):** Rendered as a stacked list, not a 3-column grid. In nominal state each row is a compact ~32px dormant monitor bar showing current reading and a green dot. When a condition fires, that row expands in-place to the full alert card with split-graph visualization. Not hidden when nominal — the dormant state communicates active monitoring and keeps layout stable.
+
+| Dormant (nominal) | Firing |
+|---|---|
+| `🌡 Thermal Degradation  ● Monitoring  68°C peak` | Full card: temp-rising / WES-falling split graph |
+| `⚡ Power Anomaly  ● Monitoring  142W` | Full card: power spike chart + anomaly reason |
+| `🧠 Memory Exhaustion  ● Monitoring  71% VRAM` | Full card: VRAM fill gauge + pressure stage |
+
+**Health Indicators (Model Fit, WES Leaderboard, Inference Density live):** Always full-card height, 3-column. The live `HexHive` hive plot for Inference Density occupies the third slot — it's always valuable even without unlock.
 
 | Card | Community | Pro | Team |
 |---|---|---|---|
-| Thermal Degradation (#1) | ✅ Full | ✅ Full | ✅ Full |
-| Power Anomaly (#2) | ✅ Full | ✅ Full | ✅ Full |
-| Memory Exhaustion (#3) | ✅ Full | ✅ Full | ✅ Full |
-| Model Fit Score (#4) | Lite: score + tier label only, no history chart | ✅ Full | ✅ Full |
-| WES Peer Leaderboard (#7) | Lite: top-3 ranking only, no sparklines | ✅ Full | ✅ Full |
-| Fleet Thermal Diversity (#12) | Lite: current diversity badge only, no trend | Lite | ✅ Full |
+| Model Fit Score (#4) | Lite: score label only, no history | ✅ Full | ✅ Full |
+| WES Leaderboard (#7) | Lite: top-3 ranking only, no sparklines | ✅ Full | ✅ Full |
+| Inference Density live (#13) | ✅ Live HexHive (always) | ✅ Live HexHive | ✅ Full (+ historical) |
 
-**Lite view rationale:** These three cards have immediate signal value even without deep history. Showing a single number (score, rank, diversity state) at Community is honest, non-deceptive, and drives organic upgrade curiosity ("how do I see the trend?").
+**Lite view rationale:** Showing a single number at Community is honest, non-deceptive, and drives upgrade curiosity ("how do I see the full history?").
 
-#### Section B — Advisory Intelligence (anchor: Pro)
+#### Section 2 — Automation & Cost (Pro)
 
-Cards visible to all tiers but locked below their gate tier. Pro cards render fully for Pro+; Team cards render as locked shells for Pro and below.
+Intentionally lean — two cards. Pro users get exactly what they're paying for: actionable automation and cost visibility. Community sees both as locked shells with specific upgrade copy.
 
-| Card | Gate |
-|---|---|
-| Model Eviction (#5) | Pro |
-| Idle Resource Cost (#6) | Pro |
-| Efficiency Regression (#8) | Team |
-| Memory Forecast (#9) | Team |
-| Quantization ROI (#10) | Team |
-| Hardware Cold Start (#11) | Team |
+| Card | Key Interaction | Locked State Copy |
+|---|---|---|
+| Model Eviction (#5) | Countdown timer: `EVICTION IN 02:45`. Pro: KEEP WARM toggle. | "Upgrade to Pro for Keep Warm →" |
+| Idle Resource Cost (#6) | Dollar ticker: `-$1.42 / Day (Idle)`. | "Upgrade to Pro to track facility overhead and PUE waste →" |
 
-#### Section C — Advanced Operations (anchor: Team/Enterprise)
+#### Section 3 — Analytics & Forensics (Team / Enterprise)
 
-| Card | Gate |
-|---|---|
-| Inference Density (#13) | Team |
-| Sovereignty Audit (#14) | Enterprise |
+Six Team-gated cards + one Enterprise card. Locked cards here are the product roadmap — six visible reasons to upgrade. The Inference Density historical card shows a thumbnail of the hive plot in its locked state — enough visual context to make the unlock feel concrete.
+
+| Card | Collecting State | Locked Copy |
+|---|---|---|
+| Efficiency Regression (#8) | Circular progress: `4/7 days collected` | "Unlock 7-day WES baseline analysis →" |
+| Memory Forecast (#9) | `Collecting memory trajectory…` | "Unlock predictive memory warnings →" |
+| Quantization ROI (#10) | `Run both quants on this node to enable` | "Compare Q4 vs Q8 on your actual hardware →" |
+| Cold Start (#11) | Live detection immediate; `historical in ~X days` | "Track cold start frequency over time →" |
+| Fleet Thermal Diversity (#12) | Live badge immediate; trend needs history | "Unlock fleet thermal cascade risk →" |
+| Inference Density historical (#13) | `Historical playback in ~X days` | Shows hive thumbnail + "Unlock Peak-Hour Analysis →" |
+| Sovereignty Audit (#14) | — | "Available on Enterprise →" (full locked shell) |
 
 ---
 
@@ -477,7 +498,7 @@ Each card follows a strict four-zone layout. The top line carries the identity; 
 | State | Trigger | Visual Treatment |
 |---|---|---|
 | **Live / Nominal** | Insight computing, no condition active | Headline value in `text-gray-200`; left border `border-gray-700` |
-| **Firing** | Active condition right now | Left border `border-red-500` or `border-amber-500`; headline in `text-red-400`; card also listed in Firing Strip |
+| **Firing** | Active condition right now | Left border `border-red-500` or `border-amber-500`; headline in `text-red-400`; card also listed in Global Status Rail |
 | **Collecting** | Tier unlocked, history insufficient | Circular progress in center; `text-gray-500` copy; no CTA |
 | **Locked** | User tier below gate | Blurred center, lock icon, tier badge, upgrade CTA |
 | **Lite** | Community viewing a Pro/Team card with partial data | Full card chrome, reduced data density, "Upgrade to unlock full view →" CTA |
@@ -487,7 +508,7 @@ Each card follows a strict four-zone layout. The top line carries the identity; 
 
 ### 5. Mobile Responsiveness
 
-- **Firing Strip:** Fixed to top of viewport on mobile. Never scrolls away. Vibrates the strip color when active.
+- **Global Status Rail:** Fixed to top of viewport on mobile. Never scrolls away. Full-bg color change animates on fire.
 - **Grid:** Collapses from 3-column → 1-column at `sm` breakpoint. Section headers remain as sticky labels.
 - **Locked cards:** Pushed to bottom of their section (not interleaved with live cards). On mobile, section order is preserved but locked cards form a collapsed "Upgrade to unlock X more insights →" expandable row.
 - **Card height:** Uniform row height within each section on desktop; auto-height on mobile.
