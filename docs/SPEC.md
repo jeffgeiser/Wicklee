@@ -459,6 +459,121 @@ When Eviction Prediction fires and the user has Keep Warm enabled (Paid), the ag
 
 ---
 
+## Insights Tab — Architecture & Card Hierarchy
+
+> *Insights = "The So What" — interpreted conclusions, not raw data. The operator should not have to think — Wicklee tells them what matters right now and why.*
+
+### Core Principle
+
+The Insights tab is a **live triage feed**, not a static page. Cards appear when their condition is true and disappear when it resolves. An empty Insights tab means everything is fine — this is a positive signal, not a broken state.
+
+**Empty state copy:**
+- localhost: `✓ All systems nominal`
+- wicklee.dev: `✓ Fleet nominal`
+
+No card is always shown. Every card has a condition. If the condition is not met, the card does not render.
+
+---
+
+### Two Contexts
+
+**localhost:7700 — single node, operator is present**
+Immediate, actionable single-node intelligence. Every card answers: "what should I do right now?"
+
+**wicklee.dev — fleet, operator may be remote**
+Fleet-level context. Cards identify which node needs attention and why.
+
+---
+
+### Card Hierarchy
+
+#### Tier 1 — Active Alerts
+*Always visible when condition is true. Cannot be dismissed. Red border.*
+
+Conditions that represent active reliability or safety failures:
+
+| Card | Condition | Copy pattern |
+|---|---|---|
+| **Thermal Degradation Active** | `thermal_state === 'Serious' \| 'Critical'` | "WK-C133 is throttling — est. 35% tok/s loss. Reduce load or improve airflow." |
+| **Memory Exhaustion Imminent** | memory headroom < 10% | "3.2GB free · model needs 2.0GB · 1.2GB remaining. Swap risk imminent." |
+| **Power Anomaly** | watts > 2× session baseline OR (watts high AND GPU% < 20%) | "WK-03E2 drawing 180W at 8% GPU util. Something is consuming power that isn't inference." |
+
+Tier 1 cards render at the top of the Insights tab, above all other content, in both localhost and cloud contexts. They cannot be dismissed — the condition must resolve for them to disappear.
+
+#### Tier 2 — Insights
+*Shown when condition is true. Dismissable per session. Amber border.*
+
+Informational but actionable — the operator should know, but it's not an emergency:
+
+| Card | Condition | Notes |
+|---|---|---|
+| **Model Fit Score** | `ollama_model_size_gb != null` | Good/Fair/Poor with recommendation. Dismissable because "Good" is noise after first view. |
+| **Model Eviction Warning** | model approaching `keep_alive` timeout | "llama3.2:3b will unload in ~2 minutes due to inactivity." |
+| **Idle Resource Notice** | node online >1hr, zero inference activity | Shows estimated electricity cost of idle time. |
+
+Dismiss is **per-session only** — dismissed cards return on next page load. No permanent dismissal. Conditions change and the card may become critical again.
+
+#### Tier 3 — Fleet Summary Cards
+*wicklee.dev only. Always visible. Green/amber/red based on current state.*
+
+Persistent fleet health cards — not alerts, not dismissable:
+
+| Card | Phase |
+|---|---|
+| **Fleet WES Leaderboard** | Phase 3A |
+| **Fleet Thermal Diversity Score** | Phase 3A |
+| **Idle Fleet Cost** | Phase 3A |
+
+These cards do not appear in localhost mode — they require fleet context.
+
+---
+
+### Layout
+
+**localhost:7700**
+```
+┌─ Active Alerts ─────────────────────────────┐
+│  Tier 1 cards (red) — if any active         │
+│  Empty state: "✓ All systems nominal"        │
+└─────────────────────────────────────────────┘
+┌─ Insights ──────────────────────────────────┐
+│  Tier 2 cards (amber) — dismissable         │
+│  Model Fit · Eviction Warning · Idle Notice │
+└─────────────────────────────────────────────┘
+┌─ Local AI Analysis ─────────────────────────┐
+│  Ollama-powered "Analyze My Fleet" button   │
+│  Analysis results when run                  │
+└─────────────────────────────────────────────┘
+```
+
+**wicklee.dev**
+```
+┌─ Active Alerts ─────────────────────────────┐
+│  Tier 1 cards per node (red) — if any       │
+│  Empty state: "✓ Fleet nominal"             │
+└─────────────────────────────────────────────┘
+┌─ Fleet Intelligence ────────────────────────┐
+│  Tier 3: WES Leaderboard · Thermal          │
+│  Diversity · Idle Fleet Cost                │
+└─────────────────────────────────────────────┘
+┌─ Per-Node Insights ─────────────────────────┐
+│  Tier 2 cards per node with model loaded    │
+└─────────────────────────────────────────────┘
+```
+
+---
+
+### Implementation Rules
+
+- Cards are computed at render time from live SSE data — no new API calls, no new state beyond dismiss tracking
+- Session dismiss state lives in `sessionStorage` keyed by card ID + node ID
+- Tier 1 cards never check `sessionStorage` — conditions override dismissal
+- `Local AI Analysis` section is a distinct feature, not an insight card — it is never hidden or conditionally rendered based on node state
+- No card ever shows mock or placeholder data — if condition data is unavailable, the card does not render
+- New insight cards added in future phases must declare their Tier, condition, and dismiss behavior before implementation
+
+---
+
 ## Idle Fleet Cost Methodology
 
 Idle Fleet Cost uses a two-variable formula to surface the true facility cost of idle inference nodes:
