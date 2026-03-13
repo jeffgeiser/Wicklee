@@ -286,9 +286,9 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
 
             <MetricCard
               id="cost-1k"
-              name="COST/1K TOKENS"
-              formula="W/1K TKN × (kWh_rate / 1000)"
-              description="Dollar cost of generating 1,000 tokens based on your configured electricity rate (default $0.12/kWh). Scales to $/1M tokens in the sub-label for readability. Configure your electricity rate in Settings → Cost & Energy for accurate figures."
+              name="COST/1M TOKENS"
+              formula="(W/1K TKN × (kWh_rate / 1000)) × 1000"
+              description="Dollar cost of generating 1 million tokens based on your configured electricity rate (default $0.12/kWh). Shown per-million so you can compare directly against cloud API pricing (e.g. GPT-4o at ~$5/1M). Configure your electricity rate in Settings → Cost & Energy for accurate figures."
             />
 
           </div>
