@@ -4,6 +4,20 @@
 
 ---
 
+## How Wicklee Works: Synchronous Observation
+
+Wicklee is a sovereign Rust binary that observes your inference fleet without ever touching your private data. Unlike standard scrapers that pull static counters, Wicklee performs Synchronous Observation by merging two high-fidelity telemetry streams:
+
+- **Hardware Harvester (10 Hz):** The agent queries your kernel and GPU drivers (NVML / IOReg / RAPL) at high frequency to capture micro-spikes in power, thermals, and utilization that 1-minute Prometheus scrapes miss.
+
+- **Performance Probe (30 s):** Every 30 seconds, the agent sends a tiny, automated 3-token "pulse" to your local API (port 11434 or 8000) to measure real-time throughput and efficiency without intercepting your actual request traffic.
+
+- **Local Interpretation:** By owning both hardware physics and runtime context, Wicklee triggers Conditional Insights — identifying "invisible" states like a Power Anomaly (high wattage vs. low GPU utilization) or Thermal Degradation (temperature spikes causing silent throughput drops).
+
+- **Zero-Intercept Privacy:** Wicklee does not act as a proxy. It never sees your prompts or model responses — it only measures the hardware "effort" required to produce them, ensuring your data remains entirely within your sovereign boundary.
+
+---
+
 ## Node Metrics
 
 Per-node values derived from hardware telemetry and inference runtime.

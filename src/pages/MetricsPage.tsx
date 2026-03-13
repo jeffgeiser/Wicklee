@@ -140,6 +140,42 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
       {/* ── Content ──────────────────────────────────────────────────────────── */}
       <div className="max-w-3xl mx-auto px-6 pb-20 space-y-14">
 
+        {/* ── How Wicklee Works ────────────────────────────────────────────── */}
+        <section>
+          <SectionHeader
+            title="How Wicklee Works: Synchronous Observation"
+            description="A sovereign Rust binary that observes your inference fleet without ever touching your private data."
+          />
+          <div className="bg-gray-900 border border-indigo-500/20 rounded-2xl p-6 space-y-5">
+            {([
+              {
+                label: 'Hardware Harvester (10 Hz)',
+                body: 'The agent queries your kernel and GPU drivers (NVML / IOReg / RAPL) at high frequency to capture micro-spikes in power, thermals, and utilization that 1-minute Prometheus scrapes miss.',
+              },
+              {
+                label: 'Performance Probe (30 s)',
+                body: 'Every 30 seconds, the agent sends a tiny, automated 3-token "pulse" to your local API (port 11434 or 8000) to measure real-time throughput and efficiency without intercepting your actual request traffic.',
+              },
+              {
+                label: 'Local Interpretation',
+                body: 'By owning both hardware physics and runtime context, Wicklee triggers Conditional Insights — identifying "invisible" states like a Power Anomaly (high wattage vs. low GPU utilization) or Thermal Degradation (temperature spikes causing silent throughput drops).',
+              },
+              {
+                label: 'Zero-Intercept Privacy',
+                body: 'Wicklee does not act as a proxy. It never sees your prompts or model responses — it only measures the hardware "effort" required to produce them, ensuring your data remains entirely within your sovereign boundary.',
+              },
+            ] as { label: string; body: string }[]).map(({ label, body }) => (
+              <div key={label} className="flex gap-3">
+                <span className="mt-[5px] w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="text-xs font-semibold text-gray-200 font-sans mb-1">{label}</p>
+                  <p className="text-sm text-gray-400 font-sans leading-relaxed">{body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {/* ── Node Metrics ─────────────────────────────────────────────────── */}
         <section>
           <SectionHeader
