@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Cloud, CloudLightning, Settings, BookOpen, Github, User as UserIcon, UserCog } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Cloud, CloudLightning, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog } from 'lucide-react';
 import { useClerk } from '@clerk/clerk-react';
 import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
@@ -197,6 +197,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 >
                   <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   Metrics Reference
+                </button>
+                <button
+                  onClick={() => { onNavigate?.('/blog'); setIsAvatarMenuOpen(false); }}
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                >
+                  <Newspaper className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  Blog
                 </button>
                 <a
                   href="https://github.com/jeffgeiser/Wicklee#readme"
