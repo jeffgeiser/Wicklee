@@ -92,7 +92,7 @@ export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
     if (isThermalSevere) {
       reason = 'Serious thermal state — inference efficiency significantly degraded';
     } else if (!modelFitsMb) {
-      reason = `Model size (${modelSizeGb}GB) exceeds available memory (${headroomGb.toFixed(1)}GB free)`;
+      reason = `Model size (${modelSizeGb.toFixed(1)}GB) exceeds available memory (${headroomGb.toFixed(1)}GB free)`;
     } else {
       // headroomPct < 10% but model technically fits — dangerously low headroom
       reason = `Only ${headroomPct.toFixed(0)}% memory free — insufficient headroom for stable inference`;
