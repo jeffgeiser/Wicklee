@@ -369,8 +369,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     m?.ollama_active_model != null &&
     (now - lastActiveTsMs) >= (3 * 60 * 1_000); // warn at 3 min (card shows 2 min remaining)
 
-  const sessionMs        = firstMessageTsRef.current ? now - firstMessageTsRef.current : 0;
-  const tier2IdleActive  = isLocalHost && !hadAnyActivity && sessionMs >= 60 * 60 * 1_000 && m != null;
+  // Idle: no tok/s for ≥ 60 continuous minutes.
+  // lastActiveTsMs resets on each tok/s > 0 — fires even after earlier activity.
+  const tier2IdleActive  = isLocalHost && m != null && (now - lastActiveTsMs) >= 60 * 60 * 1_000;
 
   // Mission Control: per-node conditions from fleet tracking refs.
   // ModelEviction proxy: no tok/s for ≥ 3 min with a model loaded.
@@ -386,12 +387,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const fleetIdleNodes: SentinelMetrics[] = !isLocalHost
     ? effectiveNodes.filter(n => {
-        const watts        = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+        const watts      = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
         if (watts == null) return false;
-        const sessionStart = nodeSessionStartRef.current[n.node_id];
-        if (!sessionStart) return false;
-        const hadActivity  = nodeHadActivityRef.current[n.node_id] ?? false;
-        return !hadActivity && (now - sessionStart) >= 60 * 60 * 1_000;
+        const lastActive = nodeLastActiveMsRef.current[n.node_id];
+        if (!lastActive) return false;
+        return (now - lastActive) >= 60 * 60 * 1_000;
       })
     : [];
 
@@ -717,11 +717,14 @@ Format as Markdown with a "Strategic Optimization" header.`,
                 />
               )
             ) : (
-              <InsightsLockedCard
-                title="Model Eviction"
-                icon={<Cpu className="w-3.5 h-3.5" />}
-                description="Countdown timer fires 2 minutes before Ollama unloads your model. Pro users get a Keep Warm toggle to reset the keep_alive timer silently."
-                tierRequired="pro"
+              // Community: live monitoring row — same as Pro nominal state.
+              // No countdown or Keep Warm action without Pro, but status is visible.
+              <Section2NominalRow
+                icon={<Cpu className="w-4 h-4" />}
+                label="Model Eviction"
+                status={effectiveNodes.some(n => n.ollama_active_model)
+                  ? `${effectiveNodes.find(n => n.ollama_active_model)?.ollama_active_model ?? 'model'} loaded · monitoring`
+                  : 'No model loaded · monitoring'}
               />
             )}
 
@@ -733,8 +736,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
                   <div id="insight-idle-resource">
                     <IdleResourceCard
                       node={m}
-                      sessionStartMs={firstMessageTsRef.current!}
-                      hadAnyActivity={hadAnyActivity}
+                      lastActiveTsMs={lastActiveTsMs}
                       kwhRate={localSettings.kwhRate}
                       pue={localSettings.pue}
                     />
@@ -755,8 +757,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
                       <div key={n.node_id} id={`insight-idle-resource-${n.node_id}`}>
                         <IdleResourceCard
                           node={n}
-                          sessionStartMs={nodeSessionStartRef.current[n.node_id] ?? now}
-                          hadAnyActivity={nodeHadActivityRef.current[n.node_id] ?? false}
+                          lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now}
                           kwhRate={ns.kwhRate}
                           pue={ns.pue}
                           showNodeHeader={fleetIdleNodes.length > 1}
@@ -773,11 +774,18 @@ Format as Markdown with a "Strategic Optimization" header.`,
                 />
               )
             ) : (
-              <InsightsLockedCard
-                title="Idle Resource Cost"
-                icon={<Zap className="w-3.5 h-3.5" />}
-                description="Dollar ticker showing live idle electricity cost with PUE multiplier. Upgrade to Pro to track your facility overhead and surface hidden waste."
-                tierRequired="pro"
+              // Community: live monitoring row with current fleet wattage.
+              // Full idle cost analysis (1-hr threshold + $/hr ticker) requires Pro.
+              <Section2NominalRow
+                icon={<Zap className="w-4 h-4" />}
+                label="Idle Resource Cost"
+                status={(() => {
+                  const w = effectiveNodes.reduce<number | null>((sum, n) => {
+                    const nw = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+                    return nw != null ? (sum ?? 0) + nw : sum;
+                  }, null);
+                  return w != null ? `${w.toFixed(0)}W fleet draw · monitoring` : 'Monitoring idle overhead';
+                })()}
               />
             )}
 
