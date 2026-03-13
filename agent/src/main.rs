@@ -1420,7 +1420,15 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
     None
 }
 
-fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
+/// GPU utilisation above this threshold (%) causes the probe to be skipped.
+/// The dashboard estimation formula (peak × gpu_util%) covers the busy case,
+/// so firing tokens into an already-loaded scheduler would only add noise.
+const GPU_LOAD_THRESHOLD_PCT: f32 = 40.0;
+
+fn start_ollama_harvester(
+    apple:  Arc<Mutex<AppleSiliconMetrics>>,
+    nvidia: Arc<Mutex<NvidiaMetrics>>,
+) -> Arc<Mutex<OllamaMetrics>> {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
 
     // ── Main task: detect + poll /api/ps every 5s ───────────────────────────
@@ -1495,10 +1503,17 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
         }
     });
 
-    // ── Probe task: 1-token benchmark every 30s ─────────────────────────────
-    let shared_probe = Arc::clone(&shared);
+    // ── Probe task: scheduled 20-token benchmark every 30s ──────────────────
+    // Dynamic scheduling: the probe only fires when the GPU is idle enough to
+    // give a clean reading. When GPU util ≥ GPU_LOAD_THRESHOLD_PCT, we skip
+    // the probe and write None — the dashboard estimation formula takes over
+    // (peak_tps × gpu_util%). Firing tokens into a loaded scheduler would
+    // queue behind the active job and produce a noisy / depressed reading.
+    let shared_probe  = Arc::clone(&shared);
+    let apple_probe   = Arc::clone(&apple);
+    let nvidia_probe  = Arc::clone(&nvidia);
     tokio::spawn(async move {
-        // Generous timeout: CPU-only inference of 1 token can take several seconds.
+        // Generous timeout: CPU-only inference of 20 tokens can take several seconds.
         let probe_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -1514,8 +1529,29 @@ fn start_ollama_harvester() -> Arc<Mutex<OllamaMetrics>> {
 
             let Some(model) = model else { continue; };
 
-            // Always write the result — None on failure clears a stale value so
-            // the dashboard shows "—" rather than carrying forward an old reading.
+            // Read current GPU utilisation — NVIDIA takes priority, fall back to
+            // Apple Silicon. None means no GPU sensor available (CPU-only node).
+            let gpu_util: Option<f32> = nvidia_probe.lock().ok()
+                .and_then(|g| g.nvidia_gpu_utilization_percent)
+                .or_else(|| apple_probe.lock().ok().and_then(|g| g.gpu_utilization_percent));
+
+            // Skip probe when GPU is clearly under load — the estimation formula
+            // uses peak × gpu_util% to fill the gap. Write None explicitly so any
+            // previously recorded tps is cleared rather than carried stale.
+            if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+                eprintln!(
+                    "[ollama] probe skipped — GPU at {:.0}% (threshold {:.0}%), using estimation",
+                    gpu_util.unwrap_or(0.0),
+                    GPU_LOAD_THRESHOLD_PCT,
+                );
+                if let Ok(mut guard) = shared_probe.lock() {
+                    guard.ollama_tokens_per_second = None;
+                }
+                continue;
+            }
+
+            // GPU is idle enough — fire the full 20-token benchmark.
+            // Always write the result: None on failure clears any stale value.
             let new_tps = probe_ollama_tps(&probe_client, &model).await;
             if let Ok(mut guard) = shared_probe.lock() {
                 guard.ollama_tokens_per_second = new_tps;
@@ -2278,7 +2314,10 @@ async fn main() {
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
-    let ollama_metrics        = start_ollama_harvester();
+    let ollama_metrics        = start_ollama_harvester(
+        Arc::clone(&apple_metrics),
+        Arc::clone(&nvidia_metrics),
+    );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
     let vllm_metrics          = start_vllm_harvester();
