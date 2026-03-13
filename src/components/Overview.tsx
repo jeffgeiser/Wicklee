@@ -1045,8 +1045,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     return (totalPowerW / fleetTps) * 1000;
   })();
 
-  // Tile 7 — COST / 1K TOKENS: wattPer1k × fleet_kwh_rate / 1000
-  const costPer1k = wattPer1k != null ? (wattPer1k / 1000) * fleetKwhRate : null;
+  // Tile 7 — COST / 1M TOKENS derived from energy per 1k tokens.
+  // wattPer1k is in J/k·tok (Joules per 1k tokens). To convert to $/k·tok:
+  //   J/k·tok × (1 kWh / 3,600,000 J) × ($/kWh) = $/k·tok
+  // The display then multiplies by 1000 to show $/1M tokens.
+  // NOTE: the old formula used /1000 instead of /3,600,000 — a ×3600 unit error.
+  const costPer1k = wattPer1k != null ? (wattPer1k * fleetKwhRate) / 3_600_000 : null;
 
   // Tile 8 — FLEET POWER COST / DAY: ∑ watts_i × pue_i × 24h × rate_i
   // Covers all nodes that report power data (cpu_power_w or nvidia_power_draw_w).
@@ -1285,20 +1289,23 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-amber-400"
         />
 
-        {/* 6. WATTAGE / 1K TKN */}
+        {/* 6. ENERGY / 1K TKN — Joules consumed to produce 1,000 tokens.
+            Formula: (totalPowerW / fleetTps) × 1000 → W/(tok/s) × 1k = J/k·tok.
+            Previously mislabelled as "W" (Watts); Joules is the correct unit for
+            energy-per-output-unit. Cost/1M derives from this via ÷3,600,000 × kWhRate. */}
         <InsightTile
           label={
             <MetricTooltip
               metricId="w-1k"
-              name="W/1K TKN — Wattage Per 1K Tokens"
-              oneLiner="Energy cost of generating 1,000 tokens right now."
+              name="J/1K TKN — Joules Per 1K Tokens"
+              oneLiner="Energy needed to generate 1,000 tokens at current fleet throughput and power draw."
             >
-              Wattage / 1k Tkn
+              Energy / 1k Tkn
             </MetricTooltip>
           }
-          value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
+          value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} J` : '—'}
           valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub="per 1k tokens"
+          sub="Joules per 1k tokens"
           icon={Zap}
           iconCls="text-emerald-400"
         />

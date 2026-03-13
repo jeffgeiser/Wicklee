@@ -40,11 +40,20 @@ Zero synthetic tokens. The agent scrapes `vllm:avg_generation_throughput_toks_pe
 
 ### Estimation Gap
 
-When an Ollama probe is skipped, Wicklee estimates throughput from the session peak and live GPU utilization:
+When an Ollama probe is skipped (or returns `null` due to inference lockup), Wicklee estimates throughput from the session peak and live GPU utilization:
 
-**Formula:** `estimated_tps = Peak_TPS × GPU_Utilization%`
+```
+// Probe returned a (possibly depressed) reading — add estimated background load
+estimated_tps = raw_tps + (peak_tps × gpu_util_frac)
+
+// Probe failed entirely (inference lockup) — infer from GPU load alone
+estimated_tps = peak_tps × gpu_util_frac    if gpu_util > 0
+estimated_tps = null                         if gpu_util = 0
+```
 
 **Peak TPS** is the session high-water mark for the current model on this node — the highest clean probe reading recorded since the session started or the last model swap. It resets automatically on model change so a new model's throughput doesn't inherit a stale baseline.
+
+**Why GPU utilisation works as a proxy:** GPU utilisation is the load signal unaffected by the probe. If the GPU is 80% busy and the peak was 70 tok/s, the hardware is plausibly doing ~56 tok/s of background inference. The probe measurement (if any) captures any additional uncontested compute.
 
 This keeps TOK/S, WES, and Cost/1M meaningful during active inference rather than falling back to `—`.
 
@@ -156,19 +165,36 @@ The OS-level assessment of hardware thermal condition. macOS: read from pmset (s
 
 ---
 
-### W/1K TKN — Wattage Per 1K Tokens
+### J/1K TKN — Energy Per 1K Tokens
 
 **Formula:** `(Watts / tok/s) × 1000`
 
-The energy cost of generating 1,000 tokens on this node right now. Lower is more energy-efficient. No universal range — compare nodes within your fleet and against cloud API pricing.
+**Unit:** Joules per 1,000 tokens.
+
+The energy required to generate 1,000 tokens at current fleet throughput and power draw. Lower is more energy-efficient. This is an energy metric (Joules), not a power metric (Watts) — the distinction matters for the cost formula below.
+
+> _Previously labelled "WATTAGE / 1K TKN · W" — renamed and relabelled in March 2026. Watts is a rate; Joules is energy-per-output. `W / (tok/s) = W·s/tok = J/tok`._
 
 ---
 
 ### COST/1M TOKENS
 
-**Formula:** `(W/1K TKN × (kWh_rate / 1000)) × 1000`
+**Formula:**
+```
+cost_per_1k_tok  = (J_per_1k_tok × kWh_rate) ÷ 3,600,000
+cost_per_1M_tok  = cost_per_1k_tok × 1,000
+```
 
-Dollar cost of generating 1 million tokens based on your configured electricity rate (default $0.12/kWh). Shown per-million so you can compare directly against cloud API pricing (e.g. GPT-4o at ~$5/1M). Configure your electricity rate in Settings → Cost & Energy for accurate figures.
+**Why 3,600,000?** 1 kWh = 1,000 W × 3,600 s = 3,600,000 J. Dividing Joules by this converts to kWh. Multiplying by your kWh rate gives dollars.
+
+**Example at current fleet values (36.1 W, 56.1 tok/s, $0.12/kWh):**
+```
+J/1k·tok         = (36.1 / 56.1) × 1000 = 643 J
+cost/1k·tok      = 643 × 0.12 / 3,600,000 = $0.0000214
+cost/1M·tok      = $0.0214
+```
+
+Shown per-million so you can compare directly against cloud API pricing (e.g. GPT-4o at ~$5/1M). Configure your electricity rate in Settings → Cost & Energy for accurate figures.
 
 ---
 
