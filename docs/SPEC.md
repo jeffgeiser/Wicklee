@@ -48,7 +48,7 @@ The hosted dashboard at `wicklee.dev` aggregates all paired agents for the opera
 - **Scope:** All paired nodes — full fleet in one view
 - **Pairing:** 6-digit code entered at `wicklee.dev` — no agent config required
 - **Auth:** Clerk (hosted signup/login, JWT). Stream tokens authenticate SSE connections.
-- **Tiers:** Community (3 nodes, free), Team (unlimited, paid ~$29/mo), Enterprise (sovereign, paid ~$199/mo)
+- **Tiers:** Community (3 nodes, free), Pro (10 nodes, ~$9/mo), Team (unlimited, ~$29/mo), Enterprise (airgapped, ~$199/mo)
 
 ---
 
@@ -681,35 +681,50 @@ Wicklee is open-core. The agent is and will remain open source. The hosted fleet
 
 **Community Edition — Free**
 - Up to 3 paired nodes
-- Full local dashboard (localhost:7700), all hardware metrics
+- Full local dashboard (localhost:7700), all hardware metrics, real-time only
 - Full Fleet Overview with live data
-- Local Intelligence free cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction)
+- Local Intelligence: live session cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction warning)
 - Fleet Intelligence panel: Efficiency Leaderboard, Thermal Diversity Score, Density Map, Idle Cost
-- Sovereignty audit log (view only)
+- Alerting: dashboard only
+- Sovereignty: Cloud Relay (standard SSE pairing)
+- Artifacts: none
+
+**Pro Edition — ~$9/mo**
+- Up to 10 paired nodes
+- All Community features
+- 7-day metric history
+- Persistent Insight cards (survive session; resurface on reconnect)
+- Keep Warm: 1 active node (silent ping to reset Ollama `keep_alive`)
+- Alerting: Slack (single channel)
+- Sovereignty: Cloud Relay
 
 **Team Edition — ~$29/mo**
 - Unlimited paired nodes
-- All free tier features
-- 90-day metric history (DuckDB)
-- Trend-based Local Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI, Efficiency Regression)
-- Slack / PagerDuty webhook alerts with per-node, per-event-type configuration
-- Keep Warm toggle (prevents model eviction)
+- All Pro features
+- 90-day metric history
+- Trend-based Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI, Efficiency Regression per model)
+- Keep Warm: all fleet nodes
+- Alerting: Slack & PagerDuty with per-node, per-event-type configuration
+- Insights AI morning briefing + `/api/v1/insights/latest`
+- MCP server tools
+- Artifacts: CSV exports
 - Alert threshold configuration
-- CSV/JSON export
-- Signed audit log export
 
 **Enterprise / Sovereign — ~$199/mo**
 - All Team Edition features
-- Unlimited nodes
+- Metric history: custom / audit scope
+- Predictive & compliance intelligence tier
+- Alerting: SIEM / webhooks (custom infrastructure response)
+- Keep Warm: all fleet nodes
+- Sovereignty: Airgapped (Custom) — no cloud pairing, fully sovereign operation
 - Sentinel Proxy (cross-node inference routing)
-- Sovereign Mode (no cloud pairing, fully airgapped)
-- Cryptographically signed audit export (CISO-ready compliance artifact)
-- On-premise Docker/Helm deployment
+- On-premise Docker / Helm deployment
 - SSO / SAML
 - HIPAA / SOC2 BAA
+- Artifacts: Signed PDF Audits (CISO-ready compliance artifacts)
 - Priority support + SLA
 
-The upgrade moment for Community → Team is natural: when inference quality degrades and you don't know why. When tok/s drops 20% and there's no alert. When idle nodes cost $200/month and nobody knows. Team Edition is when Wicklee stops being a monitor and starts being an operator.
+The upgrade moment for Community → Pro is the first overnight incident nobody caught. Community → Team is when inference quality degrades and there's no history to diagnose it. Team → Enterprise is when a compliance officer asks for a signed audit trail.
 
 ---
 

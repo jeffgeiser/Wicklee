@@ -75,12 +75,12 @@
 - [ ] **Thermal Degradation Correlation:** Named insight card when thermal state transition + tok/s drop detected simultaneously. Shows before/after tok/s, causal chain, recommendation.
 - [ ] **Power Anomaly Detection:** Fires when board power exceeds 2× session baseline or when power/GPU utilization ratio is anomalous. Flags runaway processes invisible to standard monitoring.
 - [ ] **Unified Memory Exhaustion Warning (Apple Silicon):** Correlates Ollama model size + available unified memory + vm_stat pressure. Warns before swap storm — not after.
-- [ ] **Model Eviction Prediction:** Fires 2 minutes before predicted Ollama model unload based on `/api/ps` inactivity. Free: warning. Paid: "Keep Warm" toggle sends silent ping to reset `keep_alive` timer.
+- [ ] **Model Eviction Prediction:** Fires 2 minutes before predicted Ollama model unload based on `/api/ps` inactivity. Community: warning only. Pro+: "Keep Warm" toggle (Pro = 1 active node, Team/Enterprise = all fleet nodes) sends silent ping to reset `keep_alive` timer.
 - [ ] **Idle Resource Notice:** Node online >1hr with zero inference activity. Shows estimated electricity cost of idle time.
 
 ### Fleet Intelligence Panel
 - [ ] **Fleet WES Leaderboard:** WES-ranked across all nodes. Cross-node efficiency comparison that accounts for thermal state — "which node is most efficient per token right now?" answered live.
-- [ ] **Fleet Thermal Diversity Score:** Distribution of thermal states across the fleet. "3/4 nodes thermally stressed — fleet is one spike from cascade failure." Free: score. Paid: Slack alert.
+- [ ] **Fleet Thermal Diversity Score:** Distribution of thermal states across the fleet. "3/4 nodes thermally stressed — fleet is one spike from cascade failure." Community: score only. Pro+: Slack alert.
 - [ ] **Fleet Inference Density Map:** ✅ Hexagonal hive plot — glowing pulse on active inference nodes, cold dim on idle. Visual utilization map, demo-video-ready.
 - [ ] **Idle Fleet Cost Card:** Daily electricity cost of idle nodes with PUE multiplier support. Formula: `idle_watts × pue × hours × kwh_rate`. Shows "Node: $X/day · Facility: $Y/day (PUE 1.4)" so math is transparent.
 
@@ -226,7 +226,7 @@
 
 - [x] **Clerk Auth:** ✅ Shipped. Clerk-managed signup/login with JWT. Stream tokens (UUID, 60s TTL) authenticate SSE connections.
 - [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
-- [ ] **Keep Warm Toggle (Paid):** Wicklee sends silent ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity.
+- [ ] **Keep Warm Toggle (Pro+):** Wicklee sends silent ping to reset Ollama `keep_alive` timer before predicted eviction. Pro: 1 active node. Team / Enterprise: all fleet nodes. All actions logged in Live Activity.
 - [ ] **CSV / JSON Export:** Any metric, any time range, any node.
 - [ ] **Hardware-Detected Cold Start:** GPU spike + VRAM jump pattern = cold start event. Detects model load transitions from hardware signals alone — no proxy or TTFT measurement required. Labeled "Hardware-Detected" in UI to distinguish from future request-layer timing (Sentinel Proxy, Phase 5).
 - [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
@@ -270,49 +270,53 @@
 
 ## Tier Structure
 
-| | Community (Free) | Prosumer | Team | Enterprise |
+| | Community | Pro | Team | Enterprise |
 |---|---|---|---|---|
-| Nodes | Up to 3 | Up to 10 | Unlimited | Unlimited |
-| Local dashboard | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| Live metrics (all) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| Fleet Intelligence panel | ✅ View | ✅ View | ✅ Full + alerts | ✅ Full |
+| **Max Nodes** | 3 | 10 | Unlimited | Unlimited |
+| **Price** | Free | ~$9/mo | ~$29/mo | ~$199/mo |
+| | | | | |
+| Local dashboard (localhost:7700) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| Live metrics — all hardware | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| Inference runtime (Ollama / vLLM) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| WES scores | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| Fleet Intelligence panel | ✅ View | ✅ View | ✅ Full | ✅ Full |
 | Agent API v1 | ✅ | ✅ | ✅ | ✅ |
 | `/api/v1/route/best` | ✅ | ✅ | ✅ | ✅ |
-| Local Intelligence (session) | ✅ Session only | ✅ Session only | ✅ Full + alerts | ✅ Full |
-| Local Intelligence (trend-based) | ❌ | ✅ 7-day | ✅ 90-day | ✅ Full |
-| Insights AI (morning briefing) | ❌ | ❌ | ✅ | ✅ |
-| `/api/v1/insights/latest` | ❌ | ❌ | ✅ | ✅ |
-| Keep Warm toggle | ❌ | ❌ | ✅ | ✅ |
-| Metric history | Session only | 7-day | 90-day | 90-day |
-| Email alerts | ❌ | ✅ | ✅ | ✅ |
-| Slack / PagerDuty | ❌ | ❌ | ✅ | ✅ |
+| | | | | |
+| **Metric History** | Real-time | 7-Day | 90-Day | Custom / Audit Scope |
+| **Insights** | Live Session | Persistent Cards | Trend Analysis | Predictive / Compliance |
+| Trend-based Intelligence | ❌ | ✅ 7-day | ✅ 90-day | ✅ Custom |
+| Insights AI (`/api/v1/insights/latest`) | ❌ | ❌ | ✅ | ✅ |
 | MCP server tools | ❌ | ❌ | ✅ | ✅ |
-| Sovereignty audit log | ✅ View | ✅ View | ✅ View | ✅ Signed export |
+| | | | | |
+| **Alerting** | Dashboard only | Slack (Single) | Slack & PagerDuty | SIEM / Webhooks |
+| **Keep Warm** | — | 1 Active Node | All Fleet Nodes | All Fleet Nodes |
+| **Artifacts** | — | — | CSV Exports | Signed PDF Audits |
+| Sovereignty audit log | View | View | View | Signed export |
+| **Sovereignty** | Cloud Relay | Cloud Relay | Cloud Relay | Airgapped (Custom) |
 | Sentinel Proxy routing | ❌ | ❌ | ❌ | ✅ |
-| Sovereign / Airgapped mode | ❌ | ❌ | ❌ | ✅ |
-| Price | Free | ~$9/mo | ~$29/mo | ~$199/mo |
+| SSO / SAML | ❌ | ❌ | ❌ | ✅ |
+| HIPAA / SOC2 BAA | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
 ## Alerting Tiers
 
 > Alerting capability is the clearest paywall signal in the monitoring space.
-> Key design intent: the $9 Prosumer tier creates a meaningful "unattended monitoring"
-> entry point between free and the full Team integration layer.
+> Key design intent: the $9 Pro tier creates a meaningful "unattended Slack monitoring"
+> entry point — a single channel, no PagerDuty complexity, just notifications when something goes wrong overnight.
 
 | Tier | Price | Alerting Capability | Rationale |
 |---|---|---|---|
-| Community | $0/mo | None — dashboard only | Encourages keeping the tab open. Zero friction to try. |
-| Prosumer | $9/mo | Email only | Covers individuals with small clusters who want overnight / unattended monitoring without a Slack workspace. Makes $9 the obvious "middle path" upgrade. |
-| Team | $29/mo | Slack + PagerDuty | Integrates with professional on-call rotations. Meaningful step up for teams running production workloads. |
-| Enterprise | $199/mo | Webhooks + Custom | Automated failover, custom infrastructure responses, SIEM integration. Enterprise buying motion — procurement-friendly. |
+| Community | $0/mo | Dashboard only | Zero friction to try. Dashboard tab stays open; no outbound delivery needed at this tier. |
+| Pro | $9/mo | Slack (Single channel) | Covers individuals and small clusters who want real-time Slack pings without a full on-call setup. One workspace, one channel — simple and affordable. |
+| Team | $29/mo | Slack & PagerDuty | Integrates with professional on-call rotations. Meaningful step up for teams running production workloads. |
+| Enterprise | $199/mo | SIEM / Webhooks | Automated failover triggers, SIEM ingestion, custom infrastructure responses. Enterprise buying motion — procurement-friendly. |
 
 **Open questions for design phase:**
-- Does Prosumer get email-only for *all* alert types, or only thermal/power (not tok/s regression)?
-- Email provider for Prosumer tier: Resend (current infra path) or Postmark?
-- Should "email digest" (daily summary) be Community/free to drive activation, with real-time email reserved for Prosumer+?
+- Does Pro get Slack for *all* alert types, or only thermal / power (excluding tok/s regression which requires history)?
+- Slack OAuth flow vs. webhook URL input — webhook is simpler to ship, OAuth is cleaner UX.
+- Should a daily digest (summary push at 08:00) be Community/free to drive activation, with real-time alerts reserved for Pro+?
 
 ---
 
