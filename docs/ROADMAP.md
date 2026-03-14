@@ -162,9 +162,9 @@
   }
   ```
 - [x] **API key management** — dedicated API Keys tab in the dashboard (create / list / delete). Key format `wk_live_<32-hex>`. SHA-256 hashed at rest. One-time reveal on creation.
-- [x] **Developer Portal** — Quick Reference panel: base URL, auth header, endpoint table, auto-populated curl snippet. Two-click delete confirm. Rate limit badge.
+- [x] **Developer Portal** — Quick Reference panel: base URL, auth header, endpoint table, auto-populated curl snippet. Two-click delete confirm.
 - [x] **"The Programmable Fleet" landing section** — between Sovereignty and How It Works. Three cards: Programmable Routing, Reactive Automation, Performance CI/CD.
-- [x] **Rate limiting** — Community: 60 req/min. Team: 600 req/min. In-memory sliding window, same pattern as pairing rate limits.
+- [x] **Rate limiting** — 60 req/min (Community) / 600 req/min (Team) as an operational throttle, not a feature gate. API access is available on all tiers; node count is the tier differentiator.
 - [ ] **API docs at `/docs/api`** — human and agent readable
 
 ### Sovereignty (Observability tab section)
@@ -267,7 +267,7 @@
 | Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full |
 | WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full |
 | Fleet Intelligence panel | ✅ View | ✅ Full + alerts | ✅ Full |
-| Agent API v1 | ✅ 60 req/min | ✅ 600 req/min | 🔜 Unlimited |
+| Agent API v1 ¹ | ✅ | ✅ | ✅ |
 | `/api/v1/route/best` | ✅ | ✅ | ✅ |
 | Local Intelligence (session) | ✅ Free cards | ✅ Full + alerts | ✅ Full |
 | 24h session history (localStorage) | ✅ | ✅ | ✅ |
@@ -283,6 +283,8 @@
 | Sentinel Proxy routing | ❌ | ❌ | ✅ |
 | Sovereign Mode (no cloud) | ❌ | ❌ | ✅ |
 | Price | Free | ~$29/mo | ~$199/mo |
+
+*¹ Agent API v1 is available on all tiers. Rate limits are operational throttles (60 req/min Community · 600 req/min Team · unlimited Enterprise), not feature gates. The tier differentiator is the node count limit in the "Nodes" row above.*
 
 ---
 
