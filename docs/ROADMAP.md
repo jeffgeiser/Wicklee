@@ -133,8 +133,8 @@
 > Goal: close hardware gaps, launch publicly, ship Agent API v1.
 
 ### Platform
-- [ ] **vLLM Integration:** Prometheus `/metrics` endpoint at `localhost:8000`. Real tok/s without 30s probe. vLLM users need fleet routing most.
-- [ ] **Linux Thermal:** `/sys/class/thermal` — closes the thermal state gap on GeiserBMC and similar bare metal nodes.
+- [x] **vLLM Integration:** ✅ Prometheus `/metrics` endpoint at `localhost:8000`. Real tok/s without 30s probe. 2s polling loop, 5 metrics harvested (`vllm_running`, `vllm_model_name`, `tok/s`, `cache_usage_perc`, `requests_running`).
+- [x] **Linux Thermal:** ✅ `/sys/class/thermal` — reads all `thermal_zone*/temp` entries, maps max to Normal/Fair/Serious/Critical. Closes the thermal state gap on GeiserBMC and similar bare metal nodes.
 - [ ] **Windows Thermal:** WMI thermal data for Windows nodes. Annotated as "estimated" in UI — lowest data quality platform.
 - [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.
 - [ ] **macOS CPU Power (sudoless):** Entitlement-based `powermetrics` access without requiring root.
@@ -213,9 +213,9 @@
 
 - [x] **Clerk Auth:** ✅ Shipped. Clerk-managed signup/login with JWT. Stream tokens (UUID, 60s TTL) authenticate SSE connections.
 - [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
-- [ ] **Keep Warm Toggle (Paid):** Wicklee sends silent ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity.
+- [x] **Keep Warm (Community: 1 node · Paid: unlimited):** ✅ Wicklee sends a silent 1-token `/api/generate` ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity with precise timestamp. Always opt-in, always logged, always reversible.
 - [ ] **CSV / JSON Export:** Any metric, any time range, any node.
-- [ ] **Cold Start Detection:** GPU spike + memory jump + elevated TTFT = cold start event. Requires TTFT data from Sentinel Proxy or vLLM metrics.
+- [x] **Cold Start Detection:** ✅ GPU spike + VRAM jump = cold start event. Hardware-pattern detection — no proxy or TTFT required. Sentinel Proxy (Phase 5) adds TTFT precision as an optional enhancement for advanced teams.
 - [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
 - [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
 - [ ] **Product Hunt launch**
@@ -268,10 +268,12 @@
 | Agent API v1 | ✅ 60 req/min | ✅ 600 req/min | ✅ Unlimited |
 | `/api/v1/route/best` | ✅ | ✅ | ✅ |
 | Local Intelligence (session) | ✅ Free cards | ✅ Full + alerts | ✅ Full |
+| 24h session history (localStorage) | ✅ | ✅ | ✅ |
+| Quantization ROI (live session) | ✅ | ✅ | ✅ |
 | Local Intelligence (trend-based) | ❌ | ✅ Paid | ✅ Full |
 | Insights AI (morning briefing) | ❌ | ✅ | ✅ |
 | `/api/v1/insights/latest` | ❌ | ✅ | ✅ |
-| Keep Warm toggle | ❌ | ✅ | ✅ |
+| Keep Warm (1 node free · unlimited paid) | ✅ 1 node | ✅ Unlimited | ✅ Unlimited |
 | 90-day history | ❌ | ✅ | ✅ |
 | Slack / PagerDuty | ❌ | ✅ | ✅ |
 | MCP server tools | ❌ | ✅ | ✅ |

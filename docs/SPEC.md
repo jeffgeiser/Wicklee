@@ -74,14 +74,14 @@ wicklee-agent (single Rust binary, ~700KB)
 │   ├── nvml-wrapper (Linux)     → GPU %, VRAM, board power, GPU temp — sudoless
 │   ├── /sys/class/powercap      → CPU RAPL power (Linux, kernel 5.10+)
 │   ├── /proc/cpuinfo            → Chip name (Linux)
-│   └── /sys/class/thermal       → Thermal state (Linux — Phase 3B)
+│   └── /sys/class/thermal       → Thermal state (Linux ✅)
 │
 ├── Ollama Harvester (tokio async loop, 30s probe)
 │   ├── GET localhost:11434/api/ps    → active model, quantization, model size
 │   └── POST localhost:11434/api/generate → 3-token probe → tok/s measurement
 │
-├── vLLM Harvester (Phase 3B)
-│   └── GET localhost:8000/metrics    → Prometheus metrics → real tok/s
+├── vLLM Harvester ✅ (2s poll)
+│   └── GET localhost:8000/metrics    → Prometheus metrics → real tok/s, cache%, req count
 │
 ├── Cloud Relay (when paired)
 │   └── POST /api/telemetry      → push MetricsPayload to wicklee.dev cloud backend
@@ -133,7 +133,12 @@ The `#[serde(default)]` attribute on the cloud side means:
   "ollama_model_size_gb": 0.7,
   "ollama_quantization": "Q4_0",
   "ollama_tokens_per_second": 108.9,
-  "wattage_per_1k_tokens": 5.4
+  "wattage_per_1k_tokens": 5.4,
+  "vllm_running": false,
+  "vllm_model_name": null,
+  "vllm_tokens_per_sec": null,
+  "vllm_cache_usage_perc": null,
+  "vllm_requests_running": null
 }
 ```
 
@@ -161,8 +166,8 @@ Where:
 |---|---|
 | `Normal` | 1.0 |
 | `Fair` | 1.25 |
-| `Serious` | 2.0 |
-| `Critical` | 2.0+ |
+| `Serious` | 1.75 |
+| `Critical` | 2.0 |
 | `null` | 1.0 (assumed Normal) |
 
 **Display:** Unitless score to 1 decimal place, e.g. "WES 181.5". Displays "—" when `ollama_tokens_per_second` is null or power data is unavailable.
@@ -238,7 +243,7 @@ Wicklee is the only tool that owns both hardware telemetry and inference runtime
 | Model-to-Hardware Fit Score | VRAM/unified memory, thermal state | model size, quantization |
 | Power Anomaly Detection | `nvidia_board_power_w` vs `nvidia_gpu_util_percent` | inference activity context |
 | Quantization ROI | power draw, thermal state | tok/s at Q4 vs Q8 |
-| Cold Start Detection | GPU spike, memory pressure jump | TTFT on request #1 |
+| Cold Start Detection | GPU spike, VRAM jump (hardware pattern — no proxy required) | inference activity context |
 
 ### Insight Delivery Surfaces
 
@@ -254,8 +259,10 @@ Wicklee is the only tool that owns both hardware telemetry and inference runtime
 - Free: node online/offline, thermal state transition, model eviction predicted, power anomaly detected, node paired
 - Paid: tok/s regression detected, fleet thermal alert, Keep Warm action taken
 
-### Keep Warm (Phase 4B)
-When Eviction Prediction fires and the user has Keep Warm enabled (Paid), the agent sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the Ollama expiry timer. Every Keep Warm action is logged in Live Activity with precise timestamp: "Wicklee sent keep-alive ping to llama3.1:8b at 10:42:33 PM." Actions are always opt-in, always logged, always reversible.
+### Keep Warm ✅
+When Eviction Prediction fires and the user has Keep Warm enabled, the agent sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the Ollama expiry timer. Every Keep Warm action is logged in Live Activity with precise timestamp: "Wicklee sent keep-alive ping to llama3.1:8b at 10:42:33 PM." Actions are always opt-in, always logged, always reversible.
+
+**Community:** 1 node free. **Paid (Team+):** unlimited nodes.
 
 ---
 
@@ -306,11 +313,11 @@ Enterprise tier produces a tamper-evident PDF audit report signed by the agent's
 |---|---|---|---|---|
 | macOS Apple Silicon | ✅ | ✅ ioreg | ✅ pmset | ⚠️ root only |
 | macOS Intel | ✅ | ✅ ioreg | ✅ xcpm sysctl | ⚠️ root only |
-| Linux (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 3B | ✅ RAPL (kernel 5.10+) |
-| Linux (AMD CPU-only) | ✅ | ❌ | 🔜 Phase 3B | ✅ RAPL (kernel 5.10+) |
-| Linux (AMD GPU) | ✅ | 📋 Phase 5 | 🔜 Phase 3B | ✅ RAPL |
-| Windows (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 3B | 📋 Phase 5 |
-| Linux musl (static) | ✅ | ✅ nvml-wrapper† | 🔜 | ✅ |
+| Linux (NVIDIA) | ✅ | ✅ nvml-wrapper | ✅ /sys/class/thermal | ✅ RAPL (kernel 5.10+) |
+| Linux (AMD CPU-only) | ✅ | ❌ | ✅ /sys/class/thermal | ✅ RAPL (kernel 5.10+) |
+| Linux (AMD GPU) | ✅ | 📋 Phase 5 | ✅ /sys/class/thermal | ✅ RAPL |
+| Windows (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 5 (WMI) | 📋 Phase 5 |
+| Linux musl (static) | ✅ | ✅ nvml-wrapper† | ✅ /sys/class/thermal | ✅ |
 
 † nvml-wrapper excluded on musl targets; NVIDIA Linux users should use gnu builds
 
@@ -346,7 +353,10 @@ Wicklee is open-core. The agent is and will remain open source. The hosted fleet
 - Up to 3 paired nodes
 - Full local dashboard (localhost:7700), all hardware metrics
 - Full Fleet Overview with live data
-- Local Intelligence free cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction)
+- Local Intelligence free cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction, Cold Start)
+- Quantization ROI — live session snapshot (current model, current node — no history required)
+- 24h session history (localStorage with expiry — per-node insight persistence across page reloads)
+- Keep Warm: 1 node (silent 1-token ping to reset Ollama keep_alive before predicted eviction)
 - Fleet Intelligence panel: Efficiency Leaderboard, Thermal Diversity Score, Density Map, Idle Cost
 - Sovereignty audit log (view only)
 
@@ -354,9 +364,9 @@ Wicklee is open-core. The agent is and will remain open source. The hosted fleet
 - Unlimited paired nodes
 - All free tier features
 - 90-day metric history (DuckDB)
-- Trend-based Local Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI, Efficiency Regression)
+- Trend-based Local Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI historical comparison, Efficiency Regression)
 - Slack / PagerDuty webhook alerts with per-node, per-event-type configuration
-- Keep Warm toggle (prevents model eviction)
+- Keep Warm: unlimited nodes (Community gets 1 node free)
 - Alert threshold configuration
 - CSV/JSON export
 - Signed audit log export

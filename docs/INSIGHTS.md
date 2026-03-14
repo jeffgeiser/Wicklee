@@ -31,8 +31,8 @@ WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)
 |---|---|
 | Normal | 1.0 |
 | Fair | 1.25 |
-| Serious | 2.0 |
-| Critical | 2.0+ |
+| Serious | 1.75 |
+| Critical | 2.0 |
 
 ### Why It Exists
 
@@ -180,15 +180,15 @@ Standard memory tools show current state. Wicklee can show trajectory — if mem
 ---
 
 ### #8 — Cold Start Detection
-**Tagline:** GPU spike + memory jump + elevated TTFT on request #1 = one causal event, not three unrelated blips.
+**Tagline:** GPU spike + VRAM jump = cold start. Hardware-pattern detection — no proxy or TTFT required.
 
-The first inference request after a model loads is always slower — model weights are paging into memory. Standard monitoring sees: GPU utilization spike, memory pressure jump, and slow response as three unrelated metric events. Wicklee can identify the causal pattern: cold start event, with timestamp and duration. Useful for teams that unload/reload models frequently or for capacity planning.
+The first inference request after a model loads is always slower — model weights are paging into memory. Standard monitoring sees GPU utilization spike, VRAM jump, and slow response as three unrelated metric events. Wicklee identifies the causal hardware pattern: cold start event, with timestamp and duration — no HTTP proxy or TTFT interception required. Sentinel Proxy (Phase 5) adds TTFT precision as an optional enhancement for teams that want sub-request granularity.
 
 - **Where:** Local Intelligence + Live Activity event type
-- **Data:** GPU utilization spike pattern + memory pressure jump + TTFT (requires Sentinel Proxy or vLLM /metrics)
+- **Data:** GPU utilization spike + VRAM jump (hardware pattern — no proxy required); Sentinel Proxy adds TTFT precision (Phase 5, optional)
 - **Free:** Live Activity event (free, on detection)
 - **Paid:** Alert on repeated cold starts
-- **Phase:** Phase 4B — requires TTFT data source
+- **Phase:** Phase 3B ✅ — hardware detection available now
 
 ---
 
@@ -197,11 +197,15 @@ The first inference request after a model loads is always slower — model weigh
 
 The right quantization choice depends on hardware. Wicklee can measure: Q4 on this node = X W/1K TKN at Y tok/s. Q8 = X' W/1K TKN at Y' tok/s. That's a live, hardware-specific answer derived from actual conditions on your node — current thermal state, memory pressure, and load included. Published benchmarks assume clean conditions that don't reflect production inference.
 
-- **Where:** Local Intelligence tab — Quantization Comparison card (shown on model change)
-- **Data:** Per-model, per-quant tok/s and W/1K TKN stored in DuckDB
-- **Free:** No
-- **Paid:** Team Edition
-- **Phase:** Phase 4A — requires per-model history in DuckDB
+**Two delivery tiers:**
+- **Live session card (Community free):** Current model, current node snapshot — W/1K TKN, tok/s, WES by quant level. Shown in Local Intelligence tab whenever a model is loaded. Persisted in localStorage (24h expiry).
+- **Historical comparison (Team+):** Per-model, per-quant tok/s and W/1K TKN stored in DuckDB. Cross-session comparison: "Q4 on this node has averaged 12% better WES than Q8 over the past 30 days."
+
+- **Where:** Local Intelligence tab — Quantization ROI card (session card always shown; historical comparison gated)
+- **Data:** Live: current tok/s + W/1K TKN from active probe. Historical: per-model, per-quant DuckDB records
+- **Free:** Live session card (Community)
+- **Paid:** Historical DuckDB comparison (Team Edition)
+- **Phase:** Phase 3A (live session card ✅) / Phase 4A (historical DuckDB comparison)
 
 ---
 
@@ -262,12 +266,12 @@ Every other monitoring solution requires you to trust that data isn't being exfi
 
 Ollama unloads models after a `keep_alive` timeout (default 5 minutes of inactivity). The next request pays the cold start penalty. Wicklee already polls `/api/ps` — it knows the last activity time and the model size (larger models = slower reload). It can predict eviction 2 minutes before it happens and surface a warning.
 
-**Keep Warm (Paid):** If the user enables the Keep Warm toggle, Wicklee sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the expiry timer. Every action is logged in Live Activity with precise timestamp. Always opt-in, always logged, always reversible.
+**Keep Warm:** If the user enables the Keep Warm toggle, Wicklee sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the expiry timer. Every action is logged in Live Activity with precise timestamp. Always opt-in, always logged, always reversible.
 
 - **Where:** Local Intelligence tab — Eviction Risk notice
 - **Data:** Time since last /api/ps activity + model size
-- **Free:** Warning card 2min before predicted eviction
-- **Paid:** Keep Warm toggle — prevent eviction automatically
+- **Free:** Warning card 2min before predicted eviction + Keep Warm on 1 node (Community)
+- **Paid:** Keep Warm on unlimited nodes (Team+)
 - **Phase:** 3A — /api/ps already polled ✅
 
 ---
@@ -311,12 +315,12 @@ Per-node, per-model efficiency regression is invisible without baseline history.
 | 5 | Model-to-Hardware Fit Score | 3A ✅ | Full card | Alert on Poor | Paid |
 | 6 | Sentinel Proxy Routing | Phase 5 | ❌ | Enterprise | No |
 | 7 | Memory Pressure Forecasting | 4A | ❌ | Full | Paid |
-| 8 | Cold Start Detection | 4B | Live Activity | Alert | Paid |
-| 9 | Quantization ROI | 4A | ❌ | Full | No |
+| 8 | Cold Start Detection | 3B ✅ | Live Activity | Alert | Paid |
+| 9 | Quantization ROI | 3A ✅ / 4A | Live card (session) | Historical (DuckDB) | No |
 | 10 | Fleet Thermal Diversity Score | 3A ✅ | Score card | Alert | Paid |
 | 11 | Power Anomaly Detection | 3A ✅ | Detection card | Alert | Paid |
 | 12 | Sovereignty Audit Trail | 3B / 5 | View | CSV export | No |
-| 13 | Model Eviction Prediction | 3A ✅ | Warning | Keep Warm | No |
+| 13 | Model Eviction Prediction | 3A ✅ | Warning + Keep Warm (1 node) | Keep Warm unlimited | No |
 | 14 | Fleet Inference Density Map | 3A ✅ | Full | Historical | No |
 | 15 | Efficiency Regression per Model | 4A | ❌ | Alert | Paid |
 
