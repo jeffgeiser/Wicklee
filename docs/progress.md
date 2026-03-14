@@ -4,6 +4,61 @@
 
 ---
 
+## March 14, 2026 — Utility-First Gating: Community Tier Expansion 🔓
+
+**The Goal:** Lower friction for early adopters by moving key diagnostic tools out of the Pro/Team paywall and into Community. Replace hard locks on Team cards with a "tease" pattern showing live data. Wire the Keep Warm button end-to-end. Persist insight dismissals for 24h across tab closes.
+
+---
+
+### Gate Changes ✅ (commit `22fe9a1`)
+
+**`usePermissions.ts` — INSIGHT_TIER_GATE updates:**
+- Insight 4 (Model Fit Score): `persistent` → `live_session` — Community now gets the full card, not the lite partial view
+- Insight 5 (Model Eviction): `persistent` → `live_session` — Community now gets the full eviction card with countdown and Keep Warm
+- Insight 10 (Quantization ROI): `trend` → `live_session` — new live snapshot card built from SSE data
+
+**New `usePermissions` return fields:**
+- `historyDays`: `{ community: 1, pro: 7, team: 90, enterprise: Infinity }`
+- `canKeepWarm: true` — all tiers; limit varies
+- `keepWarmNodeLimit`: Community=1, Pro=3, Team/Enterprise=∞
+
+---
+
+### Keep Warm Wired ✅ (commit `22fe9a1`)
+
+`ModelEvictionCard.tsx` upgraded from a disabled Phase-4B stub to a live action:
+- `canKeepWarm=true` → button fires `fetch('http://localhost:11434/api/generate', { num_predict: 1, stream: false })` — silent 1-token ping that resets Ollama's keep_alive timer
+- Loading spinner → "Model kept warm ✓" for 3s → idle
+- `canKeepWarm=false` → disabled button with lock + "Pro+" label (unused path now that all tiers have Keep Warm)
+
+---
+
+### New Components ✅ (commit `22fe9a1`)
+
+**`InsightsTeaseCard.tsx`** — Replaces `InsightsLockedCard` for Team cards. Shows full live SSE data (no blur) + blurred trend placeholder + "Unlock on Team →" CTA. Used by: Efficiency Regression, Memory Forecast, Hardware Cold Start, Fleet Thermal Diversity.
+
+**`QuantizationROICard.tsx`** — Live snapshot card for Community+. Shows: model name, quant badge (Q4_K_M / Q8_0 / F16 etc.), tok/s, W/1K TKN, WES (color-coded by efficiency), quant-family-aware educational copy. All from live SSE — no historical DB required.
+
+---
+
+### Insight Persistence Upgrade ✅ (commit `22fe9a1`)
+
+`useInsightDismiss.ts` switched from `sessionStorage` (lost on tab close) to `localStorage` with 24h expiry:
+```typescript
+localStorage.setItem(key, JSON.stringify({ dismissed: true, expiresAt: Date.now() + 86_400_000 }));
+```
+Cards reappear automatically after 24h without manual action.
+
+---
+
+### TIERS.md Updated ✅ (commit `22fe9a1`)
+
+Community section: history `Real-time only` → `24-Hour Rolling`, Keep Warm `Disabled` → `1 Active Node`, insights list updated with new cards, persistence notes updated.
+Pro section: Keep Warm `1 Active Node` → `3 Active Nodes`.
+Tier summary table updated.
+
+---
+
 ## March 14, 2026 — Transparent Ollama Proxy, Three-State TOK/S & Metric Smoothing 🔧
 
 **The Goal:** Eliminate the 5–35s inference detection lag from `/api/ps` polling by shipping a transparent Ollama proxy that sits on `:11434` and extracts exact tok/s from the done-packet. Simultaneously fix jumpy localhost metrics by throttling the broadcaster from 10 Hz → 1 Hz. Document all smoothing logic transparently in `metrics.md`.
