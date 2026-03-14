@@ -25,6 +25,7 @@ import SettingsView from './components/SettingsView';
 import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
 import MetricsPage from './pages/MetricsPage';
+import DocsPage from './pages/DocsPage';
 import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
 import AddNodeModal from './components/AddNodeModal';
@@ -345,6 +346,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   // Metrics reference route — public, no auth required
   if (currentPath === '/metrics') {
     return <MetricsPage onNavigate={navigate} />;
+  }
+
+  // Documentation route — public, no auth required
+  if (currentPath === '/docs') {
+    return <DocsPage onNavigate={navigate} />;
   }
 
   // Blog routes — public, no auth required

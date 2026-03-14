@@ -123,7 +123,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <Logo className="text-3xl" connectionState="connected" />
         <div className="flex items-center gap-4 sm:gap-8">
-          <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
+          <button onClick={() => onNavigate('/docs')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</button>
           <button
             onClick={() => onNavigate?.('/blog')}
             className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors"
@@ -494,7 +494,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       <footer className="border-t border-gray-900 py-16 text-center text-sm text-gray-500">
         <p>&copy; 2026 Wicklee OSS Project. All rights reserved.</p>
         <div className="flex items-center justify-center gap-6 mt-4">
-          <a href="#" className="hover:text-white transition-colors">Documentation</a>
+          <button onClick={() => onNavigate('/docs')} className="hover:text-white transition-colors">Documentation</button>
           <a href="#" className="hover:text-white transition-colors">Terms</a>
           <a href="#" className="hover:text-white transition-colors">Privacy</a>
         </div>
