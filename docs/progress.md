@@ -4,6 +4,61 @@
 
 ---
 
+## March 14, 2026 — Transparent Ollama Proxy, Three-State TOK/S & Metric Smoothing 🔧
+
+**The Goal:** Eliminate the 5–35s inference detection lag from `/api/ps` polling by shipping a transparent Ollama proxy that sits on `:11434` and extracts exact tok/s from the done-packet. Simultaneously fix jumpy localhost metrics by throttling the broadcaster from 10 Hz → 1 Hz. Document all smoothing logic transparently in `metrics.md`.
+
+---
+
+### Phase B — Transparent Ollama Proxy ✅ (commit `00d2042`)
+
+Optional proxy on `:11434` — binds ahead of Ollama (moved to `:11435`) and intercepts streaming inference responses. Provides zero-lag inference detection and exact tok/s from `eval_count/eval_duration` in the done-packet, replacing the 30s synthetic probe when active.
+
+**How it works:**
+- `ProxyState` — shared state (`AtomicBool inference_active`, `Mutex<Option<Instant>> last_done_ts`, `Mutex<Option<f32>> exact_tps`) passed to both the proxy Axum app and the OllamaMetrics writer task.
+- `proxy_ollama_streaming` — handles POST `/api/generate` + `/api/chat`. Sets `inference_active=true` immediately. Streams NDJSON chunks, scans for `"done":true`, extracts exact tok/s. Uses `tokio_stream::StreamExt`.
+- `proxy_passthrough` — pure forwarding for all other routes (`/api/ps`, `/api/tags`, etc.).
+- **Bind-or-fallback startup**: if `:11434` can't be bound, logs clearly and falls back to Phase A `/api/ps` polling unchanged.
+- `start_ollama_harvester` updated to accept `proxy_arc: Option<Arc<ProxyState>>`. Probe task gated with `if proxy_arc.is_none()`. When proxy active, reads `exact_tps`, `last_done_ts`, `inference_active` from `ProxyState`.
+- `ollama_proxy_active` field added to `MetricsPayload` — frontend shows "live" instead of "live estimate" when proxy is active.
+
+**Files changed:** `agent/Cargo.toml` (stream feature), `agent/src/main.rs`, `src/types.ts`, `src/components/Overview.tsx`
+
+---
+
+### Three-State TOK/S Display ✅ (commit `17fdcf9`)
+
+Replaced binary inference active/idle with three explicit states:
+
+| Badge | Color | Condition |
+|---|---|---|
+| **LIVE** | Green `~{tps}` | `ollama_inference_active = true` OR vLLM actively serving |
+| **BUSY** | Amber | `inference_active = false` AND `gpu% ≥ 50%` |
+| **IDLE-SPD** | Gray | Not inferring, not busy, clean probe value available |
+
+`estimateTps(rawTps, peak, gpuUtil, inferenceActive)` helper: `rawTps + (peak × gpu_frac)` when under load with probe; `peak × gpu_frac` when probe skipped; `rawTps` unmodified when idle.
+
+---
+
+### Broadcaster Throttle: 10 Hz → 1 Hz ✅ (commit `93b6053`)
+
+**Problem:** At 10 Hz the 8-sample rolling window covered only ~800ms — almost no damping, causing visible metric jumpiness on the localhost dashboard.
+
+**Fix:** `Duration::from_millis(100)` → `Duration::from_millis(1_000)` in `start_metrics_broadcaster()`. At 1 Hz, 8 samples = 8s and 12 samples = 12s — matching the effective smoothing depth of the cloud fleet dashboard.
+
+---
+
+### Metrics Reference — Comprehensive Rewrite ✅ (commit `dff5ab8`)
+
+`public/metrics.md` fully rewritten. New sections:
+- **Visual Indicators at a Glance** — every colored dot, badge, bar explained (including the Model Fit Dot / why it goes red)
+- **Dashboard: Insight Tiles** — all 8 header tiles with exact formulas
+- **Dashboard: Fleet Status Table** — all 10 columns with data sources and color logic
+- **Dashboard: Fleet Intelligence Cards** — Best Route Now, Cost, Tok/W, Thermal Diversity
+- **Display Smoothing** — corrected window-to-time equivalents, 1 Hz broadcast rate rationale, three additional protections documented
+
+---
+
 ## March 13, 2026 — Metrics Reference, Hover Tooltips & Docs Cleanup 📖
 
 **The Goal:** Give operators a permanent reference for every metric Wicklee surfaces. Build a hover-tooltip system so metric labels are self-explaining in context. Formalize the four-tier pricing model in ROADMAP. Clean up SPEC/ROADMAP inconsistencies introduced by the proxy-dependent metrics design.

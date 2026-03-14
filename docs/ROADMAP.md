@@ -32,6 +32,8 @@
 - Ollama integration: auto-detect `localhost:11434`, model name, quantization, size
 - 20-token scheduled tok/s probe via `/api/generate` (num_predict=20) — pure generation phase (`eval_count ÷ eval_duration`), isolated from prompt load time. Dynamic scheduling: probe skipped when GPU util ≥ 40% (estimation covers the gap).
 - Throughput estimation: `Peak_TPS × GPU_Utilization%` fills the gap when probe is skipped or fails. Session-scoped peak resets on model swap. Applied to TOK/S, WES, Cost/1M, and fleet totals.
+- Three-state TOK/S display: LIVE (inference active) / BUSY (GPU loaded, no inference) / IDLE-SPD (clean idle baseline). `estimateTps()` adds GPU-fraction boost when under load.
+- Transparent Ollama proxy (Phase B): optional bind on `:11434` ahead of Ollama. Zero-lag inference detection + exact tok/s from done-packet `eval_count/eval_duration`. Bind-or-fallback — if port unavailable, falls back to `/api/ps` polling silently.
 - Wattage/1K TKN: live calculation from board power ÷ tok/s
 - Cost/1M TKN: `(watts × pue × kwhRate) / (tps × 3.6)` — per-million for direct cloud API comparison
 - vLLM integration: Prometheus `/metrics` at `localhost:8000` — passive scrape of `avg_generation_throughput_toks_per_s` (no synthetic tokens), model name, KV cache utilisation %, requests running; 2s poll
@@ -179,7 +181,7 @@
 
 ### Binary Release & Local-Sync Pipeline
 - [ ] **Automated UI Sync** — post-build script that copies `frontend/dist/` into the agent embed path and verifies hashes match the cloud deployment. Prevents version drift between the Cockpit SPA and Mission Control SPA. Build gate: block release if hashes diverge.
-- [ ] **10Hz WebSocket** — Hardware Rail for the Cockpit. Rolling CPU/GPU/Thermal/Power sparkline at 10 frames/second. Separate `/ws` endpoint from the 1Hz `/api/metrics` SSE stream. The pulse chart is the Cockpit's signature visual.
+- [ ] **High-Hz Hardware Rail** — Dedicated high-frequency `/ws/hardware` endpoint for the Cockpit sparkline (CPU/GPU/Thermal/Power). Separate from the 1Hz `/api/metrics` SSE broadcast which is tuned for display smoothing. The pulse chart is the Cockpit's signature visual.
 - [ ] **Sovereign Mode Toggle** — UI control in Settings → Account & Data. Permanently disables the cloud relay even when a pairing code is entered. Backed by a `sovereign.lock` file that the agent respects on restart. Enterprise gate for HIPAA/defense operators who cannot have outbound telemetry under any circumstances.
 
 ### WES Platform Expansion
