@@ -124,7 +124,7 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
           <Logo className="text-3xl" connectionState="connected" />
         </button>
         <div className="flex items-center gap-4 sm:gap-8">
-          <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
+          <button onClick={() => onNavigate('/docs')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</button>
           <button
             onClick={() => onNavigate('/blog')}
             className="hidden sm:block text-sm font-medium text-white transition-colors"

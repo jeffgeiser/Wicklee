@@ -192,11 +192,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                   Settings
                 </button>
                 <button
-                  onClick={() => { onNavigate?.('/metrics'); setIsAvatarMenuOpen(false); }}
+                  onClick={() => { onNavigate?.('/docs'); setIsAvatarMenuOpen(false); }}
                   className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                 >
                   <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                  Metrics Reference
+                  Documentation
                 </button>
                 <button
                   onClick={() => { onNavigate?.('/blog'); setIsAvatarMenuOpen(false); }}
