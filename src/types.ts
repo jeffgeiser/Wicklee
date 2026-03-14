@@ -47,8 +47,14 @@ export interface SentinelMetrics {
   ollama_active_model?:      string | null;
   ollama_model_size_gb?:     number | null;
   ollama_quantization?:      string | null;
-  /** Sampled tok/s from 1-token /api/generate probe every 30s. Null until first probe completes. */
+  /** Sampled tok/s from 20-token /api/generate probe every 30s. Null until first probe completes. */
   ollama_tokens_per_second?: number | null;
+  /**
+   * True when a request completed within the last 35s (one probe interval).
+   * Derived from /api/ps expires_at resets. False until first reset observed.
+   * Null/absent when agent has not yet seen any expires_at change since start.
+   */
+  ollama_inference_active?: boolean | null;
   // vLLM runtime (absent/false when not running)
   vllm_running?:          boolean;
   vllm_model_name?:       string | null;
