@@ -65,7 +65,7 @@ const metricCards = [
     icon: Flame,
     iconColor: 'text-red-400',
     title: 'Thermal Degradation Correlation',
-    body: 'When thermal state changes, tok/s follows. Wicklee shows the causal chain — not two unrelated graphs.',
+    body: 'When thermal state changes, tok/s follows. The gap between your hardware\'s rated speed and its throttled reality is your Thermal Cost — Wicklee quantifies it in real time, not two unrelated graphs.',
   },
   {
     iconBg: 'bg-cyan-500/10',
@@ -93,7 +93,7 @@ const metricCards = [
     icon: Activity,
     iconColor: 'text-purple-400',
     title: 'Cold Start Detection',
-    body: 'GPU spike + memory jump + elevated TTFT on request #1 = cold start. Wicklee sees one event. Others see three blips.',
+    body: 'GPU spike + VRAM jump = cold start. Wicklee correlates the hardware pattern directly — no HTTP proxy required. Every TOK/S reading is labeled LIVE, IDLE-SPD, or BUSY so you always know what you\'re looking at.',
   },
   {
     iconBg: 'bg-green-500/10',
@@ -182,16 +182,20 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         <p className="mt-3 text-xs text-gray-600">
           Free forever · up to 3 nodes · no credit card required
         </p>
+        <p className="mt-1 text-xs text-gray-600">
+          24h rolling history · Keep Warm (1 node) · Quantization ROI
+        </p>
         <p className="mt-3 text-sm text-gray-600">
-          Already running the local agent?{' '}
+          Prefer local-only? The agent runs a full dashboard at{' '}
           <a
             href="http://localhost:7700"
             target="_blank"
             rel="noopener noreferrer"
             className="text-gray-500 hover:text-gray-300 underline underline-offset-2 transition-colors"
           >
-            Open local dashboard →
+            localhost:7700
           </a>
+          {' '}— no account needed.
         </p>
       </section>
 
@@ -262,7 +266,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           <FeatureCard
             icon={Terminal}
             title="Understand your costs"
-            description="Wattage-per-Token shows you the true cost of local inference. Most teams have never seen this number before."
+            description="WES — the MPG for AI — scores each node on tok/s per watt, thermally adjusted. Wattage-per-Token is the metric cloud providers don't surface. Now you have it for your local fleet."
           />
         </div>
       </section>
@@ -272,11 +276,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
         {/* Part 1 — Your monitoring tools are blind */}
         <div>
-          <p className="text-xs font-bold text-red-400 uppercase tracking-widest mb-4">The problem</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl">
+          <p className="text-xs font-bold text-red-400 uppercase tracking-widest mb-4 text-center">The problem</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center">
             Your monitoring tools are blind to inference.
           </h2>
-          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-6">
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-6 text-center">
             Standard tools see CPU and RAM. They don't see what's actually killing your inference performance.
           </p>
 
@@ -329,11 +333,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
         {/* Part 2 — The metrics that matter */}
         <div>
-          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4">What Wicklee surfaces</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl">
+          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">What Wicklee surfaces</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center">
             The metrics that matter. The ones you can't get elsewhere.
           </h2>
-          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10">
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center">
             Purpose-built for inference. Every signal is chosen because it directly predicts performance degradation or cost.
           </p>
 
@@ -367,6 +371,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                 <ShieldCheck className="w-5 h-5 text-green-400 shrink-0 mt-0.5" />
                 <p className="text-sm text-green-300/80">
                   Structural guarantee, not a privacy policy. The agent has no outbound connections by default — there's nothing to configure or accidentally misconfigure.
+                </p>
+              </div>
+              <div className="flex items-start gap-3 mt-4 p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl">
+                <Terminal className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+                <p className="text-sm text-indigo-300/80">
+                  Prefer to run locally? The agent exposes a full local dashboard at{' '}
+                  <a href="http://localhost:7700" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-indigo-200 transition-colors">localhost:7700</a>
+                  {' '}— no cloud account required, zero configuration, works the moment the agent starts.
                 </p>
               </div>
             </div>
@@ -464,7 +476,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Footer */}
       <footer className="border-t border-gray-900 py-16 text-center text-sm text-gray-500">
-        <p>&copy; 2024 Wicklee OSS Project. All rights reserved.</p>
+        <p>&copy; 2026 Wicklee OSS Project. All rights reserved.</p>
         <div className="flex items-center justify-center gap-6 mt-4">
           <a href="#" className="hover:text-white transition-colors">Documentation</a>
           <a href="#" className="hover:text-white transition-colors">Terms</a>
