@@ -1506,8 +1506,8 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
             StatusCode::OK,
             [
                 (header::ACCESS_CONTROL_ALLOW_ORIGIN,  "*"),
-                (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS"),
-                (header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type, authorization"),
+                (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, DELETE, OPTIONS"),
+                (header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type, authorization, x-api-key"),
             ],
         ).into_response();
     }

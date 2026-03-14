@@ -160,3 +160,22 @@ export enum DashboardTab {
   BILLING = 'billing',
   SETTINGS = 'settings',
 }
+
+// ── Agent API v1 ──────────────────────────────────────────────────────────────
+
+/** API key metadata returned by GET /api/v1/keys.
+ *  The raw key value is never included — it is returned once at creation only. */
+export interface ApiKey {
+  key_id:       string;
+  name:         string;
+  created_at:   number;        // unix ms
+  last_used_ms: number | null;
+}
+
+/** Response body for POST /api/v1/keys — raw key shown once, then gone. */
+export interface CreateApiKeyResponse {
+  key_id:     string;
+  key:        string;          // raw wk_live_... — copy immediately
+  name:       string;
+  created_at: number;          // unix ms
+}
