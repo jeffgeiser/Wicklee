@@ -192,14 +192,28 @@ Count of nodes per thermal state (Normal / Fair / Serious / Critical). A fleet w
 
 ### Display Smoothing
 
-All numbers in the dashboard pass through a rolling-average buffer before rendering:
+All numbers in the dashboard pass through a rolling-average (simple moving average) buffer before rendering. Raw unsmoothed values always drive alert thresholds so warnings fire without delay.
 
-| Metric set | Window | Equivalent time |
-|------------|--------|-----------------|
-| Per-node (tok/s, watts, GPU%) | 8 samples | ~4 probe intervals |
-| Fleet aggregates (fleet tok/s, $/1M, WES) | 12 samples | ~6 probe intervals |
+**Rolling-window sizes**
 
-Buffers reset immediately when a node goes offline. Raw (unsmoothed) values drive alert thresholds so warnings fire without delay. *Source: `src/hooks/useRollingMetrics.ts` → `useRollingBuffer()`*
+| Metric set | Window | At 1 Hz = |
+|---|---|---|
+| Per-node (tok/s, watts, GPU%) | 8 samples | ~8 seconds |
+| Fleet aggregates (fleet tok/s, $/1M, WES, W/1k) | 12 samples | ~12 seconds |
+
+**Localhost broadcast rate**
+
+The local Wicklee agent broadcasts telemetry at **1 Hz** (once per second). This was intentionally throttled from an earlier 10 Hz rate: at 10 Hz the 8-sample window covered only ~800 ms, making metrics visibly jumpy. At 1 Hz the same window covers ~8 seconds, matching the effective smoothing depth of the cloud fleet dashboard and producing a consistent reading experience across both environments.
+
+**Additional protections**
+
+| Mechanism | What it does |
+|---|---|
+| Timestamp deduplication | Prevents double-counting during React re-renders |
+| `MIN_COST_TPS = 0.1` | Gates cost samples when tok/s ≈ 0 to block Ollama startup spikes |
+| Offline buffer reset | Clears per-node buffers immediately when a node goes offline |
+
+*Source: `src/hooks/useRollingMetrics.ts` → `useRollingBuffer()`*
 
 ---
 

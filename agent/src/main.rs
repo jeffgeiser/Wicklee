@@ -2002,10 +2002,12 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
     shared
 }
 
-// ── 10 Hz Metrics Broadcaster (WebSocket feed) ────────────────────────────────
+// ── 1 Hz Metrics Broadcaster (WebSocket feed) ─────────────────────────────────
 
-/// Spawns a 100 ms sysinfo loop that serialises MetricsPayload and broadcasts
+/// Spawns a 1 s broadcast loop that serialises MetricsPayload and broadcasts
 /// the JSON string to every active WebSocket subscriber.
+/// 1 Hz keeps the display-layer rolling windows (8–12 samples) covering 8–12 s,
+/// matching the effective smoothing depth of the cloud fleet dashboard.
 /// The broadcast channel has capacity 64 — lagged subscribers simply skip frames.
 fn start_metrics_broadcaster(
     apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
@@ -2031,7 +2033,7 @@ fn start_metrics_broadcaster(
         sys.refresh_all();
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut interval = tokio::time::interval(Duration::from_millis(1_000));
         loop {
             interval.tick().await;
             sys.refresh_all();
