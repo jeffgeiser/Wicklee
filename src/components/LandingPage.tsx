@@ -37,7 +37,7 @@ const problemCards = [
     icon: Database,
     iconColor: 'text-amber-400',
     title: 'KV Cache Saturation',
-    body: 'Queue backlog building. The runtime knows. Your dashboard doesn\'t.',
+    body: 'Detected natively for vLLM. Queue backlogs and cache pressure surface before they stall your inference stream.',
   },
   {
     accent: 'border-red-500/40',
@@ -45,7 +45,7 @@ const problemCards = [
     icon: Thermometer,
     iconColor: 'text-red-400',
     title: 'Thermal Degradation',
-    body: 'Node-3 crossed into SERIOUS thermal state 4 minutes ago. Users are already noticing slower responses.',
+    body: 'Node-3 crossed into SERIOUS thermal state. Wicklee quantifies the throughput cost in real time — not two unrelated graphs.',
   },
   {
     accent: 'border-amber-500/40',
@@ -325,7 +325,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <p className="text-gray-500">[09:41] Node-3 &nbsp; GPU: 100% &nbsp; Thermal: <span className="text-red-400">SERIOUS</span> &nbsp; tok/s: <span className="text-red-300">28 ↓</span></p>
               <div className="pt-2 border-t border-gray-800 mt-2">
                 <p className="text-green-400">→ Wicklee correlated thermal state → throttling → 33% throughput drop</p>
-                <p className="text-green-400/70">&nbsp;&nbsp; 4 minutes before first user complaint</p>
+                <p className="text-green-400/70">&nbsp;&nbsp; Before users notice slower responses</p>
               </div>
             </div>
           </div>
