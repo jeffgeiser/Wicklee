@@ -56,14 +56,14 @@
 - [x] WES leaderboard in Insights tab
 - [x] getNodeSettings() helper: per-node kWh, currency, PUE override
 
-**WES v2 — Raw + Penalized + Thermal Cost**
+**WES v2 — Raw + Penalized + Thermal Cost** *(Sprint B — in progress)*
 > Elevates WES from a snapshot to a window measurement. Introduces Thermal Cost %
 > as a named, visible quantity. Makes thermal penalty legible to operators.
 
-- [ ] **Thermal sampling loop** — independent 2s sampling task during active inference. Averages `penalty_value` across the window → `thermal_penalty_avg`. Also tracks `thermal_penalty_peak` for alerting.
-- [ ] **MetricsPayload additions** — `penalty_avg`, `penalty_peak`, `thermal_source` (`iokit` | `nvml` | `clock_ratio` | `unavailable`), `sample_count`. All optional fields — no breaking changes.
-- [ ] **Refined penalty mapping** — Serious: 1.75 (was 2.0), Critical: 2.0. ⚠ Breaking change to existing WES scores — version-stamp all benchmarks after this ships.
-- [ ] **NVML throttle reason bitmask** — `nvmlDeviceGetCurrentClocksThrottleReasons()`. Elevates NVIDIA thermal data from temperature-inferred to hardware-authoritative. Multi-reason: 2.5, HW_THERMAL: 2.0, SW_THERMAL: 1.25, pre-throttle (>90°C): 1.1.
+- [x] **Thermal sampling loop** — independent 2s sampling task. Maintains 30-sample rolling window (60s). Averages `penalty_value` → `penalty_avg`. Tracks `penalty_peak` for alerting.
+- [x] **MetricsPayload additions** — `penalty_avg`, `penalty_peak`, `thermal_source` (`iokit` | `nvml` | `sysfs` | `unavailable`), `sample_count`, `wes_version: 2`. All optional — no breaking changes.
+- [x] **Refined penalty mapping** — Serious: 1.75 (was 2.0), Critical: 2.0. ⚠ Breaking change to existing WES scores — version-stamp all benchmarks after this ships.
+- [x] **NVML throttle reason bitmask** — `device.current_throttle_reasons()` (nvml-wrapper API). Multi-reason: 2.5, HW_THERMAL: 2.0, SW_THERMAL/HW_SLOWDOWN: 1.25, pre-throttle (>90°C, no bits): 1.1. Source tag = `nvml` — hardware-authoritative, overrides temperature inference.
 - [ ] **Dual WES node card** — Raw WES + Penalized WES + Thermal Cost % on every node card. Thermal Cost % is the primary alert signal — not raw temperature, not WES alone.
 - [ ] **Fleet Leaderboard with Raw/Penalized columns** — rank by Penalized WES (operational reality), Raw WES as secondary. Gap = architectural vs thermal underperformance.
 - [ ] **"Why is my WES low?" tooltip** — inline calculation breakdown: tok/s ÷ Watts ÷ Penalty = WES, with Thermal Cost % and recommended action.
