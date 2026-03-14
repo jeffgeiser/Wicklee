@@ -50,6 +50,10 @@ struct OllamaMetrics {
     /// Sustained tok/s: eval_rate from Ollama /api/generate probe every 30s.
     /// Reflects actual node throughput under current thermal/load conditions.
     ollama_tokens_per_second: Option<f32>,
+    /// True when a request completed within the last 35s (one probe interval).
+    /// Derived from expires_at resets observed in /api/ps polls.
+    /// None = not yet determined (no expires_at change seen since agent start).
+    ollama_inference_active: Option<bool>,
 }
 
 // vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
@@ -131,6 +135,9 @@ struct MetricsPayload {
     /// Sustained tok/s from 30s probe (eval_rate field from Ollama). None until first probe completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_tokens_per_second: Option<f32>,
+    /// True when a request completed within the last 35s. Derived from /api/ps expires_at resets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_inference_active: Option<bool>,
     // vLLM runtime (null/false when vLLM not running)
     #[serde(default)]
     vllm_running:          bool,
@@ -1452,6 +1459,10 @@ fn start_ollama_harvester(
         }
 
         let mut interval = tokio::time::interval(Duration::from_secs(5));
+        // Tracks the last observed expires_at string from /api/ps.
+        // When it changes, Ollama reset the keep-alive timer (request completed).
+        let mut prev_expires_at:   Option<String>              = None;
+        let mut last_inference_ts: Option<std::time::Instant>  = None;
         loop {
             interval.tick().await;
 
@@ -1469,9 +1480,27 @@ fn start_ollama_harvester(
                             .map(|b| b as f32 / 1_073_741_824.0);
                         m.ollama_quantization = first["details"]["quantization_level"]
                             .as_str().map(|s| s.to_string());
+                        // Detect inference activity via expires_at resets.
+                        // Ollama resets expires_at = now + keep_alive after each request
+                        // completes. If the string changes between polls, a request finished.
+                        if let Some(exp_str) = first["expires_at"].as_str() {
+                            let exp_owned = exp_str.to_string();
+                            if let Some(ref prev) = prev_expires_at {
+                                if *prev != exp_owned {
+                                    last_inference_ts = Some(std::time::Instant::now());
+                                }
+                            }
+                            prev_expires_at = Some(exp_owned);
+                        }
                     }
                 }
             }
+
+            // Set inference_active from last observed request completion.
+            // True for 35s after the last reset — one full probe interval.
+            m.ollama_inference_active = Some(
+                last_inference_ts.map_or(false, |t| t.elapsed().as_secs() < 35)
+            );
 
             // Validation log: confirm model name + tok/s are reaching shared state.
             // Appears in agent stderr every 5 s while Ollama is running — remove once confirmed.
@@ -1810,6 +1839,7 @@ fn start_metrics_broadcaster(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                ollama_inference_active:  ollama.ollama_inference_active,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
@@ -2021,6 +2051,7 @@ async fn handle_metrics(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                ollama_inference_active:  ollama.ollama_inference_active,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,

@@ -20,21 +20,41 @@ Wicklee is a sovereign Rust binary that observes your inference fleet without ev
 
 ## Throughput Measurement
 
-How Wicklee measures tok/s without synthetic traffic or request interception.
+How Wicklee measures tok/s — differently per runtime, honestly labeled in the dashboard.
 
 ---
 
-### Ollama — Scheduled Probe
+### Ollama — Scheduled Probe + Inference Detection
 
 Every 30 seconds, the agent fires a 20-token generation request to `/api/generate` and measures `eval_count ÷ eval_duration` — the pure generation phase, isolated from prompt load time. This gives a clean per-node baseline independent of model context size.
 
 **Dynamic scheduling:** When GPU utilization is ≥ 40%, the probe is skipped. Firing tokens into a loaded scheduler would queue behind the active job and return a depressed or failed reading. The agent writes `None` explicitly so the dashboard switches to the estimation value rather than carrying forward a stale reading. The 5-second `/api/ps` heartbeat continues regardless — keeping model presence and online status current.
+
+**Inference detection via `/api/ps`:** The agent polls `/api/ps` every 5 seconds and watches the `expires_at` field. Ollama resets `expires_at` to `now + keep_alive` each time a request completes. When the agent sees `expires_at` change, it knows inference just finished and sets `inference_active = true` for the next 35 seconds (one probe interval). This is the primary signal driving the three-state TOK/S display — it tells the dashboard whether a probe reading is a live throughput measurement or an unloaded hardware baseline.
 
 ---
 
 ### vLLM — Passive Prometheus Scrape
 
 Zero synthetic tokens. The agent scrapes `vllm:avg_generation_throughput_toks_per_s` from vLLM's Prometheus endpoint every 2 seconds. This gauge represents aggregate server throughput across all concurrent requests — the right signal for fleet monitoring, and better than a latency-inverse formula because vLLM only exposes inter-token latency as a histogram, not a scalar.
+
+Because vLLM reports actual live throughput directly, no probe, no estimation, and no inference detection signal are needed — the metric is exact and the display shows it as **LIVE** whenever `vllm_tokens_per_sec > 0`.
+
+---
+
+### Three-State TOK/S Display
+
+The dashboard labels every TOK/S reading so you know what you're looking at:
+
+| Label | Condition | Color | Meaning |
+|-------|-----------|-------|---------|
+| **LIVE** | `inference_active = true` (Ollama) or `vllm_tokens_per_sec > 0` | Green | Inference in progress. Ollama value prefixed with `~` (estimate); vLLM value is exact. |
+| **IDLE-SPD** | `inference_active = false` and GPU% < 15% | Muted gray | Hardware unloaded. Probe ran clean. This is the hardware capability baseline, not live throughput. |
+| **BUSY** | `inference_active = false` and GPU% ≥ 50% | Amber | GPU occupied by a non-Ollama workload. Last known probe baseline shown — amber signals the number does not reflect current inference. |
+
+**Why the IDLE-SPD / LIVE distinction matters:** A hardware capability baseline (probe at idle) and a live throughput reading (estimate during inference) are different numbers. Without this labeling, an idle Mac with GPU compositing at 8% would falsely report 43 tok/s. The label makes the difference explicit.
+
+**Apple Silicon note:** `gpu_utilization_percent` on Apple Silicon captures all GPU work — display compositing, Metal apps, background tasks — not just ML inference. Below 15%, only macOS compositing is running and the probe is reliable. Above 50% without Ollama inference, something else is consuming the GPU. Wicklee uses `/api/ps` detection as the primary inference signal; GPU% serves only as a threshold check for the BUSY state.
 
 ---
 
@@ -55,7 +75,30 @@ estimated_tps = null                         if gpu_util = 0
 
 **Why GPU utilisation works as a proxy:** GPU utilisation is the load signal unaffected by the probe. If the GPU is 80% busy and the peak was 70 tok/s, the hardware is plausibly doing ~56 tok/s of background inference. The probe measurement (if any) captures any additional uncontested compute.
 
-This keeps TOK/S, WES, and Cost/1M meaningful during active inference rather than falling back to `—`.
+Estimated values are prefixed with `~` in the dashboard. Exact values (vLLM, or clean Ollama probe at idle) have no prefix.
+
+---
+
+### Optional Ollama Proxy (Upgrade Path)
+
+By default, inference detection uses `/api/ps` `expires_at` — zero configuration, no request interception. For exact live tok/s during inference, Wicklee supports an opt-in transparent proxy:
+
+**What the proxy adds:**
+- `inference_active` flips to `true` the instant a request arrives — zero lag vs. the 5–35 second window from `/api/ps`
+- LIVE display shows exact tok/s (no `~`) — measured from `eval_count / eval_duration` in the final streaming packet
+- No additional network round-trip — the proxy runs in-process on loopback
+
+**Privacy guarantee:** The proxy reads only the `model` field from the request body (for model-swap tracking) and only `eval_count`, `eval_duration`, and `done` from the final response packet. It never reads, buffers, or logs `prompt`, `messages`, or `response` fields. All request and response bytes pass through verbatim.
+
+**Configuration (`config.toml`):**
+```toml
+[ollama_proxy]
+enabled = false         # opt-in, default off
+listen_port = 11435     # point your Ollama client here instead of 11434
+ollama_port  = 11434    # where real Ollama listens
+```
+
+When the proxy is disabled (default), Wicklee uses `/api/ps` detection. The proxy is purely additive — disabling it does not change any other metric behavior. vLLM does not need this option; its Prometheus endpoint already provides exact live throughput.
 
 ---
 
@@ -83,7 +126,7 @@ The single number that captures true inference efficiency. WES is tok/watt made 
 
 ### TOK/S — Tokens Per Second
 
-Raw inference throughput. Measured via a scheduled 20-token Ollama probe every 30 seconds, or passively from vLLM's Prometheus metrics endpoint. When the probe is skipped under GPU load, the value shown is an estimate (see Throughput Measurement above).
+Raw inference throughput. See **Three-State TOK/S Display** above for how the label (LIVE / IDLE-SPD / BUSY) tells you what the number means. Ollama: measured via a scheduled 20-token probe every 30 seconds, estimated during active inference. vLLM: live aggregate throughput from Prometheus, always exact.
 
 **Ranges:**
 - `> 50` 🟢 Fast · responsive for interactive use
@@ -124,6 +167,8 @@ Percentage of GPU compute capacity currently in use. Apple Silicon: read from AG
 - `95–100%` 🟡 Saturated · may queue requests
 - `< 30%` 🟡 Underutilized · model may not be GPU-accelerated
 - `0% during inference` 🔴 Runtime misconfiguration · inference running on CPU
+
+**Apple Silicon note:** GPU% includes all GPU work, not only ML inference. Wicklee uses `/api/ps` inference detection as the primary signal and GPU% only for the BUSY threshold.
 
 ---
 

@@ -18,32 +18,42 @@ import type { HexHiveRow } from './shared/HexHive';
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 /**
+ * GPU utilisation thresholds for the three-state TOK/S display:
+ *
+ * IDLE-SPD  gpu% < GPU_IDLE_THRESHOLD  — macOS compositing only, probe ran clean
+ * BUSY      gpu% ≥ GPU_BUSY_THRESHOLD  + inference_active=false — non-Ollama GPU load
+ * (between thresholds: show probe value, lighter styling, no label)
+ */
+const GPU_IDLE_THRESHOLD = 15;
+const GPU_BUSY_THRESHOLD = 50;
+
+/**
  * Estimated total hardware tok/s, accounting for background inference.
  *
- * The Ollama probe fires every 30 s. If a user inference is already running,
- * the probe may get a depressed reading (queued behind the job, GPU thermally
- * loaded) or None (inference lockup). peak × gpuUtil estimates the throughput
- * the background job is consuming, giving a more accurate picture of what the
- * hardware is actually doing.
+ * Uses ollama_inference_active (from /api/ps expires_at resets) as the primary
+ * signal for whether background inference is competing with the probe:
  *
- * Formula (as specified in throughput estimation design):
- *   probe succeeded → probe_tps + (peak × gpu_util%)   [add background load]
- *   probe failed    → peak × gpu_util%                  [infer from GPU load]
- *   no peak yet     → raw probe value as-is             [no history to estimate from]
+ *   inferenceActive=false → probe ran uncontested; rawTps IS the complete answer
+ *   inferenceActive=true  → user job competing; add peak×gpuUtil% for background load
+ *   inferenceActive=null  → no /api/ps data yet; fall back to gpu% >= 40% heuristic
  *
- * @param rawTps  Measured probe value (already smoothed); null = lockup
- * @param peak    Session high-water mark for this node+model (from peakTpsMap)
- * @param gpuUtil 0–100 GPU utilisation — nvidia_gpu_utilization_percent or gpu_utilization_percent
+ * @param rawTps           Measured probe value (already smoothed); null = lockup
+ * @param peak             Session high-water mark for this node+model (from peakTpsMap)
+ * @param gpuUtil          0–100 GPU utilisation — nvidia_gpu_utilization_percent or gpu_utilization_percent
+ * @param inferenceActive  From ollama_inference_active in SentinelMetrics
  */
 function estimateTps(
-  rawTps:  number | null,
-  peak:    number | null,
-  gpuUtil: number | null,
+  rawTps:          number | null,
+  peak:            number | null,
+  gpuUtil:         number | null,
+  inferenceActive: boolean | null | undefined,
 ): number | null {
   if (peak == null) return rawTps;                             // no history yet — use raw as-is
   const frac = (gpuUtil ?? 0) / 100;
-  if (rawTps == null) return frac > 0 ? peak * frac : null;   // lockup: infer from GPU load
-  return rawTps + (peak * frac);                              // probe got something: add background
+  // Prefer /api/ps signal; fall back to GPU% heuristic when not yet available
+  const underLoad = inferenceActive != null ? inferenceActive : (gpuUtil ?? 0) >= 40;
+  if (rawTps == null) return underLoad && frac > 0 ? peak * frac : null;
+  return underLoad ? rawTps + (peak * frac) : rawTps;
 }
 
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
@@ -257,8 +267,20 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // is depressed (background inference) or null (lockup), estimateTps fills
   // the gap using the session peak × GPU utilisation.
   const smoothedTps  = pushOne('tps', rawTps, tsMs);
-  const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst);
+  const inferenceActive = m?.ollama_inference_active ?? null;
+  const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst, inferenceActive);
   const isActive     = isOnline && tps != null && tps > 0;
+
+  // Three-state TOK/S display derived from inference_active + GPU%
+  // LIVE:     inference was detected recently (Ollama) OR vLLM is actively serving
+  // BUSY:     GPU ≥ threshold but Ollama not inferring (something else loading GPU)
+  // IDLE-SPD: GPU < threshold, probe ran clean — shows hardware capability baseline
+  const isInferring = isOnline && (
+    inferenceActive === true ||
+    (m?.vllm_running === true && (m?.vllm_tokens_per_sec ?? 0) > 0)
+  );
+  const isBusy      = isOnline && inferenceActive === false && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isIdleSpeed = isOnline && !isInferring && !isBusy && smoothedTps != null;
 
   // Thermal — not smoothed (state machine, not a continuous signal)
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
@@ -446,13 +468,35 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       </div>
 
       {/* 5. TOK/S */}
+      {/* 5. TOK/S — three-state: LIVE (green ~), IDLE-SPD (gray baseline), BUSY (amber last-probe) */}
       <div className="min-w-0 overflow-hidden">
-        <span
-          className={`${V} ${isActive ? 'text-green-400' : 'text-gray-500 dark:text-gray-600'}`}
-          title="Tokens per second — measured generation throughput from the active model."
-        >
-          {isActive ? tps!.toFixed(1) : '—'}
-        </span>
+        {isInferring ? (
+          <>
+            <span className={`${V} text-green-400`}
+              title="Live estimate — inference in progress. ~ indicates estimated throughput.">
+              ~{tps!.toFixed(1)}
+            </span>
+            <p className="text-[9px] uppercase tracking-widest text-green-500 mt-0.5 font-semibold leading-none">live</p>
+          </>
+        ) : isBusy ? (
+          <>
+            <span className={`${V} text-amber-500`}
+              title="GPU loaded by non-Ollama workload — showing last known baseline.">
+              {tps != null ? tps.toFixed(1) : '—'}
+            </span>
+            <p className="text-[9px] uppercase tracking-widest text-amber-500 mt-0.5 font-semibold leading-none">busy</p>
+          </>
+        ) : isIdleSpeed ? (
+          <>
+            <span className={`${V} text-gray-400 dark:text-gray-500`}
+              title="Idle-speed baseline — hardware unloaded. Probe result from last 30s window.">
+              {tps!.toFixed(1)}
+            </span>
+            <p className="text-[9px] uppercase tracking-widest text-gray-500 dark:text-gray-600 mt-0.5 leading-none">idle-spd</p>
+          </>
+        ) : (
+          <span className={`${V} text-gray-500 dark:text-gray-600`}>—</span>
+        )}
       </div>
 
       {/* 6. TOK/W — tokens per watt: tps ÷ watts. Higher is better. Null when watts or tok/s unavailable. */}
@@ -598,16 +642,25 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
 // Renders 4 live rows (CPU · GPU · Mem Pressure · Board Power) fed by the 10Hz
 // WebSocket stream. Replaces the fleet table when isLocalMode is true.
 interface RailRowProps {
-  label:   string;
-  value:   string;
-  pct?:    number | null;
-  textCls: string;
-  barCls:  string;
+  label:     string;
+  value:     string;
+  pct?:      number | null;
+  textCls:   string;
+  barCls:    string;
+  badge?:    string;
+  badgeCls?: string;
 }
-const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls }) => (
+const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, badge, badgeCls }) => (
   <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0">
     <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 w-28 shrink-0">{label}</p>
-    <p className={`text-sm font-telin font-bold w-20 shrink-0 ${textCls}`}>{value}</p>
+    <div className="flex items-center gap-1.5 w-20 shrink-0">
+      <p className={`text-sm font-telin font-bold ${textCls}`}>{value}</p>
+      {badge && (
+        <span className={`text-[8px] font-semibold uppercase tracking-widest leading-none ${badgeCls}`}>
+          {badge}
+        </span>
+      )}
+    </div>
     {pct != null && (
       <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden">
         <div
@@ -619,12 +672,17 @@ const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls })
   </div>
 );
 
-const DiagnosticRail: React.FC<{ sentinel: SentinelMetrics | null; transport: 'ws' | 'sse' | null }> = ({ sentinel: s, transport }) => {
-  // 5-sample rolling-average buffers — must be called before any early returns (Rules of Hooks)
+const DiagnosticRail: React.FC<{
+  sentinel: SentinelMetrics | null;
+  transport: 'ws' | 'sse' | null;
+  peakTps?: number;
+}> = ({ sentinel: s, transport, peakTps }) => {
+  // Rolling-average buffers — must be declared before any early returns (Rules of Hooks)
   const cpuBuf   = useRollingBuffer();
   const gpuBuf   = useRollingBuffer();
   const memBuf   = useRollingBuffer();
   const powerBuf = useRollingBuffer();
+  const tpsBuf   = useRollingBuffer();
 
   if (!s) {
     return (
@@ -650,6 +708,23 @@ const DiagnosticRail: React.FC<{ sentinel: SentinelMetrics | null; transport: 'w
   const powerW   = powerBuf.push(powerRaw, tsMs) ?? powerRaw;
   const hasPow   = s.cpu_power_w != null || s.nvidia_power_draw_w != null;
 
+  // TOK/S — same three-state logic as FleetStatusRow
+  const rawOllamaTps    = s.ollama_tokens_per_second ?? null;
+  const rawVllmTps      = s.vllm_tokens_per_sec ?? null;
+  const rawTps          = rawOllamaTps != null && rawVllmTps != null ? rawOllamaTps + rawVllmTps
+                        : (rawOllamaTps ?? rawVllmTps);
+  const inferenceActive = s.ollama_inference_active ?? null;
+  const smoothedTps     = tpsBuf.push(rawTps, tsMs) ?? rawTps;
+  const tps             = estimateTps(smoothedTps, peakTps ?? null, gpuPct, inferenceActive);
+
+  const isInferring  = tps != null && (
+    inferenceActive === true ||
+    (s.vllm_running === true && (s.vllm_tokens_per_sec ?? 0) > 0)
+  );
+  const isBusy       = !isInferring && inferenceActive === false && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isIdleSpeed  = !isInferring && !isBusy && smoothedTps != null;
+  const hasTps       = s.ollama_running || s.vllm_running;
+
   const utilCls = (pct: number) =>
     pct > 90 ? { text: 'text-red-400', bar: 'bg-red-400' } :
     pct > 70 ? { text: 'text-amber-400', bar: 'bg-amber-400' } :
@@ -670,6 +745,39 @@ const DiagnosticRail: React.FC<{ sentinel: SentinelMetrics | null; transport: 'w
       })()}
       {hasPow && (
         <RailRow label="Board Power" value={`${powerW.toFixed(1)} W`} textCls="text-amber-400" barCls="bg-amber-400" />
+      )}
+      {/* TOK/S — three-state: LIVE (green ~), IDLE-SPD (muted baseline), BUSY (amber last-probe) */}
+      {hasTps && (
+        isInferring ? (
+          <RailRow
+            label="Tok/s"
+            value={`~${tps!.toFixed(1)}`}
+            textCls="text-green-400"
+            barCls="bg-green-400"
+            badge="live"
+            badgeCls="text-green-500"
+          />
+        ) : isBusy ? (
+          <RailRow
+            label="Tok/s"
+            value={tps != null ? tps.toFixed(1) : '—'}
+            textCls="text-amber-500"
+            barCls="bg-amber-500"
+            badge="busy"
+            badgeCls="text-amber-500"
+          />
+        ) : isIdleSpeed ? (
+          <RailRow
+            label="Tok/s"
+            value={tps!.toFixed(1)}
+            textCls="text-gray-400 dark:text-gray-500"
+            barCls="bg-gray-500"
+            badge="idle-spd"
+            badgeCls="text-gray-600"
+          />
+        ) : (
+          <RailRow label="Tok/s" value="—" textCls="text-gray-600" barCls="bg-gray-800" />
+        )
       )}
     </div>
   );
@@ -700,6 +808,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   const [metricOpen, setMetricOpen] = useState(false);
   const metricDropdownRef = useRef<HTMLDivElement>(null);
+  const [showActiveOnly, setShowActiveOnly] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -920,9 +1029,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? tpsNodes.reduce((acc, m) => {
         const rawCombined = (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0) || null;
         const gpu         = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
-        return acc + (estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpu) ?? 0);
+        return acc + (estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpu, m.ollama_inference_active ?? null) ?? 0);
       }, 0)
     : null;
+
+  // Whether any node is currently inferring (controls Throughput tile sub-label)
+  const anyInferring = tpsNodes.some(m =>
+    m.ollama_inference_active === true ||
+    (m.vllm_running === true && (m.vllm_tokens_per_sec ?? 0) > 0)
+  );
 
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
   const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics);
@@ -952,7 +1067,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     const rawCombined = _ollamaTps != null && _vllmTps != null ? _ollamaTps + _vllmTps
                       : (_ollamaTps ?? _vllmTps);
     const gpuUtil = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
-    const tps     = estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpuUtil);
+    const tps     = estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpuUtil, m.ollama_inference_active ?? null);
     const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
     const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
     const watts    = hasWatts ? totalW : null;
@@ -1189,6 +1304,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         peakTps: peakTpsMap[n.id],
       }));
 
+  // "Show Active Only" filter — hides nodes not currently inferring
+  const visibleRows = showActiveOnly
+    ? nodeRows.filter(r => {
+        const m = r.metrics;
+        return m?.ollama_inference_active === true ||
+               (m?.vllm_running === true && (m?.vllm_tokens_per_sec ?? 0) > 0);
+      })
+    : nodeRows;
+
   return (
     <div className="space-y-6">
       {/* ── 8-tile Insight Engine: 2 rows × 4 cols ───────────────────────────── */}
@@ -1202,7 +1326,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           value={displayFleetTps != null ? `${displayFleetTps.toFixed(1)} tok/s` : '—'}
           valueCls={displayFleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={fleetTps != null
-            ? isLocalMode ? 'sampled every 30s' : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · sampled`
+            ? isLocalMode
+              ? (anyInferring ? 'live estimate' : 'idle-spd baseline')
+              : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · ${anyInferring ? 'live estimate' : 'idle-spd baseline'}`
             : (hasAnyOllama || hasAnyVllm) ? 'sampling every 30s' : 'no inference runtime'}
           icon={Activity}
           iconCls="text-indigo-400"
@@ -1399,14 +1525,32 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {isLocalMode ? (
           // ── Diagnostic Rail: live hardware metrics at 10 Hz ──────────────────
-          <DiagnosticRail sentinel={sentinel} transport={transport} />
+          <DiagnosticRail
+            sentinel={sentinel}
+            transport={transport}
+            peakTps={sentinel ? peakTpsMap[sentinel.node_id] : undefined}
+          />
         ) : (
           // ── Fleet Status table ───────────────────────────────────────────────
           nodeRows.length > 0 ? (
             <div className="overflow-x-auto">
+              {/* Active Only toggle */}
+              <div className="flex items-center justify-end px-4 py-1.5 border-b border-gray-100 dark:border-gray-800/60">
+                <button
+                  onClick={() => setShowActiveOnly(v => !v)}
+                  className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest
+                    rounded-full px-2.5 py-1 transition-colors
+                    ${showActiveOnly
+                      ? 'bg-green-500/10 text-green-400'
+                      : 'text-gray-500 dark:text-gray-600 hover:text-gray-400'}`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${showActiveOnly ? 'bg-green-400' : 'bg-gray-600'}`} />
+                  Active Only
+                </button>
+              </div>
               <FleetStatusHeader />
               <div className="divide-y divide-gray-100 dark:divide-gray-800">
-                {nodeRows.map(row => (
+                {visibleRows.map(row => (
                   <FleetStatusRow key={row.nodeId} {...row} />
                 ))}
               </div>
@@ -1857,9 +2001,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     <div className="space-y-1.5 w-full">
                       {active.map((e, i) => {
                         const isChampion = i === 0 && e.costPer1m != null;
-                        const costStr    = e.costPer1m != null
-                          ? `$${e.costPer1m.toFixed(2)}`
-                          : '— no power data';
+                        const costStr    = e.costPer1m == null
+                          ? '— no power data'
+                          : e.costPer1m < 0.01
+                          ? '< $0.01'
+                          : `$${e.costPer1m.toFixed(2)}`;
                         const costCls    = e.costPer1m == null
                           ? 'text-gray-600'
                           : isChampion
@@ -1944,7 +2090,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                       <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Cost</span>
                       <span className="text-xs text-gray-400">→</span>
                       <span className="text-sm font-bold font-telin text-gray-200">{bestCostNode.nodeId}</span>
-                      <span className="text-xs font-telin text-cyan-400 ml-auto">${bestCostNode.costPer1m!.toFixed(2)}/1M</span>
+                      <span className="text-xs font-telin text-cyan-400 ml-auto">
+                        {bestCostNode.costPer1m! < 0.01 ? '< $0.01' : `$${bestCostNode.costPer1m!.toFixed(2)}`}/1M
+                      </span>
                     </div>
                   )}
                   {/* Delta line */}
