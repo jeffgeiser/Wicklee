@@ -16,9 +16,9 @@ tokio-stream   = "0.1"
 futures-util   = "0.3"
 jsonwebtoken   = "9"
 ureq           = { version = "2", features = ["json"] }
-# Constant-time byte comparison for telemetry token auth (C1).
-# Prevents timing-side-channel attacks: an attacker probing byte-by-byte matches
-# cannot use response latency to reconstruct the expected secret.
+# SHA-256 for API key hashing.
+sha2           = "0.10"
+# Constant-time byte comparison for auth tokens — prevents timing side-channel attacks.
 subtle         = "2.6"
 
 [profile.release]

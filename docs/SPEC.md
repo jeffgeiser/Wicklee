@@ -48,62 +48,7 @@ The hosted dashboard at `wicklee.dev` aggregates all paired agents for the opera
 - **Scope:** All paired nodes — full fleet in one view
 - **Pairing:** 6-digit code entered at `wicklee.dev` — no agent config required
 - **Auth:** Clerk (hosted signup/login, JWT). Stream tokens authenticate SSE connections.
-- **Tiers:** Community (3 nodes, free), Pro (10 nodes, ~$9/mo), Team (unlimited, ~$29/mo), Enterprise (airgapped, ~$199/mo)
-
----
-
-## The Dual-Surface Strategy: Cockpit vs. Mission Control
-
-Wicklee has two distinct UI identities, selected at runtime by a single `isLocalhost` flag:
-
-```typescript
-const isLocalhost = window.location.hostname === 'localhost' ||
-                    window.location.hostname === '127.0.0.1';
-```
-
-### The Cockpit (`localhost:7700`)
-
-The agent's embedded React SPA. Built for the operator sitting at, or SSHed into, a bare-metal node.
-
-| Property | Value |
-|---|---|
-| **Auth** | None — the filesystem is the auth |
-| **Transport** | 10Hz WebSocket (Hardware Rail) + 1Hz SSE |
-| **Scope** | This node only |
-| **Outbound** | Zero — fully sovereign by default |
-| **Tab identity** | Node Intelligence |
-
-**Cockpit-exclusive surfaces:**
-- **Node Intelligence** — per-node insight cards driven by local Ollama. Thermal degradation, model fit, power anomaly, eviction prediction. All local inference, no cloud dependency.
-- **Hardware Rail** — live scrolling diagnostic timeline. CPU, GPU, Thermal, Power at 10Hz. The pulse chart is the Cockpit's signature visual.
-
-**Credibility principle:** The Cockpit must never show fleet-oriented chrome (pair-node onboarding, multi-node aggregates, WES leaderboard, Inference Density Map) on a local install. A user at `localhost:7700` has one node — fleet UI erodes trust in all the data.
-
-### Mission Control (`wicklee.dev`)
-
-The hosted dashboard. Built for the operator or team lead managing multiple nodes.
-
-| Property | Value |
-|---|---|
-| **Auth** | Clerk — hosted signup/login, JWT |
-| **Transport** | 1Hz SSE via FleetStreamContext (single shared connection) |
-| **Scope** | All paired nodes |
-| **Outbound** | Telemetry forwarded to cloud backend on pairing |
-| **Tab identity** | AI Insights |
-
-**Mission Control-exclusive surfaces:**
-- **Fleet Overview** — aggregate cards: Fleet Throughput, Inference Density, WES Leaderboard, Idle Cost, Thermal Diversity
-- **Inference Density Map** — hexagonal hive plot, pulse on active inference nodes
-- **Node Registry** — Management page across all paired nodes with Coverage column
-- **Team** — RBAC, collaborator management, billing
-
-### Why Two Identities
-
-The Credibility Gap: a unified UI serving both surfaces means local operators see fleet chrome (pair nodes, team management, billing) alongside their single-node metrics. This signals "cloud SaaS" rather than "sovereign tool" — the wrong impression for the Show HN audience and for HIPAA/defense operators who chose the agent for its sovereignty properties.
-
-`isLocalhost` is the sole branch point. Both identities are the same React codebase.
-
-**Typography standard:** All numeric telemetry values use `font-telin` (JetBrains Mono variant) with `tabular-nums` to prevent layout shifts during 10Hz updates.
+- **Tiers:** Community (3 nodes, free), Team (unlimited, paid ~$29/mo), Enterprise (sovereign, paid ~$199/mo)
 
 ---
 
@@ -129,23 +74,21 @@ wicklee-agent (single Rust binary, ~700KB)
 │   ├── nvml-wrapper (Linux)     → GPU %, VRAM, board power, GPU temp — sudoless
 │   ├── /sys/class/powercap      → CPU RAPL power (Linux, kernel 5.10+)
 │   ├── /proc/cpuinfo            → Chip name (Linux)
-│   └── /sys/class/thermal       → Thermal state (Linux — Phase 3B)
+│   └── /sys/class/thermal       → Thermal state (Linux ✅)
 │
 ├── Ollama Harvester (tokio async loop, 30s probe)
 │   ├── GET localhost:11434/api/ps    → active model, quantization, model size
 │   └── POST localhost:11434/api/generate → 3-token probe → tok/s measurement
 │
-├── vLLM Harvester (2s poll)
-│   └── GET localhost:8000/metrics    → Prometheus text → tok/s, model name, KV cache %, requests running
+├── vLLM Harvester ✅ (2s poll)
+│   └── GET localhost:8000/metrics    → Prometheus metrics → real tok/s, cache%, req count
 │
 ├── Cloud Relay (when paired)
-│   └── POST /api/telemetry      → push MetricsPayload to wicklee.dev; X-Wicklee-Token: <telemetry_secret> required
+│   └── POST /api/telemetry      → push MetricsPayload to wicklee.dev cloud backend
 │
 └── Static Assets (rust-embed)
     └── frontend/dist/           → Compiled React/Tailwind SPA, baked in at build time
 ```
-
-**Service Installer (`--install-service`):** The binary path written into the systemd unit (Linux) or launchd plist (macOS) is validated by `validate_binary_path()` before any file is written. POSIX allowlist: `[a-zA-Z0-9/_.-]` — rejects shell metacharacters, XML metacharacters, spaces, and null bytes. Windows: drive letter + `[a-zA-Z0-9\\/._- ]`. Path traversal (`..`) rejected on all platforms regardless of position. On invalid path: installer aborts with a clear error and writes nothing.
 
 ---
 
@@ -190,13 +133,16 @@ The `#[serde(default)]` attribute on the cloud side means:
   "ollama_model_size_gb": 0.7,
   "ollama_quantization": "Q4_0",
   "ollama_tokens_per_second": 108.9,
-  "wattage_per_1k_tokens": 5.4
+  "wattage_per_1k_tokens": 5.4,
+  "vllm_running": false,
+  "vllm_model_name": null,
+  "vllm_tokens_per_sec": null,
+  "vllm_cache_usage_perc": null,
+  "vllm_requests_running": null
 }
 ```
 
 All fields are nullable. Null values display with honest gap labels in the UI — never as zero, never as an error.
-
-**vLLM fields** (included when vLLM is detected at `localhost:8000`): `vllm_running`, `vllm_model_name`, `vllm_tokens_per_sec`, `vllm_cache_usage_perc` (0–100%), `vllm_requests_running`. Uses `#[serde(skip_serializing_if = "Option::is_none")]` on the agent — absent from JSON when vLLM is not running.
 
 ---
 
@@ -212,7 +158,7 @@ WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)
 ```
 
 Where:
-- `tok/s` = `ollama_tokens_per_second` + `vllm_tokens_per_sec` (whichever runtimes are active; Ollama and vLLM can run simultaneously on the same node)
+- `tok/s` = `ollama_tokens_per_second`
 - `Watts_adjusted` = `cpu_power_w` (Apple Silicon) or `nvidia_board_power_w` (NVIDIA), adjusted by PUE if configured
 - `ThermalPenalty` = lookup from `thermal_state`:
 
@@ -220,8 +166,8 @@ Where:
 |---|---|
 | `Normal` | 1.0 |
 | `Fair` | 1.25 |
-| `Serious` | 2.0 |
-| `Critical` | 2.0+ |
+| `Serious` | 1.75 |
+| `Critical` | 2.0 |
 | `null` | 1.0 (assumed Normal) |
 
 **Display:** Unitless score to 1 decimal place, e.g. "WES 181.5". Displays "—" when `ollama_tokens_per_second` is null or power data is unavailable.
@@ -240,34 +186,6 @@ WES is the primary input to the **Fleet WES Leaderboard** (Insight #2), **Therma
 
 ---
 
-## UI Architecture
-
-### Typography Standard
-
-Three font tokens are defined in `src/index.css` and loaded from Google Fonts (`Inter` + `JetBrains Mono`). Each token has a strict semantic scope — using the wrong token for a given context is a bug, not a style preference.
-
-| Token | Resolves to | `tabular-nums` | Scope |
-|---|---|---|---|
-| `font-sans` | Inter | ❌ | All prose, navigation labels, tab names, descriptions, status text |
-| `font-mono` | JetBrains Mono | ❌ | Code blocks, shell commands, install snippets, URLs, pairing codes, API keys |
-| `font-telin` | JetBrains Mono | ✅ | **All live telemetry values** — tok/s, WES, °C, watts, %, MB, ms latency |
-
-**`font-telin` is a load-bearing utility.** The `tabular-nums` variant makes every digit render at identical width, preventing layout shifts when values update at 10Hz. At high update frequencies, variable-width digits cause cards to jitter horizontally — `font-telin` eliminates this structurally rather than by clamping container widths.
-
-```css
-/* src/index.css */
-@utility font-telin {
-  font-family: var(--font-family-telin);   /* JetBrains Mono */
-  font-variant-numeric: tabular-nums;       /* fixed-width digits */
-}
-```
-
-**Rule:** Any numeric value derived from a live SSE payload field must use `font-telin`. This includes derived metrics (WES, Wattage/1K TKN, Thermal Cost %) and all future Insight card scores (Model-Fit Score, Tok/s regression delta, Memory Pressure Forecast). `font-mono` is for static strings — not live data.
-
-`font-telin` is also a future-proof token: if the typeface changes (e.g. swapping in a dedicated data typeface), one CSS variable update reflows every telemetry surface in the dashboard.
-
----
-
 ## Cloud Backend Architecture
 
 ```
@@ -279,21 +197,19 @@ wicklee-cloud (Rust + Axum, deployed on Railway)
 │   └── Scheduled cleanup task       → purge expired stream_tokens every 5 minutes
 │
 ├── Pairing
-│   ├── POST /api/pair/claim       → generate 6-digit code, store with account; returns telemetry_secret (one-time delivery); fleet_url scheme-checked (http/https only) + SSRF ranges blocked (169.254/100.64/0.x/240+)
+│   ├── POST /api/pair/claim       → generate 6-digit code, store with account
 │   └── POST /api/pair/activate    → agent calls this on first pairing; stores node
 │
 ├── Telemetry
-│   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms; X-Wicklee-Token: <telemetry_secret> required
-│   └── GET  /api/fleet/stream?token=  → SSE stream to browser; token = stream_token from /api/auth/stream-token; 10 conns/IP (429) · 1 000 total (503); RAII guard decrements on disconnect
+│   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms
+│   └── GET  /api/fleet/stream?token=  → SSE stream to browser; token = stream_token from /api/auth/stream-token
 │
 └── Storage
     ├── SQLite (rusqlite, bundled)  → users, sessions, nodes (persistent via Railway volume)
     └── DuckDB (Phase 4A)          → time-series metric history, 90-day retention
 ```
 
-**Rate limits:** `POST /api/pair/activate` — 10 attempts / 60s per IP; 429 includes `Retry-After: 60` header. IP extracted from rightmost `X-Forwarded-For` value (Railway-appended, not client-controlled). Auth rate limiting handled by Clerk.
-
-**CORS:** Origin checked against exact-match allowlist; `Access-Control-Allow-Credentials: true` set only for known origins. Agent requests (no `Origin` header) receive no CORS headers.
+**Rate limits:** POST /api/pair/activate (10/5min). Auth rate limiting is handled by Clerk.
 
 ---
 
@@ -313,117 +229,6 @@ Previously, three components each opened their own `EventSource` — three token
 
 ---
 
-## Frontend Deployment Architecture
-
-### Railway Services
-
-Wicklee uses two separate Railway services from the same repository:
-
-| Service | Dockerfile | URL |
-|---|---|---|
-| **wicklee-frontend** | `Dockerfile` (repo root) | `wicklee.dev` |
-| **wicklee-cloud** | `cloud/Dockerfile` | `vibrant-fulfillment-production-62c0.up.railway.app` |
-
-`railway.toml` at the repo root configures the frontend service. `cloud/railway.toml` configures the backend service.
-
----
-
-### Multi-Stage Docker Build
-
-The frontend Railway service runs a two-stage Docker build defined at the repo root:
-
-```
-Dockerfile (repo root)
-│
-├── Stage 1 — builder (node:22-slim)
-│   ├── ARG VITE_CLERK_PUBLISHABLE_KEY   ← baked into JS bundle at compile time
-│   ├── ARG VITE_CLOUD_URL               ← baked into JS bundle at compile time
-│   └── npm run build → agent/frontend/dist/
-│
-└── Stage 2 — serve (nginx:alpine)
-    ├── Copies dist/ → /usr/share/nginx/html
-    ├── entrypoint.sh: envsubst '$PORT' substitutes Railway's port at runtime
-    └── nginx serves on PORT, proxying /api/* to the cloud backend
-```
-
-**Critical:** Vite replaces `import.meta.env.VITE_*` at **compile time**, not runtime. Build-time env vars must be declared as Docker `ARG`s — Railway injects service environment variables as build args for any declared `ARG`. Missing `ARG` declarations produce `undefined` in the built JS bundle.
-
----
-
-### nginx Reverse Proxy (`nginx.conf`)
-
-All `/api/*` requests arriving at `wicklee.dev` are reverse-proxied to the cloud backend:
-
-```
-wicklee.dev/api/*  →  https://vibrant-fulfillment-production-62c0.up.railway.app/api/*
-```
-
-The proxy rewrites the `Host` header to the backend domain and forwards `X-Real-IP` / `X-Forwarded-For` for logging. This eliminates CORS entirely — the browser sees only same-origin requests.
-
-**`/api/fleet/stream` has its own location block** listed before the generic `/api/` rule. All five SSE-critical directives are required together — missing any one will cause the stream to stall or disconnect:
-
-| Directive | Value | Why it's required |
-|---|---|---|
-| `proxy_buffering` | `off` | nginx must not accumulate chunks before forwarding — events must reach the browser immediately |
-| `proxy_cache` | `off` | Bypass any cache layer that would hold the response body |
-| `proxy_http_version` | `1.1` | HTTP/1.1 is required for chunked transfer encoding and upstream keep-alive |
-| `proxy_set_header Connection` | `''` | Clears the hop-by-hop `Connection` header so the upstream TCP connection stays open |
-| `proxy_read_timeout` | `86400s` | Holds the connection open for 24 hours — without this nginx closes idle SSE streams after 60s |
-
-All other `/api/*` routes use standard timeouts (`proxy_read_timeout 30s`).
-
-The SPA catch-all (`try_files $uri $uri/ /index.html`) ensures React Router handles all non-asset paths correctly — no path falls through to a 404.
-
----
-
-### `$PORT` Substitution at Runtime
-
-Railway injects the assigned service port as a `PORT` environment variable at **container startup** (not build time). nginx must listen on this port. Since nginx configuration is static, `entrypoint.sh` runs `envsubst` before starting nginx:
-
-```bash
-# Only $PORT is substituted — all nginx variables ($remote_addr, $uri, etc.)
-# are passed through literally and interpreted by nginx itself.
-envsubst '$PORT' < /etc/nginx/conf.d/nginx.conf.template \
-  > /etc/nginx/conf.d/default.conf
-exec nginx -g 'daemon off;'
-```
-
-Passing `'$PORT'` explicitly (not `'$*'`) to `envsubst` is essential — without it, nginx variables like `$remote_addr` would be substituted to empty strings, silently breaking header forwarding.
-
----
-
-### `VITE_CLOUD_URL` Modes
-
-Both `App.tsx` and `FleetStreamContext.tsx` share the same `CLOUD_URL` resolution logic. Every `fetch()` and `EventSource()` call in the frontend uses `CLOUD_URL` as its base:
-
-| `VITE_CLOUD_URL` | `CLOUD_URL` resolves to | Used for |
-|---|---|---|
-| unset or `''` | `https://vibrant-fulfillment-production-62c0.up.railway.app` | Local dev, agent binary builds |
-| `/` | `''` (empty string — same-origin) | Railway frontend service (nginx proxy active) |
-| `https://…` | The specified URL | Explicit override / staging |
-
-**Active on Railway:** `VITE_CLOUD_URL=/` — all API calls use relative paths (`/api/fleet`, `/api/auth/stream-token`, etc.) that nginx routes to the backend. Switching back to direct calls requires only changing this one env var.
-
----
-
-### Build-Time Flag: `IS_AGENT` vs `isLocalHost`
-
-Two separate flags control UI identity — they serve different purposes and must not be conflated:
-
-| Flag | Source | Type | Purpose |
-|---|---|---|---|
-| `IS_AGENT` | `VITE_BUILD_TARGET === 'agent'` | Build-time constant | Which **binary** is running — agent (Rust-embedded) or cloud frontend (Railway) |
-| `isLocalHost` | `window.location.hostname` check | Runtime boolean | Which **surface** to show — Cockpit (single node) or Mission Control (fleet) |
-
-`IS_AGENT` is a Rollup dead-code-elimination constant. When `true`:
-- The entire Clerk module is excluded from the bundle (dynamic `import()` in `index.tsx`'s `else` branch is tree-shaken by Rollup)
-- `App.tsx` renders `AppCore` with stub auth values — `useAuth()`/`useUser()` are never called
-- `AddNodeModal.tsx` returns `null` before `useAuth()` — `ClerkProvider` is never in the render tree
-
-`isLocalHost` is evaluated at runtime on every page load. An operator at `localhost:7700` sees the Cockpit surface (single-node identity, no fleet chrome). The same build served at `wicklee.dev` shows Mission Control (fleet identity, team management, billing).
-
----
-
 ## Intelligence Architecture
 
 ### The Unique Position
@@ -438,7 +243,7 @@ Wicklee is the only tool that owns both hardware telemetry and inference runtime
 | Model-to-Hardware Fit Score | VRAM/unified memory, thermal state | model size, quantization |
 | Power Anomaly Detection | `nvidia_board_power_w` vs `nvidia_gpu_util_percent` | inference activity context |
 | Quantization ROI | power draw, thermal state | tok/s at Q4 vs Q8 |
-| Hardware-Detected Cold Start | GPU spike + VRAM jump | model load → first tok/s transition |
+| Cold Start Detection | GPU spike, VRAM jump (hardware pattern — no proxy required) | inference activity context |
 
 ### Insight Delivery Surfaces
 
@@ -454,123 +259,10 @@ Wicklee is the only tool that owns both hardware telemetry and inference runtime
 - Free: node online/offline, thermal state transition, model eviction predicted, power anomaly detected, node paired
 - Paid: tok/s regression detected, fleet thermal alert, Keep Warm action taken
 
-### Keep Warm (Phase 4B)
-When Eviction Prediction fires and the user has Keep Warm enabled (Paid), the agent sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the Ollama expiry timer. Every Keep Warm action is logged in Live Activity with precise timestamp: "Wicklee sent keep-alive ping to llama3.1:8b at 10:42:33 PM." Actions are always opt-in, always logged, always reversible.
+### Keep Warm ✅
+When Eviction Prediction fires and the user has Keep Warm enabled, the agent sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the Ollama expiry timer. Every Keep Warm action is logged in Live Activity with precise timestamp: "Wicklee sent keep-alive ping to llama3.1:8b at 10:42:33 PM." Actions are always opt-in, always logged, always reversible.
 
----
-
-## Insights Tab — Architecture & Card Hierarchy
-
-> *Insights = "The So What" — interpreted conclusions, not raw data. The operator should not have to think — Wicklee tells them what matters right now and why.*
-
-### Core Principle
-
-The Insights tab is a **live triage feed**, not a static page. Cards appear when their condition is true and disappear when it resolves. An empty Insights tab means everything is fine — this is a positive signal, not a broken state.
-
-**Empty state copy:**
-- localhost: `✓ All systems nominal`
-- wicklee.dev: `✓ Fleet nominal`
-
-No card is always shown. Every card has a condition. If the condition is not met, the card does not render.
-
----
-
-### Two Contexts
-
-**localhost:7700 — single node, operator is present**
-Immediate, actionable single-node intelligence. Every card answers: "what should I do right now?"
-
-**wicklee.dev — fleet, operator may be remote**
-Fleet-level context. Cards identify which node needs attention and why.
-
----
-
-### Card Hierarchy
-
-#### Tier 1 — Active Alerts
-*Always visible when condition is true. Cannot be dismissed. Red border.*
-
-Conditions that represent active reliability or safety failures:
-
-| Card | Condition | Copy pattern |
-|---|---|---|
-| **Thermal Degradation Active** | `thermal_state === 'Serious' \| 'Critical'` | "WK-C133 is throttling — est. 35% tok/s loss. Reduce load or improve airflow." |
-| **Memory Exhaustion Imminent** | memory headroom < 10% | "3.2GB free · model needs 2.0GB · 1.2GB remaining. Swap risk imminent." |
-| **Power Anomaly** | watts > 2× session baseline OR (watts high AND GPU% < 20%) | "WK-03E2 drawing 180W at 8% GPU util. Something is consuming power that isn't inference." |
-
-Tier 1 cards render at the top of the Insights tab, above all other content, in both localhost and cloud contexts. They cannot be dismissed — the condition must resolve for them to disappear.
-
-#### Tier 2 — Insights
-*Shown when condition is true. Dismissable per session. Amber border.*
-
-Informational but actionable — the operator should know, but it's not an emergency:
-
-| Card | Condition | Notes |
-|---|---|---|
-| **Model Fit Score** | `ollama_model_size_gb != null` | Good/Fair/Poor with recommendation. Dismissable because "Good" is noise after first view. |
-| **Model Eviction Warning** | model approaching `keep_alive` timeout | "llama3.2:3b will unload in ~2 minutes due to inactivity." |
-| **Idle Resource Notice** | node online >1hr, zero inference activity | Shows estimated electricity cost of idle time. |
-
-Dismiss is **per-session only** — dismissed cards return on next page load. No permanent dismissal. Conditions change and the card may become critical again.
-
-#### Tier 3 — Fleet Summary Cards
-*wicklee.dev only. Always visible. Green/amber/red based on current state.*
-
-Persistent fleet health cards — not alerts, not dismissable:
-
-| Card | Phase |
-|---|---|
-| **Fleet WES Leaderboard** | Phase 3A |
-| **Fleet Thermal Diversity Score** | Phase 3A |
-| **Idle Fleet Cost** | Phase 3A |
-
-These cards do not appear in localhost mode — they require fleet context.
-
----
-
-### Layout
-
-**localhost:7700**
-```
-┌─ Active Alerts ─────────────────────────────┐
-│  Tier 1 cards (red) — if any active         │
-│  Empty state: "✓ All systems nominal"        │
-└─────────────────────────────────────────────┘
-┌─ Insights ──────────────────────────────────┐
-│  Tier 2 cards (amber) — dismissable         │
-│  Model Fit · Eviction Warning · Idle Notice │
-└─────────────────────────────────────────────┘
-┌─ Local AI Analysis ─────────────────────────┐
-│  Ollama-powered "Analyze My Fleet" button   │
-│  Analysis results when run                  │
-└─────────────────────────────────────────────┘
-```
-
-**wicklee.dev**
-```
-┌─ Active Alerts ─────────────────────────────┐
-│  Tier 1 cards per node (red) — if any       │
-│  Empty state: "✓ Fleet nominal"             │
-└─────────────────────────────────────────────┘
-┌─ Fleet Intelligence ────────────────────────┐
-│  Tier 3: WES Leaderboard · Thermal          │
-│  Diversity · Idle Fleet Cost                │
-└─────────────────────────────────────────────┘
-┌─ Per-Node Insights ─────────────────────────┐
-│  Tier 2 cards per node with model loaded    │
-└─────────────────────────────────────────────┘
-```
-
----
-
-### Implementation Rules
-
-- Cards are computed at render time from live SSE data — no new API calls, no new state beyond dismiss tracking
-- Session dismiss state lives in `sessionStorage` keyed by card ID + node ID
-- Tier 1 cards never check `sessionStorage` — conditions override dismissal
-- `Local AI Analysis` section is a distinct feature, not an insight card — it is never hidden or conditionally rendered based on node state
-- No card ever shows mock or placeholder data — if condition data is unavailable, the card does not render
-- New insight cards added in future phases must declare their Tier, condition, and dismiss behavior before implementation
+**Community:** 1 node free. **Paid (Team+):** unlimited nodes.
 
 ---
 
@@ -603,8 +295,8 @@ The agent collects hardware and inference telemetry locally. Outbound connection
 
 An unpaired agent has zero outbound network activity. An operator can verify this independently with `lsof -i` or `ss -tuln`.
 
-### Sovereignty Tab (Phase 3B)
-The Settings → Sovereignty tab surfaces:
+### Sovereignty (Observability Tab — Phase 3B)
+Sovereignty data surfaces as a section within the Observability tab — not a standalone tab. Content:
 - Complete pairing event log: timestamp, destination IP, session duration
 - Telemetry destination: `wicklee.dev` or "Sovereign Mode: no outbound telemetry"
 - Outbound connection manifest: every domain the agent has ever connected to
@@ -624,8 +316,8 @@ Enterprise tier produces a tamper-evident PDF audit report signed by the agent's
 | Linux (NVIDIA) | ✅ | ✅ nvml-wrapper | ✅ /sys/class/thermal | ✅ RAPL (kernel 5.10+) |
 | Linux (AMD CPU-only) | ✅ | ❌ | ✅ /sys/class/thermal | ✅ RAPL (kernel 5.10+) |
 | Linux (AMD GPU) | ✅ | 📋 Phase 5 | ✅ /sys/class/thermal | ✅ RAPL |
-| Windows (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 3B | 📋 Phase 5 |
-| Linux musl (static) | ✅ | ✅ nvml-wrapper† | ✅ | ✅ |
+| Windows (NVIDIA) | ✅ | ✅ nvml-wrapper | 🔜 Phase 5 (WMI) | 📋 Phase 5 |
+| Linux musl (static) | ✅ | ✅ nvml-wrapper† | ✅ /sys/class/thermal | ✅ |
 
 † nvml-wrapper excluded on musl targets; NVIDIA Linux users should use gnu builds
 
@@ -633,12 +325,9 @@ Enterprise tier produces a tamper-evident PDF audit report signed by the agent's
 
 ## Build Pipeline
 
-### Agent Binary (local, `make` / GitHub Actions)
-
 ```bash
-# 1. Build the React frontend in agent mode
-#    VITE_BUILD_TARGET=agent → IS_AGENT=true, Clerk excluded from bundle
-npm ci && npm run build:agent
+# 1. Build the React frontend
+npm ci && npm run build
 # Output: agent/frontend/dist/
 
 # 2. Build the Rust agent (embeds dist/ via rust-embed)
@@ -650,26 +339,7 @@ wicklee
 # Dashboard: http://localhost:7700
 ```
 
-`make` and `make install` run both steps in order and optionally copy the binary to `/usr/local/bin`.
-
-### Cloud Frontend (Railway — `wicklee.dev`)
-
-Railway builds the repo-root `Dockerfile` automatically on every push to `main`:
-
-```
-Docker build (Railway CI)
-│
-├── npm ci
-├── npm run build          ← standard mode (not agent), VITE_BUILD_TARGET unset
-│   Using env vars injected by Railway via ARG declarations:
-│     VITE_CLERK_PUBLISHABLE_KEY  (baked into bundle)
-│     VITE_CLOUD_URL=/            (baked into bundle — enables nginx proxy mode)
-│
-└── nginx serves agent/frontend/dist/ on $PORT
-    /api/* → proxied to vibrant-fulfillment-production-62c0.up.railway.app
-```
-
-**Release pipeline (agent):** tag push (`git tag vX.X.X && git push origin vX.X.X`) triggers 4-platform GitHub Actions build. Assets: `wicklee-agent-darwin-aarch64`, `wicklee-agent-linux-x86_64`, `wicklee-agent-linux-aarch64`, `wicklee-agent-windows-x86_64.exe`.
+**Release pipeline:** tag push (`git tag vX.X.X && git push origin vX.X.X`) triggers 4-platform GitHub Actions build. Assets: `wicklee-agent-darwin-aarch64`, `wicklee-agent-linux-x86_64`, `wicklee-agent-linux-aarch64`, `wicklee-agent-windows-x86_64.exe`.
 
 **Linux targets use musl** (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) for fully static binaries with no glibc dependency.
 
@@ -681,50 +351,38 @@ Wicklee is open-core. The agent is and will remain open source. The hosted fleet
 
 **Community Edition — Free**
 - Up to 3 paired nodes
-- Full local dashboard (localhost:7700), all hardware metrics, real-time only
+- Full local dashboard (localhost:7700), all hardware metrics
 - Full Fleet Overview with live data
-- Local Intelligence: live session cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction warning)
+- Local Intelligence free cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction, Cold Start)
+- Quantization ROI — live session snapshot (current model, current node — no history required)
+- 24h session history (localStorage with expiry — per-node insight persistence across page reloads)
+- Keep Warm: 1 node (silent 1-token ping to reset Ollama keep_alive before predicted eviction)
 - Fleet Intelligence panel: Efficiency Leaderboard, Thermal Diversity Score, Density Map, Idle Cost
-- Alerting: dashboard only
-- Sovereignty: Cloud Relay (standard SSE pairing)
-- Artifacts: none
-
-**Pro Edition — ~$9/mo**
-- Up to 10 paired nodes
-- All Community features
-- 7-day metric history
-- Persistent Insight cards (survive session; resurface on reconnect)
-- Keep Warm: 1 active node (silent ping to reset Ollama `keep_alive`)
-- Alerting: Slack (single channel)
-- Sovereignty: Cloud Relay
+- Sovereignty audit log (view only)
 
 **Team Edition — ~$29/mo**
 - Unlimited paired nodes
-- All Pro features
-- 90-day metric history
-- Trend-based Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI, Efficiency Regression per model)
-- Keep Warm: all fleet nodes
-- Alerting: Slack & PagerDuty with per-node, per-event-type configuration
-- Insights AI morning briefing + `/api/v1/insights/latest`
-- MCP server tools
-- Artifacts: CSV exports
+- All free tier features
+- 90-day metric history (DuckDB)
+- Trend-based Local Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI historical comparison, Efficiency Regression)
+- Slack / PagerDuty webhook alerts with per-node, per-event-type configuration
+- Keep Warm: unlimited nodes (Community gets 1 node free)
 - Alert threshold configuration
+- CSV/JSON export
+- Signed audit log export
 
 **Enterprise / Sovereign — ~$199/mo**
 - All Team Edition features
-- Metric history: custom / audit scope
-- Predictive & compliance intelligence tier
-- Alerting: SIEM / webhooks (custom infrastructure response)
-- Keep Warm: all fleet nodes
-- Sovereignty: Airgapped (Custom) — no cloud pairing, fully sovereign operation
+- Unlimited nodes
 - Sentinel Proxy (cross-node inference routing)
-- On-premise Docker / Helm deployment
+- Sovereign Mode (no cloud pairing, fully airgapped)
+- Cryptographically signed audit export (CISO-ready compliance artifact)
+- On-premise Docker/Helm deployment
 - SSO / SAML
 - HIPAA / SOC2 BAA
-- Artifacts: Signed PDF Audits (CISO-ready compliance artifacts)
 - Priority support + SLA
 
-The upgrade moment for Community → Pro is the first overnight incident nobody caught. Community → Team is when inference quality degrades and there's no history to diagnose it. Team → Enterprise is when a compliance officer asks for a signed audit trail.
+The upgrade moment for Community → Team is natural: when inference quality degrades and you don't know why. When tok/s drops 20% and there's no alert. When idle nodes cost $200/month and nobody knows. Team Edition is when Wicklee stops being a monitor and starts being an operator.
 
 ---
 

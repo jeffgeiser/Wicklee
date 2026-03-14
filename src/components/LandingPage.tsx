@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Database, Thermometer, Github, Copy, Check, AlertTriangle, Flame, MemoryStick, TrendingDown, Eye, ShieldCheck, BarChart3, Snowflake } from 'lucide-react';
+import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Database, Thermometer, Github, Copy, Check, AlertTriangle, Flame, MemoryStick, TrendingDown, Eye, ShieldCheck, BarChart3, Snowflake, Route, ClipboardCheck } from 'lucide-react';
 import Logo from './Logo';
 
 interface LandingPageProps {
@@ -411,6 +411,41 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               </table>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* The Programmable Fleet Section */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
+        <div className="text-center mb-4">
+          <span className="font-mono text-xs text-indigo-400/70 tracking-wider">
+            GET /api/v1/fleet · GET /api/v1/route/best
+          </span>
+        </div>
+        <div className="text-center mb-12">
+          <h2 className="text-4xl sm:text-5xl font-bold text-white mb-6 tracking-tight">
+            The Programmable Fleet
+          </h2>
+          <p className="text-gray-400 text-lg leading-relaxed max-w-2xl mx-auto">
+            Build automation on real-time fleet intelligence. Every metric Wicklee collects
+            is queryable via a rate-limited REST API designed for operator scripting.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-3 gap-6">
+          <FeatureCard
+            icon={Route}
+            title="Programmable Routing"
+            description="Route requests with WES-aware intelligence. Query /api/v1/route/best to select the optimal node for each task based on live thermal health, cache pressure, and efficiency score."
+          />
+          <FeatureCard
+            icon={Zap}
+            title="Reactive Automation"
+            description="Drive rerouting and rebalancing scripts from live fleet telemetry. Set thresholds on memory saturation, thermal state, or WES to automatically shift load to a healthier node — before users notice degradation."
+          />
+          <FeatureCard
+            icon={ClipboardCheck}
+            title="Performance CI/CD"
+            description="Plug node-level tok/s into your deployment pipeline. Automatically flag model quantizations that regress performance on your specific hardware mix before they reach production."
+          />
         </div>
       </section>
 
