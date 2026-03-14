@@ -20,12 +20,18 @@ use std::{
 };
 use uuid::Uuid;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use duckdb::Connection as DuckConn;
+use tokio::sync::mpsc;
 
-// ── DB type ───────────────────────────────────────────────────────────────────
+// ── DB types ──────────────────────────────────────────────────────────────────
 
 /// Shared SQLite connection.  rusqlite::Connection is Send but not Sync, so we
 /// wrap it in a Mutex to allow sharing across Axum handlers.
 type Db = Arc<Mutex<Connection>>;
+
+/// Shared DuckDB connection for analytics.  All writes are serialised through
+/// the metrics_writer_task channel — direct handler access is not needed.
+type DuckDb = Arc<Mutex<DuckConn>>;
 
 // ── Shared payload shape — must stay in sync with the agent ──────────────────
 
@@ -134,11 +140,34 @@ struct ClaimResponse {
     node_id:       String,
 }
 
-/// In-memory telemetry snapshot (not persisted — DuckDB Phase 4).
+/// In-memory telemetry snapshot (not persisted to DuckDB directly — goes
+/// through the metrics_writer_task channel).
 #[derive(Clone)]
 struct MetricsEntry {
     last_seen_ms: u64,
     metrics:      Option<MetricsPayload>,
+}
+
+/// One row of derived telemetry ready for DuckDB ingest.
+/// Built from MetricsPayload on every incoming frame; flushed in 30-second batches.
+#[derive(Clone)]
+struct MetricsRow {
+    node_id:          String,
+    ts_ms:            i64,
+    tenant_id:        String,           // SQLite user_id; set after node lookup
+    tok_s:            Option<f32>,
+    watts:            Option<f32>,
+    wes_raw:          Option<f32>,      // tok_s / watts × 10, no penalty
+    wes_penalized:    Option<f32>,      // tok_s / (watts × penalty) × 10
+    thermal_cost_pct: Option<f32>,      // Phase 4B — from agent WES v2
+    thermal_penalty:  Option<f32>,      // 1.0 / 1.25 / 1.75 / 2.0
+    thermal_state:    Option<String>,
+    vram_used_mb:     Option<i32>,
+    vram_total_mb:    Option<i32>,
+    mem_pressure_pct: Option<f32>,
+    gpu_pct:          Option<f32>,
+    cpu_pct:          Option<f32>,
+    wes_version:      u8,               // incremented when WES formula changes
 }
 
 #[derive(Serialize)]
@@ -181,6 +210,9 @@ struct AppState {
     clerk_keys:       Arc<RwLock<Vec<JwkKey>>>,
     /// Sliding-window rate-limit timestamps keyed by api_key key_id.
     api_rate_limits:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
+    /// Channel to the DuckDB writer task.  try_send drops rows if the writer
+    /// falls behind; that's acceptable for telemetry.
+    metrics_tx:       mpsc::Sender<MetricsRow>,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -1240,6 +1272,9 @@ async fn handle_telemetry(
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
 
+    // Derive the DuckDB row BEFORE moving payload into the in-memory map.
+    let duck_row = metrics_row_from_payload(&payload, ts);
+
     // Update in-memory snapshot.
     {
         let mut map = state.metrics.write().unwrap();
@@ -1252,20 +1287,36 @@ async fn handle_telemetry(
         }
     }
 
-    // Persist last_seen (and hostname when present) to nodes table.
-    let db = state.db.clone();
+    // Persist last_seen (and hostname when present) to nodes table,
+    // then look up tenant_id and enqueue the DuckDB row.
+    let db         = state.db.clone();
+    let metrics_tx = state.metrics_tx.clone();
+    let nid        = node_id.clone();
     tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
         if let Some(ref h) = node_hostname {
             conn.execute(
                 "UPDATE nodes SET last_seen = ?1, hostname = ?2 WHERE wk_id = ?3",
-                params![ts as i64, h, node_id],
+                params![ts as i64, h, nid],
             ).ok();
         } else {
             conn.execute(
                 "UPDATE nodes SET last_seen = ?1 WHERE wk_id = ?2",
-                params![ts as i64, node_id],
+                params![ts as i64, nid],
             ).ok();
+        }
+
+        // Resolve tenant_id (= user_id) and enqueue for DuckDB ingest.
+        // Nodes that haven't been activated yet have NULL user_id — skip those.
+        if let Ok(tenant_id) = conn.query_row(
+            "SELECT user_id FROM nodes WHERE wk_id = ?1 AND user_id IS NOT NULL",
+            params![nid],
+            |r| r.get::<_, String>(0),
+        ) {
+            let row = MetricsRow { tenant_id, ..duck_row };
+            // try_send is non-blocking; drops the row if the channel is full
+            // (8 192-slot buffer means this should never happen in practice).
+            let _ = metrics_tx.try_send(row);
         }
     }).await.ok();
 
@@ -1519,6 +1570,354 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
     res
 }
 
+// ── DuckDB — path & connection ────────────────────────────────────────────────
+
+fn duck_db_path() -> std::path::PathBuf {
+    // Railway: set DUCK_DB_PATH=/data/analytics.duckdb via the volume mount.
+    if let Ok(p) = std::env::var("DUCK_DB_PATH") {
+        return std::path::PathBuf::from(p);
+    }
+    // Local fallback: ~/.wicklee/analytics.duckdb
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home).join(".wicklee").join("analytics.duckdb")
+}
+
+fn open_duck_db() -> DuckConn {
+    let path = duck_db_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("Cannot create DuckDB directory");
+    }
+    let conn = DuckConn::open(&path)
+        .unwrap_or_else(|e| panic!("Cannot open DuckDB at {}: {e}", path.display()));
+
+    // ZSTD compression at level 3 — ~1.5-2× additional reduction vs default.
+    conn.execute_batch("
+        SET force_compression='zstd';
+        SET zstd_compression_level=3;
+    ").expect("DuckDB compression settings failed");
+
+    run_duck_migrations(&conn);
+    println!("  DUCK → {}", path.display());
+    conn
+}
+
+// ── DuckDB — schema migrations ────────────────────────────────────────────────
+
+fn run_duck_migrations(conn: &DuckConn) {
+    conn.execute_batch("
+        -- ── Raw telemetry (24-hour rolling window at native 1 Hz) ──────────
+        CREATE TABLE IF NOT EXISTS metrics_raw (
+            node_id          VARCHAR   NOT NULL,
+            ts_ms            BIGINT    NOT NULL,
+            tenant_id        VARCHAR   NOT NULL,
+            tok_s            FLOAT,
+            watts            FLOAT,
+            wes_raw          FLOAT,
+            wes_penalized    FLOAT,
+            thermal_cost_pct FLOAT,
+            thermal_penalty  FLOAT,
+            thermal_state    VARCHAR,
+            vram_used_mb     INTEGER,
+            vram_total_mb    INTEGER,
+            mem_pressure_pct FLOAT,
+            gpu_pct          FLOAT,
+            cpu_pct          FLOAT,
+            wes_version      UTINYINT  NOT NULL DEFAULT 1,
+            agent_version    VARCHAR,
+            PRIMARY KEY (tenant_id, node_id, ts_ms)
+        );
+
+        -- ── 5-minute aggregates (90-day retention) ───────────────────────
+        CREATE TABLE IF NOT EXISTS metrics_5min (
+            node_id              VARCHAR   NOT NULL,
+            ts_ms                BIGINT    NOT NULL,
+            tenant_id            VARCHAR   NOT NULL,
+            tok_s_avg            FLOAT,
+            tok_s_p50            FLOAT,
+            tok_s_p95            FLOAT,
+            watts_avg            FLOAT,
+            wes_raw_avg          FLOAT,
+            wes_penalized_avg    FLOAT,
+            wes_penalized_min    FLOAT,
+            thermal_cost_pct_avg FLOAT,
+            thermal_cost_pct_max FLOAT,
+            thermal_state_worst  VARCHAR,
+            mem_pressure_pct_avg FLOAT,
+            mem_pressure_pct_max FLOAT,
+            gpu_pct_avg          FLOAT,
+            sample_count         USMALLINT NOT NULL DEFAULT 0,
+            wes_version          UTINYINT  NOT NULL DEFAULT 1,
+            wes_version_count    UTINYINT  NOT NULL DEFAULT 1,
+            agent_version        VARCHAR,
+            PRIMARY KEY (tenant_id, node_id, ts_ms)
+        );
+
+        -- ── WES formula version boundaries ───────────────────────────────
+        CREATE TABLE IF NOT EXISTS schema_breakpoints (
+            node_id         VARCHAR NOT NULL,
+            ts_ms           BIGINT  NOT NULL,
+            tenant_id       VARCHAR NOT NULL,
+            breakpoint_type VARCHAR NOT NULL,
+            detail          VARCHAR
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_raw_node_ts
+            ON metrics_raw  (tenant_id, node_id, ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_5min_node_ts
+            ON metrics_5min (tenant_id, node_id, ts_ms);
+    ").expect("DuckDB migrations failed");
+}
+
+// ── DuckDB — derive MetricsRow from inbound telemetry ────────────────────────
+
+fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
+    let tok_s   = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
+    let watts   = m.nvidia_power_draw_w.or(m.cpu_power_w);
+    let penalty = thermal_penalty_for(m.thermal_state.as_deref());
+
+    let wes_raw = match (tok_s, watts) {
+        (Some(t), Some(w)) if t > 0.0 && w > 0.0 =>
+            Some(((t / w) * 10.0).round() / 10.0),
+        _ => None,
+    };
+    let wes_penalized = match (tok_s, watts) {
+        (Some(t), Some(w)) if t > 0.0 && w > 0.0 =>
+            Some(((t / (w * penalty)) * 10.0).round() / 10.0),
+        _ => None,
+    };
+    let gpu_pct = m.gpu_utilization_percent.or(m.nvidia_gpu_utilization_percent);
+
+    MetricsRow {
+        node_id:          m.node_id.clone(),
+        ts_ms:            ts_ms as i64,
+        tenant_id:        String::new(), // filled in by handle_telemetry after node lookup
+        tok_s,
+        watts,
+        wes_raw,
+        wes_penalized,
+        thermal_cost_pct: None,          // Phase 4B — requires agent WES v2
+        thermal_penalty:  Some(penalty),
+        thermal_state:    m.thermal_state.clone(),
+        vram_used_mb:     m.nvidia_vram_used_mb.map(|v| v as i32),
+        vram_total_mb:    m.nvidia_vram_total_mb.map(|v| v as i32),
+        mem_pressure_pct: m.memory_pressure_percent,
+        gpu_pct,
+        cpu_pct:          Some(m.cpu_usage_percent),
+        wes_version:      1,
+    }
+}
+
+// ── DuckDB — batch writer ─────────────────────────────────────────────────────
+
+/// Flush a batch of MetricsRow into metrics_raw using the DuckDB Appender
+/// (10-20× faster than prepared statements for bulk inserts).
+/// Call only from spawn_blocking — DuckDB Connection is !Sync.
+fn flush_batch(conn: &DuckConn, batch: &[MetricsRow]) {
+    if batch.is_empty() { return; }
+
+    let mut app = match conn.appender("metrics_raw") {
+        Ok(a)  => a,
+        Err(e) => { eprintln!("[duck] appender open failed: {e}"); return; }
+    };
+
+    for row in batch {
+        let _ = app.append_row(duckdb::params![
+            row.node_id.as_str(),
+            row.ts_ms,
+            row.tenant_id.as_str(),
+            row.tok_s,
+            row.watts,
+            row.wes_raw,
+            row.wes_penalized,
+            row.thermal_cost_pct,
+            row.thermal_penalty,
+            row.thermal_state.as_deref(),
+            row.vram_used_mb,
+            row.vram_total_mb,
+            row.mem_pressure_pct,
+            row.gpu_pct,
+            row.cpu_pct,
+            row.wes_version,
+            Option::<&str>::None, // agent_version — Phase 4B
+        ]);
+    }
+
+    if let Err(e) = app.flush() {
+        eprintln!("[duck] appender flush failed ({} rows dropped): {e}", batch.len());
+    }
+}
+
+/// Background task: drain the metrics channel and flush to DuckDB every 30 s
+/// or when the buffer hits 512 rows (safety valve).
+async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, duck: DuckDb) {
+    let mut buffer: Vec<MetricsRow> = Vec::with_capacity(256);
+    let mut flush_interval = tokio::time::interval(Duration::from_secs(30));
+    flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    flush_interval.tick().await; // discard the immediate first tick
+
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    None => break, // sender dropped; flush remaining and exit
+                    Some(row) => {
+                        buffer.push(row);
+                        if buffer.len() >= 512 {
+                            let batch = std::mem::take(&mut buffer);
+                            let d = duck.clone();
+                            tokio::task::spawn_blocking(move || {
+                                flush_batch(&d.lock().unwrap(), &batch);
+                            }).await.ok();
+                        }
+                    }
+                }
+            }
+            _ = flush_interval.tick() => {
+                if !buffer.is_empty() {
+                    let batch = std::mem::take(&mut buffer);
+                    let d = duck.clone();
+                    tokio::task::spawn_blocking(move || {
+                        flush_batch(&d.lock().unwrap(), &batch);
+                    }).await.ok();
+                }
+            }
+        }
+    }
+
+    // Final flush on shutdown
+    if !buffer.is_empty() {
+        let d = duck.clone();
+        tokio::task::spawn_blocking(move || {
+            flush_batch(&d.lock().unwrap(), &buffer);
+        }).await.ok();
+    }
+}
+
+// ── DuckDB — rollup & maintenance ────────────────────────────────────────────
+
+/// Hourly: aggregate metrics_raw rows older than 24 h into 5-minute buckets,
+/// then delete the raw rows that were successfully rolled up.
+/// EXISTS guard on DELETE ensures we never lose data if the INSERT fails.
+fn run_rollup(conn: &DuckConn) {
+    let cutoff_ms: i64 = (now_ms() as i64) - 86_400_000; // 24 h ago
+
+    // thermal_state_worst uses numeric encoding so ordering is correct:
+    // Critical(3) > Serious(2) > Fair(1) > Normal(0).
+    let sql = format!(r#"
+        BEGIN TRANSACTION;
+
+        INSERT INTO metrics_5min (
+            node_id, ts_ms, tenant_id,
+            tok_s_avg, tok_s_p50, tok_s_p95,
+            watts_avg, wes_raw_avg, wes_penalized_avg, wes_penalized_min,
+            thermal_cost_pct_avg, thermal_cost_pct_max, thermal_state_worst,
+            mem_pressure_pct_avg, mem_pressure_pct_max, gpu_pct_avg,
+            sample_count, wes_version, wes_version_count, agent_version
+        )
+        SELECT
+            node_id,
+            (ts_ms / 300000) * 300000          AS ts_ms,
+            tenant_id,
+            AVG(tok_s)                         AS tok_s_avg,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tok_s) AS tok_s_p50,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tok_s) AS tok_s_p95,
+            AVG(watts)                         AS watts_avg,
+            AVG(wes_raw)                       AS wes_raw_avg,
+            AVG(wes_penalized)                 AS wes_penalized_avg,
+            MIN(wes_penalized)                 AS wes_penalized_min,
+            AVG(thermal_cost_pct)              AS thermal_cost_pct_avg,
+            MAX(thermal_cost_pct)              AS thermal_cost_pct_max,
+            CASE MAX(CASE thermal_state
+                     WHEN 'Critical' THEN 3
+                     WHEN 'Serious'  THEN 2
+                     WHEN 'Fair'     THEN 1
+                     ELSE 0 END)
+                WHEN 3 THEN 'Critical'
+                WHEN 2 THEN 'Serious'
+                WHEN 1 THEN 'Fair'
+                ELSE 'Normal' END              AS thermal_state_worst,
+            AVG(mem_pressure_pct)              AS mem_pressure_pct_avg,
+            MAX(mem_pressure_pct)              AS mem_pressure_pct_max,
+            AVG(gpu_pct)                       AS gpu_pct_avg,
+            COUNT(*)::USMALLINT                AS sample_count,
+            MAX(wes_version)                   AS wes_version,
+            COUNT(DISTINCT wes_version)::UTINYINT AS wes_version_count,
+            ANY_VALUE(agent_version)           AS agent_version
+        FROM metrics_raw
+        WHERE ts_ms < {cutoff_ms}
+        GROUP BY node_id, tenant_id, (ts_ms / 300000) * 300000
+        ON CONFLICT DO NOTHING;
+
+        -- Only delete raw rows that were successfully rolled up (EXISTS guard).
+        DELETE FROM metrics_raw
+        WHERE ts_ms < {cutoff_ms}
+          AND EXISTS (
+              SELECT 1 FROM metrics_5min m
+              WHERE m.tenant_id = metrics_raw.tenant_id
+                AND m.node_id   = metrics_raw.node_id
+                AND m.ts_ms     = (metrics_raw.ts_ms / 300000) * 300000
+          );
+
+        -- Prune 5-min rows older than 90 days.
+        DELETE FROM metrics_5min
+        WHERE ts_ms < ({cutoff_ms} - 7776000000);
+
+        COMMIT;
+    "#);
+
+    conn.execute_batch(&sql)
+        .unwrap_or_else(|e| eprintln!("[rollup] failed: {e}"));
+    println!("[rollup] complete (cutoff_ms={cutoff_ms})");
+}
+
+/// Nightly (3 AM UTC): CHECKPOINT + ANALYZE to compact WAL and update stats.
+/// Separated from the hourly rollup to avoid blocking the Appender writer.
+fn run_nightly_maintenance(conn: &DuckConn) {
+    conn.execute_batch("
+        CHECKPOINT;
+        ANALYZE metrics_raw;
+        ANALYZE metrics_5min;
+    ").unwrap_or_else(|e| eprintln!("[nightly] maintenance failed: {e}"));
+    println!("[nightly] CHECKPOINT + ANALYZE complete");
+}
+
+/// Hourly rollup background task.
+async fn rollup_task(duck: DuckDb) {
+    let mut interval = tokio::time::interval(Duration::from_secs(3600));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval.tick().await; // skip immediate first tick — wait a full hour
+    loop {
+        interval.tick().await;
+        let d = duck.clone();
+        tokio::task::spawn_blocking(move || {
+            run_rollup(&d.lock().unwrap());
+        }).await.ok();
+    }
+}
+
+/// Nightly maintenance task — fires at 3 AM UTC.
+async fn nightly_task(duck: DuckDb) {
+    loop {
+        // Calculate seconds until next 3 AM UTC.
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let secs_in_day      = now_s % 86400;
+        let target_in_day    = 3 * 3600_u64; // 03:00 UTC
+        let sleep_secs = if secs_in_day < target_in_day {
+            target_in_day - secs_in_day
+        } else {
+            86400 - secs_in_day + target_in_day
+        };
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+        let d = duck.clone();
+        tokio::task::spawn_blocking(move || {
+            run_nightly_maintenance(&d.lock().unwrap());
+        }).await.ok();
+    }
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -1572,12 +1971,27 @@ async fn main() {
     }
     let clerk_keys = Arc::new(RwLock::new(initial_keys));
 
+    // Open DuckDB and create the analytics write channel.
+    let duck_conn = open_duck_db();
+    let duck      = Arc::new(Mutex::new(duck_conn)) as DuckDb;
+    let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsRow>(8_192);
+
     let state = AppState {
         db:              Arc::new(Mutex::new(conn)),
         metrics:         Arc::new(RwLock::new(seed_metrics)),
         clerk_keys:      clerk_keys.clone(),
         api_rate_limits: Arc::new(Mutex::new(HashMap::new())),
+        metrics_tx,
     };
+
+    // Spawn DuckDB analytics writer (drains channel, batches, flushes every 30 s).
+    tokio::spawn(metrics_writer_task(metrics_rx, duck.clone()));
+
+    // Spawn hourly rollup (raw → 5-min aggregates, prune old raw rows).
+    tokio::spawn(rollup_task(duck.clone()));
+
+    // Spawn nightly maintenance (CHECKPOINT + ANALYZE at 3 AM UTC).
+    tokio::spawn(nightly_task(duck.clone()));
 
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.
     if let Some(url) = jwks_url {
@@ -1644,14 +2058,14 @@ async fn main() {
         .expect("Failed to bind");
 
     println!("╔══════════════════════════════════════════════╗");
-    println!("║  Wicklee Cloud                               ║");
+    println!("║  Wicklee Cloud  (Phase 4A — DuckDB active)   ║");
     println!("║  POST /api/auth/signup                       ║");
     println!("║  POST /api/auth/login                        ║");
     println!("║  GET  /api/auth/me                           ║");
     println!("║  GET  /api/auth/stream-token                 ║");
     println!("║  POST /api/pair/claim                        ║");
     println!("║  POST /api/pair/activate                     ║");
-    println!("║  POST /api/telemetry                         ║");
+    println!("║  POST /api/telemetry  → DuckDB metrics_raw   ║");
     println!("║  GET  /api/fleet                             ║");
     println!("║  GET  /api/fleet/stream                      ║");
     println!("║  ── Agent API v1 ─────────────────────────  ║");
