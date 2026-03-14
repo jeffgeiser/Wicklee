@@ -10,10 +10,10 @@
 |---|---|---|---|---|
 | **Max Nodes** | 3 | 10 | Unlimited | Unlimited |
 | **Price** | Free | ~$9/mo | ~$29/mo | ~$199/mo |
-| **Metric History** | Real-time | 7-Day | 90-Day | Custom / Audit Scope |
+| **Metric History** | 24-Hour Rolling | 7-Day | 90-Day | Custom / Audit Scope |
 | **Alerting** | Dashboard only | Slack (Single) | Slack & PagerDuty | SIEM / Webhooks |
-| **Insights** | Live Session | Persistent Cards | Trend Analysis | Predictive / Compliance |
-| **Keep Warm** | — | 1 Active Node | All Fleet Nodes | All Fleet Nodes |
+| **Insights** | Live + Core Educational | Persistent Cards | Trend Analysis | Predictive / Compliance |
+| **Keep Warm** | 1 Active Node | 3 Active Nodes | All Fleet Nodes | All Fleet Nodes |
 | **Sovereignty** | Cloud Relay | Cloud Relay | Cloud Relay | Airgapped (Custom) |
 | **Artifacts** | — | — | CSV Exports | Signed PDF Audits |
 
@@ -29,21 +29,22 @@
 - UI: 3-node hard cap with upgrade prompt when adding a 4th node
 
 ### Metrics & History
-- **Real-time only** — no historical storage
+- **24-Hour Rolling History** — cloud stores last 24h of SSE stream data
 - All hardware telemetry available: WES, tok/s, tok/w, watts, GPU%, memory, VRAM, thermal
-- Data retention: current session only; no DuckDB persistence in cloud
+- Data retention: 24h in cloud; no long-term DuckDB persistence at this tier
 - Local agent SQLite (localhost:7700): unaffected — always stores full local history
 
 ### Insights
-- **Live Session** — insight cards computed at render time from current SSE frame; do not persist across sessions or reconnects
+- **Live + Core Educational** — insight cards computed from current SSE frame + 24h rolling data; persist across sessions within the 24h window
 - Available cards:
-  - Model-to-Hardware Fit Score
+  - Model-to-Hardware Fit Score (full card — Community unlocked)
   - Thermal Degradation Correlation
   - Power Anomaly Detection
   - Unified Memory Exhaustion Warning (Apple Silicon)
-  - Model Eviction Prediction (warning only — no Keep Warm action)
+  - Model Eviction Prediction (full card with Keep Warm action — 1 node)
   - Idle Resource Notice
-- Cards dismiss via sessionStorage; dismissed state lost on page reload
+  - Quantization ROI (live snapshot — tok/s, W/1K TKN, WES with educational copy)
+- Cards persist via localStorage with 24h expiry; dismissed state survives tab close within the 24h window
 
 ### Alerting
 - **Dashboard only** — no outbound delivery
@@ -51,8 +52,10 @@
 - No email, Slack, webhook, or SIEM delivery
 
 ### Keep Warm
-- **Disabled** — Model Eviction Prediction shows warning but Keep Warm toggle is locked
-- UI: toggle visible but disabled with upgrade prompt
+- **1 Active Node** — Keep Warm enabled for one node at a time
+- Fires a silent 1-token Ollama ping (`num_predict=1`) before predicted eviction to reset the keep_alive timer
+- Node selection: first node showing eviction warning
+- UI: Keep Warm button active on ModelEvictionCard; shows loading → "kept warm ✓" state
 
 ### Fleet Intelligence
 - View-only access to: Fleet WES Leaderboard, Thermal Diversity Score, Inference Density Map, Idle Fleet Cost
@@ -76,8 +79,9 @@
 ```typescript
 // src/types.ts or src/constants/tiers.ts
 COMMUNITY_NODE_LIMIT = 3
-COMMUNITY_HISTORY_DAYS = 0          // real-time only
-COMMUNITY_KEEP_WARM = false
+COMMUNITY_HISTORY_DAYS = 1          // 24-hour rolling
+COMMUNITY_KEEP_WARM = true
+COMMUNITY_KEEP_WARM_LIMIT = 1       // 1 active node
 COMMUNITY_INSIGHTS = 'live_session'
 COMMUNITY_ALERTING = 'dashboard'
 COMMUNITY_ARTIFACTS = false
@@ -117,11 +121,11 @@ COMMUNITY_SOVEREIGN = false
 - UI: Settings → Alerts → Slack Webhook URL input field (enabled at Pro+)
 
 ### Keep Warm
-- **1 Active Node**
-- Operator selects which single node gets Keep Warm protection
-- Wicklee sends silent 3-token ping to `localhost:11434` (or configured port) before predicted eviction
-- Ping logged in Live Activity
-- UI: Keep Warm toggle enabled on exactly one node; switching to another node disables the previous
+- **3 Active Nodes**
+- Operator selects up to 3 nodes for Keep Warm protection (up from 1 at Community)
+- Wicklee sends silent 1-token ping to `localhost:11434` (or configured port) before predicted eviction
+- Pings logged in Live Activity
+- UI: Keep Warm toggle enabled on up to 3 nodes; additional nodes require Team tier
 
 ### Fleet Intelligence
 - Full view + alert delivery for: Thermal Diversity Score → Slack
@@ -144,7 +148,8 @@ COMMUNITY_SOVEREIGN = false
 ```typescript
 PRO_NODE_LIMIT = 10
 PRO_HISTORY_DAYS = 7
-PRO_KEEP_WARM = 'single_node'
+PRO_KEEP_WARM = true
+PRO_KEEP_WARM_LIMIT = 3             // up to 3 active nodes
 PRO_INSIGHTS = 'persistent_cards'
 PRO_ALERTING = 'slack_single'
 PRO_ARTIFACTS = false
@@ -356,4 +361,4 @@ Node limit is enforced server-side at `/api/pair/activate` — client-side gates
 
 ---
 
-*Last updated: March 13, 2026. Source of truth for all subscription gating decisions.*
+*Last updated: March 14, 2026. Source of truth for all subscription gating decisions.*

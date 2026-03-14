@@ -41,10 +41,14 @@ import ModelFitInsightCard from './insights/tier2/ModelFitInsightCard';
 import ModelEvictionCard   from './insights/tier2/ModelEvictionCard';
 import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 
+// Tier 2 cards (cont.)
+import QuantizationROICard from './insights/tier2/QuantizationROICard';
+
 // Gate & layout components
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
 import InsightsLockedCard from './insights/InsightsLockedCard';
 import InsightsLiteCard   from './insights/InsightsLiteCard';
+import InsightsTeaseCard  from './insights/InsightsTeaseCard';
 import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
 
@@ -588,52 +592,23 @@ Format as Markdown with a "Strategic Optimization" header.`,
           {/* Health Indicators — 3-col grid */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 
-            {/* Model Fit Score */}
-            {canViewInsight(4) ? (
-              <div>
-                {fitNodes.length > 0
-                  ? fitNodes.map(n => (
-                      <ModelFitInsightCard key={n.node_id} node={n} showNodeHeader={fitNodes.length > 1} />
-                    ))
-                  : (
-                      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
-                        <Target className="w-4 h-4 text-gray-600 shrink-0" />
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Model Fit Score</p>
-                          <p className="text-xs text-gray-700 mt-0.5">No model loaded.</p>
-                        </div>
+            {/* Model Fit Score — Community+ (live_session gate) */}
+            <div>
+              {fitNodes.length > 0
+                ? fitNodes.map(n => (
+                    <ModelFitInsightCard key={n.node_id} node={n} showNodeHeader={fitNodes.length > 1} />
+                  ))
+                : (
+                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                      <Target className="w-4 h-4 text-gray-600 shrink-0" />
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Model Fit Score</p>
+                        <p className="text-xs text-gray-700 mt-0.5">No model loaded.</p>
                       </div>
-                    )
-                }
-              </div>
-            ) : (
-              <InsightsLiteCard
-                title="Model Fit Score"
-                icon={<Target className="w-3.5 h-3.5" />}
-                tierRequired="pro"
-                upgradeCopy="Unlock history & recommendations on Pro →"
-              >
-                {fitNodes.length > 0 ? (
-                  <div className="space-y-1">
-                    {fitNodes.slice(0, 2).map(n => {
-                      const r = computeModelFitScore(n);
-                      return r ? (
-                        <div key={n.node_id} className="flex items-center gap-2">
-                          <span className={`font-telin text-sm font-bold capitalize ${
-                            r.score === 'poor' ? 'text-red-400' : r.score === 'fair' ? 'text-amber-400' : 'text-green-400'
-                          }`}>{r.score}</span>
-                          {fitNodes.length > 1 && (
-                            <span className="text-[10px] text-gray-600 truncate">{n.hostname ?? n.node_id}</span>
-                          )}
-                        </div>
-                      ) : null;
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-xs text-gray-600">No model loaded.</p>
-                )}
-              </InsightsLiteCard>
-            )}
+                    </div>
+                  )
+              }
+            </div>
 
             {/* WES Leaderboard */}
             {canViewInsight(7) ? (
@@ -677,54 +652,43 @@ Format as Markdown with a "Strategic Optimization" header.`,
           <SectionHeader>Automation &amp; Cost</SectionHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
-            {/* Model Eviction */}
-            {canViewInsight(5) ? (
-              isLocalHost ? (
-                // Cockpit: single-node, local SSE tracking
-                tier2EvictionActive && m ? (
-                  <div id="insight-model-eviction">
-                    <ModelEvictionCard node={m} lastActiveTsMs={lastActiveTsMs} />
-                  </div>
-                ) : (
-                  <Section2NominalRow
-                    icon={<Cpu className="w-4 h-4" />}
-                    label="Model Eviction"
-                    status={m?.ollama_active_model
-                      ? `${m.ollama_active_model} active — no eviction predicted`
-                      : 'No model loaded'}
-                  />
-                )
-              ) : fleetEvictionNodes.length > 0 ? (
-                // Mission Control: one card per eviction-predicted node
-                <div className="space-y-3">
-                  {fleetEvictionNodes.map(n => (
-                    <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
-                      <ModelEvictionCard
-                        node={n}
-                        lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now}
-                        showNodeHeader={fleetEvictionNodes.length > 1}
-                      />
-                    </div>
-                  ))}
+            {/* Model Eviction — Community+ (live_session gate) */}
+            {isLocalHost ? (
+              // Cockpit: single-node, local SSE tracking
+              tier2EvictionActive && m ? (
+                <div id="insight-model-eviction">
+                  <ModelEvictionCard node={m} lastActiveTsMs={lastActiveTsMs} canKeepWarm />
                 </div>
               ) : (
                 <Section2NominalRow
                   icon={<Cpu className="w-4 h-4" />}
                   label="Model Eviction"
-                  status={effectiveNodes.some(n => n.ollama_active_model)
-                    ? 'Models active — no eviction predicted'
-                    : 'No models loaded'}
+                  status={m?.ollama_active_model
+                    ? `${m.ollama_active_model} active — no eviction predicted`
+                    : 'No model loaded'}
                 />
               )
+            ) : fleetEvictionNodes.length > 0 ? (
+              // Mission Control: one card per eviction-predicted node
+              <div className="space-y-3">
+                {fleetEvictionNodes.map(n => (
+                  <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
+                    <ModelEvictionCard
+                      node={n}
+                      lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now}
+                      showNodeHeader={fleetEvictionNodes.length > 1}
+                      canKeepWarm
+                    />
+                  </div>
+                ))}
+              </div>
             ) : (
-              // Community: live monitoring row — same as Pro nominal state.
-              // No countdown or Keep Warm action without Pro, but status is visible.
               <Section2NominalRow
                 icon={<Cpu className="w-4 h-4" />}
                 label="Model Eviction"
                 status={effectiveNodes.some(n => n.ollama_active_model)
-                  ? `${effectiveNodes.find(n => n.ollama_active_model)?.ollama_active_model ?? 'model'} loaded · monitoring`
-                  : 'No model loaded · monitoring'}
+                  ? 'Models active — no eviction predicted'
+                  : 'No models loaded'}
               />
             )}
 
@@ -799,41 +763,210 @@ Format as Markdown with a "Strategic Optimization" header.`,
           <SectionHeader>Analytics &amp; Forensics</SectionHeader>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 
-            <InsightsLockedCard
-              title="Efficiency Regression"
-              icon={<TrendingDown className="w-3.5 h-3.5" />}
-              description="Detects when a node's WES drops >20% from its 7-day baseline. The 'check engine' light for your fleet."
-              tierRequired="team"
-            />
+            {/* Efficiency Regression — Team tease: shows live WES */}
+            {canViewInsight(8) ? (
+              // Full team card — pending build; placeholder until implemented
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <TrendingDown className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Efficiency Regression</p>
+                  <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
+                </div>
+              </div>
+            ) : (
+              <InsightsTeaseCard
+                title="Efficiency Regression"
+                icon={<TrendingDown className="w-3.5 h-3.5" />}
+                tierRequired="team"
+                upgradeCopy="Unlock 7-day WES baseline comparison on Team →"
+                liveContent={
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] text-gray-600 uppercase tracking-widest">Current WES</p>
+                    {fleetWes != null ? (
+                      <div className="flex items-baseline gap-2">
+                        <span className={`font-telin text-xl font-bold ${
+                          fleetWes >= 3 ? 'text-green-400' : fleetWes >= 1.5 ? 'text-amber-400' : 'text-red-400'
+                        }`}>
+                          {fleetWes.toFixed(1)}
+                        </span>
+                        <span className="text-[10px] text-gray-600">vs. baseline: requires Team history</span>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-600">No active inference — WES unavailable.</p>
+                    )}
+                  </div>
+                }
+              />
+            )}
 
-            <InsightsLockedCard
-              title="Memory Forecast"
-              icon={<Database className="w-3.5 h-3.5" />}
-              description="Rate-of-change on memory pressure predicts critical threshold ETA. Alerts at 15-minute and 5-minute windows."
-              tierRequired="team"
-            />
+            {/* Memory Forecast — Team tease: shows live memory pressure */}
+            {canViewInsight(9) ? (
+              // Full team card — pending build
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <Database className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Memory Forecast</p>
+                  <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
+                </div>
+              </div>
+            ) : (
+              <InsightsTeaseCard
+                title="Memory Forecast"
+                icon={<Database className="w-3.5 h-3.5" />}
+                tierRequired="team"
+                upgradeCopy="Unlock ETA forecasting & 15-min alerts on Team →"
+                liveContent={(() => {
+                  const pressureNode = effectiveNodes.find(n => n.memory_pressure_percent != null);
+                  const pressure = pressureNode?.memory_pressure_percent ?? null;
+                  const vramNode = effectiveNodes.find(n => (n.nvidia_vram_total_mb ?? 0) > 0);
+                  const vramPct = vramNode
+                    ? (((vramNode.nvidia_vram_used_mb ?? 0) / (vramNode.nvidia_vram_total_mb ?? 1)) * 100)
+                    : null;
+                  const displayPct = pressure ?? vramPct;
+                  return (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest">Memory Pressure</p>
+                      {displayPct != null ? (
+                        <div className="flex items-baseline gap-2">
+                          <span className={`font-telin text-xl font-bold ${
+                            displayPct >= 80 ? 'text-red-400' : displayPct >= 60 ? 'text-amber-400' : 'text-green-400'
+                          }`}>
+                            {displayPct.toFixed(0)}%
+                          </span>
+                          <span className="text-[10px] text-gray-600">
+                            {displayPct >= 80 ? 'Critical — forecast requires Team' : displayPct >= 60 ? 'Elevated' : 'Normal'}
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-600">No memory pressure data.</p>
+                      )}
+                    </div>
+                  );
+                })()}
+              />
+            )}
 
-            <InsightsLockedCard
-              title="Quantization ROI"
-              icon={<Scale className="w-3.5 h-3.5" />}
-              description="Compares Q4 vs Q8 tok/s and W/1K TKN on your actual hardware at your thermal state — not synthetic benchmarks."
-              tierRequired="team"
-            />
+            {/* Quantization ROI — Community+ (live_session gate) */}
+            {canViewInsight(10) && effectiveNodes.length > 0 ? (
+              <QuantizationROICard
+                node={effectiveNodes[0]}
+                nodes={effectiveNodes}
+              />
+            ) : canViewInsight(10) ? (
+              // No nodes connected yet
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <Scale className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Quantization ROI</p>
+                  <p className="text-xs text-gray-700 mt-0.5">No nodes connected.</p>
+                </div>
+              </div>
+            ) : (
+              <InsightsTeaseCard
+                title="Quantization ROI"
+                icon={<Scale className="w-3.5 h-3.5" />}
+                tierRequired="team"
+                upgradeCopy="Compare quantizations over time on Team →"
+                liveContent={
+                  <p className="text-xs text-gray-600">
+                    Live efficiency metrics available — load a model to see tok/s and W/1K TKN.
+                  </p>
+                }
+              />
+            )}
 
-            <InsightsLockedCard
-              title="Hardware Cold Start"
-              icon={<Activity className="w-3.5 h-3.5" />}
-              description="Detects model load transitions from GPU spike + VRAM jump patterns. No proxy required — pure hardware signal."
-              tierRequired="team"
-            />
+            {/* Hardware Cold Start — Team tease: shows last known model state */}
+            {canViewInsight(11) ? (
+              // Full team card — pending build
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <Activity className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Hardware Cold Start</p>
+                  <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
+                </div>
+              </div>
+            ) : (
+              <InsightsTeaseCard
+                title="Hardware Cold Start"
+                icon={<Activity className="w-3.5 h-3.5" />}
+                tierRequired="team"
+                upgradeCopy="Unlock load-time detection & cold start alerts on Team →"
+                liveContent={(() => {
+                  const loadedNode = effectiveNodes.find(n => n.ollama_active_model);
+                  return (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest">Model State</p>
+                      {loadedNode ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-green-500/70 shrink-0" />
+                          <span className="font-mono text-xs text-gray-300 truncate">{loadedNode.ollama_active_model}</span>
+                          <span className="text-[10px] text-gray-600">loaded</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0" />
+                          <span className="text-xs text-gray-600">No model loaded — cold start on next request</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              />
+            )}
 
-            <InsightsLockedCard
-              title="Fleet Thermal Diversity"
-              icon={<Globe className="w-3.5 h-3.5" />}
-              description="Distribution of thermal states across the fleet. Flags when the fleet is one spike away from a cascade failure."
-              tierRequired="team"
-            />
+            {/* Fleet Thermal Diversity — Team tease: shows live state counts */}
+            {canViewInsight(12) ? (
+              // Full team card — pending build
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <Globe className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Fleet Thermal Diversity</p>
+                  <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
+                </div>
+              </div>
+            ) : (
+              <InsightsTeaseCard
+                title="Fleet Thermal Diversity"
+                icon={<Globe className="w-3.5 h-3.5" />}
+                tierRequired="team"
+                upgradeCopy="Unlock cascade risk analysis on Team →"
+                liveContent={(() => {
+                  const counts = effectiveNodes.reduce<Record<string, number>>(
+                    (acc, n) => {
+                      const s = n.thermal_state?.toLowerCase() ?? 'normal';
+                      acc[s] = (acc[s] ?? 0) + 1;
+                      return acc;
+                    }, {}
+                  );
+                  const states: Array<{ label: string; key: string; color: string }> = [
+                    { label: 'Normal',   key: 'normal',   color: 'text-green-400' },
+                    { label: 'Fair',     key: 'fair',     color: 'text-yellow-400' },
+                    { label: 'Serious',  key: 'serious',  color: 'text-amber-400' },
+                    { label: 'Critical', key: 'critical', color: 'text-red-400' },
+                  ];
+                  const active = states.filter(s => (counts[s.key] ?? 0) > 0);
+                  return effectiveNodes.length === 0 ? (
+                    <p className="text-xs text-gray-600">No nodes connected.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {active.length > 0 ? active.map(s => (
+                        <span key={s.key} className="text-xs">
+                          <span className={`font-telin font-bold ${s.color}`}>{counts[s.key]}</span>
+                          <span className="text-gray-600 ml-1">{s.label}</span>
+                        </span>
+                      )) : states.map(s => (
+                        <span key={s.key} className="text-xs">
+                          <span className="font-telin font-bold text-green-400">0</span>
+                          <span className="text-gray-600 ml-1">{s.label}</span>
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
+              />
+            )}
 
+            {/* Inference Density (Historical) — Team locked */}
             <InsightsLockedCard
               title="Inference Density (Historical)"
               icon={<Layers className="w-3.5 h-3.5" />}
@@ -841,6 +974,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
               tierRequired="team"
             />
 
+            {/* Sovereignty Audit — Enterprise locked */}
             <InsightsLockedCard
               title="Sovereignty Audit"
               icon={<Shield className="w-3.5 h-3.5" />}

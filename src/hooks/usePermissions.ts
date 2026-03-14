@@ -24,13 +24,13 @@ const INSIGHT_TIER_GATE: Record<number, InsightsTier> = {
   1:  'live_session',   // Thermal Degradation     — Community
   2:  'live_session',   // Power Anomaly            — Community
   3:  'live_session',   // Memory Exhaustion        — Community
-  4:  'persistent',     // Model Fit Score          — Pro
-  5:  'persistent',     // Model Eviction           — Pro
+  4:  'live_session',   // Model Fit Score          — Community (was Pro)
+  5:  'live_session',   // Model Eviction           — Community (was Pro)
   6:  'persistent',     // Idle Resource Cost       — Pro
   7:  'persistent',     // WES Peer Leaderboard     — Pro
   8:  'trend',          // Efficiency Regression    — Team
   9:  'trend',          // Memory Forecast          — Team
-  10: 'trend',          // Quantization ROI         — Team
+  10: 'live_session',   // Quantization ROI         — Community (was Team)
   11: 'trend',          // Hardware Cold Start      — Team
   12: 'trend',          // Fleet Thermal Diversity  — Team
   13: 'trend',          // Inference Density        — Team
@@ -99,6 +99,19 @@ export const usePermissions = (user: User | null) => {
     subscriptionTier,
     insightsTier,
     canViewInsight,
+
+    // ── History depth ─────────────────────────────────────────────────────
+    historyDays: (
+      { community: 1, pro: 7, team: 90, enterprise: Infinity } as Record<SubscriptionTier, number>
+    )[subscriptionTier],
+
+    // ── Keep Warm ─────────────────────────────────────────────────────────
+    // All tiers can use Keep Warm; the limit varies by tier.
+    canKeepWarm: true,
+    keepWarmNodeLimit:
+      subscriptionTier === 'community' ? 1
+      : subscriptionTier === 'pro'     ? 3
+      : Infinity,
 
     // ── Convenience booleans ──────────────────────────────────────────────
     isPro:        subscriptionTier !== 'community',

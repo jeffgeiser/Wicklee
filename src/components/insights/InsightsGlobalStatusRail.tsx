@@ -96,9 +96,14 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
       {/* Green pulse dot */}
       <div className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0 animate-pulse shadow-[0_0_6px_rgba(34,197,94,0.5)]" />
 
-      <span className="font-telin text-[10px] tracking-widest text-gray-400 uppercase">
-        All Systems Nominal
-      </span>
+      <div className="flex flex-col gap-0.5">
+        <span className="font-telin text-[10px] tracking-widest text-gray-400 uppercase">
+          All Systems Nominal
+        </span>
+        <span className="font-telin text-[9px] text-gray-600 tracking-wide">
+          No alerts this session · insight history persists for 24h
+        </span>
+      </div>
 
       {/* Fleet stats ticker — right-aligned */}
       <div className="ml-auto flex items-center gap-4">
