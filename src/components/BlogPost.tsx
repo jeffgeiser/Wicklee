@@ -100,7 +100,7 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate, onSignIn, onSignU
       {/* Nav */}
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <button onClick={() => onNavigate('/')} className="cursor-pointer">
-          <Logo className="text-3xl" active={true} />
+          <Logo className="text-3xl" connectionState="connected" />
         </button>
         <div className="flex items-center gap-4 sm:gap-8">
           <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
