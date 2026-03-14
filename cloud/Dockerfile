@@ -3,6 +3,12 @@ FROM rust:1.88-slim AS builder
 
 WORKDIR /app
 
+# DuckDB bundled feature compiles DuckDB from C++ source.
+# build-essential provides g++/gcc/make; cmake drives the DuckDB configure step.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential cmake \
+ && rm -rf /var/lib/apt/lists/*
+
 # Cache dependency compilation separately from source changes.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo "fn main(){}" > src/main.rs && cargo build --release
