@@ -55,6 +55,10 @@ export interface SentinelMetrics {
    * Null/absent when agent has not yet seen any expires_at change since start.
    */
   ollama_inference_active?: boolean | null;
+  /** True when the Wicklee transparent proxy is active on :11434.
+   * When true, tok/s comes from done-packet eval_count/eval_duration (exact),
+   * not the 30-second synthetic probe. Frontend shows "live" not "live estimate". */
+  ollama_proxy_active?: boolean | null;
   // vLLM runtime (absent/false when not running)
   vllm_running?:          boolean;
   vllm_model_name?:       string | null;

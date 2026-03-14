@@ -54,6 +54,10 @@ struct OllamaMetrics {
     /// Derived from expires_at resets observed in /api/ps polls.
     /// None = not yet determined (no expires_at change seen since agent start).
     ollama_inference_active: Option<bool>,
+    /// True when the transparent proxy is active on :11434.
+    /// When true, tok/s comes from done-packet eval_count/eval_duration rather than the 30s probe.
+    #[serde(default)]
+    ollama_proxy_active: bool,
 }
 
 // vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
@@ -138,6 +142,10 @@ struct MetricsPayload {
     /// True when a request completed within the last 35s. Derived from /api/ps expires_at resets.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_inference_active: Option<bool>,
+    /// True when the Wicklee transparent proxy is active on :11434.
+    /// Frontend uses this to label tok/s as "live" (not "live estimate").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_proxy_active: Option<bool>,
     // vLLM runtime (null/false when vLLM not running)
     #[serde(default)]
     vllm_running:          bool,
@@ -159,6 +167,25 @@ struct MetricsPayload {
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
 
+/// Optional transparent proxy configuration.
+/// When enabled, the agent binds :11434 and forwards to Ollama on ollama_port.
+/// Provides zero-lag inference detection and exact tok/s from done packets.
+/// Requires the user to move Ollama to ollama_port (OLLAMA_HOST=127.0.0.1:11435).
+#[derive(Serialize, Deserialize, Default, Clone)]
+struct OllamaProxyConfig {
+    /// Enable the transparent proxy. Default: false (Phase A /api/ps polling).
+    #[serde(default)]
+    enabled: bool,
+    /// Port where Ollama listens after being moved. Default: 11435.
+    #[serde(default = "default_proxy_ollama_port")]
+    ollama_port: u16,
+    /// Return 503 immediately when backend is unreachable rather than timing out.
+    #[serde(default)]
+    bypass_if_proxy_down: bool,
+}
+
+fn default_proxy_ollama_port() -> u16 { 11435 }
+
 #[derive(Serialize, Deserialize, Default)]
 struct WickleeConfig {
     node_id: String,
@@ -167,6 +194,9 @@ struct WickleeConfig {
     /// Cloud session token — persisted so telemetry push resumes after restart.
     #[serde(skip_serializing_if = "Option::is_none")]
     session_token: Option<String>,
+    /// Optional transparent Ollama proxy configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ollama_proxy: Option<OllamaProxyConfig>,
 }
 
 #[derive(Clone)]
@@ -687,7 +717,7 @@ fn load_or_create_config() -> WickleeConfig {
             }
         }
     }
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None };
     save_config(&cfg);
     cfg
 }
@@ -1369,6 +1399,206 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
     shared
 }
 
+// ── Ollama Transparent Proxy ──────────────────────────────────────────────────
+//
+// Optional. Binds :11434 and forwards to Ollama on a user-configured backend port
+// (default :11435). Provides:
+//   - Zero-lag inference detection (inference_active flips true on first byte in)
+//   - Exact tok/s from the done packet (eval_count / eval_duration), replacing the probe
+//   - The 30s /api/generate probe is disabled when the proxy is active
+//
+// Falls back gracefully: if :11434 cannot be bound, Phase A /api/ps polling takes over.
+
+/// Shared state between the proxy Axum app and the OllamaMetrics writer task.
+struct ProxyState {
+    ollama_port:    u16,
+    bypass_if_down: bool,
+    client:         reqwest::Client,
+    /// Set to true the instant a request arrives; cleared via 35s window after last done packet.
+    inference_active: std::sync::atomic::AtomicBool,
+    /// Timestamp of last completed request (done packet received).
+    last_done_ts:   Mutex<Option<std::time::Instant>>,
+    /// Exact tok/s from the most recent done packet.
+    exact_tps:      Mutex<Option<f32>>,
+}
+
+/// Proxy handler for /api/generate and /api/chat — streams request through and
+/// inspects the final done packet for exact tok/s.
+async fn proxy_ollama_streaming(
+    axum::extract::State(state): axum::extract::State<Arc<ProxyState>>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    use tokio_stream::StreamExt;
+
+    let path = req.uri().path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_default();
+
+    let method = req.method().clone();
+    let headers = req.headers().clone();
+
+    // Buffer request body (prompt JSON — typically <64 KB)
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return axum::http::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from("request body too large"))
+            .unwrap(),
+    };
+
+    // Extract model name and mark inference as active immediately
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+        // model field optional — Ollama uses last loaded model if absent
+        let _ = v["model"].as_str();
+    }
+    state.inference_active.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // Forward to backend Ollama
+    let backend_url = format!("http://127.0.0.1:{}{}", state.ollama_port, path);
+    let upstream = state.client
+        .request(method, &backend_url)
+        .headers(headers)
+        .body(body_bytes)
+        .send()
+        .await;
+
+    let upstream_resp = match upstream {
+        Ok(r) => r,
+        Err(e) => {
+            let hint = format!(
+                "Wicklee proxy: cannot reach Ollama on :{} — {}\n\
+                 Check that Ollama is running with OLLAMA_HOST=127.0.0.1:{}",
+                state.ollama_port, e, state.ollama_port
+            );
+            if state.bypass_if_down {
+                return axum::http::Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header("X-Wicklee-Hint", "backend-unreachable")
+                    .body(Body::from(hint))
+                    .unwrap();
+            } else {
+                return axum::http::Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::from(hint))
+                    .unwrap();
+            }
+        }
+    };
+
+    let status  = upstream_resp.status();
+    let resp_headers = upstream_resp.headers().clone();
+
+    // Stream response back, inspecting chunks for the done packet
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
+    let proxy_state = Arc::clone(&state);
+
+    tokio::spawn(async move {
+        let mut byte_stream = upstream_resp.bytes_stream();
+        while let Some(chunk) = byte_stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    // Scan for done packet — Ollama sends one JSON object per line (NDJSON).
+                    // The done packet is the last line; it's small and rarely split across chunks.
+                    if let Ok(text) = std::str::from_utf8(&bytes) {
+                        for line in text.lines() {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                                if v["done"].as_bool() == Some(true) {
+                                    if let (Some(ec), Some(ed)) = (
+                                        v["eval_count"].as_u64(),
+                                        v["eval_duration"].as_u64(),
+                                    ) {
+                                        let tps = ec as f64 / (ed as f64 / 1_000_000_000.0);
+                                        *proxy_state.exact_tps.lock().unwrap() = Some(tps as f32);
+                                        *proxy_state.last_done_ts.lock().unwrap() =
+                                            Some(std::time::Instant::now());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if tx.send(Ok(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    let stream_body = Body::from_stream(ReceiverStream::new(rx));
+    let mut builder = axum::http::Response::builder().status(status);
+    for (name, value) in &resp_headers {
+        builder = builder.header(name, value);
+    }
+    builder.body(stream_body).unwrap_or_else(|_| {
+        axum::http::Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::empty())
+            .unwrap()
+    })
+}
+
+/// Proxy passthrough for all other Ollama routes (/api/tags, /api/ps, /api/version, etc.).
+/// Pure forwarding — no inspection needed.
+async fn proxy_passthrough(
+    axum::extract::State(state): axum::extract::State<Arc<ProxyState>>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    use tokio_stream::StreamExt;
+
+    let path = req.uri().path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_default();
+
+    let method  = req.method().clone();
+    let headers = req.headers().clone();
+    let body_bytes = axum::body::to_bytes(req.into_body(), 64 * 1024 * 1024)
+        .await
+        .unwrap_or_default();
+
+    let backend_url = format!("http://127.0.0.1:{}{}", state.ollama_port, path);
+    let upstream = state.client
+        .request(method, &backend_url)
+        .headers(headers)
+        .body(body_bytes)
+        .send()
+        .await;
+
+    match upstream {
+        Err(e) => axum::http::Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .body(Body::from(format!("Wicklee proxy: backend unreachable — {e}")))
+            .unwrap(),
+        Ok(resp) => {
+            let status       = resp.status();
+            let resp_headers = resp.headers().clone();
+            let (tx, rx)     = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
+            tokio::spawn(async move {
+                let mut s = resp.bytes_stream();
+                while let Some(c) = s.next().await {
+                    match c {
+                        Ok(b)  => { if tx.send(Ok(b)).await.is_err() { break; } }
+                        Err(e) => { let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await; break; }
+                    }
+                }
+            });
+            let mut builder = axum::http::Response::builder().status(status);
+            for (name, value) in &resp_headers {
+                builder = builder.header(name, value);
+            }
+            builder.body(Body::from_stream(ReceiverStream::new(rx))).unwrap_or_else(|_| {
+                axum::http::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::empty())
+                    .unwrap()
+            })
+        }
+    }
+}
+
 // ── Ollama Harvester ──────────────────────────────────────────────────────────
 //
 // Auto-detects Ollama on 127.0.0.1:11434 (explicit IPv4 — avoids Windows resolving
@@ -1433,13 +1663,15 @@ async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> 
 const GPU_LOAD_THRESHOLD_PCT: f32 = 40.0;
 
 fn start_ollama_harvester(
-    apple:  Arc<Mutex<AppleSiliconMetrics>>,
-    nvidia: Arc<Mutex<NvidiaMetrics>>,
+    apple:     Arc<Mutex<AppleSiliconMetrics>>,
+    nvidia:    Arc<Mutex<NvidiaMetrics>>,
+    proxy_arc: Option<Arc<ProxyState>>,
 ) -> Arc<Mutex<OllamaMetrics>> {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
 
     // ── Main task: detect + poll /api/ps every 5s ───────────────────────────
-    let shared_main = Arc::clone(&shared);
+    let shared_main  = Arc::clone(&shared);
+    let proxy_main   = proxy_arc.clone();
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -1498,9 +1730,22 @@ fn start_ollama_harvester(
 
             // Set inference_active from last observed request completion.
             // True for 35s after the last reset — one full probe interval.
-            m.ollama_inference_active = Some(
-                last_inference_ts.map_or(false, |t| t.elapsed().as_secs() < 35)
-            );
+            // When the proxy is active, its signals take priority over /api/ps detection.
+            if let Some(ref ps) = proxy_main {
+                // Proxy inference_active: atomic flag set on request arrival.
+                // Stays true for 35s after the last done packet.
+                let proxy_active = ps.inference_active.load(std::sync::atomic::Ordering::Relaxed);
+                let since_done   = ps.last_done_ts.lock().unwrap()
+                    .map_or(false, |t| t.elapsed().as_secs() < 35);
+                m.ollama_inference_active = Some(proxy_active || since_done);
+                // Exact tok/s from the done packet — overrides the probe value.
+                m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
+                m.ollama_proxy_active = true;
+            } else {
+                m.ollama_inference_active = Some(
+                    last_inference_ts.map_or(false, |t| t.elapsed().as_secs() < 35)
+                );
+            }
 
             // Validation log: confirm model name + tok/s are reaching shared state.
             // Appears in agent stderr every 5 s while Ollama is running — remove once confirmed.
@@ -1533,11 +1778,14 @@ fn start_ollama_harvester(
     });
 
     // ── Probe task: scheduled 20-token benchmark every 30s ──────────────────
+    // Skipped entirely when the proxy is active — the proxy provides exact tok/s
+    // from done packets, so synthetic probes are redundant and wasteful.
     // Dynamic scheduling: the probe only fires when the GPU is idle enough to
     // give a clean reading. When GPU util ≥ GPU_LOAD_THRESHOLD_PCT, we skip
     // the probe and write None — the dashboard estimation formula takes over
     // (peak_tps × gpu_util%). Firing tokens into a loaded scheduler would
     // queue behind the active job and produce a noisy / depressed reading.
+    if proxy_arc.is_none() {
     let shared_probe  = Arc::clone(&shared);
     let apple_probe   = Arc::clone(&apple);
     let nvidia_probe  = Arc::clone(&nvidia);
@@ -1587,6 +1835,7 @@ fn start_ollama_harvester(
             }
         }
     });
+    } // end if proxy_arc.is_none()
 
     shared
 }
@@ -1840,6 +2089,7 @@ fn start_metrics_broadcaster(
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
                 ollama_inference_active:  ollama.ollama_inference_active,
+                ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
@@ -1925,6 +2175,7 @@ async fn handle_pair_generate(
                 node_id: state.node_id.clone(),
                 fleet_url: Some(fleet_url),
                 session_token: Some(token),
+                ollama_proxy: None,
             });
         }
     });
@@ -1951,6 +2202,7 @@ async fn handle_pair_claim(
             node_id: state.node_id.clone(),
             fleet_url: Some(fleet_url.clone()),
             session_token: state.cloud_session_token.clone(),
+            ollama_proxy: None,
         });
         state.status = PairingStatus::Connected { fleet_url };
     }
@@ -1963,7 +2215,7 @@ async fn handle_pair_disconnect(
     let mut state = pairing_state.lock().unwrap();
     state.status              = PairingStatus::Unpaired;
     state.cloud_session_token = None;
-    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None });
+    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None, ollama_proxy: None });
     Json(pairing_response(&state))
 }
 
@@ -2052,6 +2304,7 @@ async fn handle_metrics(
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
                 ollama_inference_active:  ollama.ollama_inference_active,
+                ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
@@ -2333,6 +2586,7 @@ async fn main() {
                     node_id: state.node_id.clone(),
                     fleet_url: Some(fleet_url),
                     session_token: Some(token),
+                    ollama_proxy: None,
                 });
             }
             None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
@@ -2343,11 +2597,60 @@ async fn main() {
     // Run diagnostics first so the output appears before the banner
     run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port).await;
 
+    // ── Optional Ollama transparent proxy ─────────────────────────────────────
+    // When enabled in config, try to bind :11434 and forward to Ollama on
+    // ollama_port (default 11435). If :11434 is unavailable (Ollama still there),
+    // fall back to Phase A /api/ps polling with a clear log message.
+    let proxy_cfg = config.ollama_proxy.clone().unwrap_or_default();
+    let proxy_arc: Option<Arc<ProxyState>> = if proxy_cfg.enabled {
+        match tokio::net::TcpListener::bind("127.0.0.1:11434").await {
+            Ok(proxy_listener) => {
+                let ps = Arc::new(ProxyState {
+                    ollama_port:      proxy_cfg.ollama_port,
+                    bypass_if_down:   proxy_cfg.bypass_if_proxy_down,
+                    client:           reqwest::Client::builder()
+                                        .timeout(Duration::from_secs(300))
+                                        .build()
+                                        .unwrap_or_default(),
+                    inference_active: std::sync::atomic::AtomicBool::new(false),
+                    last_done_ts:     Mutex::new(None),
+                    exact_tps:        Mutex::new(None),
+                });
+                let ps_clone = Arc::clone(&ps);
+                let proxy_app = axum::Router::new()
+                    .route("/api/generate", axum::routing::post(proxy_ollama_streaming))
+                    .route("/api/chat",     axum::routing::post(proxy_ollama_streaming))
+                    .fallback(proxy_passthrough)
+                    .with_state(ps_clone)
+                    .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any));
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(proxy_listener, proxy_app).await {
+                        eprintln!("[proxy] Server exited: {e}");
+                    }
+                });
+                eprintln!("[proxy] Listening on 127.0.0.1:11434 → Ollama :{}", proxy_cfg.ollama_port);
+                Some(ps)
+            }
+            Err(e) => {
+                eprintln!(
+                    "[proxy] Cannot bind 127.0.0.1:11434 ({e})\n\
+                     Falling back to /api/ps polling (Phase A). Is Ollama still on :11434?\n\
+                     To enable proxy: set OLLAMA_HOST=127.0.0.1:{} and restart Ollama, then restart the agent.",
+                    proxy_cfg.ollama_port
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
     let ollama_metrics        = start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
+        proxy_arc,
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();

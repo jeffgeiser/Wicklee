@@ -1038,6 +1038,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     m.ollama_inference_active === true ||
     (m.vllm_running === true && (m.vllm_tokens_per_sec ?? 0) > 0)
   );
+  // Whether any inferring node has the Wicklee proxy active (exact tok/s, not estimated)
+  const anyProxyActive = tpsNodes.some(m => m.ollama_proxy_active === true);
 
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
   const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics);
@@ -1327,8 +1329,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           valueCls={displayFleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={fleetTps != null
             ? isLocalMode
-              ? (anyInferring ? 'live estimate' : 'idle-spd baseline')
-              : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · ${anyInferring ? 'live estimate' : 'idle-spd baseline'}`
+              ? (anyInferring ? (anyProxyActive ? 'live' : 'live estimate') : 'idle-spd baseline')
+              : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · ${anyInferring ? (anyProxyActive ? 'live' : 'live estimate') : 'idle-spd baseline'}`
             : (hasAnyOllama || hasAnyVllm) ? 'sampling every 30s' : 'no inference runtime'}
           icon={Activity}
           iconCls="text-indigo-400"
