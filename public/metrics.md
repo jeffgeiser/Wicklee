@@ -227,6 +227,8 @@ How Wicklee measures tok/s — differently per runtime, honestly labeled in the 
 
 Every 30 seconds, the agent fires a 20-token generation request to `/api/generate` and measures `eval_count ÷ eval_duration` — the pure generation phase, isolated from prompt load time. This gives a clean per-node baseline independent of model context size.
 
+**Keep Warm pings:** The Model Eviction insight card can fire a silent 1-token ping (`num_predict=1`) to reset Ollama's `keep_alive` timer before a model is evicted. This briefly trips `/api/ps` inference detection — the TOK/S badge may show LIVE for one poll cycle (~5 seconds) with a `~0` reading. The 8-sample rolling buffer absorbs the single sample; it does not alter your throughput baseline or WES.
+
 **Dynamic scheduling:** When GPU utilization is ≥ 40%, the probe is skipped. Firing tokens into a loaded scheduler would queue behind the active job and return a depressed or failed reading. The agent writes `None` explicitly so the dashboard switches to the estimation value rather than carrying forward a stale reading. The 5-second `/api/ps` heartbeat continues regardless — keeping model presence and online status current.
 
 **Inference detection via `/api/ps`:** The agent polls `/api/ps` every 5 seconds and watches the `expires_at` field. Ollama resets `expires_at` to `now + keep_alive` each time a request completes. When the agent sees `expires_at` change, it knows inference just finished and sets `inference_active = true` for the next 35 seconds (one probe interval). This is the primary signal driving the three-state TOK/S display — it tells the dashboard whether a probe reading is a live throughput measurement or an unloaded hardware baseline.
@@ -428,6 +430,27 @@ The OS-level assessment of hardware thermal condition. macOS: read from `pmset` 
 **Unit:** W per (k·tok/s) — watts of sustained power draw per 1,000 tokens/second of throughput.
 
 How much power the fleet sustains per unit of inference capacity. Lower is more efficient. The ratio `W / (tok/s)` is mathematically equivalent to J/tok (joules per token) — same number, power framing. The cost formula uses this equivalence to derive $/1M (see COST/1M TOKENS below).
+
+---
+
+### QUANTIZATION LEVEL
+
+The precision level at which a model's weights are stored and computed. Quantization is the single biggest lever on VRAM usage, tok/s, and WES — the **Quantization ROI** insight card shows a live snapshot for the currently loaded model.
+
+| Level | VRAM vs Q8 | Tok/s delta | Quality |
+|-------|-----------|-------------|---------|
+| Q2    | ~75% less | faster      | Noticeable degradation — avoid coding/math tasks |
+| Q3    | ~60% less | faster      | Variable by model |
+| **Q4_K_M** | **~50% less** | **~10–15% faster** | **Recommended default — minimal quality loss** |
+| Q5    | ~35% less | ~5–10% faster | Near-lossless with meaningful VRAM savings |
+| Q6    | ~20% less | ~2–5% faster | Near-identical to Q8 in quality |
+| Q8    | baseline  | baseline    | Maximum accuracy |
+| F16   | ~2× Q8    | slower      | Full precision — production accuracy-critical workloads |
+| F32   | ~4× Q8    | significantly slower | Double precision — rarely needed at inference |
+
+**Effect on WES:** Net impact depends on your hardware. On memory-constrained Apple Silicon, Q4_K_M often *improves* WES by eliminating swap pressure that was silently depressing tok/s. On a GPU with ample VRAM, Q8 may edge out Q4_K_M since there's no memory penalty and accuracy is higher. Let the rolling buffer stabilize (~8 seconds) after a model swap before comparing WES readings across quants.
+
+*Source: `src/components/insights/tier2/QuantizationROICard.tsx`*
 
 ---
 
