@@ -245,14 +245,14 @@ A node drawing full board power at low GPU utilization has a mismatch — a back
 
 Every other monitoring solution requires you to trust that data isn't being exfiltrated. Wicklee's architecture makes the guarantee structural — the agent only phones home when the operator explicitly pairs it. For HIPAA, financial services, and defense-adjacent inference use cases, this isn't a nice-to-have, it's a procurement requirement.
 
-**Sovereignty Tab content:**
+**Observability tab — Sovereignty section content:**
 - Complete pairing event log (timestamp, destination IP, session duration)
 - Telemetry destination: `wicklee.dev` or "Sovereign Mode: no outbound telemetry"
 - Outbound connection manifest: every domain the agent has ever connected to
 
 **Cryptographically Signed Export (Enterprise):** PDF signed by the agent's unique hardware ID (WK-XXXX) using HMAC-SHA256. Tamper-evident. A CISO can independently verify the document hasn't been modified since export. This is the compliance artifact that wins HIPAA and defense contracts.
 
-- **Where:** Settings → Sovereignty tab
+- **Where:** Observability tab → Sovereignty section (not a standalone tab)
 - **Data:** Agent pairing events + telemetry destination log
 - **Free:** View only
 - **Paid (Team):** View + audit log export (CSV)
