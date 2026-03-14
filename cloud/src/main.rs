@@ -1,12 +1,13 @@
 use axum::{
     body::Body,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
+use sha2::{Sha256, Digest};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::StreamExt as _;
@@ -173,11 +174,13 @@ struct JwksResponse {
 #[derive(Clone)]
 struct AppState {
     /// Persistent store for users, sessions, and node pairing records.
-    db:             Db,
+    db:               Db,
     /// In-memory telemetry cache keyed by node_id.
-    metrics:        Arc<RwLock<HashMap<String, MetricsEntry>>>,
+    metrics:          Arc<RwLock<HashMap<String, MetricsEntry>>>,
     /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
-    clerk_keys:     Arc<RwLock<Vec<JwkKey>>>,
+    clerk_keys:       Arc<RwLock<Vec<JwkKey>>>,
+    /// Sliding-window rate-limit timestamps keyed by api_key key_id.
+    api_rate_limits:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -276,12 +279,33 @@ fn run_migrations(conn: &Connection) {
     let _ = conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_nodes_user_id ON nodes(user_id);"
     );
+
+    // API keys for Agent API v1 (Phase 3B).
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS api_keys (
+            key_id       TEXT PRIMARY KEY,
+            key_hash     TEXT UNIQUE NOT NULL,
+            user_id      TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            created_at   INTEGER NOT NULL,
+            last_used_ms INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+    ").expect("api_keys migration failed");
 }
 
 // ── Tier constants ────────────────────────────────────────────────────────────
 
 /// Maximum nodes a free-tier account may pair.
 const MAX_FREE_NODES: usize = 3;
+
+/// Agent API v1 rate limits (requests per 60-second sliding window).
+const API_RATE_COMMUNITY: usize = 60;
+const API_RATE_TEAM:      usize = 600;
+
+/// Nodes not seen within this window are considered offline.
+const ONLINE_THRESHOLD_MS: u64 = 30_000;
 
 /// If DEV_ACCOUNT_EMAIL env var is set, that account gets isPro=true and no
 /// node limit — useful for internal testing without hitting the free wall.
@@ -470,6 +494,468 @@ fn user_node_set(user_id: &str, conn: &Connection) -> HashSet<String> {
                 .unwrap_or_default()
         })
         .unwrap_or_default()
+}
+
+// ── Agent API v1 helpers ──────────────────────────────────────────────────────
+
+fn sha256_hex(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+fn thermal_penalty_for(state: Option<&str>) -> f32 {
+    match state.unwrap_or("Normal") {
+        "Fair"     => 1.25,
+        "Serious"  => 1.75,
+        "Critical" => 2.0,
+        _          => 1.0,
+    }
+}
+
+fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
+    let tok_s = if m.vllm_running {
+        m.vllm_tokens_per_sec?
+    } else {
+        m.ollama_tokens_per_second?
+    };
+    if tok_s <= 0.0 { return None; }
+    let watts = m.nvidia_power_draw_w.or(m.cpu_power_w)?;
+    if watts <= 0.0 { return None; }
+    let penalty = thermal_penalty_for(m.thermal_state.as_deref());
+    Some(((tok_s / (watts * penalty)) * 10.0).round() / 10.0)
+}
+
+/// Validate a raw API key, enforce rate limits, return (key_id, user_id, is_pro).
+/// Call inside spawn_blocking.
+fn validate_api_key_sync(
+    raw_key: &str,
+    conn: &Connection,
+    rate_limits: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
+) -> Option<(String, String, bool)> {
+    let hash = sha256_hex(raw_key);
+    let (key_id, user_id, is_pro_int): (String, String, i32) = conn.query_row(
+        "SELECT k.key_id, k.user_id, u.is_pro
+         FROM api_keys k
+         JOIN users u ON u.id = k.user_id
+         WHERE k.key_hash = ?1",
+        params![hash],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).ok()?;
+
+    let limit = if is_pro_int != 0 { API_RATE_TEAM } else { API_RATE_COMMUNITY };
+    let now = now_ms();
+    let window_start = now.saturating_sub(60_000);
+    {
+        let mut rl = rate_limits.lock().unwrap();
+        let calls = rl.entry(key_id.clone()).or_default();
+        calls.retain(|&t| t >= window_start);
+        if calls.len() >= limit {
+            return None; // rate limit exceeded
+        }
+        calls.push(now);
+    }
+
+    let _ = conn.execute(
+        "UPDATE api_keys SET last_used_ms = ?1 WHERE key_id = ?2",
+        params![now as i64, key_id],
+    );
+
+    Some((key_id, user_id, is_pro_int != 0))
+}
+
+fn extract_api_key(headers: &HeaderMap) -> Option<String> {
+    headers.get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned())
+        .or_else(|| extract_bearer(headers))
+}
+
+// ── Agent API v1 types ────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct V1NodeInfo {
+    node_id:      String,
+    hostname:     Option<String>,
+    online:       bool,
+    last_seen_ms: u64,
+    metrics:      Option<MetricsPayload>,
+    wes:          Option<f32>,
+}
+
+#[derive(Serialize)]
+struct V1FleetResponse {
+    nodes: Vec<V1NodeInfo>,
+}
+
+#[derive(Serialize)]
+struct V1WesNode {
+    node_id: String,
+    wes:     Option<f32>,
+    online:  bool,
+}
+
+#[derive(Serialize)]
+struct V1RouteCandidate {
+    node:   String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tok_s:  Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wes:    Option<f32>,
+    reason: String,
+}
+
+#[derive(Serialize)]
+struct V1RouteResponse {
+    latency:    Option<V1RouteCandidate>,
+    efficiency: Option<V1RouteCandidate>,
+    default:    &'static str,
+}
+
+#[derive(Serialize)]
+struct V1KeyInfo {
+    key_id:       String,
+    name:         String,
+    created_at:   i64,
+    last_used_ms: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct V1CreateKeyRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct V1CreateKeyResponse {
+    key_id:     String,
+    key:        String,  // raw key — returned once, not stored
+    name:       String,
+    created_at: i64,
+}
+
+// ── Agent API v1 handlers — key management ────────────────────────────────────
+
+/// POST /api/v1/keys
+async fn handle_v1_create_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<V1CreateKeyRequest>,
+) -> impl IntoResponse {
+    if body.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "name is required" }))).into_response();
+    }
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db   = state.db.clone();
+    let name = body.name.trim().to_owned();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let raw_key = format!("wk_live_{}", Uuid::new_v4().to_string().replace('-', ""));
+        let key_hash = sha256_hex(&raw_key);
+        let key_id   = Uuid::new_v4().to_string();
+        let ts       = now_ms() as i64;
+
+        conn.execute(
+            "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![key_id, key_hash, user_id, name, ts],
+        ).ok()?;
+
+        Some(V1CreateKeyResponse { key_id, key: raw_key, name, created_at: ts })
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(r) => (StatusCode::CREATED, Json(r)).into_response(),
+    }
+}
+
+/// GET /api/v1/keys
+async fn handle_v1_list_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<Vec<V1KeyInfo>> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let mut stmt = conn.prepare(
+            "SELECT key_id, name, created_at, last_used_ms
+             FROM api_keys WHERE user_id = ?1 ORDER BY created_at DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![user_id], |r| Ok(V1KeyInfo {
+            key_id:       r.get(0)?,
+            name:         r.get(1)?,
+            created_at:   r.get(2)?,
+            last_used_ms: r.get(3)?,
+        })).ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(k) => Json(serde_json::json!({ "keys": k })).into_response(),
+    }
+}
+
+/// DELETE /api/v1/keys/:key_id
+async fn handle_v1_delete_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<usize> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let n = conn.execute(
+            "DELETE FROM api_keys WHERE key_id = ?1 AND user_id = ?2",
+            params![key_id, user_id],
+        ).unwrap_or(0);
+        Some(n)
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(0) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
+        Some(_) => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+// ── Agent API v1 handlers — fleet data ────────────────────────────────────────
+
+/// GET /api/v1/fleet
+async fn handle_v1_fleet(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let rl = state.api_rate_limits.clone();
+
+    let result: Option<Vec<(String, i64)>> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let mut stmt = conn.prepare(
+            "SELECT wk_id, last_seen FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![user_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    let persisted = match result {
+        None    => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(r) => r,
+    };
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+    let nodes: Vec<V1NodeInfo> = persisted.into_iter().map(|(node_id, last_seen_db)| {
+        let (last_seen_ms, metrics) = metrics_map.get(&node_id)
+            .map(|e| (e.last_seen_ms, e.metrics.clone()))
+            .unwrap_or((last_seen_db as u64, None));
+        let online   = now.saturating_sub(last_seen_ms) < ONLINE_THRESHOLD_MS;
+        let wes      = metrics.as_ref().and_then(wes_for_payload);
+        let hostname = metrics.as_ref().and_then(|m| m.hostname.clone());
+        V1NodeInfo { node_id, hostname, online, last_seen_ms, metrics, wes }
+    }).collect();
+
+    Json(V1FleetResponse { nodes }).into_response()
+}
+
+/// GET /api/v1/fleet/wes
+async fn handle_v1_fleet_wes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let rl = state.api_rate_limits.clone();
+
+    let result: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
+        Some(stmt.query_map(params![user_id], |r| r.get(0))
+            .ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    let node_ids = match result {
+        None  => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(ids) => ids,
+    };
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+    let nodes: Vec<V1WesNode> = node_ids.into_iter().map(|node_id| {
+        let entry        = metrics_map.get(&node_id);
+        let last_seen_ms = entry.map(|e| e.last_seen_ms).unwrap_or(0);
+        let online       = now.saturating_sub(last_seen_ms) < ONLINE_THRESHOLD_MS;
+        let wes          = entry.and_then(|e| e.metrics.as_ref()).and_then(wes_for_payload);
+        V1WesNode { node_id, wes, online }
+    }).collect();
+
+    Json(serde_json::json!({ "nodes": nodes })).into_response()
+}
+
+/// GET /api/v1/nodes/:id
+async fn handle_v1_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db       = state.db.clone();
+    let rl       = state.api_rate_limits.clone();
+    let nid      = node_id.clone();
+
+    let result: Option<bool> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let owned: bool = conn.query_row(
+            "SELECT 1 FROM nodes WHERE wk_id = ?1 AND user_id = ?2",
+            params![nid, user_id],
+            |_| Ok(true),
+        ).unwrap_or(false);
+        Some(owned)
+    }).await.unwrap();
+
+    match result {
+        None        => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(false) => return (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
+        Some(true)  => {}
+    }
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+
+    match metrics_map.get(&node_id) {
+        None => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
+        Some(entry) => {
+            let last_seen_ms = entry.last_seen_ms;
+            let online   = now.saturating_sub(last_seen_ms) < ONLINE_THRESHOLD_MS;
+            let wes      = entry.metrics.as_ref().and_then(wes_for_payload);
+            let hostname = entry.metrics.as_ref().and_then(|m| m.hostname.clone());
+            Json(V1NodeInfo {
+                node_id, hostname, online, last_seen_ms,
+                metrics: entry.metrics.clone(), wes,
+            }).into_response()
+        }
+    }
+}
+
+/// GET /api/v1/route/best
+async fn handle_v1_route_best(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let rl = state.api_rate_limits.clone();
+
+    let result: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
+        Some(stmt.query_map(params![user_id], |r| r.get(0))
+            .ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    let node_ids = match result {
+        None      => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(ids) => ids,
+    };
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+
+    struct NodeScore {
+        node_id: String,
+        tok_s:   Option<f32>,
+        wes:     Option<f32>,
+    }
+
+    let candidates: Vec<NodeScore> = node_ids.into_iter().filter_map(|node_id| {
+        let entry = metrics_map.get(&node_id)?;
+        if now.saturating_sub(entry.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; }
+        let m     = entry.metrics.as_ref()?;
+        let tok_s = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
+        let wes   = wes_for_payload(m);
+        Some(NodeScore { node_id, tok_s, wes })
+    }).collect();
+
+    let best_latency = candidates.iter()
+        .filter_map(|c| c.tok_s.map(|t| (c, t)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(c, t)| V1RouteCandidate {
+            node: c.node_id.clone(), tok_s: Some(t), wes: c.wes,
+            reason: "Highest throughput".into(),
+        });
+
+    let best_efficiency = candidates.iter()
+        .filter_map(|c| c.wes.map(|w| (c, w)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(c, w)| V1RouteCandidate {
+            node: c.node_id.clone(), tok_s: c.tok_s, wes: Some(w),
+            reason: "Highest WES".into(),
+        });
+
+    Json(V1RouteResponse {
+        latency: best_latency, efficiency: best_efficiency, default: "efficiency",
+    }).into_response()
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
@@ -1087,9 +1573,10 @@ async fn main() {
     let clerk_keys = Arc::new(RwLock::new(initial_keys));
 
     let state = AppState {
-        db:         Arc::new(Mutex::new(conn)),
-        metrics:    Arc::new(RwLock::new(seed_metrics)),
-        clerk_keys: clerk_keys.clone(),
+        db:              Arc::new(Mutex::new(conn)),
+        metrics:         Arc::new(RwLock::new(seed_metrics)),
+        clerk_keys:      clerk_keys.clone(),
+        api_rate_limits: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.
@@ -1134,6 +1621,14 @@ async fn main() {
         .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",         get(handle_fleet))
         .route("/api/fleet/stream",  get(handle_fleet_stream))
+        // ── Agent API v1 ──────────────────────────────────────────────────────
+        .route("/api/v1/keys",           post(handle_v1_create_key))
+        .route("/api/v1/keys",           get(handle_v1_list_keys))
+        .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))
+        .route("/api/v1/fleet",          get(handle_v1_fleet))
+        .route("/api/v1/fleet/wes",      get(handle_v1_fleet_wes))
+        .route("/api/v1/nodes/:id",      get(handle_v1_node))
+        .route("/api/v1/route/best",     get(handle_v1_route_best))
         .with_state(state)
         .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
 
@@ -1159,6 +1654,14 @@ async fn main() {
     println!("║  POST /api/telemetry                         ║");
     println!("║  GET  /api/fleet                             ║");
     println!("║  GET  /api/fleet/stream                      ║");
+    println!("║  ── Agent API v1 ─────────────────────────  ║");
+    println!("║  POST   /api/v1/keys                         ║");
+    println!("║  GET    /api/v1/keys                         ║");
+    println!("║  DELETE /api/v1/keys/:key_id                 ║");
+    println!("║  GET    /api/v1/fleet                        ║");
+    println!("║  GET    /api/v1/fleet/wes                    ║");
+    println!("║  GET    /api/v1/nodes/:id                    ║");
+    println!("║  GET    /api/v1/route/best                   ║");
     println!("║  Listening on {addr:<30} ║");
     println!("╚══════════════════════════════════════════════╝");
 

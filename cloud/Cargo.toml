@@ -16,6 +16,10 @@ tokio-stream   = "0.1"
 futures-util   = "0.3"
 jsonwebtoken   = "9"
 ureq           = { version = "2", features = ["json"] }
+# SHA-256 for API key hashing.
+sha2           = "0.10"
+# Constant-time byte comparison for API key auth — prevents timing side-channels.
+subtle         = "2.6"
 
 [profile.release]
 opt-level     = 3
