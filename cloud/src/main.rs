@@ -1590,11 +1590,10 @@ fn open_duck_db() -> DuckConn {
     let conn = DuckConn::open(&path)
         .unwrap_or_else(|e| panic!("Cannot open DuckDB at {}: {e}", path.display()));
 
-    // ZSTD compression at level 3 — ~1.5-2× additional reduction vs default.
-    conn.execute_batch("
-        SET force_compression='zstd';
-        SET zstd_compression_level=3;
-    ").expect("DuckDB compression settings failed");
+    // Request ZSTD for all future checkpoints. DuckDB picks the level internally;
+    // zstd_compression_level is not an exposed setting in v1.
+    conn.execute_batch("SET force_compression='zstd';")
+        .expect("DuckDB compression settings failed");
 
     run_duck_migrations(&conn);
     println!("  DUCK → {}", path.display());
