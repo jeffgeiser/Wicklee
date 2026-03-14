@@ -21,7 +21,7 @@ use std::{
 use sysinfo::System;
 use tokio::sync::broadcast;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
-use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
+use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::TemperatureSensor, Nvml};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -82,6 +82,12 @@ struct NvidiaMetrics {
     nvidia_power_draw_w:            Option<f32>,
     /// Human-readable GPU model name, e.g. "NVIDIA GeForce RTX 4080"
     nvidia_gpu_name:                Option<String>,
+    /// Thermal penalty derived from the NVML throttle-reason bitmask (WES v2).
+    /// Always Some(_) when NVML is active — 1.0 = no throttle, >1.0 = throttled.
+    /// None on non-NVIDIA platforms. The WES sampler prefers this over string-inferred
+    /// thermal_state because it is hardware-authoritative, not temperature-proxied.
+    #[serde(skip)]   // internal use only; not forwarded in MetricsPayload
+    nvidia_throttle_penalty:        Option<f32>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -163,6 +169,29 @@ struct MetricsPayload {
     /// (e.g. self-update) emit a notable event. Frontend renders as Live Activity entries.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     live_activities: Vec<LiveActivityEvent>,
+
+    // ── WES v2 thermal-penalty window ─────────────────────────────────────────
+    // All optional — None until the first 2 s sampler tick completes (≈2 s after start).
+    // The cloud backend stores these in the reserved DuckDB columns (Phase 4B).
+
+    /// Average thermal penalty over the last 30 samples (up to 60 s rolling window).
+    /// 1.0 = no penalty (healthy), >1.0 = throttled. Three decimal places.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    penalty_avg:    Option<f32>,
+    /// Worst (highest) penalty seen in the same 60 s window. Alert threshold: >1.75.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    penalty_peak:   Option<f32>,
+    /// Source of the thermal data: "nvml" | "iokit" | "sysfs" | "unavailable".
+    /// "nvml" = hardware-authoritative bitmask. Others = state-string inference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thermal_source: Option<String>,
+    /// Number of samples in the current window (1–30). Low values mean the agent
+    /// just started or restarted — treat avg/peak as provisional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sample_count:   Option<u32>,
+    /// WES formula version. 1 = original (Serious=2.0). 2 = refined (Serious=1.75, NVML bitmask).
+    /// Increment here when the formula changes; version-stamps all benchmarks in DuckDB.
+    wes_version:    u8,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -1389,6 +1418,44 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
                 m.nvidia_gpu_name = device.name().ok();
 
+                // ── WES v2: NVML throttle-reason bitmask ─────────────────
+                // Maps hardware clock-throttle reasons to a thermal penalty
+                // factor. This is the most authoritative thermal signal on
+                // NVIDIA hardware — no temperature inference required.
+                //
+                // Priority when multiple thermal bits are set: 2.5 (worst-case)
+                //   HW_THERMAL_SLOWDOWN alone   → 2.0
+                //   SW_THERMAL_SLOWDOWN alone   → 1.25
+                //   HW_SLOWDOWN / HW_POWER_BRAKE alone → 1.25
+                //   No throttle bits, temp ≥90°C → 1.1 (pre-throttle)
+                //   No throttle bits, temp <90°C → 1.0 (healthy)
+                if let Ok(reasons) = device.current_throttle_reasons() {
+                    let hw_thermal  = reasons.contains(ThrottleReasons::HW_THERMAL_SLOWDOWN);
+                    let sw_thermal  = reasons.contains(ThrottleReasons::SW_THERMAL_SLOWDOWN);
+                    let hw_slowdown = reasons.contains(ThrottleReasons::HW_SLOWDOWN);
+                    let pwr_brake   = reasons.contains(ThrottleReasons::HW_POWER_BRAKE_SLOWDOWN);
+
+                    let thermal_count = [hw_thermal, sw_thermal, hw_slowdown, pwr_brake]
+                        .iter()
+                        .filter(|&&b| b)
+                        .count();
+
+                    let penalty: f32 = if thermal_count > 1 {
+                        2.5
+                    } else if hw_thermal {
+                        2.0
+                    } else if sw_thermal || hw_slowdown || pwr_brake {
+                        1.25
+                    } else {
+                        // No throttle bits active — check pre-throttle threshold.
+                        m.nvidia_gpu_temp_c
+                            .map(|t| if t >= 90 { 1.1 } else { 1.0 })
+                            .unwrap_or(1.0)
+                    };
+
+                    m.nvidia_throttle_penalty = Some(penalty);
+                }
+
                 if let Ok(mut guard) = shared_clone.lock() {
                     *guard = m;
                 }
@@ -2002,6 +2069,121 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
     shared
 }
 
+// ── WES v2: Thermal Penalty Sampler ───────────────────────────────────────────
+//
+// Maps the current thermal_state string (or NVML bitmask result) to a numeric
+// penalty factor, then maintains a 30-sample (60 s) rolling window per the WES v2
+// spec. The window averages and peak are forwarded in every MetricsPayload.
+//
+// WES v2 penalty table (refined from v1 — Serious was 2.0, now 1.75):
+//   Normal   → 1.00
+//   Fair     → 1.25
+//   Serious  → 1.75  ← changed from 2.0
+//   Critical → 2.00
+//
+// Source tags:
+//   "nvml"        — NVML throttle-reason bitmask (hardware-authoritative; NVIDIA only)
+//   "iokit"       — macOS pmset / sysctl thermal level
+//   "sysfs"       — Linux /sys/class/thermal zone max
+//   "unavailable" — no thermal data on this platform
+
+/// Maps a thermal-state string to the WES v2 penalty factor.
+fn thermal_penalty_v2(state: &str) -> f32 {
+    match state {
+        "Critical" => 2.00,
+        "Serious"  => 1.75,
+        "Fair"     => 1.25,
+        _          => 1.00,  // "Normal" and any unknown/empty value
+    }
+}
+
+/// Snapshot of the WES thermal-penalty rolling window shared between the
+/// sampler task and the 1 Hz broadcaster / SSE handler.
+#[derive(Clone, Default)]
+struct WesMetrics {
+    /// Average thermal penalty over the last 30 samples (up to 60 s).
+    /// None until the first sampler tick completes.
+    penalty_avg:    Option<f32>,
+    /// Peak (worst) penalty seen in the same window.
+    penalty_peak:   Option<f32>,
+    /// Source of the thermal data feeding this window.
+    thermal_source: Option<String>,
+    /// Number of samples currently in the window (1–30).
+    sample_count:   u32,
+}
+
+/// Spawns a 2 s thermal-penalty sampling loop.
+///
+/// Priority (highest first):
+///   1. `nvidia_metrics.nvidia_throttle_penalty` — NVML bitmask (authoritative)
+///   2. `apple_metrics.thermal_state`            — macOS iokit
+///   3. `linux_thermal_metrics`                  — Linux sysfs
+///   4. Fallback: 1.0, source = "unavailable"
+///
+/// Maintains a `VecDeque` of up to 30 samples. Writes avg + peak + source + count
+/// into the shared `WesMetrics` on every tick.
+fn start_wes_sampler(
+    apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
+    nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
+    linux_thermal_metrics: Arc<Mutex<Option<String>>>,
+) -> Arc<Mutex<WesMetrics>> {
+    let shared = Arc::new(Mutex::new(WesMetrics::default()));
+    let shared_clone = Arc::clone(&shared);
+
+    tokio::spawn(async move {
+        let mut window: std::collections::VecDeque<f32> =
+            std::collections::VecDeque::with_capacity(30);
+
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        // Discard the immediate first tick so the first real sample has data.
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+
+            let nvidia = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let linux  = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
+
+            // Determine penalty + source (highest-quality source wins).
+            let (penalty, source): (f32, &'static str) =
+                if let Some(p) = nvidia.nvidia_throttle_penalty {
+                    (p, "nvml")
+                } else if let Some(ref state) = apple.thermal_state {
+                    (thermal_penalty_v2(state.as_str()), "iokit")
+                } else if let Some(ref state) = linux {
+                    (thermal_penalty_v2(state.as_str()), "sysfs")
+                } else {
+                    (1.0, "unavailable")
+                };
+
+            // Rolling window: evict oldest sample when full.
+            if window.len() >= 30 {
+                window.pop_front();
+            }
+            window.push_back(penalty);
+
+            let n   = window.len() as f32;
+            let avg = window.iter().copied().sum::<f32>() / n;
+            let peak = window.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+            // Round to 3 decimal places — avoids floating-point noise in JSON.
+            let round3 = |v: f32| (v * 1_000.0).round() / 1_000.0;
+
+            if let Ok(mut guard) = shared_clone.lock() {
+                *guard = WesMetrics {
+                    penalty_avg:    Some(round3(avg)),
+                    penalty_peak:   Some(round3(peak)),
+                    thermal_source: Some(source.to_string()),
+                    sample_count:   window.len() as u32,
+                };
+            }
+        }
+    });
+
+    shared
+}
+
 // ── 1 Hz Metrics Broadcaster (WebSocket feed) ─────────────────────────────────
 
 /// Spawns a 1 s broadcast loop that serialises MetricsPayload and broadcasts
@@ -2017,6 +2199,7 @@ fn start_metrics_broadcaster(
     linux_thermal_metrics: Arc<Mutex<Option<String>>>,
     vllm_metrics:          Arc<Mutex<VllmMetrics>>,
     live_events:           Arc<Mutex<Vec<LiveActivityEvent>>>,
+    wes_metrics:           Arc<Mutex<WesMetrics>>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -2054,6 +2237,7 @@ fn start_metrics_broadcaster(
             let vllm          = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
+            let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
 
             // Drain any pending live-activity events (normally empty, non-zero during update).
             let pending_events: Vec<LiveActivityEvent> = live_events
@@ -2105,6 +2289,12 @@ fn start_metrics_broadcaster(
                     { "Unknown".to_string() }
                 },
                 live_activities: pending_events,
+                // WES v2 thermal-penalty window (None until first 2 s sampler tick)
+                penalty_avg:    wes.penalty_avg,
+                penalty_peak:   wes.penalty_peak,
+                thermal_source: wes.thermal_source,
+                sample_count:   if wes.sample_count > 0 { Some(wes.sample_count) } else { None },
+                wes_version:    2,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -2240,6 +2430,7 @@ async fn handle_metrics(
     axum::extract::Extension(rapl_metrics):          axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
     axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<String>>>>,
     axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
+    axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -2275,6 +2466,7 @@ async fn handle_metrics(
             let vllm          = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
+            let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -2321,6 +2513,12 @@ async fn handle_metrics(
                 },
                 // SSE handler never generates live-activity events; broadcaster owns that.
                 live_activities: Vec::new(),
+                // WES v2 thermal-penalty window
+                penalty_avg:    wes.penalty_avg,
+                penalty_peak:   wes.penalty_peak,
+                thermal_source: wes.thermal_source,
+                sample_count:   if wes.sample_count > 0 { Some(wes.sample_count) } else { None },
+                wes_version:    2,
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -2658,6 +2856,14 @@ async fn main() {
     let linux_thermal_metrics = start_linux_thermal_harvester();
     let vllm_metrics          = start_vllm_harvester();
 
+    // WES v2 — 2 s thermal-penalty sampler (30-sample rolling window).
+    // Must start after the platform harvesters above so it has data to read.
+    let wes_metrics = start_wes_sampler(
+        Arc::clone(&apple_metrics),
+        Arc::clone(&nvidia_metrics),
+        Arc::clone(&linux_thermal_metrics),
+    );
+
     // Shared event queue for drain-on-send live activity entries (update notifications etc.).
     let live_events: Arc<Mutex<Vec<LiveActivityEvent>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -2669,6 +2875,7 @@ async fn main() {
         Arc::clone(&linux_thermal_metrics),
         Arc::clone(&vllm_metrics),
         Arc::clone(&live_events),
+        Arc::clone(&wes_metrics),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -2695,6 +2902,7 @@ async fn main() {
         .layer(axum::extract::Extension(rapl_metrics))
         .layer(axum::extract::Extension(linux_thermal_metrics))
         .layer(axum::extract::Extension(vllm_metrics))
+        .layer(axum::extract::Extension(wes_metrics))
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
