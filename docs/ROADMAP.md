@@ -178,12 +178,18 @@
 
 ---
 
-## Phase 4A — Intelligence Depth + Insights AI *(2–3 months)*
+## Phase 4A — Intelligence Depth + Insights AI *(in progress)*
 
-> Requires DuckDB 90-day history. Unlocks trend-based insights and AI-powered briefings.
+> DuckDB write path shipped. 90-day history accumulating. Unlocks trend-based insights and AI-powered briefings.
 
 ### Infrastructure
-- [ ] **DuckDB Time-Series:** 90-day per-node, per-metric history stored on Railway. Powers all trend-based insights below.
+- [x] **DuckDB Write Path (Phase 4A shipped `e8c6b47`):**
+  - `metrics_raw` table: 24-hour rolling window at native 1 Hz. `metrics_5min` table: 90-day aggregate retention (5-minute buckets with pre-computed tok_s P50/P95).
+  - ZSTD compression (level 3). Tiered retention via hourly rollup with EXISTS guard (no data loss on partial failure). Nightly CHECKPOINT + ANALYZE at 3 AM UTC.
+  - `mpsc` channel (8 192-slot) + dedicated writer task → DuckDB Appender API (10-20× insert throughput). 30-second flush interval, 512-row safety valve.
+  - Storage math: ~3 MB per user per 90 days (5-min aggregates). Railway 10 GB volume covers ~3 000+ users.
+  - duckdb crate v1.10500.0 (bundled — compiles on Railway). `DUCK_DB_PATH` env var for volume mount.
+  - `thermal_cost_pct` and `agent_version` columns reserved; populated when WES v2 ships (Phase 4B).
 - [ ] **Historical Performance Graphs:** Same metric selector as live graph but spanning 1hr/24hr/7d/30d/90d.
 - [ ] **Percentile Baselines:** P50/P95 for tok/s, power, CPU per node — shown as reference lines on graphs.
 - [ ] **Per-model WES normalization** — WES at 3B vs 70B is not directly comparable. Normalize against per-model historical baseline in DuckDB. Requires history to establish baseline before normalization is meaningful.
