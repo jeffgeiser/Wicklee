@@ -36,8 +36,8 @@ const problemCards = [
     iconBg: 'bg-amber-500/10',
     icon: Database,
     iconColor: 'text-amber-400',
-    title: 'KV Cache Saturation',
-    body: 'Detected natively for vLLM. Queue backlogs and cache pressure surface before they stall your inference stream.',
+    title: 'KV Cache Saturation (vLLM)',
+    body: 'KV cache pressure detected natively via the vLLM Prometheus endpoint. Queue backlogs surface before they stall your inference stream.',
   },
   {
     accent: 'border-red-500/40',
@@ -100,7 +100,7 @@ const metricCards = [
     icon: ShieldCheck,
     iconColor: 'text-green-400',
     title: 'Sovereignty Audit Trail',
-    body: 'The only monitor that can prove your inference data never left your network. Structural guarantee, not a privacy policy.',
+    body: 'Ensure your inference data never leaves your network. A structural guarantee, not a privacy policy. Audit the open-source agent for total peace of mind.',
   },
 ];
 
@@ -260,8 +260,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           />
           <FeatureCard
             icon={Activity}
-            title="Protect your hardware"
-            description="Sentinel monitors thermal thresholds and reroutes traffic before nodes overheat — automatically, while you sleep."
+            title="Thermal Intelligence"
+            description="Monitor thermal thresholds and health signals across your entire fleet. Prevent hardware degradation with real-time alerts and WES-aware health telemetry."
           />
           <FeatureCard
             icon={Terminal}
@@ -434,12 +434,12 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           <FeatureCard
             icon={Route}
             title="Programmable Routing"
-            description="Route requests with WES-aware intelligence. Query /api/v1/route/best to select the optimal node for each task based on live thermal health, cache pressure, and efficiency score."
+            description="Route requests with efficiency-aware intelligence. Query /api/v1/route/best to select the optimal node for each task based on live thermal health, runtime backlogs, and Efficiency Score."
           />
           <FeatureCard
             icon={Zap}
             title="Reactive Automation"
-            description="Drive rerouting and rebalancing scripts from live fleet telemetry. Set thresholds on memory saturation, thermal state, or WES to automatically shift load to a healthier node — before users notice degradation."
+            description="Drive rerouting and rebalancing scripts from live fleet telemetry. Set thresholds on memory saturation, thermal state, or WES to programmatically shift load to a healthier node — before users notice degradation."
           />
           <FeatureCard
             icon={ClipboardCheck}
@@ -474,7 +474,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shrink-0 shadow-lg shadow-blue-500/20">3</div>
                   <div>
                     <h4 className="text-white font-semibold text-lg mb-1">Sentinel watches your hardware</h4>
-                    <p className="text-gray-500 leading-relaxed">Thermal thresholds, auto-rerouting, and Slack alerts out of the box. Protect your GPUs while you sleep.</p>
+                    <p className="text-gray-500 leading-relaxed">Set custom thermal thresholds and receive Slack alerts when nodes throttle. Use the Agent API to drive your own failover logic and protect your silicon.</p>
                   </div>
                 </div>
               </div>
