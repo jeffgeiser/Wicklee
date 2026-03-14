@@ -1,630 +1,350 @@
-# Wicklee — Insights Reference
+# Wicklee — Intelligence Strategy: 15 Unique Insights 🛰️
 
-> **Authoritative spec for all 14 insights: derivation formulas, tier gating, UI placement, and scaffolding approach.**
-> The Insights tab and all `InsightCard` components should derive from this document.
-
----
-
-## Core Thesis
-
-Every insight on this list is impossible without owning both hardware telemetry and inference runtime context simultaneously. That intersection is Wicklee's structural moat.
-
-- **Hardware side:** CPU power (RAPL / NVML), GPU utilization, thermal state, VRAM, memory pressure
-- **Runtime side:** model loaded, quantization, size, tok/s (Ollama probe / vLLM Prometheus)
-
-No other tool has both streams. This is not a feature list — it is a structural moat.
+> *Every insight on this list is impossible without owning both hardware telemetry and inference runtime context simultaneously. That intersection is Wicklee's structural moat.*
 
 ---
 
-## Proxy-Free Architecture
+## The Core Thesis
 
-All 14 insights are derived from hardware telemetry and Ollama/vLLM API metadata **only**. Wicklee never sits in the HTTP request path. It does not intercept, proxy, or inspect actual inference requests or model responses.
+Standard monitoring tools see CPU and RAM as separate, unrelated metrics. Wicklee owns both sides:
 
-Data sources used:
-- `NVML` / `powermetrics` / `ioreg` — hardware metrics
-- Ollama `/api/ps`, `/api/tags` — model metadata, keepalive state
-- vLLM `/metrics` — Prometheus endpoint, no request content
-- Wicklee Performance Probe — Wicklee's own 3-token pulse, not user traffic
-- DuckDB time-series history — for trend and regression insights (Pro+ / Team+)
+- **Hardware side:** CPU power (RAPL/NVML), GPU utilization, thermal state, VRAM, memory pressure
+- **Runtime side:** model loaded, quantization, size, tokens/sec (Ollama probe / vLLM Prometheus)
 
-**Removed from scope:** Cross-Node Inference Routing (Sentinel Proxy) was considered as an insight but requires being in the HTTP request path. It is deferred to Phase 5 as a separate architectural component, not an insight card.
-
-**Hardware Cold Start note:** Earlier spec versions required TTFT data (which needed proxy). The current derivation uses pure hardware pattern matching (gpu_util + vram + power transitions) and does not require proxying.
+The product strategy is built around insights that are only possible at the intersection of both. No other tool has both. This is not a feature list — it is a structural moat.
 
 ---
 
-## WES — Foundation Metric
+## WES — The Foundation Metric
+
+Before the 15 insights, there is one number that makes them possible: **WES (Wicklee Efficiency Score)**.
+
+### Formula
 
 ```
 WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)
 ```
 
+**ThermalPenalty lookup:**
+
 | Thermal State | Penalty |
 |---|---|
-| Normal | 1.0× |
-| Fair | 1.25× |
-| Serious | 2.0× |
-| Critical | 2.0×+ |
+| Normal | 1.0 |
+| Fair | 1.25 |
+| Serious | 1.75 |
+| Critical | 2.0 |
 
-WES is thermally-honest tok/watt. When a node is healthy, WES ≈ tok/watt. When throttling, WES is lower — the gap is exactly how much efficiency heat is costing you.
+### Why It Exists
 
----
+Wattage/1K Tokens tells you what inference costs right now. WES tells you how efficiently the hardware is being used at its current thermal state. Without the thermal penalty, a throttled node looks artificially efficient — it's generating fewer tokens on less power, but the hardware is working far below its true capability.
 
-## The 14 Insights
+WES is Wicklee's coined fleet efficiency standard. The concept is aligned with the Stanford / Together AI "Intelligence per Watt" framework (arXiv:2511.07885, Nov 2025), which proposes normalizing AI output quality by energy consumed. WES applies that lens at the operator layer: real tokens, real hardware, real thermal conditions.
 
----
+### Real Fleet Measurements
 
-### Tier 1 — Active Alerts · Community · All Nodes
-
-> Real-time detection from a single SSE frame. No history required. Available to all users.
-
----
-
-#### 1. Thermal Degradation
-
-**Derivation:** `thermal_state` transitions to `Serious` or `Critical` AND `tok/s` drops >15% from the session baseline (rolling 5-sample mean from session start).
-
-**Data sources:** `thermal_state` (pmset / NVML) · `ollama_tokens_per_second` + `vllm_tokens_per_sec`
-
-**Session baseline:** computed from the first 5 tok/s samples after agent connect; reset on reconnect.
-
-**Card state:** Fires when both conditions are true simultaneously. Dismissed when thermal returns to Normal or tok/s recovers within 15% of baseline.
-
-**Alerting:** Dashboard card (Community) · Slack delivery (Pro+)
-
-**Existing component:** `src/components/insights/tier1/ThermalDegradationCard.tsx` ✅
-
----
-
-#### 2. Power Anomaly
-
-**Derivation:** `current_watts > 2 × idle_watts` AND `gpu_utilization < 20%`.
-
-**Data sources:** `cpu_power_w` + `nvidia_power_draw_w` (board total) · `nvidia_gpu_utilization_percent` or `gpu_utilization_percent`
-
-**Idle baseline:** lowest 5-sample rolling min of `watts` during the current session.
-
-**Card state:** Fires on sustained anomaly (>60s). High wattage at low GPU% indicates a background process consuming power without doing inference work.
-
-**Alerting:** Dashboard card (Community) · Slack after 5-min sustained anomaly (Pro+)
-
-**Existing component:** `src/components/insights/tier1/PowerAnomalyCard.tsx` ✅
-
----
-
-#### 3. Memory Exhaustion
-
-**Derivation:** `available_mem - model_size < 10% of total_mem`.
-
-**Data sources:** `used_memory_mb` / `total_memory_mb` / `memory_pressure_percent` · `ollama_model_size_gb` (from Ollama `/api/ps`)
-
-**Apple Silicon note:** Unified memory serves both CPU and GPU. `memory_pressure_percent` from `vm_stat` is the primary signal; model size from Ollama `/api/ps`.
-
-**Card state:** Warning card when headroom < 10%. Dismissed when headroom recovers above 15%.
-
-**Alerting:** Dashboard card (Community) · Slack at configurable threshold (Pro+, default 10%)
-
-**Existing component:** `src/components/insights/tier1/MemoryExhaustionCard.tsx` ✅
-
----
-
-### Tier 2 — Advisory · Pro · Up to 10 Nodes · 7-Day History
-
-> Persistent cards that survive session reconnects. Some cards require accumulated history to activate — show "Collecting data…" state until threshold met.
-
----
-
-#### 4. Model Fit Score
-
-**Derivation:**
-- **Poor:** `model_size > available_vram` OR memory headroom < 10%
-- **Fair:** memory headroom < 30% OR thermal state = Fair
-- **Good:** memory headroom > 30% AND thermal Normal
-
-**Data sources:** `ollama_model_size_gb` (from `/api/ps`) · `nvidia_vram_used_mb` / `nvidia_vram_total_mb` · `memory_pressure_percent` · `thermal_state`
-
-**History required:** No — computed from current frame.
-
-**Card state:** Always shown when a model is loaded. Score degrades in real time as memory pressure increases or thermal worsens.
-
-**Alerting:** Dashboard card (Pro) · Slack when score degrades to Poor (Pro+)
-
-**Existing component:** `src/components/insights/tier2/ModelFitInsightCard.tsx` ✅
-
----
-
-#### 5. Model Eviction Prediction
-
-**Derivation:** `(ollama_keep_alive_seconds - time_since_last_request_s) < 120`.
-
-**Data sources:** Ollama `/api/ps` — exposes `expires_at` per loaded model. `time_since_last_req` derived from `expires_at` and `keep_alive` without request proxying.
-
-**No proxy required:** Ollama tracks last-request time internally and surfaces it via `/api/ps`. Wicklee reads this directly.
-
-**Card state:** Warning shown when eviction is predicted within 2 minutes. Keep Warm toggle available (Pro: 1 node, Team+: all fleet nodes).
-
-**Keep Warm mechanics:** On predicted eviction, Wicklee sends a silent 3-token pulse with `keep_alive: -1` to reset the expiry timer. Logged in Live Activity with timestamp and model name.
-
-**Alerting:** Warning card (Pro) · Keep Warm action (Pro: single node, Team+: all nodes)
-
-**Existing component:** `src/components/insights/tier2/ModelEvictionCard.tsx` ✅
-
----
-
-#### 6. Idle Resource Cost
-
-**Derivation:** `idle_watts × PUE × kwh_rate × 24` = $/day. Only fires when node has been idle (no active inference) for > 1 hour.
-
-**Data sources:** `cpu_power_w` / `nvidia_power_draw_w` · per-node `kwhRate` + `pue` from Settings · `ollama_tokens_per_second` (to confirm idle state)
-
-**Idle threshold:** No tok/s activity for > 60 continuous minutes.
-
-**History required:** No — computed from current power draw.
-
-**Card state:** Shows projected 24h cost from current idle draw. Dismissed when inference becomes active.
-
-**Alerting:** Dashboard card (Pro) · Weekly idle cost digest via Slack (Team+)
-
-**Existing component:** `src/components/insights/tier2/IdleResourceCard.tsx` ✅
-
----
-
-#### 7. WES Peer Leaderboard
-
-**Derivation:** Flags a node if its `current_WES < 80% of fleet_avg_WES` across nodes running identical hardware.
-
-**Hardware matching:** Nodes grouped by `chip_name` (Apple Silicon) or `gpu_name` (NVIDIA). Only nodes in the same hardware group are compared.
-
-**Data sources:** Per-node `wes` · `chip_name` / `gpu_name` from telemetry · 7-day WES history (DuckDB)
-
-**History required:** 7-day history for trend context (shows "Collecting data…" until threshold met). Live peer comparison available immediately.
-
-**Card state:** Flags underperforming nodes. A same-hardware node running below fleet peers is a signal of thermal paste degradation, background processes, or VRAM fragmentation.
-
-**Alerting:** Dashboard card (Pro) · Slack when a node drops below 80% of hardware-group WES (Pro+)
-
-**Component:** `src/components/insights/tier2/WESPeerLeaderboardCard.tsx` 🔲 Pending
-
----
-
-### Tier 3 — Advanced Intelligence · Team · Unlimited Nodes · 90-Day History
-
-> Trend and regression analysis. All cards require historical data from DuckDB. Show "Collecting history…" state for new Team subscribers until minimum history is met.
-
----
-
-#### 8. Efficiency Regression
-
-**Derivation:** `current_WES < 85% of 7_day_avg_WES` where thermal state is Normal (filters out thermal-caused regressions, which are covered by Insight #1).
-
-**Data sources:** Per-node WES time-series (DuckDB, 7-day window) · `thermal_state` (to exclude throttling events from baseline)
-
-**History required:** 7 days minimum. "Collecting history…" state below threshold.
-
-**Card state:** Shows current WES vs 7-day baseline with delta. Triggered when degradation is statistically significant and not thermally explained.
-
-**Alerting:** Dashboard card (Team) · Slack when regression >20% vs 7-day baseline
-
-**Component:** `src/components/insights/tier3/EfficiencyRegressionCard.tsx` 🔲 Pending
-
----
-
-#### 9. Memory Forecast
-
-**Derivation:** Linear regression of `memory_pressure_percent` over the last 60 minutes. Projects time to 90% saturation.
-
-**Data sources:** `memory_pressure_percent` time-series (DuckDB) · `total_memory_mb` · `ollama_model_size_gb`
-
-**History required:** 60 minutes of samples for regression. "Collecting data…" until threshold met.
-
-**Card state:** Shows ETA to critical pressure with a mini sparkline of the pressure trajectory. Only fires when slope is positive (pressure is rising).
-
-**Alerting:** Dashboard card (Team) · Slack at 15-min ETA · Slack at 5-min ETA (cannot disable)
-
-**Component:** `src/components/insights/tier3/MemoryForecastCard.tsx` 🔲 Pending
-
----
-
-#### 10. Quantization ROI
-
-**Derivation:** `historical_WES(Q4) > 1.25 × current_WES(Q8)` — fires when Q4 quantization shows >25% better WES than the current Q8 run on the same hardware.
-
-**Data sources:** Per-model, per-quantization WES and tok/s history (DuckDB) · `ollama_active_model` (quantization detected from model name suffix)
-
-**History required:** Both quantizations must have been run on this node within the 90-day window. "No comparison data" state otherwise — this is a point-in-time comparison, not a live condition.
-
-**Card state:** Side-by-side WES and tok/s for each quantization with hardware context. Actionable recommendation: switch to Q4 to recover X% efficiency.
-
-**Alerting:** Dashboard card only (Team) — no alert delivery
-
-**Component:** `src/components/insights/tier3/QuantizationROICard.tsx` 🔲 Pending
-
----
-
-#### 11. Hardware Cold Start
-
-**Derivation:** Pattern match on three simultaneous transitions within a 10-second window:
-1. `gpu_utilization`: 0% → ≥80%
-2. VRAM / unified memory: near-zero → approximately `model_size`
-3. Power draw: idle level → inference level (≥1.5× idle)
-
-**Data sources:** `gpu_utilization_percent` · `nvidia_vram_used_mb` or `memory_pressure_percent` · `cpu_power_w` + `nvidia_power_draw_w` — all hardware telemetry, no request proxying required.
-
-**No proxy required:** Detection is fully hardware-metric-based. TTFT is not used (proxy dependency removed from earlier spec versions).
-
-**History required:** No for live detection. DuckDB used for cold start frequency analysis over 90-day window.
-
-**Card state:** Live Activity event on each detection. Insight card shows cold start frequency and average model load duration over 90-day window.
-
-**Alerting:** Live Activity event (Team) · Slack on >3 cold starts/day (Team+)
-
-**Component:** `src/components/insights/tier3/ColdStartCard.tsx` 🔲 Pending
-
----
-
-#### 12. Fleet Thermal Diversity
-
-**Derivation:** Percentage of fleet nodes in `Serious` or `Critical` thermal state.
-- **Healthy:** 0% of nodes throttling
-- **Stressed:** >25% of nodes at Serious
-- **Critical:** >50% of nodes at Serious or Critical
-
-**Data sources:** `thermal_state` per node across all paired fleet nodes — live telemetry.
-
-**History required:** No for live score. DuckDB used for 90-day thermal trend view.
-
-**Card state:** Live fleet health score with per-state breakdown. Trend sparkline over 90-day window.
-
-**Alerting:** Dashboard card (Team) · Slack when fleet reaches Stressed threshold (Team+)
-
-**Component:** `src/components/insights/tier3/FleetThermalDiversityCard.tsx` 🔲 Pending
-
----
-
-#### 13. Inference Density
-
-**Derivation:** Visualization of active vs. idle nodes across the fleet. Active inference = amber pulse. Idle = dim gray. Throttling = red.
-
-**Data sources:** `ollama_tokens_per_second` / `vllm_tokens_per_sec` · `gpu_utilization_percent` · `thermal_state` — all live telemetry.
-
-**History required:** No for live view. DuckDB used for historical density playback (Team+).
-
-**Note on live view:** The live hive plot already ships in Fleet Intelligence at the Community tier. The Inference Density insight card at Team tier adds: historical density playback over the 90-day window, peak inference hour analysis, and node utilization heatmap by time-of-day.
-
-**Alerting:** None — visualization only.
-
-**Component:** `src/components/insights/tier3/InferenceDensityCard.tsx` 🔲 Pending (live hive: `HexHive.tsx` ✅)
-
----
-
-### Tier 4 — Sovereignty · Enterprise · Custom / Airgapped
-
-> Compliance-layer insights. Enterprise only. Requires Sovereign Mode or airgapped deployment.
-
----
-
-#### 14. Sovereignty Audit
-
-**Derivation:** Verifies `telemetry_logs` against an operator-defined IP/Domain allowlist. Detects any outbound connections from the agent not in the allowlist.
-
-**Data sources:** Agent outbound connection log · operator-configured allowlist (IP ranges + domains) · pairing event timestamps
-
-**Card state:** Compliance posture score — Green (all telemetry within allowlist) / Amber (unrecognized destinations) / Red (allowlist violations). Full signed audit trail.
-
-**Artifact:** Cryptographically signed PDF export (ECDSA). Report includes: node inventory, metric history summary, egress event log, data residency map, audit window timestamps. CISO-ready compliance artifact.
-
-**Alerting:** Dashboard card + webhook to SIEM on allowlist violation (Enterprise)
-
-**Component:** `src/components/insights/tier4/SovereigntyAuditCard.tsx` 🔲 Pending
-
----
-
-## UI Tab Organization
-
-### 1. The Global Status Rail
-
-A full-width bar with a 1px bottom border — always pinned at the top of the Insights tab, never hidden. Two distinct states.
-
-#### Nominal State — fleet healthy, no insights firing
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  ●  ALL SYSTEMS NOMINAL          FLEET WES: 42.1  ·  NODES: 3   │
-└──────────────────────────────────────────────────────────────────┘
-```
-- Background: `gray-900` with `border-b border-gray-800`
-- Left: pulsing green dot (`animate-pulse text-green-500`) + `"ALL SYSTEMS NOMINAL"` in `font-telin text-xs tracking-widest text-gray-400`
-- Center / right: stats ticker — `FLEET WES: 42.1 · REACHABLE NODES: 3` in `font-telin text-xs text-gray-600`
-- The rail is always present. The nominal state is the proof the system is watching.
-
-#### Active State — one or more insights firing
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  █  THERMAL THROTTLING DETECTED ON WK-1EFC  |  POWER ANOMALY — WK-A07 — 11 min ago  │
-└──────────────────────────────────────────────────────────────────┘
-```
-- Background changes to `amber-950` (warning) or `red-950` (critical) — full-width, not a side strip
-- High-contrast white text: `font-telin text-xs uppercase tracking-widest text-white`
-- Alert format: `INSIGHT NAME — NODE-ID — elapsed time` — multiple alerts separated by ` | `
-- Each alert is an anchor link scrolling to its card in the grid below
-- `animate-pulse` on the background or a left accent bar for urgency
-- Dismissible per-alert: sessionStorage for Community; server-side for Pro+
-
----
-
-### 2. The Grid: "The Triage of Intelligence"
-
-Below the Status Rail, a **3-column responsive grid** in three named sections representing the user's data "depth." Cards are **never hidden** — lower-tier users always see every card; locked cards render as teaser shells with upgrade CTA.
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  [GLOBAL STATUS RAIL — always visible]                           │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  SECTION 1 — OPERATIONAL SIGNALS  [Community]                    │
-│                                                                  │
-│  Alert Trio — stacked dormant list (expands on fire):            │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │  🌡  Thermal Degradation    ●  Monitoring   68°C peak    │    │
-│  ├──────────────────────────────────────────────────────────┤    │
-│  │  ⚡  Power Anomaly           ●  Monitoring   142W        │    │
-│  ├──────────────────────────────────────────────────────────┤    │
-│  │  🧠  Memory Exhaustion       ●  Monitoring   71% VRAM   │    │
-│  └──────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Health Indicators — always full cards (3-col):                  │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │ 🎯 Model Fit   │  │ 📊 WES         │  │ 🔬 Inference   │      │
-│  │ Score          │  │ Leaderboard    │  │ Density (live) │      │
-│  │ [lite → Pro]   │  │ [lite → Pro]   │  │ [HexHive]      │      │
-│  └────────────────┘  └────────────────┘  └────────────────┘      │
-│                                                                  │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  SECTION 2 — AUTOMATION & COST  [Pro]                            │
-│  ┌────────────────────────┐  ┌────────────────────────┐          │
-│  │ 🔄 Model Eviction      │  │ 💤 Idle Resource Cost  │          │
-│  │ EVICTION IN 02:45      │  │ -$1.42 / Day (Idle)    │          │
-│  │ [KEEP WARM ⚙]  [Pro]   │  │ [lock: Pro CTA]        │          │
-│  └────────────────────────┘  └────────────────────────┘          │
-│                                                                  │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  SECTION 3 — ANALYTICS & FORENSICS  [Team / Enterprise]          │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │ 📉 Efficiency  │  │ 💾 Memory      │  │ ⚖️ Quant ROI   │      │
-│  │ Regression     │  │ Forecast       │  │                │      │
-│  │ ████░░░ 4/7d   │  │ [lock: Team]   │  │ [lock: Team]   │      │
-│  └────────────────┘  └────────────────┘  └────────────────┘      │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │ 🚀 Cold Start  │  │ 🌐 Fleet       │  │ 🔬 Inference   │      │
-│  │                │  │ Thermal Div    │  │ Density (hist) │      │
-│  │ [lock: Team]   │  │ [lock: Team]   │  │ [hive thumb]   │      │
-│  └────────────────┘  └────────────────┘  └────────────────┘      │
-│  ┌────────────────┐                                               │
-│  │ 🛡 Sovereignty  │                                              │
-│  │ Audit           │                                             │
-│  │ [lock: Ent.]    │                                             │
-│  └────────────────┘                                              │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-#### Section 1 — Operational Signals (Community)
-
-**Alert Trio (Thermal, Power, Memory):** Rendered as a stacked list, not a 3-column grid. In nominal state each row is a compact ~32px dormant monitor bar showing current reading and a green dot. When a condition fires, that row expands in-place to the full alert card with split-graph visualization. Not hidden when nominal — the dormant state communicates active monitoring and keeps layout stable.
-
-| Dormant (nominal) | Firing |
-|---|---|
-| `🌡 Thermal Degradation  ● Monitoring  68°C peak` | Full card: temp-rising / WES-falling split graph |
-| `⚡ Power Anomaly  ● Monitoring  142W` | Full card: power spike chart + anomaly reason |
-| `🧠 Memory Exhaustion  ● Monitoring  71% VRAM` | Full card: VRAM fill gauge + pressure stage |
-
-**Health Indicators (Model Fit, WES Leaderboard, Inference Density live):** Always full-card height, 3-column. The live `HexHive` hive plot for Inference Density occupies the third slot — it's always valuable even without unlock.
-
-| Card | Community | Pro | Team |
-|---|---|---|---|
-| Model Fit Score (#4) | Lite: score label only, no history | ✅ Full | ✅ Full |
-| WES Leaderboard (#7) | Lite: top-3 ranking only, no sparklines | ✅ Full | ✅ Full |
-| Inference Density live (#13) | ✅ Live HexHive (always) | ✅ Live HexHive | ✅ Full (+ historical) |
-
-**Lite view rationale:** Showing a single number at Community is honest, non-deceptive, and drives upgrade curiosity ("how do I see the full history?").
-
-#### Section 2 — Automation & Cost (Pro)
-
-Intentionally lean — two cards. Pro users get exactly what they're paying for: actionable automation and cost visibility. Community sees both as locked shells with specific upgrade copy.
-
-| Card | Key Interaction | Locked State Copy |
-|---|---|---|
-| Model Eviction (#5) | Countdown timer: `EVICTION IN 02:45`. Pro: KEEP WARM toggle. | "Upgrade to Pro for Keep Warm →" |
-| Idle Resource Cost (#6) | Dollar ticker: `-$1.42 / Day (Idle)`. | "Upgrade to Pro to track facility overhead and PUE waste →" |
-
-#### Section 3 — Analytics & Forensics (Team / Enterprise)
-
-Six Team-gated cards + one Enterprise card. Locked cards here are the product roadmap — six visible reasons to upgrade. The Inference Density historical card shows a thumbnail of the hive plot in its locked state — enough visual context to make the unlock feel concrete.
-
-| Card | Collecting State | Locked Copy |
-|---|---|---|
-| Efficiency Regression (#8) | Circular progress: `4/7 days collected` | "Unlock 7-day WES baseline analysis →" |
-| Memory Forecast (#9) | `Collecting memory trajectory…` | "Unlock predictive memory warnings →" |
-| Quantization ROI (#10) | `Run both quants on this node to enable` | "Compare Q4 vs Q8 on your actual hardware →" |
-| Cold Start (#11) | Live detection immediate; `historical in ~X days` | "Track cold start frequency over time →" |
-| Fleet Thermal Diversity (#12) | Live badge immediate; trend needs history | "Unlock fleet thermal cascade risk →" |
-| Inference Density historical (#13) | `Historical playback in ~X days` | Shows hive thumbnail + "Unlock Peak-Hour Analysis →" |
-| Sovereignty Audit (#14) | — | "Available on Enterprise →" (full locked shell) |
-
----
-
-### 3. Card Anatomy (The "So What" Design)
-
-Each card follows a strict four-zone layout. The top line carries the identity; the center delivers the signal; the bottom demands an action.
-
-```
-┌──────────────────────────────────────┐
-│  [Icon]  Insight Name     [Pro badge]│  ← Top: identity + tier badge (top-right)
-├──────────────────────────────────────┤
-│                                      │
-│         HEADLINE VALUE               │  ← Center: the single most important number
-│         or ALERT CONDITION           │     or state (large, font-telin)
-│                                      │
-│  Supporting context line             │  ← Sub: one-liner explanation
-│                                      │
-├──────────────────────────────────────┤
-│  [CTA button or action text →]       │  ← Bottom: actionable next step
-└──────────────────────────────────────┘
-```
-
-**Zone specs:**
-- **Top Left:** `icon (16px Lucide) + text-xs uppercase tracking-widest text-gray-500` insight name
-- **Top Right:** Tier badge — `text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded` in tier color; hidden for Community cards
-- **Center:** `font-telin text-2xl font-bold` — headline value or alert state; `text-red-400` when firing, `text-gray-200` when live/nominal
-- **Sub:** `text-xs text-gray-500` — context line (units, node name, delta direction)
-- **Bottom CTA:** `text-xs text-indigo-400 hover:text-indigo-300` — "View history →", "Upgrade to Pro →", "Collecting baseline…"
-
-**Locked card treatment:**
-- Full card chrome rendered (same dimensions, same position in grid)
-- Center body area: `opacity-30` blur overlay with `🔒` icon centered
-- Bottom CTA replaced with: `"Available on [Tier] →"` linking to billing/upgrade flow
-- **No mock or sample data** — the one-liner description is sufficient context without misleading operators
-
-**Collecting card treatment** (tier unlocked, history insufficient):
-- Center: circular progress indicator + `"Collecting — X days remaining"` in `font-telin text-xs text-gray-500`
-- Bottom CTA: none (user is waiting, not being asked to act)
-- Distinct from Locked — user has paid; this is a time gate, not a tier gate
-
----
-
-### 4. Card States Reference
-
-| State | Trigger | Visual Treatment |
-|---|---|---|
-| **Live / Nominal** | Insight computing, no condition active | Headline value in `text-gray-200`; left border `border-gray-700` |
-| **Firing** | Active condition right now | Left border `border-red-500` or `border-amber-500`; headline in `text-red-400`; card also listed in Global Status Rail |
-| **Collecting** | Tier unlocked, history insufficient | Circular progress in center; `text-gray-500` copy; no CTA |
-| **Locked** | User tier below gate | Blurred center, lock icon, tier badge, upgrade CTA |
-| **Lite** | Community viewing a Pro/Team card with partial data | Full card chrome, reduced data density, "Upgrade to unlock full view →" CTA |
-| **Unavailable** | Required data source absent | `"— no power data"` / `"— no GPU telemetry"` in `text-gray-600` |
-
----
-
-### 5. Mobile Responsiveness
-
-- **Global Status Rail:** Fixed to top of viewport on mobile. Never scrolls away. Full-bg color change animates on fire.
-- **Grid:** Collapses from 3-column → 1-column at `sm` breakpoint. Section headers remain as sticky labels.
-- **Locked cards:** Pushed to bottom of their section (not interleaved with live cards). On mobile, section order is preserved but locked cards form a collapsed "Upgrade to unlock X more insights →" expandable row.
-- **Card height:** Uniform row height within each section on desktop; auto-height on mobile.
-
----
-
-### 6. Upgrade Prompt on Alert Delivery
-
-For Community users when a Tier 1 card fires, inline CTA below the card body:
-```
-⚠ Thermal Degradation on WK-C133
-  Upgrade to Pro to receive Slack alerts →
-```
-
----
-
-## Gating Implementation
-
-### `usePermissions` Mapping
-
-```typescript
-// insightsTier from usePermissions (see TIERS.md)
-type InsightsTier = 'live_session' | 'persistent' | 'trend' | 'predictive';
-
-const INSIGHT_TIER_GATE: Record<number, InsightsTier> = {
-  1:  'live_session',   // Thermal Degradation        — Community
-  2:  'live_session',   // Power Anomaly              — Community
-  3:  'live_session',   // Memory Exhaustion          — Community
-  4:  'persistent',     // Model Fit Score            — Pro
-  5:  'persistent',     // Model Eviction             — Pro
-  6:  'persistent',     // Idle Resource Cost         — Pro
-  7:  'persistent',     // WES Peer Leaderboard       — Pro
-  8:  'trend',          // Efficiency Regression      — Team
-  9:  'trend',          // Memory Forecast            — Team
-  10: 'trend',          // Quantization ROI           — Team
-  11: 'trend',          // Hardware Cold Start        — Team
-  12: 'trend',          // Fleet Thermal Diversity    — Team
-  13: 'trend',          // Inference Density (hist.)  — Team
-  14: 'predictive',     // Sovereignty Audit          — Enterprise
-};
-
-const TIER_ORDER: InsightsTier[] = [
-  'live_session', 'persistent', 'trend', 'predictive'
-];
-
-function canViewInsight(insightId: number, userTier: InsightsTier): boolean {
-  const required = INSIGHT_TIER_GATE[insightId];
-  return TIER_ORDER.indexOf(userTier) >= TIER_ORDER.indexOf(required);
-}
-```
-
-### History-Gated Cards
-
-Cards where the tier is unlocked but data hasn't accumulated yet. These render as "Collecting" state — not "Locked". The user has paid; they just need to wait.
-
-| Insight | Min History | "Collecting" Message |
-|---|---|---|
-| WES Peer Leaderboard (#7) | 1 day | "Collecting baseline — available in ~X hours" |
-| Efficiency Regression (#8) | 7 days | "Collecting 7-day WES baseline — available in ~X days" |
-| Memory Forecast (#9) | 1 hour | "Collecting memory trajectory…" |
-| Quantization ROI (#10) | Both quants run | "Run both quantizations on this node to enable comparison" |
-| Cold Start history (#11) | 7 days (history view) | Live detection available now; historical frequency in ~X days |
-| Inference Density history (#13) | 7 days | Live hive available now; density playback in ~X days |
-
-### Alert Delivery Gate
-
-Alert delivery is separately gated from card visibility. Community sees the card; Slack/PagerDuty delivery gates to Pro+ per TIERS.md alerting tier.
-
----
-
-## Component Inventory
-
-| Component | Tier | Status |
-|---|---|---|
-| `InsightCard.tsx` | base | ✅ Shipped |
-| `ModelFitCard.tsx` | base | ✅ Shipped |
-| `tier1/ThermalDegradationCard.tsx` | 1 | ✅ Shipped |
-| `tier1/PowerAnomalyCard.tsx` | 1 | ✅ Shipped |
-| `tier1/MemoryExhaustionCard.tsx` | 1 | ✅ Shipped |
-| `tier2/ModelFitInsightCard.tsx` | 2 | ✅ Shipped |
-| `tier2/ModelEvictionCard.tsx` | 2 | ✅ Shipped |
-| `tier2/IdleResourceCard.tsx` | 2 | ✅ Shipped |
-| `tier2/WESPeerLeaderboardCard.tsx` | 2 | 🔲 Pending |
-| `tier3/EfficiencyRegressionCard.tsx` | 3 | 🔲 Pending |
-| `tier3/MemoryForecastCard.tsx` | 3 | 🔲 Pending |
-| `tier3/QuantizationROICard.tsx` | 3 | 🔲 Pending |
-| `tier3/ColdStartCard.tsx` | 3 | 🔲 Pending |
-| `tier3/FleetThermalDiversityCard.tsx` | 3 | 🔲 Pending |
-| `tier3/InferenceDensityCard.tsx` | 3 | 🔲 Pending (live: `HexHive.tsx` ✅) |
-| `tier4/SovereigntyAuditCard.tsx` | 4 | 🔲 Pending |
-| `InsightLockedCard.tsx` | gate wrapper | 🔲 Pending |
-| `InsightsTab.tsx` | tab orchestrator | 🔲 Pending |
-| `InsightsFiringStrip.tsx` | firing strip (dual state) | 🔲 Pending |
-| `InsightsLiteCard.tsx` | lite/partial-data wrapper | 🔲 Pending |
-
----
-
-## Delivery Reference
-
-| # | Insight | Tier | History Req. | Shipped | Alerting |
+| Hardware | Model | tok/s | Watts | Thermal | WES |
 |---|---|---|---|---|---|
-| 1 | Thermal Degradation | Community | None | ✅ | Slack (Pro+) |
-| 2 | Power Anomaly | Community | None | ✅ | Slack 5-min debounce (Pro+) |
-| 3 | Memory Exhaustion | Community | None | ✅ | Slack at threshold (Pro+) |
-| 4 | Model Fit Score | Pro | None | ✅ | Slack on Poor (Pro+) |
-| 5 | Model Eviction | Pro | None | ✅ | Keep Warm action |
-| 6 | Idle Resource Cost | Pro | None | ✅ | Weekly digest (Team+) |
-| 7 | WES Peer Leaderboard | Pro | 1 day | 🔲 | Slack <80% peer (Pro+) |
-| 8 | Efficiency Regression | Team | 7 days | 🔲 | Slack >20% regression |
-| 9 | Memory Forecast | Team | 1 hour | 🔲 | Slack 15-min + 5-min ETA |
-| 10 | Quantization ROI | Team | Both quants | 🔲 | None |
-| 11 | Hardware Cold Start | Team | None (live) | 🔲 | Slack >3/day |
-| 12 | Fleet Thermal Diversity | Team | None (live) | 🔲 | Slack at Stressed |
-| 13 | Inference Density (hist.) | Team | 7 days | 🔲 | None |
-| 14 | Sovereignty Audit | Enterprise | Full window | 🔲 | SIEM / webhook |
+| Apple M2 | llama3.1:8b | 108.9 | 0.6W | Normal | **181.5** |
+| Ryzen 9 7950X | llama3.1:8b | 17.3 | 32.5W (idle probe) | Normal | **0.53** |
+| Ryzen 9 7950X | llama3.1:8b | 17.1 | 121.2W (load) | Normal | **0.14** |
+
+Apple Silicon is approximately 340× more WES-efficient than CPU-only inference on the same model.
+
+### Display
+
+WES is shown as a unitless score to one decimal place: "WES 181.5". When tok/s or power data is unavailable, it shows "—". Higher is always better.
+
+### Which Insights Use WES
+
+WES is the primary input to three of the 15 insights:
+- **#2** — Wattage-per-Token ROI / Fleet WES Leaderboard: ranks nodes by WES live across heterogeneous hardware
+- **#3** — Thermal Degradation Correlation: WES drop quantifies the causal chain (temperature rise → efficiency loss)
+- **#10** — Fleet Thermal Diversity Score: thermal penalty distribution drives the fleet health calculation
 
 ---
 
-*Last updated: March 13, 2026. Source of truth for the Insights tab and InsightCard scaffolding.*
+## The 15 Insights
+
+### #1 — Unified Memory Exhaustion Warning
+**Tagline:** Warns before the swap storm hits — not after.
+
+Activity Monitor shows memory pressure but has no inference context. It doesn't know your 70B model needs 40GB and you have 2GB of headroom. Wicklee correlates `ollama_model_size_gb` + `available_memory_mb` + `memory_pressure_percent` and warns before the model starts swapping — which manifests as a catastrophic tok/s collapse invisible to any other tool.
+
+- **Where:** Local Intelligence tab — warning card
+- **Data:** Ollama model size + vm_stat / /proc/meminfo + memory pressure %
+- **Free:** Warning card shown
+- **Paid:** Slack alert when headroom < configurable threshold (default 10%)
+- **Phase:** 3A
+
+---
+
+### #2 — Fleet WES Leaderboard (Wattage-per-Token ROI Across Heterogeneous Fleet)
+**Tagline:** Which node is most WES-efficient for this model right now? Live answer across mixed hardware.
+
+Nobody knows this today without manual math. An M3 Max, RTX 4090, and Ryzen 9 7950X running the same model have vastly different efficiency profiles. Wicklee is the only tool that can answer this question live because it owns both power draw (NVML board power / RAPL) and token throughput (Ollama probe) simultaneously — and applies the ThermalPenalty to give a true efficiency score, not just a raw cost number.
+
+**WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)**
+
+Real measurements from the Wicklee fleet:
+- Apple M2 · llama3.1:8b · 5.4W/1K TKN · **WES 181.5**
+- Ryzen 9 7950X · llama3.1:8b · 2,080W/1K TKN (idle probe) · **WES 0.53**
+- RTX 4090 · llama3.1:8b · ~2,900W/1K TKN (estimated)
+
+Apple Silicon is ~340× more WES-efficient than CPU-only inference on the same model. A thermally stressed high-end node can have a lower WES than a clean mid-range node — raw tok/s alone doesn't tell you this.
+
+- **Where:** Fleet Intelligence panel — Fleet WES Leaderboard card
+- **Data:** NVML board power / RAPL + Ollama tok/s + thermal state — live on all nodes
+- **Free:** View current leaderboard (WES-ranked)
+- **Paid:** Historical trend, alerts on WES regression
+- **Phase:** 3A — data exists now ✅
+
+---
+
+### #3 — Thermal Degradation Correlation
+**Tagline:** The causal chain invisible everywhere else: temperature rise → tok/s drop, quantified and named.
+
+A node at 89°C isn't just "hot" — its tok/s has silently dropped 30–40% due to throttling. Standard monitoring shows temperature and throughput as separate unrelated metrics. Wicklee can correlate them: "Node WK-C133 dropped from 42 tok/s to 28 tok/s four minutes after thermal state changed to Serious." That causal chain is invisible everywhere else.
+
+- **Where:** Local Intelligence tab — named insight card with before/after tok/s, causal chain, recommendation
+- **Data:** Thermal state transitions + tok/s 30s probe — both live now
+- **Free:** Session-scope detection, insight card shown
+- **Paid:** Trend analysis, Slack alert on confirmed degradation event
+- **Phase:** 3A — data exists now ✅
+
+---
+
+### #4 — Idle Fleet Cost Visibility
+**Tagline:** Teams leave GPU nodes running 24/7. Nobody knows what that costs. Wicklee shows it live.
+
+Across a 4-node fleet, idle power draw can represent $200–400/month in electricity that nobody is tracking. Wicklee surfaces idle power per node continuously, with a PUE multiplier for accurate datacenter cost.
+
+**Formula:** `idle_watts × pue × 24hrs × (kwh_rate / 1000) = $/day`
+
+**PUE Multiplier** (configurable in Settings):
+- Home lab / desktop: 1.0 (no overhead)
+- Standard datacenter: 1.4–1.6
+- Hyperscale colo: 1.1–1.2
+
+UI shows: "Node: $X.XX/day · Facility: $Y.YY/day (PUE 1.4)" — math always visible.
+
+- **Where:** Fleet Overview — 8th summary card + Local Intelligence idle notice
+- **Data:** Idle board power / RAPL per node + kWh rate + PUE setting
+- **Free:** Live idle cost card
+- **Paid:** Weekly cost digest via Slack
+- **Phase:** 3A — data exists now ✅
+
+---
+
+### #5 — Model-to-Hardware Fit Score
+**Tagline:** "Llama-3-70B on 8GB M2: Poor fit. Recommended: Llama-3-8B-Q4 or add a node."
+
+When Ollama reports the loaded model and Wicklee knows the hardware specs, it can surface a fit score: does this hardware have enough VRAM/unified memory headroom to run this model without thrashing? No tool does this today — it requires owning both the hardware telemetry and the runtime context simultaneously.
+
+**Scoring:**
+- ✅ **Good:** Model fits with >20% memory headroom, thermal Normal
+- 🟡 **Fair:** Model fits but memory pressure >60% or thermal Fair
+- 🔴 **Poor:** Memory headroom <10%, thermal Serious, or model exceeds VRAM
+
+- **Where:** Local Intelligence tab — always shown when a model is loaded
+- **Data:** Ollama model size + available unified/VRAM memory + thermal state + memory pressure
+- **Free:** Fit score card with recommendation
+- **Paid:** Alert when fit score degrades to Poor
+- **Phase:** 3A — data exists now ✅
+
+---
+
+### #6 — Cross-Node Inference Routing (Sentinel Proxy)
+**Tagline:** Route each request to the currently most efficient node. Novel routing strategy — doesn't exist in any inference proxy today.
+
+When Wicklee knows the live W/1K TKN for every node in the fleet, it can route each incoming inference request to whichever node is currently the most cost-efficient. This isn't round-robin — it's efficiency-aware routing that dynamically shifts with thermal state, load, and model fit. The policy options include `lowest-watt-per-token`, `lowest-thermal`, `lowest-load`, and `pinned`.
+
+- **Where:** Phase 5 — Sentinel Proxy architectural component (separate from dashboard)
+- **Data:** Live W/1K TKN + thermal state + VRAM headroom + queue depth
+- **Free:** No
+- **Paid:** Enterprise tier
+- **Phase:** Phase 5 — requires Sentinel Proxy
+
+---
+
+### #7 — Inference-Aware Memory Pressure Forecasting
+**Tagline:** "At current rate, this node hits critical memory pressure in ~7 minutes." Predictive, with inference context.
+
+Standard memory tools show current state. Wicklee can show trajectory — if memory pressure is at 65% and rising 2% per minute under current load, with a 40GB model loaded, the swap storm arrives in ~7 minutes. No tool does predictive pressure forecasting with inference context because it requires owning the time-series data AND knowing what model is loaded.
+
+- **Where:** Local Intelligence tab — Forecast card with ETA countdown
+- **Data:** Memory pressure time-series (DuckDB) + rate of change + model size loaded
+- **Free:** No
+- **Paid:** Team Edition — Slack alert at 15min and 5min ETA thresholds
+- **Phase:** Phase 4A — requires DuckDB history
+
+---
+
+### #8 — Cold Start Detection
+**Tagline:** GPU spike + VRAM jump = cold start. Hardware-pattern detection — no proxy or TTFT required.
+
+The first inference request after a model loads is always slower — model weights are paging into memory. Standard monitoring sees GPU utilization spike, VRAM jump, and slow response as three unrelated metric events. Wicklee identifies the causal hardware pattern: cold start event, with timestamp and duration — no HTTP proxy or TTFT interception required. Sentinel Proxy (Phase 5) adds TTFT precision as an optional enhancement for teams that want sub-request granularity.
+
+- **Where:** Local Intelligence + Live Activity event type
+- **Data:** GPU utilization spike + VRAM jump (hardware pattern — no proxy required); Sentinel Proxy adds TTFT precision (Phase 5, optional)
+- **Free:** Live Activity event (free, on detection)
+- **Paid:** Alert on repeated cold starts
+- **Phase:** Phase 3B ✅ — hardware detection available now
+
+---
+
+### #9 — Quantization ROI Measurement
+**Tagline:** Q4 vs Q8 on YOUR hardware at YOUR thermal state. No benchmark database can give you this answer.
+
+The right quantization choice depends on hardware. Wicklee can measure: Q4 on this node = X W/1K TKN at Y tok/s. Q8 = X' W/1K TKN at Y' tok/s. That's a live, hardware-specific answer derived from actual conditions on your node — current thermal state, memory pressure, and load included. Published benchmarks assume clean conditions that don't reflect production inference.
+
+**Two delivery tiers:**
+- **Live session card (Community free):** Current model, current node snapshot — W/1K TKN, tok/s, WES by quant level. Shown in Local Intelligence tab whenever a model is loaded. Persisted in localStorage (24h expiry).
+- **Historical comparison (Team+):** Per-model, per-quant tok/s and W/1K TKN stored in DuckDB. Cross-session comparison: "Q4 on this node has averaged 12% better WES than Q8 over the past 30 days."
+
+- **Where:** Local Intelligence tab — Quantization ROI card (session card always shown; historical comparison gated)
+- **Data:** Live: current tok/s + W/1K TKN from active probe. Historical: per-model, per-quant DuckDB records
+- **Free:** Live session card (Community)
+- **Paid:** Historical DuckDB comparison (Team Edition)
+- **Phase:** Phase 3A (live session card ✅) / Phase 4A (historical DuckDB comparison)
+
+---
+
+### #10 — Fleet Thermal Diversity Score
+**Tagline:** "3/4 nodes thermally stressed — fleet is one spike from cascade failure."
+
+If three nodes are at Serious thermal state, the fleet is vulnerable. A single additional load spike causes a cascade. Standard monitoring shows per-node status — nobody tracks the distribution of thermal states at the fleet level. Wicklee can surface a fleet health score based on the thermal state distribution across all paired nodes.
+
+**Scoring:**
+- 🟢 **Healthy:** All nodes Normal or Fair
+- 🟡 **Stressed:** >25% of nodes at Serious
+- 🔴 **Critical:** >50% of nodes at Serious or Critical
+
+- **Where:** Fleet Overview — Fleet Health card (8th summary card)
+- **Data:** Thermal state distribution — all paired nodes, live now
+- **Free:** Score card shown
+- **Paid:** Slack alert when score reaches Stressed or Critical
+- **Phase:** 3A — data exists now ✅
+
+---
+
+### #11 — Power Anomaly Detection
+**Tagline:** 450W at 30% GPU utilization. Something is consuming power that isn't inference work.
+
+A node drawing full board power at low GPU utilization has a mismatch — a background process, a memory leak, a runaway job consuming power without doing inference work. Standard monitoring sees power and GPU utilization as separate metrics and never connects the anomaly. Wicklee cross-correlates them in real time.
+
+- **Where:** Local Intelligence tab — Anomaly card + Live Activity event
+- **Data:** Board power (NVML/RAPL) + GPU utilization % — cross-correlated
+- **Free:** Detection + in-dashboard card
+- **Paid:** Slack alert on sustained anomaly >5 minutes
+- **Phase:** 3A — data exists now ✅ (NVML nodes; RAPL nodes Phase 3B)
+
+---
+
+### #12 — Sovereignty Audit Trail
+**Tagline:** Structural proof that inference data never left the network. Not a nice-to-have — a compliance requirement.
+
+Every other monitoring solution requires you to trust that data isn't being exfiltrated. Wicklee's architecture makes the guarantee structural — the agent only phones home when the operator explicitly pairs it. For HIPAA, financial services, and defense-adjacent inference use cases, this isn't a nice-to-have, it's a procurement requirement.
+
+**Observability tab — Sovereignty section content:**
+- Complete pairing event log (timestamp, destination IP, session duration)
+- Telemetry destination: `wicklee.dev` or "Sovereign Mode: no outbound telemetry"
+- Outbound connection manifest: every domain the agent has ever connected to
+
+**Cryptographically Signed Export (Enterprise):** PDF signed by the agent's unique hardware ID (WK-XXXX) using HMAC-SHA256. Tamper-evident. A CISO can independently verify the document hasn't been modified since export. This is the compliance artifact that wins HIPAA and defense contracts.
+
+- **Where:** Observability tab → Sovereignty section (not a standalone tab)
+- **Data:** Agent pairing events + telemetry destination log
+- **Free:** View only
+- **Paid (Team):** View + audit log export (CSV)
+- **Paid (Enterprise):** Cryptographically signed PDF export + Sovereign Mode (no cloud)
+- **Phase:** 3B (UI surface) / Phase 5 (signed export)
+
+---
+
+### #13 — Model Eviction Prediction
+**Tagline:** Ollama quietly unloads models after inactivity. Wicklee can predict the eviction before it happens.
+
+Ollama unloads models after a `keep_alive` timeout (default 5 minutes of inactivity). The next request pays the cold start penalty. Wicklee already polls `/api/ps` — it knows the last activity time and the model size (larger models = slower reload). It can predict eviction 2 minutes before it happens and surface a warning.
+
+**Keep Warm:** If the user enables the Keep Warm toggle, Wicklee sends a silent 1-token `/api/generate` with `keep_alive: -1` to reset the expiry timer. Every action is logged in Live Activity with precise timestamp. Always opt-in, always logged, always reversible.
+
+- **Where:** Local Intelligence tab — Eviction Risk notice
+- **Data:** Time since last /api/ps activity + model size
+- **Free:** Warning card 2min before predicted eviction + Keep Warm on 1 node (Community)
+- **Paid:** Keep Warm on unlimited nodes (Team+)
+- **Phase:** 3A — /api/ps already polled ✅
+
+---
+
+### #14 — Fleet Inference Density Map
+**Tagline:** Where in the fleet is inference actually happening right now?
+
+A visual utilization map across the fleet: which nodes are actively running inference, which are idle, which are saturated. Implemented as a heatmap/hive plot — glowing amber pulse on nodes with active inference, cold dim gray on idle nodes. Not a grid of numbers — a visual that makes fleet state readable at a glance. Demo-video-ready.
+
+**Visual design:** Each node as a hexagonal cell. Active inference = glowing amber pulse animation. Idle = dim gray. Saturated (CPU/GPU >80%) = bright red. Offline = dark with disconnected indicator.
+
+- **Where:** Fleet Overview — below All Nodes compact rows
+- **Data:** Ollama /api/ps active model + CPU/GPU % per node — all live
+- **Free:** Full visualization
+- **Paid:** Historical density heatmap (which nodes were active when)
+- **Phase:** 3A — data exists now ✅
+
+---
+
+### #15 — Efficiency Regression Alert (per model, per hardware)
+**Tagline:** A node used to run llama3.1:8b at 17 tok/s. It now runs it at 11 tok/s. Wicklee notices.
+
+Per-node, per-model efficiency regression is invisible without baseline history. Causes include: thermal paste degradation, background process competition, VRAM fragmentation, or model file corruption. None of these are detectable from a single snapshot — they only emerge from comparing current performance to a historical baseline for the same model on the same hardware.
+
+- **Where:** Local Intelligence tab — Regression card with baseline vs current comparison
+- **Data:** Per-model tok/s history in DuckDB + current probe value
+- **Free:** No
+- **Paid:** Team Edition — Slack alert when regression >20% vs 7-day baseline
+- **Phase:** Phase 4A — requires per-model DuckDB history
+
+---
+
+## Delivery Matrix
+
+| # | Insight | Phase | Free | Paid | Alert |
+|---|---|---|---|---|---|
+| 1 | Unified Memory Warning | 3A | Warning card | Slack threshold | Paid |
+| 2 | W/1K TKN Efficiency Leaderboard | 3A ✅ | View | History + alert | Paid |
+| 3 | Thermal Degradation Correlation | 3A ✅ | Session card | Trend + alert | Paid |
+| 4 | Idle Fleet Cost (with PUE) | 3A ✅ | Live card | Weekly digest | Paid |
+| 5 | Model-to-Hardware Fit Score | 3A ✅ | Full card | Alert on Poor | Paid |
+| 6 | Sentinel Proxy Routing | Phase 5 | ❌ | Enterprise | No |
+| 7 | Memory Pressure Forecasting | 4A | ❌ | Full | Paid |
+| 8 | Cold Start Detection | 3B ✅ | Live Activity | Alert | Paid |
+| 9 | Quantization ROI | 3A ✅ / 4A | Live card (session) | Historical (DuckDB) | No |
+| 10 | Fleet Thermal Diversity Score | 3A ✅ | Score card | Alert | Paid |
+| 11 | Power Anomaly Detection | 3A ✅ | Detection card | Alert | Paid |
+| 12 | Sovereignty Audit Trail | 3B / 5 | View | CSV export | No |
+| 13 | Model Eviction Prediction | 3A ✅ | Warning + Keep Warm (1 node) | Keep Warm unlimited | No |
+| 14 | Fleet Inference Density Map | 3A ✅ | Full | Historical | No |
+| 15 | Efficiency Regression per Model | 4A | ❌ | Alert | Paid |
+
+✅ = data already exists in current v0.4.5 build, insight is aggregation/presentation work only
+
+---
+
+## Notification Architecture
+
+All notifications are opt-in per node per event type. Never default-on except thermal Critical.
+
+| Event | Urgency | Channel | Tier |
+|---|---|---|---|
+| Thermal: Serious → Critical | Immediate, cannot disable | Slack + PagerDuty | Free (critical safety) |
+| Node offline > 5min | Immediate | Slack | Paid |
+| Unified Memory < 10% headroom | Immediate | Slack | Paid |
+| Power anomaly sustained > 5min | 5min debounce | Slack | Paid |
+| Fleet thermal diversity Critical | 15min debounce | Slack | Paid |
+| Tok/s regression > 20% | 30min debounce | Slack | Paid |
+| Memory pressure ETA < 15min | Immediate | Slack | Paid |
+| Memory pressure ETA < 5min | Immediate, cannot disable | Slack + PagerDuty | Paid |
+| Idle cost weekly digest | Weekly, Monday 9am | Slack / email | Paid |
+| Efficiency regression > 20% | Daily digest | Slack | Paid |
+
+---
+
+*Wicklee is sovereign infrastructure. Your fleet data never leaves your network until you choose.*

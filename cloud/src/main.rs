@@ -1,20 +1,15 @@
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Query, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
+use sha2::{Sha256, Digest};
 use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll};
 use std::time::Duration;
-use futures_util::Stream;
-use subtle::ConstantTimeEq;
 use tokio_stream::StreamExt as _;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -135,25 +130,15 @@ struct ClaimRequest {
 
 #[derive(Serialize)]
 struct ClaimResponse {
-    session_token:    String,
-    node_id:          String,
-    /// C1 — one-time delivery of the telemetry secret to the agent.
-    /// The agent MUST store this and send it as `X-Wicklee-Token` on every
-    /// POST /api/telemetry.  It is never logged by the server.
-    telemetry_secret: String,
+    session_token: String,
+    node_id:       String,
 }
 
 /// In-memory telemetry snapshot (not persisted — DuckDB Phase 4).
 #[derive(Clone)]
 struct MetricsEntry {
-    last_seen_ms:     u64,
-    metrics:          Option<MetricsPayload>,
-    /// C1 — per-node telemetry secret loaded at startup and refreshed at pair time.
-    /// `None` for nodes paired before this column was added (backward-compat:
-    /// those nodes continue to be accepted without a token until they re-pair).
-    /// `Some(s)` — the incoming `X-Wicklee-Token` header must match `s` via
-    /// constant-time comparison; any mismatch or absent header → 401.
-    telemetry_secret: Option<String>,
+    last_seen_ms: u64,
+    metrics:      Option<MetricsPayload>,
 }
 
 #[derive(Serialize)]
@@ -184,83 +169,18 @@ struct JwksResponse {
     keys: Vec<JwkKey>,
 }
 
-// ── H2 — SSE connection limits ────────────────────────────────────────────────
-//
-// Without caps, a single IP can open thousands of EventSource connections,
-// each pinning a Tokio task and a broadcast receiver.  At scale that exhausts
-// both task memory and Railway's connection table.
-//
-// Two guards:
-//   MAX_SSE_TOTAL   — global hard cap; prevents memory exhaustion regardless of
-//                     how many IPs are involved.
-//   MAX_SSE_PER_IP  — per-IP cap; one legitimate user needs at most ~3 tabs.
-//                     10 is generous enough for power users / tests.
-//
-// Both counters are decremented via `SseConnStream::drop`, which fires on both
-// clean stream completion and abrupt client disconnect — Axum drops the stream
-// task as soon as the TCP write side detects the client is gone.
-
-/// Global ceiling on concurrent `/api/fleet/stream` connections.
-const MAX_SSE_TOTAL:  usize = 1_000;
-/// Per-source-IP ceiling on concurrent `/api/fleet/stream` connections.
-const MAX_SSE_PER_IP: usize = 10;
-
-/// RAII wrapper around an SSE stream that decrements both the global and
-/// per-IP SSE connection counters when the stream is dropped.
-///
-/// This is the canonical Rust approach to "cleanup on async cancellation":
-/// implement `Drop` on a wrapper that holds the resource handles.  The Axum
-/// runtime drops the stream task when the client disconnects, so `Drop` fires
-/// reliably regardless of whether the stream ended naturally or the TCP
-/// connection was reset.
-struct SseConnStream<S> {
-    inner:  S,
-    total:  Arc<AtomicUsize>,
-    per_ip: Arc<Mutex<HashMap<String, usize>>>,
-    ip:     String,
-}
-
-impl<S: Stream + Unpin> Stream for SseConnStream<S> {
-    type Item = S::Item;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
-    }
-}
-
-impl<S> Drop for SseConnStream<S> {
-    fn drop(&mut self) {
-        // Decrement global counter.  fetch_sub on Relaxed is fine — there are
-        // no loads that need to observe the decrement in a happens-before sense;
-        // we only need the value to be monotonically accurate over time.
-        self.total.fetch_sub(1, Ordering::Relaxed);
-
-        // Decrement per-IP counter and evict the entry when it reaches zero
-        // to keep the map from growing unbounded.
-        let mut map = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(c) = map.get_mut(&self.ip) {
-            if *c > 0 { *c -= 1; }
-            if *c == 0 { map.remove(&self.ip); }
-        }
-    }
-}
-
 // ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
     /// Persistent store for users, sessions, and node pairing records.
-    db:             Db,
+    db:               Db,
     /// In-memory telemetry cache keyed by node_id.
-    metrics:        Arc<RwLock<HashMap<String, MetricsEntry>>>,
+    metrics:          Arc<RwLock<HashMap<String, MetricsEntry>>>,
     /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
-    clerk_keys:     Arc<RwLock<Vec<JwkKey>>>,
-    /// C4 — per-IP pairing attempt timestamps for sliding-window rate limiting.
-    pair_attempts:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
-    /// H2 — Total live SSE connection count (across all IPs).
-    sse_total:      Arc<AtomicUsize>,
-    /// H2 — Per-IP live SSE connection counts; entry removed when it reaches 0.
-    sse_per_ip:     Arc<Mutex<HashMap<String, usize>>>,
+    clerk_keys:       Arc<RwLock<Vec<JwkKey>>>,
+    /// Sliding-window rate-limit timestamps keyed by api_key key_id.
+    api_rate_limits:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -329,10 +249,6 @@ fn run_migrations(conn: &Connection) {
     // Add user_id column — links each node to the account that activated it.
     // Needed for per-user node counting to enforce the free-tier limit correctly.
     let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN user_id TEXT;");
-    // C1 — telemetry_secret: cryptographically random value generated at pair time.
-    // NULL for nodes paired before this column existed (backward-compat: they are
-    // still accepted without a token).  New pairings always populate this column.
-    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN telemetry_secret TEXT;");
 
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS stream_tokens (
@@ -363,6 +279,20 @@ fn run_migrations(conn: &Connection) {
     let _ = conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_nodes_user_id ON nodes(user_id);"
     );
+
+    // API keys for Agent API v1 (Phase 3B).
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS api_keys (
+            key_id       TEXT PRIMARY KEY,
+            key_hash     TEXT UNIQUE NOT NULL,
+            user_id      TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            created_at   INTEGER NOT NULL,
+            last_used_ms INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+    ").expect("api_keys migration failed");
 }
 
 // ── Tier constants ────────────────────────────────────────────────────────────
@@ -370,49 +300,19 @@ fn run_migrations(conn: &Connection) {
 /// Maximum nodes a free-tier account may pair.
 const MAX_FREE_NODES: usize = 3;
 
+/// Agent API v1 rate limits (requests per 60-second sliding window).
+const API_RATE_COMMUNITY: usize = 60;
+const API_RATE_TEAM:      usize = 600;
+
+/// Nodes not seen within this window are considered offline.
+const ONLINE_THRESHOLD_MS: u64 = 30_000;
+
 /// If DEV_ACCOUNT_EMAIL env var is set, that account gets isPro=true and no
 /// node limit — useful for internal testing without hitting the free wall.
 fn is_dev_account(email: &str) -> bool {
     std::env::var("DEV_ACCOUNT_EMAIL")
         .map(|e| e.trim().to_lowercase() == email.trim().to_lowercase())
         .unwrap_or(false)
-}
-
-// ── Rate-limit constants (C4) ─────────────────────────────────────────────────
-
-/// Max pairing-code attempts per IP within the sliding window.
-const MAX_PAIR_ATTEMPTS: usize = 10;
-/// Sliding window duration in milliseconds.
-const PAIR_WINDOW_MS: u64 = 60_000;
-
-/// Extract the client IP for rate-limiting purposes.
-///
-/// # Trusted hop invariant
-/// Railway appends **exactly one** entry to `X-Forwarded-For` — the IP it
-/// observed on the incoming TCP socket.  Taking the **rightmost** comma-separated
-/// value gives us Railway's appended entry (trustworthy infrastructure data).
-/// Taking the **leftmost** value is wrong: it is supplied by the client and is
-/// trivially forged, which would allow an attacker to cycle fake IPs and bypass
-/// the sliding-window rate limit entirely.
-///
-/// # axum-client-ip evaluation
-/// `axum-client-ip` with `SecureClientIpSource::RightmostXForwardedFor` would
-/// express this intent clearly, but it adds a compile-time dependency for a
-/// one-line parsing rule.  The explicit `split(',').last()` here is equally
-/// auditable, simpler, and has no transitive deps.  Revisit if the proxy topology
-/// ever grows to multiple hops (add per-hop stripping via `RightmostNXForwardedFor`).
-///
-/// # Fallback
-/// When there is no `X-Forwarded-For` header (local dev, direct TLS termination),
-/// we fall back to the raw socket peer address via axum's `ConnectInfo` extractor.
-fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').last())   // rightmost = Railway-appended
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| peer.ip().to_string())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -451,35 +351,6 @@ fn fetch_jwks(url: &str) -> Vec<JwkKey> {
     }
 }
 
-// ── Agent version cache ───────────────────────────────────────────────────────
-
-const GH_RELEASES_URL: &str =
-    "https://api.github.com/repos/jeffgeiser/Wicklee/releases/latest";
-const VERSION_CACHE_TTL_MS: u64 = 5 * 60 * 1_000; // 5 minutes
-
-struct GhReleaseCache {
-    fetched_at_ms: u64,
-    latest:        String, // "0.4.7" (v-prefix stripped)
-    tag_name:      String, // "v0.4.7" (used in download URLs)
-}
-
-static RELEASE_CACHE: Mutex<Option<GhReleaseCache>> = Mutex::new(None);
-
-/// Fetch the latest GitHub release. Synchronous — run via spawn_blocking.
-/// Returns (tag_name, version_no_v) or None on any error.
-fn fetch_github_latest() -> Option<(String, String)> {
-    #[derive(Deserialize)]
-    struct GhRelease { tag_name: String }
-    let resp = ureq::get(GH_RELEASES_URL)
-        .set("User-Agent", "wicklee-cloud/1.0")
-        .call()
-        .ok()?;
-    let release: GhRelease = resp.into_json().ok()?;
-    let tag = release.tag_name;
-    let ver = tag.trim_start_matches('v').to_string();
-    Some((tag, ver))
-}
-
 /// Verify a Clerk JWT and return the `sub` claim (Clerk user ID).
 fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
     #[derive(Deserialize)]
@@ -511,10 +382,8 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
     };
 
     let mut val = Validation::new(Algorithm::RS256);
-    val.validate_exp = true;  // explicit — jsonwebtoken v9 default; stated to prevent silent
-                              // regression if the crate ever changes its default behaviour
-    val.validate_aud = false; // Clerk uses azp claim, not aud
-    val.leeway = 60;          // 60s clock-skew tolerance; safe — Clerk JWTs expire in 1h
+    val.validate_aud = false; // Clerk uses azp, not aud
+    val.leeway = 60;          // 60s leeway for clock skew
 
     for jwk in &candidates {
         match DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
@@ -625,6 +494,468 @@ fn user_node_set(user_id: &str, conn: &Connection) -> HashSet<String> {
                 .unwrap_or_default()
         })
         .unwrap_or_default()
+}
+
+// ── Agent API v1 helpers ──────────────────────────────────────────────────────
+
+fn sha256_hex(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+fn thermal_penalty_for(state: Option<&str>) -> f32 {
+    match state.unwrap_or("Normal") {
+        "Fair"     => 1.25,
+        "Serious"  => 1.75,
+        "Critical" => 2.0,
+        _          => 1.0,
+    }
+}
+
+fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
+    let tok_s = if m.vllm_running {
+        m.vllm_tokens_per_sec?
+    } else {
+        m.ollama_tokens_per_second?
+    };
+    if tok_s <= 0.0 { return None; }
+    let watts = m.nvidia_power_draw_w.or(m.cpu_power_w)?;
+    if watts <= 0.0 { return None; }
+    let penalty = thermal_penalty_for(m.thermal_state.as_deref());
+    Some(((tok_s / (watts * penalty)) * 10.0).round() / 10.0)
+}
+
+/// Validate a raw API key, enforce rate limits, return (key_id, user_id, is_pro).
+/// Call inside spawn_blocking.
+fn validate_api_key_sync(
+    raw_key: &str,
+    conn: &Connection,
+    rate_limits: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
+) -> Option<(String, String, bool)> {
+    let hash = sha256_hex(raw_key);
+    let (key_id, user_id, is_pro_int): (String, String, i32) = conn.query_row(
+        "SELECT k.key_id, k.user_id, u.is_pro
+         FROM api_keys k
+         JOIN users u ON u.id = k.user_id
+         WHERE k.key_hash = ?1",
+        params![hash],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).ok()?;
+
+    let limit = if is_pro_int != 0 { API_RATE_TEAM } else { API_RATE_COMMUNITY };
+    let now = now_ms();
+    let window_start = now.saturating_sub(60_000);
+    {
+        let mut rl = rate_limits.lock().unwrap();
+        let calls = rl.entry(key_id.clone()).or_default();
+        calls.retain(|&t| t >= window_start);
+        if calls.len() >= limit {
+            return None; // rate limit exceeded
+        }
+        calls.push(now);
+    }
+
+    let _ = conn.execute(
+        "UPDATE api_keys SET last_used_ms = ?1 WHERE key_id = ?2",
+        params![now as i64, key_id],
+    );
+
+    Some((key_id, user_id, is_pro_int != 0))
+}
+
+fn extract_api_key(headers: &HeaderMap) -> Option<String> {
+    headers.get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned())
+        .or_else(|| extract_bearer(headers))
+}
+
+// ── Agent API v1 types ────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct V1NodeInfo {
+    node_id:      String,
+    hostname:     Option<String>,
+    online:       bool,
+    last_seen_ms: u64,
+    metrics:      Option<MetricsPayload>,
+    wes:          Option<f32>,
+}
+
+#[derive(Serialize)]
+struct V1FleetResponse {
+    nodes: Vec<V1NodeInfo>,
+}
+
+#[derive(Serialize)]
+struct V1WesNode {
+    node_id: String,
+    wes:     Option<f32>,
+    online:  bool,
+}
+
+#[derive(Serialize)]
+struct V1RouteCandidate {
+    node:   String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tok_s:  Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wes:    Option<f32>,
+    reason: String,
+}
+
+#[derive(Serialize)]
+struct V1RouteResponse {
+    latency:    Option<V1RouteCandidate>,
+    efficiency: Option<V1RouteCandidate>,
+    default:    &'static str,
+}
+
+#[derive(Serialize)]
+struct V1KeyInfo {
+    key_id:       String,
+    name:         String,
+    created_at:   i64,
+    last_used_ms: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct V1CreateKeyRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct V1CreateKeyResponse {
+    key_id:     String,
+    key:        String,  // raw key — returned once, not stored
+    name:       String,
+    created_at: i64,
+}
+
+// ── Agent API v1 handlers — key management ────────────────────────────────────
+
+/// POST /api/v1/keys
+async fn handle_v1_create_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<V1CreateKeyRequest>,
+) -> impl IntoResponse {
+    if body.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "name is required" }))).into_response();
+    }
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db   = state.db.clone();
+    let name = body.name.trim().to_owned();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let raw_key = format!("wk_live_{}", Uuid::new_v4().to_string().replace('-', ""));
+        let key_hash = sha256_hex(&raw_key);
+        let key_id   = Uuid::new_v4().to_string();
+        let ts       = now_ms() as i64;
+
+        conn.execute(
+            "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![key_id, key_hash, user_id, name, ts],
+        ).ok()?;
+
+        Some(V1CreateKeyResponse { key_id, key: raw_key, name, created_at: ts })
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(r) => (StatusCode::CREATED, Json(r)).into_response(),
+    }
+}
+
+/// GET /api/v1/keys
+async fn handle_v1_list_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<Vec<V1KeyInfo>> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let mut stmt = conn.prepare(
+            "SELECT key_id, name, created_at, last_used_ms
+             FROM api_keys WHERE user_id = ?1 ORDER BY created_at DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![user_id], |r| Ok(V1KeyInfo {
+            key_id:       r.get(0)?,
+            name:         r.get(1)?,
+            created_at:   r.get(2)?,
+            last_used_ms: r.get(3)?,
+        })).ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(k) => Json(serde_json::json!({ "keys": k })).into_response(),
+    }
+}
+
+/// DELETE /api/v1/keys/:key_id
+async fn handle_v1_delete_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<usize> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let n = conn.execute(
+            "DELETE FROM api_keys WHERE key_id = ?1 AND user_id = ?2",
+            params![key_id, user_id],
+        ).unwrap_or(0);
+        Some(n)
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(0) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
+        Some(_) => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+// ── Agent API v1 handlers — fleet data ────────────────────────────────────────
+
+/// GET /api/v1/fleet
+async fn handle_v1_fleet(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let rl = state.api_rate_limits.clone();
+
+    let result: Option<Vec<(String, i64)>> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let mut stmt = conn.prepare(
+            "SELECT wk_id, last_seen FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![user_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    let persisted = match result {
+        None    => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(r) => r,
+    };
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+    let nodes: Vec<V1NodeInfo> = persisted.into_iter().map(|(node_id, last_seen_db)| {
+        let (last_seen_ms, metrics) = metrics_map.get(&node_id)
+            .map(|e| (e.last_seen_ms, e.metrics.clone()))
+            .unwrap_or((last_seen_db as u64, None));
+        let online   = now.saturating_sub(last_seen_ms) < ONLINE_THRESHOLD_MS;
+        let wes      = metrics.as_ref().and_then(wes_for_payload);
+        let hostname = metrics.as_ref().and_then(|m| m.hostname.clone());
+        V1NodeInfo { node_id, hostname, online, last_seen_ms, metrics, wes }
+    }).collect();
+
+    Json(V1FleetResponse { nodes }).into_response()
+}
+
+/// GET /api/v1/fleet/wes
+async fn handle_v1_fleet_wes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let rl = state.api_rate_limits.clone();
+
+    let result: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
+        Some(stmt.query_map(params![user_id], |r| r.get(0))
+            .ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    let node_ids = match result {
+        None  => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(ids) => ids,
+    };
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+    let nodes: Vec<V1WesNode> = node_ids.into_iter().map(|node_id| {
+        let entry        = metrics_map.get(&node_id);
+        let last_seen_ms = entry.map(|e| e.last_seen_ms).unwrap_or(0);
+        let online       = now.saturating_sub(last_seen_ms) < ONLINE_THRESHOLD_MS;
+        let wes          = entry.and_then(|e| e.metrics.as_ref()).and_then(wes_for_payload);
+        V1WesNode { node_id, wes, online }
+    }).collect();
+
+    Json(serde_json::json!({ "nodes": nodes })).into_response()
+}
+
+/// GET /api/v1/nodes/:id
+async fn handle_v1_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db       = state.db.clone();
+    let rl       = state.api_rate_limits.clone();
+    let nid      = node_id.clone();
+
+    let result: Option<bool> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let owned: bool = conn.query_row(
+            "SELECT 1 FROM nodes WHERE wk_id = ?1 AND user_id = ?2",
+            params![nid, user_id],
+            |_| Ok(true),
+        ).unwrap_or(false);
+        Some(owned)
+    }).await.unwrap();
+
+    match result {
+        None        => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(false) => return (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
+        Some(true)  => {}
+    }
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+
+    match metrics_map.get(&node_id) {
+        None => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
+        Some(entry) => {
+            let last_seen_ms = entry.last_seen_ms;
+            let online   = now.saturating_sub(last_seen_ms) < ONLINE_THRESHOLD_MS;
+            let wes      = entry.metrics.as_ref().and_then(wes_for_payload);
+            let hostname = entry.metrics.as_ref().and_then(|m| m.hostname.clone());
+            Json(V1NodeInfo {
+                node_id, hostname, online, last_seen_ms,
+                metrics: entry.metrics.clone(), wes,
+            }).into_response()
+        }
+    }
+}
+
+/// GET /api/v1/route/best
+async fn handle_v1_route_best(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let rl = state.api_rate_limits.clone();
+
+    let result: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
+        Some(stmt.query_map(params![user_id], |r| r.get(0))
+            .ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    let node_ids = match result {
+        None      => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(ids) => ids,
+    };
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+
+    struct NodeScore {
+        node_id: String,
+        tok_s:   Option<f32>,
+        wes:     Option<f32>,
+    }
+
+    let candidates: Vec<NodeScore> = node_ids.into_iter().filter_map(|node_id| {
+        let entry = metrics_map.get(&node_id)?;
+        if now.saturating_sub(entry.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; }
+        let m     = entry.metrics.as_ref()?;
+        let tok_s = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
+        let wes   = wes_for_payload(m);
+        Some(NodeScore { node_id, tok_s, wes })
+    }).collect();
+
+    let best_latency = candidates.iter()
+        .filter_map(|c| c.tok_s.map(|t| (c, t)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(c, t)| V1RouteCandidate {
+            node: c.node_id.clone(), tok_s: Some(t), wes: c.wes,
+            reason: "Highest throughput".into(),
+        });
+
+    let best_efficiency = candidates.iter()
+        .filter_map(|c| c.wes.map(|w| (c, w)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(c, w)| V1RouteCandidate {
+            node: c.node_id.clone(), tok_s: c.tok_s, wes: Some(w),
+            reason: "Highest WES".into(),
+        });
+
+    Json(V1RouteResponse {
+        latency: best_latency, efficiency: best_efficiency, default: "efficiency",
+    }).into_response()
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
@@ -853,89 +1184,6 @@ async fn handle_me(
     }
 }
 
-// ── H3 — fleet_url SSRF validation ────────────────────────────────────────────
-//
-// `fleet_url` is supplied by the agent at pair time and stored in SQLite.  It is
-// returned to the browser as a navigation link to the agent's local dashboard.
-// The cloud backend does NOT currently follow this URL, but we validate it now
-// because:
-//   (a) Future features (health checks, webhook callbacks) would follow it.
-//   (b) Storing an IMDS-targeting URL creates a loaded gun for any future code.
-//   (c) The validation cost is zero — it runs once per pair, not per request.
-//
-// Rules:
-//   1. Scheme must be `http://` or `https://` — rejects `file://`, `ftp://`,
-//      `javascript:`, `data:`, and every other vector.
-//   2. The URL must not target SSRF-dangerous addresses:
-//        169.254.x.x  — link-local / AWS IMDS endpoint
-//        100.64.x.x   — shared address space (CGNAT / Railway internal fabric)
-//        0.x.x.x      — reserved
-//        240-255.x.x.x — reserved / experimental
-//   3. Max 2 048 bytes, no null bytes or ASCII control characters.
-//   4. Intentionally does NOT reject private RFC-1918 ranges (10.x, 172.16–31.x,
-//      192.168.x) because agents legitimately run on LAN hosts and the URL is
-//      only ever opened by the operator in their own browser.
-
-/// Parse a dotted-decimal IPv4 host string.  Returns `None` for hostnames.
-fn parse_ipv4_host(host: &str) -> Option<[u8; 4]> {
-    let parts: Vec<&str> = host.split('.').collect();
-    if parts.len() != 4 { return None; }
-    Some([
-        parts[0].parse().ok()?,
-        parts[1].parse().ok()?,
-        parts[2].parse().ok()?,
-        parts[3].parse().ok()?,
-    ])
-}
-
-fn validate_fleet_url(url: &str) -> Result<(), &'static str> {
-    // Length + control-character guard.
-    if url.len() > 2048 {
-        return Err("fleet_url exceeds maximum length (2048 bytes)");
-    }
-    if url.bytes().any(|b| b == 0 || b < 0x20) {
-        return Err("fleet_url contains null bytes or ASCII control characters");
-    }
-
-    // Scheme check — must be http:// or https://.
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or("fleet_url must use http:// or https:// scheme")?;
-
-    // Extract the host component (before the first '/' or ':' after the scheme).
-    let host_port = rest.split('/').next().unwrap_or("");
-    let host = host_port.split(':').next().unwrap_or("").to_lowercase();
-    if host.is_empty() {
-        return Err("fleet_url is missing a host");
-    }
-
-    // SSRF-dangerous address check.  Only applies when the host is a raw IPv4
-    // address; hostnames are accepted (DNS resolution happens in the browser, not
-    // on the server, so there is no SSRF surface at this stage).
-    if let Some([a, b, c, _d]) = parse_ipv4_host(&host) {
-        // 169.254.x.x — AWS IMDS, Azure IMDS, Railway metadata service
-        if a == 169 && b == 254 {
-            return Err("fleet_url targets a link-local / IMDS address (169.254.x.x)");
-        }
-        // 100.64.x.x — IANA shared address space; used internally by some cloud providers
-        if a == 100 && b == 64 {
-            return Err("fleet_url targets shared address space (100.64.x.x)");
-        }
-        // 0.x.x.x — IANA reserved
-        if a == 0 {
-            return Err("fleet_url targets a reserved address (0.x.x.x)");
-        }
-        // 240–255.x.x.x — IANA reserved / experimental / broadcast
-        if a >= 240 {
-            let _ = c; // suppress unused warning on the destructure
-            return Err("fleet_url targets a reserved/experimental address (240–255.x.x.x)");
-        }
-    }
-
-    Ok(())
-}
-
 // ── Fleet handlers ────────────────────────────────────────────────────────────
 
 /// POST /api/pair/claim
@@ -952,14 +1200,6 @@ async fn handle_claim(
             Json(serde_json::json!({ "error": "node_id and fleet_url are required" }))).into_response();
     }
 
-    // H3 — Reject fleet_urls that could be used as SSRF gadgets if the backend
-    // ever follows them (health checks, webhook callbacks, etc.).  Validates
-    // scheme, blocks SSRF-dangerous IP ranges, and enforces a length cap.
-    if let Err(msg) = validate_fleet_url(&body.fleet_url) {
-        return (StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg }))).into_response();
-    }
-
     let token    = mint_node_token(&body.node_id);
     let ts       = now_ms() as i64;
     let db       = state.db.clone();
@@ -969,161 +1209,53 @@ async fn handle_claim(
     let token2   = token.clone();
     let node_id2 = node_id.clone();
 
-    // C1 — generate a cryptographically random telemetry secret (UUID v4 = 122 bits
-    // of entropy, OS CSPRNG via getrandom).  This is returned to the agent exactly
-    // once and must never appear in logs.  On re-pair the old secret is replaced,
-    // invalidating any potentially leaked value.
-    let secret    = Uuid::new_v4().to_string();
-    let secret_db = secret.clone();
-
-    let insert_ok = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap_or_else(|e| e.into_inner());
+    tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
         conn.execute(
-            "INSERT INTO nodes
-               (wk_id, fleet_url, session_token, code, telemetry_secret, paired_at, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+            "INSERT INTO nodes (wk_id, fleet_url, session_token, code, paired_at, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
              ON CONFLICT(wk_id) DO UPDATE SET
-               fleet_url        = excluded.fleet_url,
-               session_token    = excluded.session_token,
-               code             = excluded.code,
-               telemetry_secret = excluded.telemetry_secret,
-               last_seen        = excluded.last_seen",
-            params![node_id2, fleet_url, token2, code, secret_db, ts],
-        ).is_ok()
-    }).await.unwrap_or(false);
+               fleet_url     = excluded.fleet_url,
+               session_token = excluded.session_token,
+               code          = excluded.code,
+               last_seen     = excluded.last_seen",
+            params![node_id2, fleet_url, token2, code, ts],
+        ).ok();
+    }).await.unwrap();
 
-    if !insert_ok {
-        return (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Internal error" }))).into_response();
-    }
+    // Seed the in-memory metrics entry so telemetry can flow immediately.
+    state.metrics.write().unwrap()
+        .entry(node_id.clone())
+        .or_insert(MetricsEntry { last_seen_ms: now_ms(), metrics: None });
 
-    // Seed / refresh the in-memory entry.  Always write the new secret so a
-    // re-pairing agent gets the fresh value on the very next telemetry push.
-    {
-        let mut map = state.metrics.write().unwrap_or_else(|e| e.into_inner());
-        let entry = map.entry(node_id.clone()).or_insert_with(|| MetricsEntry {
-            last_seen_ms:     now_ms(),
-            metrics:          None,
-            telemetry_secret: Some(secret.clone()),
-        });
-        entry.telemetry_secret = Some(secret.clone());
-    }
-
-    // telemetry_secret is returned here and never logged — keep it that way.
-    (StatusCode::OK, Json(ClaimResponse {
-        session_token:    token,
-        node_id,
-        telemetry_secret: secret,
-    })).into_response()
+    (StatusCode::OK, Json(ClaimResponse { session_token: token, node_id })).into_response()
 }
 
 /// POST /api/telemetry
 async fn handle_telemetry(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Json(payload): Json<MetricsPayload>,
 ) -> StatusCode {
     let node_id       = payload.node_id.clone();
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
 
-    // C1 — Authentication gate.
-    //
-    // Strategy: look up the node's expected secret from the in-memory map.
-    // The map is pre-loaded from the DB at startup, so this is a read-lock
-    // with no blocking in the common case.  The DB is only hit for node_ids
-    // not yet seen since the last restart.
-    //
-    // We return the SAME 401 for all failure cases:
-    //   - node unknown     → 401 (do not reveal whether the node_id is registered)
-    //   - token absent     → 401
-    //   - token wrong      → 401 (constant-time comparison via subtle::ConstantTimeEq)
-    //
-    // Pre-migration nodes (telemetry_secret = NULL) are accepted without a token
-    // for backward compatibility.  They transition to enforced auth on next re-pair.
-
-    // Fast path: node is already in the in-memory map.
-    let map_lookup: Option<Option<String>> = state.metrics
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&node_id)
-        .map(|e| e.telemetry_secret.clone());
-
-    // Resolve: Some(Some(s)) = has secret, Some(None) = pre-migration, None = unknown.
-    let secret_opt: Option<String> = match map_lookup {
-        Some(s) => s, // already in memory — use cached secret (may be None)
-        None => {
-            // Slow path: not in memory — check the DB.
-            let db2 = state.db.clone();
-            let nid = node_id.clone();
-            let db_row: Option<Option<String>> = tokio::task::spawn_blocking(move || {
-                let conn = db2.lock().unwrap_or_else(|e| e.into_inner());
-                conn.query_row(
-                    "SELECT telemetry_secret FROM nodes WHERE wk_id = ?1",
-                    params![nid],
-                    |r| r.get::<_, Option<String>>(0),
-                ).ok()
-            }).await.unwrap_or(None);
-
-            match db_row {
-                // Node not found — reject.  Same status code as wrong-token to
-                // prevent node-ID enumeration via timing or status differences.
-                None => return StatusCode::UNAUTHORIZED,
-                Some(secret) => {
-                    // Seed into the in-memory map for subsequent fast-path lookups.
-                    state.metrics
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .entry(node_id.clone())
-                        .or_insert_with(|| MetricsEntry {
-                            last_seen_ms:     ts,
-                            metrics:          None,
-                            telemetry_secret: secret.clone(),
-                        });
-                    secret
-                }
-            }
-        }
-    };
-
-    // If the node has a secret, verify the provided token with constant-time
-    // comparison.  This prevents timing attacks where an attacker probes
-    // byte-by-byte matches by measuring response latency.
-    if let Some(ref expected) = secret_opt {
-        let provided = headers
-            .get("x-wicklee-token")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        // subtle::ConstantTimeEq operates on &[u8].  For equal-length UUID strings
-        // this is fully constant-time.  Different lengths short-circuit to false,
-        // which is safe: the length of a UUID token is not a secret.
-        if !bool::from(expected.as_bytes().ct_eq(provided.as_bytes())) {
-            return StatusCode::UNAUTHORIZED;
-        }
-    }
-    // secret_opt == None → pre-migration node; continue without token.
-
-    // Auth passed — update in-memory snapshot.
+    // Update in-memory snapshot.
     {
-        let mut map = state.metrics.write().unwrap_or_else(|e| e.into_inner());
+        let mut map = state.metrics.write().unwrap();
         if let Some(entry) = map.get_mut(&node_id) {
             entry.last_seen_ms = ts;
             entry.metrics      = Some(payload);
         } else {
-            // Node reconnecting after restart and not yet in the map — safe because
-            // we already validated it exists (either in-memory or via DB above).
-            map.insert(node_id.clone(), MetricsEntry {
-                last_seen_ms:     ts,
-                metrics:          Some(payload),
-                telemetry_secret: secret_opt,
-            });
+            // Accept telemetry even if the node reconnects after a restart.
+            map.insert(node_id.clone(), MetricsEntry { last_seen_ms: ts, metrics: Some(payload) });
         }
     }
 
     // Persist last_seen (and hostname when present) to nodes table.
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = db.lock().unwrap();
         if let Some(ref h) = node_hostname {
             conn.execute(
                 "UPDATE nodes SET last_seen = ?1, hostname = ?2 WHERE wk_id = ?3",
@@ -1194,37 +1326,12 @@ struct ActivateRequest {
 
 async fn handle_activate(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<ActivateRequest>,
 ) -> impl IntoResponse {
     if body.code.len() != 6 || !body.code.chars().all(|c| c.is_ascii_digit()) {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
-    }
-
-    // C4 — Sliding-window rate limit: max 10 attempts per IP per 60 seconds.
-    // Cleanup (retain) runs on every request — no background timer needed for
-    // a low-frequency endpoint like this.
-    let ip  = client_ip(&headers, peer);
-    let now = now_ms();
-    {
-        let mut attempts = state.pair_attempts.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = attempts.entry(ip).or_default();
-        entry.retain(|&t| now - t < PAIR_WINDOW_MS);
-        if entry.len() >= MAX_PAIR_ATTEMPTS {
-            // Retry-After: 60 tells well-behaved clients exactly how long to wait.
-            let mut res = (StatusCode::TOO_MANY_REQUESTS,
-                Json(serde_json::json!({
-                    "error": "Too many pairing attempts. Try again in 60 seconds."
-                }))).into_response();
-            res.headers_mut().insert(
-                header::RETRY_AFTER,
-                header::HeaderValue::from_static("60"),
-            );
-            return res;
-        }
-        entry.push(now);
     }
 
     // Auth is required — a node must always be owned by an account.
@@ -1299,14 +1406,9 @@ async fn handle_activate(
 /// GET /api/fleet/stream — SSE stream pushing fleet snapshots every 2 s.
 /// Auth: single-use stream token via ?token=<uuid> (issued by /api/auth/stream-token).
 /// EventSource cannot send Authorization headers, so we use a short-lived UUID token.
-///
-/// H2: enforces MAX_SSE_PER_IP and MAX_SSE_TOTAL connection caps.  Both counters
-/// are decremented via `SseConnStream::drop` when the client disconnects.
 async fn handle_fleet_stream(
-    State(state):      State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers:           HeaderMap,
-    Query(params):     Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let stream_token = match params.get("token") {
         Some(t) if !t.is_empty() => t.clone(),
@@ -1334,54 +1436,9 @@ async fn handle_fleet_stream(
         ).ok()
     }).await.unwrap() {
         Some(uid) => uid,
-        None => {
-            // L3 — log auth failures so abuse is detectable in Railway logs.
-            // Log only the first 8 chars of the token (UUID prefix) — enough for
-            // correlation without exposing a usable credential fragment.
-            let tok_pfx = &stream_token[..stream_token.len().min(8)];
-            eprintln!("[auth] SSE 401 — invalid or expired stream token (prefix={tok_pfx})");
-            return (StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response();
-        }
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
-
-    // H2 — Enforce per-IP and global SSE connection caps BEFORE allocating any
-    // async resources for this connection.
-    //
-    // Increment per-IP first so we can roll it back cleanly if the global cap
-    // is exceeded.  Both counters are decremented by `SseConnStream::drop`,
-    // which fires when the client disconnects or the stream task is cancelled.
-    let ip = client_ip(&headers, peer);
-
-    // Per-IP check.
-    {
-        let mut map = state.sse_per_ip.lock().unwrap_or_else(|e| e.into_inner());
-        let slot = map.entry(ip.clone()).or_insert(0);
-        if *slot >= MAX_SSE_PER_IP {
-            return (StatusCode::TOO_MANY_REQUESTS,
-                Json(serde_json::json!({
-                    "error": format!("Too many SSE connections from this IP (limit: {MAX_SSE_PER_IP})")
-                }))).into_response();
-        }
-        *slot += 1;
-    }
-
-    // Global cap — fetch_add returns the *previous* value; if it was already
-    // at the limit, roll back the per-IP increment and reject.
-    let prev_total = state.sse_total.fetch_add(1, Ordering::Relaxed);
-    if prev_total >= MAX_SSE_TOTAL {
-        state.sse_total.fetch_sub(1, Ordering::Relaxed);
-        {
-            let mut map = state.sse_per_ip.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(c) = map.get_mut(&ip) {
-                if *c > 0 { *c -= 1; }
-                if *c == 0 { map.remove(&ip); }
-            }
-        }
-        return (StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "Server at maximum SSE connection capacity" })))
-            .into_response();
-    }
 
     // Load initial node set for this user.
     let db = state.db.clone();
@@ -1429,17 +1486,7 @@ async fn handle_fleet_stream(
         Ok::<_, Infallible>(Event::default().data(data))
     });
 
-    // Wrap with SseConnStream so both counters are decremented when the
-    // client disconnects, regardless of whether the stream ended cleanly
-    // or the TCP connection was reset.
-    let guarded = SseConnStream {
-        inner:  stream,
-        total:  state.sse_total.clone(),
-        per_ip: state.sse_per_ip.clone(),
-        ip,
-    };
-
-    Sse::new(guarded).keep_alive(KeepAlive::default()).into_response()
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 /// GET /health — trivial liveness probe, no DB dependency.
@@ -1447,147 +1494,28 @@ async fn handle_health() -> StatusCode {
     StatusCode::OK
 }
 
-/// GET /api/agent/version?platform={platform}
-///
-/// Returns `{ "latest": "0.4.7", "download_url": "https://…" }`.
-/// Proxies GitHub Releases API with a 5-minute in-memory cache so the entire
-/// fleet doesn't hammer GitHub on every agent startup.
-async fn handle_agent_version(
-    Query(q): Query<std::collections::HashMap<String, String>>,
-) -> Response {
-    const VALID_PLATFORMS: &[&str] = &[
-        "darwin-aarch64",
-        "linux-x86_64",
-        "linux-aarch64",
-        "windows-x86_64",
-    ];
-
-    let platform = match q.get("platform").map(|s| s.as_str()) {
-        Some(p) if VALID_PLATFORMS.contains(&p) => p.to_string(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Missing or invalid platform" })),
-            )
-                .into_response();
-        }
-    };
-
-    let now = now_ms();
-
-    // Fast path: serve from cache if still fresh.
-    {
-        let guard = RELEASE_CACHE.lock().unwrap();
-        if let Some(ref entry) = *guard {
-            if now.saturating_sub(entry.fetched_at_ms) < VERSION_CACHE_TTL_MS {
-                return version_json(&entry.tag_name, &entry.latest, &platform);
-            }
-        }
-    }
-
-    // Cache stale or cold — hit GitHub on a blocking thread.
-    let fetched = tokio::task::spawn_blocking(fetch_github_latest)
-        .await
-        .unwrap_or(None);
-
-    match fetched {
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Failed to fetch latest release from GitHub" })),
-        )
-            .into_response(),
-        Some((tag_name, latest)) => {
-            {
-                let mut guard = RELEASE_CACHE.lock().unwrap();
-                *guard = Some(GhReleaseCache {
-                    fetched_at_ms: now,
-                    latest:        latest.clone(),
-                    tag_name:      tag_name.clone(),
-                });
-            }
-            version_json(&tag_name, &latest, &platform)
-        }
-    }
-}
-
-fn version_json(tag_name: &str, latest: &str, platform: &str) -> Response {
-    let ext = if platform.starts_with("windows") { ".exe" } else { "" };
-    let download_url = format!(
-        "https://github.com/jeffgeiser/Wicklee/releases/download/{tag_name}/wicklee-agent-{platform}{ext}"
-    );
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "latest": latest, "download_url": download_url })),
-    )
-        .into_response()
-}
-
-// ── CORS middleware (C2 — origin allowlist) ───────────────────────────────────
+// ── CORS middleware ───────────────────────────────────────────────────────────
 //
-// Hand-rolled so the security invariants are auditable in one place rather than
-// scattered across a third-party crate's configuration API.
-//
-// Rules:
-//   1. Origin matching is EXACT string equality against ALLOWED_ORIGINS —
-//      no prefix, suffix, or contains checks.
-//   2. Access-Control-Allow-Credentials: true is only emitted when the request
-//      Origin is in the allowlist.  If the origin is absent or unknown, NO CORS
-//      headers are sent at all (absence is correct — do not send "false").
-//   3. Agents posting to /api/telemetry never send an Origin header, so this
-//      middleware is a complete no-op for them.
-//   4. OPTIONS preflights are short-circuited with 200 OK before they reach
-//      any route handler.
-
-const ALLOWED_ORIGINS: &[&str] = &[
-    "https://wicklee.dev",
-    "https://www.wicklee.dev",
-    "http://localhost:5173",   // Vite dev server
-    "http://localhost:3000",   // alternate dev port
-];
+// Injected directly into the response so Railway's proxy cannot strip the
+// headers. OPTIONS preflights are short-circuited with 200 OK before they
+// reach any route handler.
 
 async fn cors(req: Request<Body>, next: Next) -> Response {
-    // Exact match only — &[&str]::contains uses PartialEq which is byte equality.
-    let allow_origin: Option<String> = req.headers()
-        .get(header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-        .filter(|o| ALLOWED_ORIGINS.contains(o))
-        .map(|o| o.to_owned());
-
-    // Short-circuit OPTIONS preflights — never reach route handlers.
     if req.method() == Method::OPTIONS {
-        let mut response = (
+        return (
             StatusCode::OK,
             [
-                (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS"),
-                (header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type, authorization"),
+                (header::ACCESS_CONTROL_ALLOW_ORIGIN,  "*"),
+                (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, DELETE, OPTIONS"),
+                (header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type, authorization, x-api-key"),
             ],
         ).into_response();
-        if let Some(ref origin) = allow_origin {
-            if let Ok(val) = header::HeaderValue::from_str(origin) {
-                response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
-            }
-            // Credentials (cookies, Authorization) are only permitted for known
-            // origins.  Setting this on a wildcard * origin is a security error;
-            // the header is intentionally absent when origin is not in the list.
-            response.headers_mut().insert(
-                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                header::HeaderValue::from_static("true"),
-            );
-        }
-        return response;
     }
 
     let mut res = next.run(req).await;
-    if let Some(ref origin) = allow_origin {
-        if let Ok(val) = header::HeaderValue::from_str(origin) {
-            res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
-        }
-        // Same invariant as above: credentials header only on known origins.
-        res.headers_mut().insert(
-            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-            header::HeaderValue::from_static("true"),
-        );
-    }
+    let h = res.headers_mut();
+    h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        header::HeaderValue::from_static("*"));
     res
 }
 
@@ -1608,27 +1536,20 @@ async fn main() {
     // Pre-load known nodes from the DB so they survive Railway redeploys.
     // metrics is always None here — the frontend shows "last seen X ago" until
     // the agent re-pushes real telemetry (within its 2s push cadence).
-    // telemetry_secret is also loaded so the fast-path auth check in
-    // handle_telemetry never has to hit the DB for already-known nodes.
     let seed_metrics: HashMap<String, MetricsEntry> = {
-        let rows: Vec<(String, i64, Option<String>)> = conn
-            .prepare("SELECT wk_id, last_seen, telemetry_secret FROM nodes")
-            .expect("Failed to prepare node seed query")
+        let rows: Vec<(String, i64)> = conn
+            .prepare("SELECT wk_id, last_seen FROM nodes")
+            .unwrap()
             .query_map([], |r| Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
-                r.get::<_, Option<String>>(2)?,
             )))
-            .expect("Failed to query nodes at startup")
+            .unwrap()
             .filter_map(|r| r.ok())
             .collect();
         rows.into_iter()
-            .map(|(node_id, last_seen, telemetry_secret)| {
-                (node_id, MetricsEntry {
-                    last_seen_ms:     last_seen as u64,
-                    metrics:          None,
-                    telemetry_secret,
-                })
+            .map(|(node_id, last_seen)| {
+                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics: None })
             })
             .collect()
     };
@@ -1652,12 +1573,10 @@ async fn main() {
     let clerk_keys = Arc::new(RwLock::new(initial_keys));
 
     let state = AppState {
-        db:            Arc::new(Mutex::new(conn)),
-        metrics:       Arc::new(RwLock::new(seed_metrics)),
-        clerk_keys:    clerk_keys.clone(),
-        pair_attempts: Arc::new(Mutex::new(HashMap::new())),
-        sse_total:     Arc::new(AtomicUsize::new(0)),
-        sse_per_ip:    Arc::new(Mutex::new(HashMap::new())),
+        db:              Arc::new(Mutex::new(conn)),
+        metrics:         Arc::new(RwLock::new(seed_metrics)),
+        clerk_keys:      clerk_keys.clone(),
+        api_rate_limits: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.
@@ -1700,9 +1619,16 @@ async fn main() {
         .route("/api/pair/claim",    post(handle_claim))
         .route("/api/pair/activate", post(handle_activate))
         .route("/api/telemetry",    post(handle_telemetry))
-        .route("/api/fleet",          get(handle_fleet))
-        .route("/api/fleet/stream",   get(handle_fleet_stream))
-        .route("/api/agent/version",  get(handle_agent_version))
+        .route("/api/fleet",         get(handle_fleet))
+        .route("/api/fleet/stream",  get(handle_fleet_stream))
+        // ── Agent API v1 ──────────────────────────────────────────────────────
+        .route("/api/v1/keys",           post(handle_v1_create_key))
+        .route("/api/v1/keys",           get(handle_v1_list_keys))
+        .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))
+        .route("/api/v1/fleet",          get(handle_v1_fleet))
+        .route("/api/v1/fleet/wes",      get(handle_v1_fleet_wes))
+        .route("/api/v1/nodes/:id",      get(handle_v1_node))
+        .route("/api/v1/route/best",     get(handle_v1_route_best))
         .with_state(state)
         .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
 
@@ -1728,14 +1654,16 @@ async fn main() {
     println!("║  POST /api/telemetry                         ║");
     println!("║  GET  /api/fleet                             ║");
     println!("║  GET  /api/fleet/stream                      ║");
-    println!("║  GET  /api/agent/version                     ║");
+    println!("║  ── Agent API v1 ─────────────────────────  ║");
+    println!("║  POST   /api/v1/keys                         ║");
+    println!("║  GET    /api/v1/keys                         ║");
+    println!("║  DELETE /api/v1/keys/:key_id                 ║");
+    println!("║  GET    /api/v1/fleet                        ║");
+    println!("║  GET    /api/v1/fleet/wes                    ║");
+    println!("║  GET    /api/v1/nodes/:id                    ║");
+    println!("║  GET    /api/v1/route/best                   ║");
     println!("║  Listening on {addr:<30} ║");
     println!("╚══════════════════════════════════════════════╝");
 
-    // into_make_service_with_connect_info enables the ConnectInfo<SocketAddr>
-    // extractor in handle_activate, which provides the raw socket peer address
-    // as a fallback when X-Forwarded-For is absent (local dev / direct TLS).
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .expect("Server exited unexpectedly");
+    axum::serve(listener, app).await.expect("Server exited unexpectedly");
 }

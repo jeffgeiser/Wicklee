@@ -30,13 +30,9 @@
 
 **Inference Runtime**
 - Ollama integration: auto-detect `localhost:11434`, model name, quantization, size
-- 20-token scheduled tok/s probe via `/api/generate` (num_predict=20) — pure generation phase (`eval_count ÷ eval_duration`), isolated from prompt load time. Dynamic scheduling: probe skipped when GPU util ≥ 40% (estimation covers the gap).
-- Throughput estimation: `Peak_TPS × GPU_Utilization%` fills the gap when probe is skipped or fails. Session-scoped peak resets on model swap. Applied to TOK/S, WES, Cost/1M, and fleet totals.
-- Three-state TOK/S display: LIVE (inference active) / BUSY (GPU loaded, no inference) / IDLE-SPD (clean idle baseline). `estimateTps()` adds GPU-fraction boost when under load.
-- Transparent Ollama proxy (Phase B): optional bind on `:11434` ahead of Ollama. Zero-lag inference detection + exact tok/s from done-packet `eval_count/eval_duration`. Bind-or-fallback — if port unavailable, falls back to `/api/ps` polling silently.
+- 30-second sampled tok/s probe via `/api/generate` (num_predict=3)
 - Wattage/1K TKN: live calculation from board power ÷ tok/s
-- Cost/1M TKN: `(watts × pue × kwhRate) / (tps × 3.6)` — per-million for direct cloud API comparison
-- vLLM integration: Prometheus `/metrics` at `localhost:8000` — passive scrape of `avg_generation_throughput_toks_per_s` (no synthetic tokens), model name, KV cache utilisation %, requests running; 2s poll
+- Cost/1K TKN: wattage × configurable kWh rate (default $0.13)
 
 **UI**
 - Fleet Overview: 6 real-time summary cards (all live data, no mock values)
@@ -73,45 +69,17 @@
 - [ ] **"Why is my WES low?" tooltip** — inline calculation breakdown: tok/s ÷ Watts ÷ Penalty = WES, with Thermal Cost % and recommended action.
 - [ ] **`wes_config.json`** — configurable penalty thresholds per platform. Sane defaults ship tuned for standard deployments. Operators can override for unusual hardware or environments.
 
-### Insights Tab v1 — The Intelligence Hub
-
-> Full spec and wireframe: `docs/INSIGHTS.md`. This is the canonical reference for all card designs, tier gating, and section layout.
-
-- [x] **`InsightsTab.tsx` shell** — Global Status Rail + 3-section grid (`InsightsSection` component). Replaces any existing placeholder tab content.
-- [x] **`InsightsGlobalStatusRail.tsx`** — full-width bar: nominal state (green pulse + ALL SYSTEMS NOMINAL + stats ticker) / active state (full amber/red bg + alert rows + anchor links). Always pinned.
-- [ ] **`InsightsLockedCard.tsx`** — gate wrapper: blurred body, lock icon, tier badge, upgrade CTA. No mock data.
-- [ ] **`InsightsLiteCard.tsx`** — partial-data wrapper for Community views of Pro/Team cards (reduced data density + "Unlock full view →" CTA).
-
-**Section 1 — Operational Signals (Community)**
-- [ ] **Alert Trio** (`ThermalDegradationCard`, `PowerAnomalyCard`, `MemoryExhaustionCard`) — stacked dormant list, expands in-place on fire. Dormant state: compact ~32px bar with current reading + green dot. Fire state: full split-graph card.
-- [ ] **Model Fit Score card** — Lite at Community (score label only); full card at Pro+ (history chart, recommendation).
-- [ ] **WES Leaderboard card** — Lite at Community (top-3 rank only, no sparklines); full at Pro+.
-- [x] **Inference Density live** — existing `HexHive.tsx` embedded in the third Health Indicator slot. Always visible at all tiers.
-
-**Section 2 — Automation & Cost (Pro)**
-- [ ] **Model Eviction card** — countdown timer `EVICTION IN MM:SS`; KEEP WARM toggle (Pro+); locked shell for Community with upgrade copy.
-- [ ] **Idle Resource Cost card** — dollar ticker `-$X.XX / Day (Idle)`; locked shell for Community.
-
-**Section 3 — Analytics & Forensics (Team / Enterprise)**
-- [ ] **Efficiency Regression card** — 7-day baseline; collecting state with circular progress bar `4/7 days`; locked shell for Pro-.
-- [ ] **Memory Forecast, Quant ROI, Cold Start, Fleet Thermal Diversity** — locked Team shells with upgrade copy.
-- [ ] **Inference Density historical** — locked shell showing hive thumbnail + "Unlock Peak-Hour Analysis →"; full unlock at Team (shares component with live HexHive).
-- [ ] **Sovereignty Audit** — locked Enterprise shell.
-
 ### Local Intelligence Tab — Free Tier Insight Cards
-
-> Cards below are the per-insight logic layer. UI scaffolding is owned by Insights Tab v1 above. See `docs/INSIGHTS.md` for derivation formulas and alerting specs.
-
 - [ ] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded.
 - [ ] **Thermal Degradation Correlation:** Named insight card when thermal state transition + tok/s drop detected simultaneously. Shows before/after tok/s, causal chain, recommendation.
 - [ ] **Power Anomaly Detection:** Fires when board power exceeds 2× session baseline or when power/GPU utilization ratio is anomalous. Flags runaway processes invisible to standard monitoring.
 - [ ] **Unified Memory Exhaustion Warning (Apple Silicon):** Correlates Ollama model size + available unified memory + vm_stat pressure. Warns before swap storm — not after.
-- [ ] **Model Eviction Prediction:** Fires 2 minutes before predicted Ollama model unload based on `/api/ps` inactivity. Community: warning only. Pro+: "Keep Warm" toggle (Pro = 1 active node, Team/Enterprise = all fleet nodes) sends silent ping to reset `keep_alive` timer.
+- [ ] **Model Eviction Prediction:** Fires 2 minutes before predicted Ollama model unload based on `/api/ps` inactivity. Free: warning. Paid: "Keep Warm" toggle sends silent ping to reset `keep_alive` timer.
 - [ ] **Idle Resource Notice:** Node online >1hr with zero inference activity. Shows estimated electricity cost of idle time.
 
 ### Fleet Intelligence Panel
 - [ ] **Fleet WES Leaderboard:** WES-ranked across all nodes. Cross-node efficiency comparison that accounts for thermal state — "which node is most efficient per token right now?" answered live.
-- [ ] **Fleet Thermal Diversity Score:** Distribution of thermal states across the fleet. "3/4 nodes thermally stressed — fleet is one spike from cascade failure." Community: score only. Pro+: Slack alert.
+- [ ] **Fleet Thermal Diversity Score:** Distribution of thermal states across the fleet. "3/4 nodes thermally stressed — fleet is one spike from cascade failure." Free: score. Paid: Slack alert.
 - [ ] **Fleet Inference Density Map:** ✅ Hexagonal hive plot — glowing pulse on active inference nodes, cold dim on idle. Visual utilization map, demo-video-ready.
 - [ ] **Idle Fleet Cost Card:** Daily electricity cost of idle nodes with PUE multiplier support. Formula: `idle_watts × pue × hours × kwh_rate`. Shows "Node: $X/day · Facility: $Y/day (PUE 1.4)" so math is transparent.
 
@@ -131,14 +99,6 @@
 - [x] Navigation restructure — single profile entry point lower left
 - [x] Profile dropdown cleanup — identity, Settings, Docs, Release notes, Sign out
 
-### UI Conventions — Telin Audit
-> `font-telin` (JetBrains Mono + `tabular-nums`) is the required class for all live numeric telemetry.
-> `font-mono` is for static strings only (code, keys, URLs). Wrong token = layout jitter at 10Hz.
-
-- [ ] **Telin Audit — existing components:** Sweep all 83+ `font-telin` usages and confirm zero regressions to bare `font-mono` on numeric values. Flag any `font-mono` on a live SSE-derived field as a bug.
-- [ ] **Telin gate — new Insight cards:** Model-Fit Score, Thermal Degradation Correlation, Power Anomaly, Memory Pressure Forecast, Tok/s Regression delta — all derived numeric scores must use `font-telin`. Enforce in PR review checklist.
-- [ ] **Telin gate — `font-sans` on numbers:** Catch any numeric telemetry value rendered in `font-sans` (Inter). Inter has no `tabular-nums` variant at the weights we use — layout shift guaranteed under load.
-
 ### Live Activity — New Event Types
 - [ ] Power anomaly detected/resolved
 - [ ] Model eviction predicted / Keep Warm action taken
@@ -154,7 +114,7 @@
 - [x] **Raw Markdown route** — every post served at `/blog/[slug]` (rendered) and `/blog/[slug].md` (raw text). Agents fetch the `.md` directly.
 - [x] **Path-based routing** — `currentPath` state + `navigate()` + `popstate` listener in App.tsx. Blog routes bypass auth entirely.
 - [x] **Blog nav link** — "Blog" added to LandingPage nav between Documentation and GitHub.
-- [ ] **First post content:** Drop any `.md` into `/public/blog/` — Vite plugin auto-generates `index.json` at build time. Suggested first post: WES formula, live fleet data, four-node comparison table, IPW academic citation (arXiv:2511.07885). Blog listing at `/blog`, profile menu entry added.
+- [ ] **First post content:** `wes-the-mpg-for-local-ai-inference.md` — WES formula, live fleet data, four-node comparison table, IPW academic citation (arXiv:2511.07885). *(placeholder live, full article pending)*
 
 ### Launch Prep
 - [ ] Fix mock data on localhost fleet overview cards
@@ -173,16 +133,11 @@
 > Goal: close hardware gaps, launch publicly, ship Agent API v1.
 
 ### Platform
-- [x] **vLLM Integration:** ✅ Shipped (v0.4.5). Prometheus `/metrics` at `localhost:8000`. Real tok/s, model name, KV cache %, requests running. Ollama and vLLM can run simultaneously — fleet tok/s sums both.
-- [x] **Linux Thermal:** ✅ Shipped (v0.4.5). `/sys/class/thermal` — thermal state on GeiserBMC and similar bare metal nodes.
+- [x] **vLLM Integration:** ✅ Prometheus `/metrics` endpoint at `localhost:8000`. Real tok/s without 30s probe. 2s polling loop, 5 metrics harvested (`vllm_running`, `vllm_model_name`, `tok/s`, `cache_usage_perc`, `requests_running`).
+- [x] **Linux Thermal:** ✅ `/sys/class/thermal` — reads all `thermal_zone*/temp` entries, maps max to Normal/Fair/Serious/Critical. Closes the thermal state gap on GeiserBMC and similar bare metal nodes.
 - [ ] **Windows Thermal:** WMI thermal data for Windows nodes. Annotated as "estimated" in UI — lowest data quality platform.
 - [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.
 - [ ] **macOS CPU Power (sudoless):** Entitlement-based `powermetrics` access without requiring root.
-
-### Binary Release & Local-Sync Pipeline
-- [ ] **Automated UI Sync** — post-build script that copies `frontend/dist/` into the agent embed path and verifies hashes match the cloud deployment. Prevents version drift between the Cockpit SPA and Mission Control SPA. Build gate: block release if hashes diverge.
-- [ ] **High-Hz Hardware Rail** — Dedicated high-frequency `/ws/hardware` endpoint for the Cockpit sparkline (CPU/GPU/Thermal/Power). Separate from the 1Hz `/api/metrics` SSE broadcast which is tuned for display smoothing. The pulse chart is the Cockpit's signature visual.
-- [ ] **Sovereign Mode Toggle** — UI control in Settings → Account & Data. Permanently disables the cloud relay even when a pairing code is entered. Backed by a `sovereign.lock` file that the agent respects on restart. Enterprise gate for HIPAA/defense operators who cannot have outbound telemetry under any circumstances.
 
 ### WES Platform Expansion
 - [ ] **AMD CPU thermal** — k10temp + clock ratio derivation. Cache max boost at agent startup. Clock ratio thresholds: ≥0.95→1.0, ≥0.80→1.25, ≥0.60→1.75, <0.60→2.5. Temperature tie-breaker at >85°C. Flagged as `clock_ratio` source in UI.
@@ -191,14 +146,14 @@
 - [ ] **Thermal Cost % alerts** — Info >10%, Warning >25%, Critical >40%. Alert on rate-of-change as well as absolute — a 15% drop in 5 minutes is more urgent than a steady 20%.
 - [ ] **Benchmark report output format** — reproducible, citable: model, prompt, token count, date, Wicklee version, per-node Raw WES / Penalized WES / Thermal Cost % / Thermal Source. Enables the published research series.
 
-### Agent API v1 *(new)*
+### Agent API v1 ✅
 > The first machine-readable interface to Wicklee fleet data.
 > Agents are first-class consumers — same data as the dashboard, JSON over HTTP.
 
-- [ ] **`GET /api/v1/fleet`** — fleet summary, all nodes, current state
-- [ ] **`GET /api/v1/fleet/wes`** — WES scores across all nodes, ranked
-- [ ] **`GET /api/v1/nodes/{id}`** — single node deep metrics
-- [ ] **`GET /api/v1/route/best`** — opinionated routing recommendation:
+- [x] **`GET /api/v1/fleet`** — fleet summary, all nodes, current state, WES
+- [x] **`GET /api/v1/fleet/wes`** — WES scores across all nodes, ranked
+- [x] **`GET /api/v1/nodes/{id}`** — single node deep metrics
+- [x] **`GET /api/v1/route/best`** — opinionated routing recommendation:
   ```json
   {
     "latency":    { "node": "WK-C133", "tok_s": 240, "reason": "Highest throughput" },
@@ -206,11 +161,14 @@
     "default":    "efficiency"
   }
   ```
-- [ ] **API key generation** — Settings → Account & Data
+- [x] **API key management** — dedicated API Keys tab in the dashboard (create / list / delete). Key format `wk_live_<32-hex>`. SHA-256 hashed at rest. One-time reveal on creation.
+- [x] **Developer Portal** — Quick Reference panel: base URL, auth header, endpoint table, auto-populated curl snippet. Two-click delete confirm. Rate limit badge.
+- [x] **"The Programmable Fleet" landing section** — between Sovereignty and How It Works. Three cards: Programmable Routing, Reactive Automation, Performance CI/CD.
+- [x] **Rate limiting** — Community: 60 req/min. Team: 600 req/min. In-memory sliding window, same pattern as pairing rate limits.
 - [ ] **API docs at `/docs/api`** — human and agent readable
 
-### Sovereignty
-- [ ] **Sovereignty Tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network.
+### Sovereignty (Observability tab section)
+- [ ] **Sovereignty section in Observability tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network. Lives in the Observability tab — not a standalone tab.
 - [ ] **Audit Log Export (Free):** Exportable pairing and telemetry history.
 
 ### Launch Content
@@ -257,9 +215,9 @@
 
 - [x] **Clerk Auth:** ✅ Shipped. Clerk-managed signup/login with JWT. Stream tokens (UUID, 60s TTL) authenticate SSE connections.
 - [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
-- [ ] **Keep Warm Toggle (Pro+):** Wicklee sends silent ping to reset Ollama `keep_alive` timer before predicted eviction. Pro: 1 active node. Team / Enterprise: all fleet nodes. All actions logged in Live Activity.
+- [x] **Keep Warm (Community: 1 node · Paid: unlimited):** ✅ Wicklee sends a silent 1-token `/api/generate` ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity with precise timestamp. Always opt-in, always logged, always reversible.
 - [ ] **CSV / JSON Export:** Any metric, any time range, any node.
-- [ ] **Hardware-Detected Cold Start:** GPU spike + VRAM jump pattern = cold start event. Detects model load transitions from hardware signals alone — no proxy or TTFT measurement required. Labeled "Hardware-Detected" in UI to distinguish from future request-layer timing (Sentinel Proxy, Phase 5).
+- [x] **Cold Start Detection:** ✅ GPU spike + VRAM jump = cold start event. Hardware-pattern detection — no proxy or TTFT required. Sentinel Proxy (Phase 5) adds TTFT precision as an optional enhancement for advanced teams.
 - [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
 - [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
 - [ ] **Product Hunt launch**
@@ -301,53 +259,30 @@
 
 ## Tier Structure
 
-| | Community | Pro | Team | Enterprise |
-|---|---|---|---|---|
-| **Max Nodes** | 3 | 10 | Unlimited | Unlimited |
-| **Price** | Free | ~$9/mo | ~$29/mo | ~$199/mo |
-| | | | | |
-| Local dashboard (localhost:7700) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| Live metrics — all hardware | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| Inference runtime (Ollama / vLLM) | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| WES scores | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| Fleet Intelligence panel | ✅ View | ✅ View | ✅ Full | ✅ Full |
-| Agent API v1 | ✅ | ✅ | ✅ | ✅ |
-| `/api/v1/route/best` | ✅ | ✅ | ✅ | ✅ |
-| | | | | |
-| **Metric History** | Real-time | 7-Day | 90-Day | Custom / Audit Scope |
-| **Insights** | Live Session | Persistent Cards | Trend Analysis | Predictive / Compliance |
-| Trend-based Intelligence | ❌ | ✅ 7-day | ✅ 90-day | ✅ Custom |
-| Insights AI (`/api/v1/insights/latest`) | ❌ | ❌ | ✅ | ✅ |
-| MCP server tools | ❌ | ❌ | ✅ | ✅ |
-| | | | | |
-| **Alerting** | Dashboard only | Slack (Single) | Slack & PagerDuty | SIEM / Webhooks |
-| **Keep Warm** | — | 1 Active Node | All Fleet Nodes | All Fleet Nodes |
-| **Artifacts** | — | — | CSV Exports | Signed PDF Audits |
-| Sovereignty audit log | View | View | View | Signed export |
-| **Sovereignty** | Cloud Relay | Cloud Relay | Cloud Relay | Airgapped (Custom) |
-| Sentinel Proxy routing | ❌ | ❌ | ❌ | ✅ |
-| SSO / SAML | ❌ | ❌ | ❌ | ✅ |
-| HIPAA / SOC2 BAA | ❌ | ❌ | ❌ | ✅ |
-
----
-
-## Alerting Tiers
-
-> Alerting capability is the clearest paywall signal in the monitoring space.
-> Key design intent: the $9 Pro tier creates a meaningful "unattended Slack monitoring"
-> entry point — a single channel, no PagerDuty complexity, just notifications when something goes wrong overnight.
-
-| Tier | Price | Alerting Capability | Rationale |
+| | Community | Team | Enterprise |
 |---|---|---|---|
-| Community | $0/mo | Dashboard only | Zero friction to try. Dashboard tab stays open; no outbound delivery needed at this tier. |
-| Pro | $9/mo | Slack (Single channel) | Covers individuals and small clusters who want real-time Slack pings without a full on-call setup. One workspace, one channel — simple and affordable. |
-| Team | $29/mo | Slack & PagerDuty | Integrates with professional on-call rotations. Meaningful step up for teams running production workloads. |
-| Enterprise | $199/mo | SIEM / Webhooks | Automated failover triggers, SIEM ingestion, custom infrastructure responses. Enterprise buying motion — procurement-friendly. |
-
-**Open questions for design phase:**
-- Does Pro get Slack for *all* alert types, or only thermal / power (excluding tok/s regression which requires history)?
-- Slack OAuth flow vs. webhook URL input — webhook is simpler to ship, OAuth is cleaner UX.
-- Should a daily digest (summary push at 08:00) be Community/free to drive activation, with real-time alerts reserved for Pro+?
+| Nodes | Up to 3 | Unlimited | Unlimited |
+| Local dashboard | ✅ Full | ✅ Full | ✅ Full |
+| Live metrics (all) | ✅ Full | ✅ Full | ✅ Full |
+| Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full |
+| WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full |
+| Fleet Intelligence panel | ✅ View | ✅ Full + alerts | ✅ Full |
+| Agent API v1 | ✅ 60 req/min | ✅ 600 req/min | 🔜 Unlimited |
+| `/api/v1/route/best` | ✅ | ✅ | ✅ |
+| Local Intelligence (session) | ✅ Free cards | ✅ Full + alerts | ✅ Full |
+| 24h session history (localStorage) | ✅ | ✅ | ✅ |
+| Quantization ROI (live session) | ✅ | ✅ | ✅ |
+| Local Intelligence (trend-based) | ❌ | ✅ Paid | ✅ Full |
+| Insights AI (morning briefing) | ❌ | ✅ | ✅ |
+| `/api/v1/insights/latest` | ❌ | ✅ | ✅ |
+| Keep Warm (1 node free · unlimited paid) | ✅ 1 node | ✅ Unlimited | ✅ Unlimited |
+| 90-day history | ❌ | ✅ | ✅ |
+| Slack / PagerDuty | ❌ | ✅ | ✅ |
+| MCP server tools | ❌ | ✅ | ✅ |
+| Sovereignty audit log | ✅ View | ✅ View | ✅ Signed export |
+| Sentinel Proxy routing | ❌ | ❌ | ✅ |
+| Sovereign Mode (no cloud) | ❌ | ❌ | ✅ |
+| Price | Free | ~$29/mo | ~$199/mo |
 
 ---
 
@@ -364,8 +299,8 @@ An agent running a multi-step inference pipeline calls `wicklee_best_route("effi
 
 **The progression:**
 ```
-Phase 3A  →  /llms.txt + Markdown blog     agents can discover and read Wicklee
-Phase 3B  →  Agent API v1                  agents can query live fleet data
+Phase 3A  →  /llms.txt + Markdown blog     agents can discover and read Wicklee       ✅
+Phase 3B  →  Agent API v1                  agents can query live fleet data            ✅
 Phase 4A  →  /api/v1/insights/latest       agents can consume Wicklee intelligence
 Phase 5   →  MCP server                    agents call Wicklee tools natively
 ```
