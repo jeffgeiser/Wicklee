@@ -221,8 +221,18 @@ Replaced the hardcoded TypeScript `POST_SLUGS` registry with a fully automated s
 
 ---
 
+### Transparent Ollama Proxy + Metric Smoothing
+*4 commits — 93b6053 ← dff5ab8 ← 00d2042 ← 17fdcf9*
+
+1. **Three-state TOK/S** (`17fdcf9`) — LIVE / BUSY / IDLE-SPD badge logic + `estimateTps()` helper in `Overview.tsx`. Replaced binary inference detection with GPU%-aware state machine.
+2. **Phase B Proxy** (`00d2042`) — Optional transparent Ollama proxy on `:11434`. Bind-or-fallback startup. `ProxyState` shared Arc. Exact tok/s from done-packet `eval_count/eval_duration`. `ollama_proxy_active` propagated to frontend — shows "live" vs "live estimate".
+3. **Metrics reference rewrite** (`dff5ab8`) — `public/metrics.md` comprehensive rewrite: Visual Indicators at a Glance, all 8 Insight Tiles, all 10 Fleet Status columns, Fleet Intelligence cards, corrected Display Smoothing section.
+4. **Broadcaster throttle** (`93b6053`) — 10 Hz → 1 Hz in `start_metrics_broadcaster()`. Fixes localhost metric jumpiness: 8-sample window now covers ~8s instead of ~800ms, matching cloud smoothing depth.
+
+---
+
 ## Phase Status
 
 - **Phase 1** ✅ — Sentinel agent, SSE/WS telemetry, Apple Silicon + NVIDIA metrics, embedded frontend
 - **Phase 2** 🔄 — NVIDIA/NVML support ✅, Fleet Connect ✅, pairing-state-driven UI mode ✅, Settings page ✅
-- **Phase 3A** 🔄 — Insights Hub shell ✅, HexHive ✅, Throughput Estimation ✅, Probe Scheduling ✅, Blog infrastructure ✅ · Insight cards, WES v2, Launch Prep pending
+- **Phase 3A** 🔄 — Insights Hub shell ✅, HexHive ✅, Throughput Estimation ✅, Probe Scheduling ✅, Blog infrastructure ✅, Transparent Proxy ✅, Three-State TOK/S ✅, Broadcaster throttle ✅ · Insight cards, WES v2, Launch Prep pending
