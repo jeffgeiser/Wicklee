@@ -20,6 +20,8 @@ ureq           = { version = "2", features = ["json"] }
 sha2           = "0.10"
 # Constant-time byte comparison for auth tokens — prevents timing side-channel attacks.
 subtle         = "2.6"
+# DuckDB for time-series analytics (Phase 4A). bundled = compile DuckDB from source (required for Railway).
+duckdb         = { version = "1", features = ["bundled"] }
 
 [profile.release]
 opt-level     = 3
