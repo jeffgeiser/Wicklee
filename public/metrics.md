@@ -1,6 +1,6 @@
 # Wicklee Metrics Reference
 
-> Every metric Wicklee surfaces — what it means, what to do about it.
+> Every metric Wicklee surfaces — what it means, how it's calculated, what to do about it.
 
 ---
 
@@ -15,6 +15,191 @@ Wicklee is a sovereign Rust binary that observes your inference fleet without ev
 - **Local Interpretation:** By owning both hardware physics and runtime context, Wicklee triggers Conditional Insights — identifying "invisible" states like a Power Anomaly (high wattage vs. low GPU utilization) or Thermal Degradation (temperature spikes causing silent throughput drops).
 
 - **Zero-Intercept Privacy:** Wicklee does not act as a proxy. It never sees your prompts or model responses — it only measures the hardware "effort" required to produce them, ensuring your data remains entirely within your sovereign boundary.
+
+---
+
+## Visual Indicators at a Glance
+
+Every colored dot, badge, and bar in the dashboard — explained in one place.
+
+---
+
+### Node Status Dot (NODE column)
+
+| Appearance | Meaning | Logic |
+|------------|---------|-------|
+| Animated green ping + solid green fill | **Online** | Last telemetry received within 60 seconds |
+| Gray outlined circle, no fill | **Offline** | No telemetry for > 60 seconds |
+| Solid gray dot | **Pending** | Paired but no telemetry received yet |
+
+A node is considered online if `Date.now() − lastSeen ≤ 60,000 ms`. Rolling-buffer smoothing is paused and cleared when a node goes offline.
+
+---
+
+### Model Fit Dot (MODEL column)
+
+The small colored dot next to the loaded model name answers: *"Is this hardware well-matched for this model?"*
+
+| Color | Score | When it appears |
+|-------|-------|-----------------|
+| 🟢 Green | **Good** | Model fits in available memory with **>20% headroom** AND thermal is Normal |
+| 🟡 Amber | **Fair** | Model fits, but headroom is **10–20%** OR thermal is Fair |
+| 🔴 Red | **Poor** | Model **exceeds** available memory, headroom **<10%**, OR thermal is Serious/Critical |
+
+The dot only appears when Ollama is running with a model loaded. **Hover over it** for the exact reason (e.g. *"Model fits with 34% memory headroom · Normal thermal"* or *"Model size (13.0 GB) exceeds available memory (8.1 GB free)"*).
+
+**Memory source:** NVIDIA nodes use dedicated VRAM (`nvidia_vram_total_mb`). Apple Silicon and CPU-only nodes use system RAM (`total_memory_mb − available_memory_mb`). The headroom percentage is free memory as a fraction of total capacity.
+
+**Scoring priority (Poor → Fair → Good):**
+1. **Poor** if: model doesn't fit in free memory, OR headroom < 10%, OR thermal is Serious/Critical
+2. **Fair** if: model fits AND (headroom 10–20% OR thermal is Fair)
+3. **Good** if: model fits AND headroom > 20% AND thermal is Normal (or unavailable)
+
+*Source: `src/utils/modelFit.ts` → `computeModelFitScore()`*
+
+---
+
+### TOK/S Badges
+
+| Badge | Color | Condition | Meaning |
+|-------|-------|-----------|---------|
+| **LIVE** | Green | `ollama_inference_active = true` OR `vllm_tokens_per_sec > 0` | Inference in progress |
+| **IDLE-SPD** | Muted gray | `inference_active = false` AND GPU% < 15% | Probe ran at idle — hardware capability baseline |
+| **BUSY** | Amber | `inference_active = false` AND GPU% ≥ 50% | GPU occupied by non-Ollama workload |
+
+Ollama LIVE values are prefixed with `~` (estimated). vLLM LIVE values are exact. See **Throughput Measurement** for full detail.
+
+---
+
+### WES Color
+
+| Color | Range | Meaning |
+|-------|-------|---------|
+| 🟢 Green | > 10 | Efficient — Apple Silicon territory |
+| 🟡 Amber | 1–10 | Moderate — high-power GPU or mild throttle |
+| 🔴 Red | < 1 | Poor — CPU inference or severe thermal throttling |
+
+*Source: `src/utils/wes.ts` → `wesColorClass()`*
+
+---
+
+### Thermal Badges
+
+| Color | State | macOS source | NVIDIA equivalent |
+|-------|-------|-------------|-------------------|
+| 🟢 Green | Normal | pmset nominal | GPU temp < 70°C |
+| 🟡 Yellow | Fair / Elevated | pmset mild throttle | 70–83°C |
+| 🟠 Orange | Serious / High | pmset active throttle | 83–90°C |
+| 🔴 Red | Critical | pmset severe | ≥ 90°C |
+
+For NVIDIA nodes without a native macOS `thermal_state`, temperature is inferred from `nvidia_gpu_temp_c`. *Source: `src/components/NodeHardwarePanel.tsx` → `derivedNvidiaThermal()`*
+
+---
+
+### Memory and VRAM Bars
+
+| Bar color | Utilization | Meaning |
+|-----------|-------------|---------|
+| 🟢 Green | < 70% | Comfortable headroom |
+| 🟡 Amber | 70–90% | Monitor — approaching pressure zone |
+| 🔴 Red | ≥ 90% | Near capacity — swap risk or OOM risk |
+
+---
+
+### Cost/1M per Node
+
+| Color | Value | Meaning |
+|-------|-------|---------|
+| 🟢 Green | < $0.01 | Very cheap — below display threshold |
+| 🟡 Amber | $0.01–$0.05 | Moderate cost |
+| 🔴 Red | > $0.05 | High cost — check power draw or electricity rate |
+
+---
+
+## Dashboard: Insight Tiles
+
+Eight summary cards at the top of the dashboard. All displayed values pass through a rolling-average buffer (fleet metrics: 12-sample window; per-node metrics: 8-sample window) to suppress probe noise while keeping transitions live.
+
+| # | Tile | Formula / Source | Notes |
+|---|------|-----------------|-------|
+| 1 | **Throughput** | `∑ estimateTps(tok/s, peakTps, GPU%, inferenceActive)` across active nodes | Sub-label: "live" (proxy active), "live estimate" (polling), "idle-spd baseline", or "sampling every 30s" |
+| 2 | **Fleet Health** | `(# nodes with Normal or Fair thermal) ÷ (# nodes with thermal data) × 100` | 🟢 100%, 🟡 ≥75%, 🔴 <75% |
+| 3 | **Total Fleet VRAM** | `∑ nvidia_vram_used_mb ÷ ∑ nvidia_vram_total_mb` | NVIDIA only — Apple Silicon unified memory is excluded |
+| 4 | **Fleet Nodes** | Online node count / total paired node count | Online = telemetry within last 60s |
+| 5 | **Avg WES** | Mean `tok/s ÷ (watts × PUE × ThermalPenalty)` across nodes with power data | Thermally penalized tok/watt |
+| 6 | **W/1K Tkn** | `(totalPowerW ÷ fleetTps) × 1000` | Watts per 1,000 tok/s; equivalent to J/tok |
+| 7 | **Cost/1M Tokens** | `wattPer1k × kWhRate ÷ 3,600,000 × 1,000,000` | Default $0.13/kWh; configure in Settings |
+| 8 | **Fleet Power Cost/Day** | `∑ (watts_i × PUE_i) × 24 × (rate ÷ 1000)` | Always-on infrastructure cost — not filtered by inference activity |
+
+*Source: `src/utils/efficiency.ts`, computed inline in `src/components/Overview.tsx`*
+
+---
+
+## Dashboard: Fleet Status Table
+
+Ten columns in the main node table. Values update at up to 10 Hz but are smoothed over an 8-sample rolling window before display.
+
+| Column | What it shows | Data source | Color logic |
+|--------|--------------|-------------|-------------|
+| **NODE** | Node ID + hostname + online dot | `node_id`, `hostname`, `timestamp_ms` | Online/offline/pending dot (see Visual Indicators) |
+| **MEMORY** | Memory utilization % + bar | `memory_pressure_percent` (Apple) OR `used_memory_mb / total_memory_mb × 100` | Green <70%, Amber 70–90%, Red ≥90% |
+| **VRAM** | NVIDIA VRAM % + bar | `nvidia_vram_used_mb / nvidia_vram_total_mb × 100` | Same thresholds; shows `—` on Apple Silicon |
+| **MODEL** | Model name + **Fit Dot** + vLLM cache% | `ollama_active_model`, `vllm_model_name`, `vllm_cache_usage_perc` | Fit dot: Green/Amber/Red (see Visual Indicators) |
+| **WES** | Wicklee Efficiency Score | `computeWES(tps, watts, thermal, pue)` | Green >10, Amber 1–10, Red <1 |
+| **TOK/S** | Three-state throughput reading | `estimateTps()` with LIVE / IDLE-SPD / BUSY badge | See TOK/S Badges above |
+| **TOK/W** | Tokens per watt | `tps ÷ (watts / 1000)` | No threshold — higher is always better |
+| **WATTS** | Board power draw | `cpu_power_w + nvidia_power_draw_w` | No threshold coloring in table |
+| **GPU%** | GPU utilization | `nvidia_gpu_utilization_percent` OR `gpu_utilization_percent` | No threshold coloring in table |
+| **THERMAL** | Thermal state badge | `thermal_state` (macOS pmset / Linux) or inferred from `nvidia_gpu_temp_c` | Green / Yellow / Orange / Red (see Thermal Badges) |
+
+---
+
+## Dashboard: Fleet Intelligence Cards
+
+Cards rendered below the Fleet Status table.
+
+---
+
+### Best Route Now
+
+Picks the single best node for three routing strategies, using smoothed values:
+
+- **Lowest Latency** — node with the highest current `tps` (fastest response)
+- **Highest Efficiency** — node with the highest `wes` (best tok/watt)
+- **Lowest Cost** — node with the lowest `costPer1m` (cheapest per 1M tokens; requires power data)
+
+Use this when you want to direct a single request to the optimal node right now, rather than load-balancing across the fleet.
+
+---
+
+### Cost Efficiency Card
+
+Fleet-level $/1M tokens broken down with per-node contribution. Same formula as Insight Tile 7 but shows how many nodes are contributing and their individual costs. Color: 🟢 green < $0.01, 🟡 amber $0.01–$0.05, 🔴 red > $0.05 per node.
+
+---
+
+### Tokens Per Watt Card
+
+`fleetTps ÷ totalFleetWatts` — fleet-wide energy efficiency. Rises when efficient nodes (Apple Silicon, quantized models) are active; falls when power-hungry GPUs dominate the fleet.
+
+---
+
+### Thermal Diversity
+
+Count of nodes per thermal state (Normal / Fair / Serious / Critical). A fleet where any node shows Serious or Critical is already losing throughput capacity silently.
+
+---
+
+### Display Smoothing
+
+All numbers in the dashboard pass through a rolling-average buffer before rendering:
+
+| Metric set | Window | Equivalent time |
+|------------|--------|-----------------|
+| Per-node (tok/s, watts, GPU%) | 8 samples | ~4 probe intervals |
+| Fleet aggregates (fleet tok/s, $/1M, WES) | 12 samples | ~6 probe intervals |
+
+Buffers reset immediately when a node goes offline. Raw (unsmoothed) values drive alert thresholds so warnings fire without delay. *Source: `src/hooks/useRollingMetrics.ts` → `useRollingBuffer()`*
 
 ---
 
@@ -85,18 +270,20 @@ By default, inference detection uses `/api/ps` `expires_at` — zero configurati
 
 **What the proxy adds:**
 - `inference_active` flips to `true` the instant a request arrives — zero lag vs. the 5–35 second window from `/api/ps`
-- LIVE display shows exact tok/s (no `~`) — measured from `eval_count / eval_duration` in the final streaming packet
+- Throughput tile sub-label changes from "live estimate" to "live" when proxy is active
+- Exact tok/s measured from `eval_count / eval_duration` in the final streaming packet
 - No additional network round-trip — the proxy runs in-process on loopback
 
 **Privacy guarantee:** The proxy reads only the `model` field from the request body (for model-swap tracking) and only `eval_count`, `eval_duration`, and `done` from the final response packet. It never reads, buffers, or logs `prompt`, `messages`, or `response` fields. All request and response bytes pass through verbatim.
 
-**Configuration (`config.toml`):**
+**Configuration (`~/.wicklee/config.toml`):**
 ```toml
 [ollama_proxy]
-enabled = false         # opt-in, default off
-listen_port = 11435     # point your Ollama client here instead of 11434
-ollama_port  = 11434    # where real Ollama listens
+enabled = true       # opt-in, default false
+ollama_port = 11435  # where Ollama now listens (after you move it)
 ```
+
+To enable: set `OLLAMA_HOST=127.0.0.1:11435` in Ollama's environment and restart it. The Wicklee agent binds `:11434` (the standard Ollama port) on startup. If it can't bind (Ollama still there), it logs a clear message and falls back to `/api/ps` polling automatically.
 
 When the proxy is disabled (default), Wicklee uses `/api/ps` detection. The proxy is purely additive — disabling it does not change any other metric behavior. vLLM does not need this option; its Prometheus endpoint already provides exact live throughput.
 
@@ -110,30 +297,40 @@ Per-node values derived from hardware telemetry and inference runtime.
 
 ### WES — Wicklee Efficiency Score
 
-**Formula:** `tok/s ÷ (Watts × ThermalPenalty)`
+**Formula:** `tok/s ÷ (Watts × PUE × ThermalPenalty)`
 
 The single number that captures true inference efficiency. WES is tok/watt made thermally honest — when a node is healthy, WES equals tok/watt. When it's throttling, WES is lower, and the gap is exactly how much efficiency heat is costing you.
 
-**Ranges:**
-- `> 50` 🟢 Excellent · Apple Silicon territory
-- `10–50` 🟡 Good · efficient GPU at load
-- `1–10` 🟠 Fair · high-power GPU or mild throttle
+**Thermal penalties applied to the denominator:**
+
+| State | Multiplier | Effect |
+|-------|-----------|--------|
+| Normal | 1.0× | No adjustment |
+| Fair | 1.25× | WES = 80% of raw tok/watt |
+| Serious | 2.0× | WES = 50% of raw tok/watt |
+| Critical | 2.0× | WES = 50% of raw tok/watt |
+
+**Color ranges:**
+- `> 10` 🟢 Excellent · Apple Silicon territory
+- `1–10` 🟡 Fair · high-power GPU or mild throttle
 - `< 1` 🔴 Poor · CPU inference or thermal throttling
 
-**If this is low / high:** Check thermal state first. If throttling, reduce load or improve airflow. If thermal is Normal, the hardware is simply less efficient per watt — compare models or quantizations.
+**If this is low:** Check thermal state first. If throttling, reduce load or improve airflow. If thermal is Normal, the hardware is simply less efficient per watt — compare models or quantizations.
+
+*Source: `src/utils/wes.ts` → `computeWES()`*
 
 ---
 
 ### TOK/S — Tokens Per Second
 
-Raw inference throughput. See **Three-State TOK/S Display** above for how the label (LIVE / IDLE-SPD / BUSY) tells you what the number means. Ollama: measured via a scheduled 20-token probe every 30 seconds, estimated during active inference. vLLM: live aggregate throughput from Prometheus, always exact.
+Raw inference throughput. The badge (LIVE / IDLE-SPD / BUSY) tells you what the number means — see **Visual Indicators** above and **Three-State TOK/S Display** in Throughput Measurement. Ollama: measured via scheduled 20-token probe every 30 seconds, estimated during active inference. vLLM: live aggregate throughput from Prometheus, always exact.
 
 **Ranges:**
 - `> 50` 🟢 Fast · responsive for interactive use
 - `10–50` 🟡 Moderate · usable, not snappy
 - `< 10` 🔴 Slow · model may be too large for hardware
 
-**If this is low / high:** Check memory headroom (model may be swapping), thermal state (throttling cuts tok/s 30–50%), and GPU utilization (low GPU% with low tok/s = runtime misconfiguration).
+**If this is low:** Check memory headroom (model may be swapping), thermal state (throttling cuts tok/s 30–50%), and GPU utilization (low GPU% with low tok/s = runtime misconfiguration).
 
 ---
 
@@ -147,14 +344,14 @@ Raw efficiency without thermal penalty — the energy cost of each token before 
 
 ### WATTS — Board Power
 
-Total power draw of the inference hardware in watts. Apple Silicon: CPU power via powermetrics (requires sudo). NVIDIA: board power via NVML (sudoless).
+Total power draw of the inference hardware in watts. Apple Silicon: CPU power via powermetrics. NVIDIA: board power via NVML (sudoless). Linux: CPU package power via RAPL.
 
 **Ranges:**
 - `< 15W` 🟢 Low draw · Apple Silicon or idle GPU
 - `15–150W` 🟡 Moderate · GPU under inference load
 - `> 150W` 🔴 High draw · monitor for cost and thermals
 
-**If this is low / high:** Check GPU utilization. High watts + low GPU% = power anomaly (background process consuming power without doing inference work).
+**If this is high with low GPU%:** Power anomaly — a background process is consuming power without doing inference work.
 
 ---
 
@@ -174,20 +371,20 @@ Percentage of GPU compute capacity currently in use. Apple Silicon: read from AG
 
 ### MEMORY — System Memory Pressure
 
-Percentage of total system memory in use, combined with kernel memory pressure assessment. On Apple Silicon, unified memory serves both CPU and GPU — the model lives here alongside everything else.
+Percentage of total system memory in use. On Apple Silicon, unified memory serves both CPU and GPU — the model lives here alongside everything else. Color thresholds are reflected in the progress bar (see Visual Indicators).
 
 **Ranges:**
-- `< 60%` 🟢 Comfortable headroom
-- `60–80%` 🟡 Monitor · approaching pressure zone
-- `> 80%` 🔴 High pressure · swap risk, tok/s may drop
+- `< 70%` 🟢 Comfortable headroom
+- `70–90%` 🟡 Monitor · approaching pressure zone
+- `> 90%` 🔴 High pressure · swap risk, tok/s may drop
 
-**If this is low / high:** The loaded model may be too large for this hardware. Wicklee's Model Fit Score will flag this before performance collapses.
+**If this is high:** The loaded model may be too large for this hardware. The Model Fit Dot in the MODEL column will flag this — check the hover tooltip for exact headroom figures.
 
 ---
 
 ### VRAM — GPU Memory Utilization
 
-NVIDIA only. Percentage of dedicated GPU memory in use. Apple Silicon shows — · unified memory serves both roles and is covered by the MEMORY metric.
+NVIDIA only. Percentage of dedicated GPU memory in use. Apple Silicon shows `—` — unified memory serves both roles and is covered by the MEMORY metric. Color thresholds are reflected in the progress bar.
 
 **Ranges:**
 - `< 70%` 🟢 Comfortable headroom
@@ -198,15 +395,15 @@ NVIDIA only. Percentage of dedicated GPU memory in use. Apple Silicon shows — 
 
 ### THERMAL STATE
 
-The OS-level assessment of hardware thermal condition. macOS: read from pmset (sudoless). NVIDIA: inferred from GPU temperature via NVML.
+The OS-level assessment of hardware thermal condition. macOS: read from `pmset` (sudoless). NVIDIA: inferred from GPU temperature via NVML. See **Thermal Badges** in Visual Indicators for the color mapping.
 
-**Ranges:**
+**Ranges with WES impact:**
 - `Normal` 🟢 1.0× penalty — Hardware running within design limits
 - `Fair` 🟡 1.25× penalty — Mild throttling beginning
-- `Serious` 🔴 2.0× penalty — Active throttling · tok/s dropping
+- `Serious` 🔴 2.0× penalty — Active throttling · tok/s dropping ~30–50%
 - `Critical` 🔴 2.0×+ penalty — Severe throttling · reduce load immediately
 
-**If this is low / high:** Stop inference if possible. Check airflow, fan curve, and ambient temperature. A node at Serious thermal has already lost 30–50% of its tok/s invisibly.
+**If Serious or Critical:** Stop inference if possible. Check airflow, fan curve, and ambient temperature. A node at Serious thermal has already lost 30–50% of its tok/s invisibly — WES captures this loss even when the tok/s number looks stable.
 
 ---
 
@@ -230,14 +427,14 @@ cost_per_1M_tok  = cost_per_1k_tok × 1,000
 
 **Why 3,600,000?** 1 kWh = 1,000 W × 3,600 s = 3,600,000 J. Dividing Joules by this converts to kWh. Multiplying by your kWh rate gives dollars.
 
-**Example at current fleet values (36.1 W, 56.1 tok/s, $0.12/kWh):**
+**Example (36.1 W, 56.1 tok/s, $0.12/kWh):**
 ```
-J/1k·tok         = (36.1 / 56.1) × 1000 = 643 J
-cost/1k·tok      = 643 × 0.12 / 3,600,000 = $0.0000214
-cost/1M·tok      = $0.0214
+J/1k·tok    = (36.1 / 56.1) × 1000 = 643 J
+cost/1k·tok = 643 × 0.12 / 3,600,000 = $0.0000214
+cost/1M·tok = $0.0214
 ```
 
-Shown per-million so you can compare directly against cloud API pricing (e.g. GPT-4o at ~$5/1M). Configure your electricity rate in Settings → Cost & Energy for accurate figures.
+Shown per-million so you can compare directly against cloud API pricing (e.g. GPT-4o at ~$5/1M). Configure your electricity rate in Settings → Cost & Energy for accurate figures. Color: 🟢 < $0.01, 🟡 $0.01–$0.05, 🔴 > $0.05.
 
 ---
 
@@ -249,7 +446,7 @@ Aggregated across all paired nodes. Available in the cloud dashboard at wicklee.
 
 ### FLEET AVG WES
 
-Average WES score across all online nodes. Weighted equally — not by throughput. A useful fleet health signal but not a routing decision — use Best Route Now for routing.
+Average WES score across all online nodes with power data. Weighted equally — not by throughput. A useful fleet health signal, but use Best Route Now for routing decisions.
 
 ---
 
@@ -261,7 +458,7 @@ Fleet-level cost per million tokens at current draw and throughput. Uses per-nod
 
 ### TOKENS PER WATT (Fleet)
 
-**Formula:** `fleet_tok/s ÷ (total_fleet_watts / 1000)`
+**Formula:** `fleet_tok/s ÷ total_fleet_watts`
 
 Fleet-wide energy efficiency. Rises when efficient nodes (Apple Silicon) are active, falls when power-hungry nodes dominate the fleet.
 
@@ -269,24 +466,24 @@ Fleet-wide energy efficiency. Rises when efficient nodes (Apple Silicon) are act
 
 ### FLEET HEALTH
 
-Distribution of thermal states across all paired nodes. A node at Serious or Critical thermal state is already throttling — fleet health reflects how many nodes are in this condition simultaneously.
+Percentage of nodes with `thermal_state = Normal or Fair`. A node at Serious or Critical thermal state is already throttling — fleet health reflects how many nodes are in this condition simultaneously.
 
 **Ranges:**
-- `All Normal` 🟢 All nodes running within design limits
-- `Any Fair` 🟡 Monitor · mild throttling on at least one node
-- `Any Serious/Critical` 🔴 Active degradation · fleet efficiency is reduced
+- `100%` 🟢 All nodes running within design limits
+- `≥ 75%` 🟡 Monitor · mild throttling on at least one node
+- `< 75%` 🔴 Active degradation · fleet efficiency is reduced
 
 ---
 
 ## Configuration
 
-User-configured multipliers and scores that affect cost and efficiency calculations.
+User-configured multipliers that affect cost and efficiency calculations.
 
 ---
 
 ### PUE — Power Usage Effectiveness
 
-A multiplier accounting for datacenter overhead beyond raw node wattage (cooling, power delivery losses). Configure in Settings → Cost & Energy.
+A multiplier accounting for datacenter overhead beyond raw node wattage (cooling, power delivery losses). Applies to cost-per-token and WES calculations. Configure in Settings → Cost & Energy.
 
 **Typical values:**
 - `1.0` — Home lab or direct plug measurement
@@ -297,12 +494,25 @@ A multiplier accounting for datacenter overhead beyond raw node wattage (cooling
 
 ### MODEL FIT SCORE
 
-Correlates loaded model size against available memory and thermal state to assess whether this hardware is well-matched for this model. Appears in the Insights tab when a model is loaded.
+Correlates the loaded model's weight size against available memory (VRAM for NVIDIA, system RAM for Apple Silicon) and thermal state to assess whether this hardware is well-matched for this model.
 
-**Ranges:**
-- `Good` 🟢 Model fits with >20% memory headroom, Normal thermal
-- `Fair` 🟡 Model fits but headroom is tight or thermal is Fair
-- `Poor` 🔴 Model exceeds available memory or thermal is Serious
+**Scoring logic** (priority order: Poor → Fair → Good):
+
+| Score | Condition |
+|-------|-----------|
+| **Poor** 🔴 | Model size exceeds free memory, OR headroom < 10%, OR thermal is Serious/Critical |
+| **Fair** 🟡 | Model fits AND (headroom 10–20% OR thermal is Fair) |
+| **Good** 🟢 | Model fits AND headroom > 20% AND thermal is Normal (or unavailable) |
+
+The score appears as a colored dot next to the model name in the Fleet Status table (see **Model Fit Dot** in Visual Indicators). Hover the dot for the exact reason string.
+
+*Source: `src/utils/modelFit.ts` → `computeModelFitScore()`*
+
+---
+
+### ELECTRICITY RATE
+
+Default: `$0.13 USD/kWh`. Used in all cost calculations when no per-node rate is configured. Set your actual rate in Settings → Cost & Energy to make $/1M comparisons accurate.
 
 ---
 
