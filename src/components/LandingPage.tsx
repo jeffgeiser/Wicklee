@@ -121,7 +121,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Navigation */}
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
-        <Logo className="text-3xl" active={true} />
+        <Logo className="text-3xl" connectionState="connected" />
         <div className="flex items-center gap-4 sm:gap-8">
           <a href="#" className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</a>
           <button
@@ -164,19 +164,13 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
           Routing intelligence. True inference cost. Thermal state. Live, across every node. Built for Ollama and vLLM. Install in 60 seconds — nothing to configure.
         </p>
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
+        <div className="flex items-center justify-center">
           <button
             onClick={onSignUp}
             className="w-full sm:w-auto px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 text-lg"
           >
             Create Account — Free
             <ChevronRight className="w-5 h-5" />
-          </button>
-          <button
-            onClick={onSignIn}
-            className="w-full sm:w-auto px-8 py-4 bg-gray-900 border border-gray-800 hover:border-gray-700 text-white font-bold rounded-2xl transition-all text-lg flex items-center justify-center gap-2"
-          >
-            Sign In
           </button>
         </div>
         <p className="mt-3 text-xs text-gray-600">
