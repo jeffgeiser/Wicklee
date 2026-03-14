@@ -295,8 +295,8 @@ The agent collects hardware and inference telemetry locally. Outbound connection
 
 An unpaired agent has zero outbound network activity. An operator can verify this independently with `lsof -i` or `ss -tuln`.
 
-### Sovereignty Tab (Phase 3B)
-The Settings → Sovereignty tab surfaces:
+### Sovereignty (Observability Tab — Phase 3B)
+Sovereignty data surfaces as a section within the Observability tab — not a standalone tab. Content:
 - Complete pairing event log: timestamp, destination IP, session duration
 - Telemetry destination: `wicklee.dev` or "Sovereign Mode: no outbound telemetry"
 - Outbound connection manifest: every domain the agent has ever connected to

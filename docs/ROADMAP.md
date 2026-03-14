@@ -165,8 +165,8 @@
 - [ ] **API docs at `/docs/api`** — human and agent readable
 - [ ] **Rate limiting** — Community: 60 req/min. Team: 600 req/min.
 
-### Sovereignty
-- [ ] **Sovereignty Tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network.
+### Sovereignty (Observability tab section)
+- [ ] **Sovereignty section in Observability tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network. Lives in the Observability tab — not a standalone tab.
 - [ ] **Audit Log Export (Free):** Exportable pairing and telemetry history.
 
 ### Launch Content
