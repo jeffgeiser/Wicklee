@@ -274,28 +274,15 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       {/* ── Why Wicklee Section ─────────────────────────────────────────────────── */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-40 relative z-10 space-y-16 sm:space-y-24">
 
-        {/* Part 1 — Your monitoring tools are blind */}
+        {/* Part 1 — Standard monitors stop at the hardware */}
         <div>
           <p className="text-xs font-bold text-red-400 uppercase tracking-widest mb-4 text-center">The problem</p>
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center mx-auto">
-            Your monitoring tools are blind to inference.
+            Standard monitors stop at the hardware. We see the inference layer.
           </h2>
-          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-6 text-center mx-auto">
-            Standard tools see CPU and RAM. They don't see what's actually killing your inference performance.
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
+            While standard tools report raw utilization, Wicklee surfaces the invisible metrics—WES scores, wattage-per-token, and runtime health—that define your real-world performance.
           </p>
-
-          {/* Differentiator callout */}
-          <div className="flex mx-auto items-start gap-3 bg-indigo-500/5 border border-indigo-500/20 rounded-xl px-4 py-3 mb-10 max-w-2xl">
-            <span className="mt-0.5 shrink-0 text-indigo-400">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5"/>
-                <path d="M8 5v4M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </span>
-            <p className="text-sm text-indigo-300/80 leading-relaxed">
-              <span className="font-semibold text-indigo-300">Note:</span> Wicklee monitors hardware and inference runtime performance — not model output quality. We catch the infrastructure problems that cause output degradation before they show up in your evals.
-            </p>
-          </div>
 
           {/* Problem cards 2x2 */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
