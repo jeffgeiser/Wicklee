@@ -265,8 +265,8 @@
 | Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full |
 | WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full |
 | Fleet Intelligence panel | ✅ View | ✅ Full + alerts | ✅ Full |
-| Agent API v1 | ✅ 60 req/min | ✅ 600 req/min | ✅ Unlimited |
-| `/api/v1/route/best` | ✅ | ✅ | ✅ |
+| Agent API v1 | 🔜 60 req/min | 🔜 600 req/min | 🔜 Unlimited |
+| `/api/v1/route/best` | 🔜 | 🔜 | 🔜 |
 | Local Intelligence (session) | ✅ Free cards | ✅ Full + alerts | ✅ Full |
 | 24h session history (localStorage) | ✅ | ✅ | ✅ |
 | Quantization ROI (live session) | ✅ | ✅ | ✅ |
