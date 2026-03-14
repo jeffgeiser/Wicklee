@@ -146,14 +146,14 @@
 - [ ] **Thermal Cost % alerts** — Info >10%, Warning >25%, Critical >40%. Alert on rate-of-change as well as absolute — a 15% drop in 5 minutes is more urgent than a steady 20%.
 - [ ] **Benchmark report output format** — reproducible, citable: model, prompt, token count, date, Wicklee version, per-node Raw WES / Penalized WES / Thermal Cost % / Thermal Source. Enables the published research series.
 
-### Agent API v1 *(new)*
+### Agent API v1 ✅
 > The first machine-readable interface to Wicklee fleet data.
 > Agents are first-class consumers — same data as the dashboard, JSON over HTTP.
 
-- [ ] **`GET /api/v1/fleet`** — fleet summary, all nodes, current state
-- [ ] **`GET /api/v1/fleet/wes`** — WES scores across all nodes, ranked
-- [ ] **`GET /api/v1/nodes/{id}`** — single node deep metrics
-- [ ] **`GET /api/v1/route/best`** — opinionated routing recommendation:
+- [x] **`GET /api/v1/fleet`** — fleet summary, all nodes, current state, WES
+- [x] **`GET /api/v1/fleet/wes`** — WES scores across all nodes, ranked
+- [x] **`GET /api/v1/nodes/{id}`** — single node deep metrics
+- [x] **`GET /api/v1/route/best`** — opinionated routing recommendation:
   ```json
   {
     "latency":    { "node": "WK-C133", "tok_s": 240, "reason": "Highest throughput" },
@@ -161,9 +161,11 @@
     "default":    "efficiency"
   }
   ```
-- [ ] **API key generation** — Settings → Account & Data
+- [x] **API key management** — dedicated API Keys tab in the dashboard (create / list / delete). Key format `wk_live_<32-hex>`. SHA-256 hashed at rest. One-time reveal on creation.
+- [x] **Developer Portal** — Quick Reference panel: base URL, auth header, endpoint table, auto-populated curl snippet. Two-click delete confirm. Rate limit badge.
+- [x] **"The Programmable Fleet" landing section** — between Sovereignty and How It Works. Three cards: Programmable Routing, Reactive Automation, Performance CI/CD.
+- [x] **Rate limiting** — Community: 60 req/min. Team: 600 req/min. In-memory sliding window, same pattern as pairing rate limits.
 - [ ] **API docs at `/docs/api`** — human and agent readable
-- [ ] **Rate limiting** — Community: 60 req/min. Team: 600 req/min.
 
 ### Sovereignty (Observability tab section)
 - [ ] **Sovereignty section in Observability tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network. Lives in the Observability tab — not a standalone tab.
@@ -265,8 +267,8 @@
 | Inference runtime (Ollama/vLLM) | ✅ Full | ✅ Full | ✅ Full |
 | WES scores (Raw + Penalized) | ✅ Full | ✅ Full | ✅ Full |
 | Fleet Intelligence panel | ✅ View | ✅ Full + alerts | ✅ Full |
-| Agent API v1 | 🔜 60 req/min | 🔜 600 req/min | 🔜 Unlimited |
-| `/api/v1/route/best` | 🔜 | 🔜 | 🔜 |
+| Agent API v1 | ✅ 60 req/min | ✅ 600 req/min | 🔜 Unlimited |
+| `/api/v1/route/best` | ✅ | ✅ | ✅ |
 | Local Intelligence (session) | ✅ Free cards | ✅ Full + alerts | ✅ Full |
 | 24h session history (localStorage) | ✅ | ✅ | ✅ |
 | Quantization ROI (live session) | ✅ | ✅ | ✅ |
@@ -297,8 +299,8 @@ An agent running a multi-step inference pipeline calls `wicklee_best_route("effi
 
 **The progression:**
 ```
-Phase 3A  →  /llms.txt + Markdown blog     agents can discover and read Wicklee
-Phase 3B  →  Agent API v1                  agents can query live fleet data
+Phase 3A  →  /llms.txt + Markdown blog     agents can discover and read Wicklee       ✅
+Phase 3B  →  Agent API v1                  agents can query live fleet data            ✅
 Phase 4A  →  /api/v1/insights/latest       agents can consume Wicklee intelligence
 Phase 5   →  MCP server                    agents call Wicklee tools natively
 ```
