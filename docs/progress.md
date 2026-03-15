@@ -4,6 +4,90 @@
 
 ---
 
+## March 15, 2026 — WES v2 Sprint D: Insights Restructure + Thermal Alerts + Benchmark Reports 📊
+
+**The Goal:** Close the WES v2 UI loop — restructure Insights into a 3-tab hierarchy, add strategic doc updates (TIERS.md, ROADMAP.md Phase 5, metrics.md Prometheus schema), implement WES history chart (raw vs penalized), Thermal Cost % alerts, and benchmark report output format.
+
+---
+
+### Insights Tab Hierarchy ✅
+
+Restructured `AIInsights.tsx` from a vertical-scroll layout into three tabs:
+
+- **Triage** — Alert Quartet (Thermal Degradation, Power Anomaly, Memory Exhaustion, Thermal Cost), Model Eviction, Idle Resource, Model Fit, Local AI Analysis (Cockpit only).
+- **Performance** — WES Leaderboard, Inference Density HexHive, WES Trend Chart (cloud only, Pro+), Quantization ROI, Export Benchmark Report.
+- **Forensics** — Six Team+ locked/tease cards: Efficiency Regression, Memory Forecast, Hardware Cold Start, Fleet Thermal Diversity, Inference Density Historical, Sovereignty Audit.
+
+`InsightsGlobalStatusRail` always visible above all tabs. Tab bar renders "Team" badge on Forensics when locked. Dormant monitoring panel refactored to array-based isFirst/isLast logic — safe for variable number of dormant rows.
+
+### WES History Chart ✅
+
+`WESHistoryChart.tsx` switched from stacked `AreaChart` to `ComposedChart` with:
+- `Area` — filled indigo (Penalized WES, operational score)
+- `Line` — dashed reference (Raw WES / hardware ceiling) — only appears when `hasThermalCost` is true
+- Time-range gating: 1H/24H (Community), 7D (Pro), 30D/90D (Team). Locked buttons show tier label.
+- Pro nudge in empty state: "DuckDB is active. Pro unlocks 7-day historical trends." — contextual, single line, disappears once data arrives.
+- Tooltip shows both Penalized WES and Raw WES (ceiling) labels.
+
+### Thermal Cost % Alerts ✅
+
+New `ThermalCostAlertCard` (Tier 1) in Triage tab:
+
+- **Info** >10% · **Warning** >25% · **Critical** >40%
+- Rate-of-change escalation: TC% rise ≥15pp in rolling 30-frame SSE window bumps severity one level — a spike from 5%→20% is more urgent than steady 20%
+- Suppressed when `ThermalDegradationCard` is already firing (Serious/Critical thermal state) — no double-alerting
+- `tcPctHistoryRef` per-node rolling history for rate detection
+- TC% fires into `firingAlerts` array → appears in `InsightsGlobalStatusRail`
+- Dormant monitoring row shows peak fleet TC% when below threshold
+
+### Benchmark Report Output Format ✅
+
+`src/utils/benchmarkReport.ts`:
+- `BenchmarkReport` type — full provenance: node, hardware, OS, runtime, model, quantization, tok/s, watts, Raw WES, Penalized WES, Thermal Cost %, thermal state+source, WES version, Wicklee version, ISO timestamp
+- `buildReportFromLive(SentinelMetrics)` — live snapshot with full field coverage
+- `buildReportFromHistory(opts)` — WES history point snapshot (WES/thermal fields; model/watts absent)
+- `formatReportMarkdown(report)` — pasteable Markdown block for blog/arXiv/GitHub
+- `formatReportJSON(report)` — machine-readable JSON
+- `downloadReport(content, filename)` + `reportFilename(report, ext)` utilities
+
+`src/components/BenchmarkReportModal.tsx`:
+- WES summary strip (Raw / Penalized / Thermal Cost %)
+- Markdown ↔ JSON tab toggle
+- Copy-to-clipboard button
+- Download `.md` (primary) + Download `.json` (secondary)
+
+Export triggers:
+1. **Insights → Performance tab** — "Export snapshot" button appears when WES data is live. Uses best-WES node (Mission Control) or `localSentinel` (Cockpit).
+2. **WES Trend chart header** — "Export" button appears when history data is loaded. Snapshots the most recent point from the selected node's window.
+
+### Strategic Docs ✅
+
+- `docs/TIERS.md` — Enterprise tier: Prometheus/Grafana, Kubernetes Operator, SSO/SAML
+- `docs/ROADMAP.md` — Phase 5 "Enterprise & Orchestration": Prometheus Exporter, Grafana, OTel, vLLM/Ray Serve awareness, MIG slice WES, Docker/Helm/K8s Operator, Signed Audit PDF
+- `docs/metrics.md` — Enterprise Contextual Metrics (Cost Allocation formula, departmental multi-tenancy), full Prometheus schema (10 gauge + 2 state label metrics)
+- `src/hooks/usePermissions.ts` — `canGoSovereign` + `hasPrometheusExport` Enterprise flags
+- `src/types.ts` — `TIER_BADGE` constant (`Record<SubscriptionTier, { label, color }>`)
+- `src/pages/DocsPage.tsx` — Pro tier row in data retention table, Benchmark Report sub-section in WES section
+
+### What's Next
+
+**Phase 3B remaining (agent/Rust):**
+- AMD CPU thermal — k10temp + clock ratio
+- Intel CPU thermal — thermald zone states
+- ANE Utilization — Apple Neural Engine watt + utilization
+- macOS CPU Power sudoless
+
+**Phase 3B remaining (frontend):**
+- Sovereignty section in Observability tab (pairing event log, telemetry destination, outbound connection manifest)
+
+**Launch prep:**
+- Andy_PC RTX 3070 WES capture
+- RTX 4090 Vast.ai test
+- GitHub repo description
+- Show HN · r/LocalLLaMA · Ollama Discord
+
+---
+
 ## March 15, 2026 — WES v2 Sprint C: Thermal Cost % UI 🌡️
 
 **The Goal:** Surface Thermal Cost % as a first-class visible metric in the Fleet Status table, Best Route Now card, and WES tooltip. Wire rawWes / tcPct / thermalSource through the leaderboard data model. Fix formula errors in the `/docs` page.

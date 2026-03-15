@@ -33,14 +33,18 @@ import {
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
-import { computeWES } from '../utils/wes';
+import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
+import { buildReportFromLive } from '../utils/benchmarkReport';
+import type { BenchmarkReport } from '../utils/benchmarkReport';
+import BenchmarkReportModal from './BenchmarkReportModal';
 import { computeModelFitScore } from '../utils/modelFit';
 import { useSettings } from '../hooks/useSettings';
 
 // Tier 1 cards
-import ThermalDegradationCard from './insights/tier1/ThermalDegradationCard';
-import MemoryExhaustionCard   from './insights/tier1/MemoryExhaustionCard';
-import PowerAnomalyCard       from './insights/tier1/PowerAnomalyCard';
+import ThermalDegradationCard  from './insights/tier1/ThermalDegradationCard';
+import ThermalCostAlertCard    from './insights/tier1/ThermalCostAlertCard';
+import MemoryExhaustionCard    from './insights/tier1/MemoryExhaustionCard';
+import PowerAnomalyCard        from './insights/tier1/PowerAnomalyCard';
 
 // Tier 2 cards
 import ModelFitInsightCard from './insights/tier2/ModelFitInsightCard';
@@ -276,6 +280,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
   const [now, setNow]                     = useState(() => Date.now());
   const [activeTab, setActiveTab]         = useState<InsightsTab>('triage');
+  const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
 
   // Power baseline (Cockpit only)
   const wattReadingsRef        = useRef<number[]>([]);
@@ -293,6 +298,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const thermalFiredAtRef = useRef<number | null>(null);
   const powerFiredAtRef   = useRef<number | null>(null);
   const memFiredAtRef     = useRef<number | null>(null);
+  const tcFiredAtRef      = useRef<number | null>(null);
+
+  // Thermal Cost % rolling history — 30-frame window per node for rate-of-change detection.
+  // At typical SSE cadence (~1 frame/s), 30 frames ≈ 30 seconds; adjust window as needed.
+  const tcPctHistoryRef = useRef<Record<string, number[]>>({});
 
   // Transition tracking for FleetEvent emissions
   const prevThermalFiringRef  = useRef(false);
@@ -489,6 +499,44 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       })
     : [];
 
+  // ── Thermal Cost % alerts ─────────────────────────────────────────────────
+  // Fires for nodes in "Fair" thermal state where TC% > 10%.
+  // Nodes already in Serious/Critical are covered by ThermalDegradationCard — excluded here.
+
+  const tcPctByNode: Record<string, number>     = {};
+  const tcRateByNode: Record<string, number>    = {};
+
+  for (const node of effectiveNodes) {
+    const tps    = node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null;
+    const watts  = node.cpu_power_w ?? node.nvidia_power_draw_w ?? null;
+    const rawWes = computeRawWES(tps, watts);
+    const penWes = computeWES(tps, watts, node.thermal_state);
+    const tc     = thermalCostPct(rawWes, penWes);
+    tcPctByNode[node.node_id] = tc;
+
+    // Update rolling window (cap at 30 frames)
+    const prev    = tcPctHistoryRef.current[node.node_id] ?? [];
+    const updated = [...prev.slice(-29), tc];
+    tcPctHistoryRef.current[node.node_id] = updated;
+
+    // Rate-of-change: how much TC% rose from the start of the window to now
+    if (updated.length >= 2) {
+      tcRateByNode[node.node_id] = Math.max(0, tc - updated[0]);
+    }
+  }
+
+  const tcAlertNodes = effectiveNodes.filter(n => {
+    const tc           = tcPctByNode[n.node_id] ?? 0;
+    const alreadyAlert = ['serious', 'critical'].includes(n.thermal_state?.toLowerCase() ?? '');
+    return tc > 10 && !alreadyAlert;
+  });
+
+  const tcFiring = tcAlertNodes.length > 0;
+
+  // Track firing onset timestamp for the status rail
+  if (tcFiring && tcFiredAtRef.current === null) tcFiredAtRef.current = now;
+  if (!tcFiring) tcFiredAtRef.current = null;
+
   // ── Fleet stats for Status Rail ───────────────────────────────────────────
 
   const wesValues = effectiveNodes.map(computeNodeWes).filter((v): v is number => v != null);
@@ -526,6 +574,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       elapsedMs: memFiredAtRef.current ? now - memFiredAtRef.current : 0,
       severity:  'amber' as const,
     })),
+    ...tcAlertNodes.map(n => ({
+      id:        `tc-cost-${n.node_id}`,
+      name:      'Thermal Cost',
+      nodeId:    n.hostname ?? n.node_id ?? '—',
+      elapsedMs: tcFiredAtRef.current ? now - tcFiredAtRef.current : 0,
+      severity:  ((tcPctByNode[n.node_id] ?? 0) >= 40 ? 'red' : 'amber') as 'red' | 'amber',
+    })),
   ];
 
   // ── Per-node readings for dormant monitoring rows ─────────────────────────
@@ -561,6 +616,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     return pct > wPct ? n : worst;
   }, null);
   const memReading = peakVramNode ? fmtVram(peakVramNode) : null;
+
+  // Thermal Cost % dormant reading: peak TC% across non-alerting nodes
+  const peakTcPct = effectiveNodes.reduce((max, n) => {
+    const tc = tcPctByNode[n.node_id] ?? 0;
+    return tc > max ? tc : max;
+  }, 0);
+  const tcReading = peakTcPct > 0 ? `${peakTcPct}%` : 'Normal';
 
   // ── Model Fit (Triage tab) ─────────────────────────────────────────────────
 
@@ -674,7 +736,27 @@ Format as Markdown with a "Strategic Optimization" header.`,
 
   // ── RENDER ────────────────────────────────────────────────────────────────
 
+  // ── Benchmark report export ───────────────────────────────────────────────
+
+  const handleExportBenchmark = () => {
+    // Pick the node with the best (highest) penalized WES from live data, or localSentinel
+    const source = isLocalHost
+      ? localSentinel
+      : effectiveNodes.reduce<SentinelMetrics | null>((best, n) => {
+          const wes = computeNodeWes(n);
+          if (wes == null) return best;
+          if (best == null) return n;
+          return wes > (computeNodeWes(best) ?? 0) ? n : best;
+        }, null);
+    if (!source) return;
+    setBenchmarkReport(buildReportFromLive(source));
+  };
+
   return (
+    <>
+    {benchmarkReport && (
+      <BenchmarkReportModal report={benchmarkReport} onClose={() => setBenchmarkReport(null)} />
+    )}
     <div className="flex flex-col min-h-0">
 
       {/* ── Global Status Rail — always first ───────────────────────────────── */}
@@ -700,7 +782,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'triage' && (
             <>
-              {/* Alert Trio — firing cards above dormant monitoring panel */}
+              {/* Alert Quartet — firing cards above dormant monitoring panel */}
               <div className="space-y-3">
                 {thermalFiring && thermalNodes.map(n => (
                   <div key={n.node_id} id={`insight-thermal-${n.node_id}`}>
@@ -717,39 +799,43 @@ Format as Markdown with a "Strategic Optimization" header.`,
                     <MemoryExhaustionCard node={n} showNodeHeader={effectiveNodes.length > 1} />
                   </div>
                 ))}
-
-                {/* Dormant monitoring rows for non-firing conditions */}
-                {(!thermalFiring || !powerFiring || !memFiring) && (
-                  <div>
-                    {!thermalFiring && (
-                      <AlertDormantRow
-                        icon={<Thermometer className="w-3.5 h-3.5" />}
-                        label="Thermal Degradation"
-                        reading={thermalReading}
-                        isFirst
-                        isLast={powerFiring && memFiring}
-                      />
-                    )}
-                    {!powerFiring && (
-                      <AlertDormantRow
-                        icon={<Zap className="w-3.5 h-3.5" />}
-                        label="Power Anomaly"
-                        reading={powerReading}
-                        isFirst={thermalFiring}
-                        isLast={memFiring}
-                      />
-                    )}
-                    {!memFiring && (
-                      <AlertDormantRow
-                        icon={<HardDrive className="w-3.5 h-3.5" />}
-                        label="Memory Exhaustion"
-                        reading={memReading}
-                        isFirst={thermalFiring && powerFiring}
-                        isLast
-                      />
-                    )}
+                {tcFiring && tcAlertNodes.map(n => (
+                  <div key={n.node_id} id={`insight-thermal-cost-${n.node_id}`}>
+                    <ThermalCostAlertCard
+                      node={n}
+                      tcPct={tcPctByNode[n.node_id] ?? 0}
+                      rateOfChangePct={tcRateByNode[n.node_id] ?? 0}
+                      showNodeHeader={effectiveNodes.length > 1}
+                    />
                   </div>
-                )}
+                ))}
+
+                {/* Dormant monitoring rows for non-firing conditions.
+                    Build an ordered array so isFirst/isLast track correctly
+                    regardless of how many are currently dormant. */}
+                {(() => {
+                  const dormant = [
+                    ...(!thermalFiring ? [{ key: 'thermal', icon: <Thermometer className="w-3.5 h-3.5" />, label: 'Thermal Degradation', reading: thermalReading }] : []),
+                    ...(!powerFiring   ? [{ key: 'power',   icon: <Zap          className="w-3.5 h-3.5" />, label: 'Power Anomaly',       reading: powerReading   }] : []),
+                    ...(!memFiring     ? [{ key: 'mem',     icon: <HardDrive    className="w-3.5 h-3.5" />, label: 'Memory Exhaustion',   reading: memReading     }] : []),
+                    ...(!tcFiring      ? [{ key: 'tc',      icon: <Thermometer  className="w-3.5 h-3.5" />, label: 'Thermal Cost',         reading: tcReading      }] : []),
+                  ];
+                  if (dormant.length === 0) return null;
+                  return (
+                    <div>
+                      {dormant.map((item, i) => (
+                        <AlertDormantRow
+                          key={item.key}
+                          icon={item.icon}
+                          label={item.label}
+                          reading={item.reading}
+                          isFirst={i === 0}
+                          isLast={i === dormant.length - 1}
+                        />
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Model Eviction + Idle Resource Cost */}
@@ -1032,6 +1118,26 @@ Format as Markdown with a "Strategic Optimization" header.`,
                   }
                 />
               )}
+
+              {/* Export Benchmark Report — live snapshot */}
+              {effectiveNodes.length > 0 && wesValues.length > 0 && (
+                <div className="flex items-center justify-between bg-gray-900 border border-gray-800 rounded-2xl px-5 py-3.5">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                      Benchmark Report
+                    </p>
+                    <p className="text-xs text-gray-600 mt-0.5 truncate">
+                      Reproducible, citable WES snapshot — Raw · Penalized · Thermal Cost · Source
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleExportBenchmark}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors shrink-0 ml-4"
+                  >
+                    Export snapshot
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -1237,6 +1343,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
         </div>
       </div>
     </div>
+    </>
   );
 };
 

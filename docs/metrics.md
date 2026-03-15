@@ -359,7 +359,7 @@ Wicklee is designed to work across both platforms without compromise:
 | VRAM used / total | — (unified memory) | ✅ sudoless (NVML) |
 | GPU temperature | — | ✅ sudoless (NVML) |
 | GPU power draw | — | ✅ sudoless (NVML) |
-| Thermal state | ✅ sudoless | 🔜 Phase 3B |
+| Thermal state | ✅ sudoless | ✅ sysfs thermal |
 | CPU power draw | ⚠️ requires sudo | ⚠️ requires sudo |
 | Active model (Ollama) | ✅ sudoless | ✅ sudoless |
 | Tokens per second | ✅ sudoless | ✅ sudoless |
