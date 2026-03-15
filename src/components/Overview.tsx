@@ -328,18 +328,19 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // Only computed when Ollama is running and metrics are present.
   const fitResult = (hasOllama && m) ? computeModelFitScore(m) : null;
 
-  // VRAM % — NVIDIA only; Apple Silicon unified memory is architecturally distinct → show —
+  // VRAM % — NVIDIA only; Apple Silicon unified memory is architecturally distinct
+  // memory_pressure_percent is strictly Apple Silicon (IOKit/powermetrics) — reliable platform detector
+  const isAppleSilicon = m?.memory_pressure_percent != null;
   const vramPctRaw = hasNvidia
     ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
     : null;
   const vramPct = vramPctRaw != null ? Math.round(vramPctRaw * 10) / 10 : null;
   // Tooltip explains why — differs by platform/install method
-  const isAppleNode = (m?.gpu_name ?? '').toLowerCase().includes('apple') || m?.cpu_power_w != null;
   const vramTooltip = hasNvidia
     ? `NVIDIA dedicated VRAM utilisation — ${vramPct}%`
-    : isAppleNode
-    ? 'Apple Silicon uses unified memory — shown in MEMORY column instead.'
-    : 'No NVIDIA GPU detected. If this node has an NVIDIA GPU, re-run the installer — it will auto-detect and download the GPU-enabled build.';
+    : isAppleSilicon
+    ? 'Apple Silicon uses unified memory shared with the CPU. Memory pressure is shown in the MEMORY column.'
+    : 'No NVIDIA GPU on this node. If an NVIDIA GPU is present, re-run the installer — it auto-detects and downloads the GPU-enabled build.';
   const vramColorCls = vramPct == null ? 'text-gray-500 dark:text-gray-600'
     : vramPct >= 90 ? 'text-red-400'
     : vramPct >= 70 ? 'text-amber-400'
@@ -419,7 +420,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 2b. VRAM — NVIDIA dedicated VRAM only; Apple Silicon shows — (unified memory is architecturally distinct) */}
+      {/* 2b. VRAM — NVIDIA: percentage bar; Apple Silicon: "Unified" badge; CPU-only: — */}
       <div
         className="hidden md:block min-w-0 overflow-hidden"
         title={vramTooltip}
@@ -431,6 +432,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
               <div className={`h-full ${vramBarCls} rounded-full`} style={{ width: `${Math.min(vramPct, 100)}%` }} />
             </div>
           </div>
+        ) : isAppleSilicon ? (
+          <span className="text-[10px] font-telin tracking-wide text-indigo-400/70 border border-indigo-500/20 rounded px-1 py-0.5 bg-indigo-500/5">
+            Unified
+          </span>
         ) : (
           <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
         )}
