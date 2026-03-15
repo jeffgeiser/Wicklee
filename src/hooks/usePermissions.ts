@@ -26,8 +26,8 @@ const INSIGHT_TIER_GATE: Record<number, InsightsTier> = {
   3:  'live_session',   // Memory Exhaustion        — Community
   4:  'live_session',   // Model Fit Score          — Community (was Pro)
   5:  'live_session',   // Model Eviction           — Community (was Pro)
-  6:  'persistent',     // Idle Resource Cost       — Pro
-  7:  'persistent',     // WES Peer Leaderboard     — Pro
+  6:  'live_session',   // Idle Resource Cost       — Community
+  7:  'live_session',   // WES Peer Leaderboard     — Community
   8:  'trend',          // Efficiency Regression    — Team
   9:  'trend',          // Memory Forecast          — Team
   10: 'live_session',   // Quantization ROI         — Community (was Team)

@@ -20,6 +20,7 @@
 import React from 'react';
 import { Scale } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
+import { computeWES } from '../../../utils/wes';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -83,12 +84,6 @@ const QUANT_COPY: Record<string, { headline: string; detail: string }> = {
   },
 };
 
-function computeWes(tps: number, watts: number, thermalState: string | null): number {
-  const th = thermalState?.toLowerCase() ?? 'normal';
-  const penalty = th === 'critical' || th === 'serious' ? 2.0 : th === 'fair' ? 1.25 : 1.0;
-  return tps / (watts * penalty);
-}
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface QuantizationROICardProps {
@@ -133,7 +128,7 @@ const QuantizationROICard: React.FC<QuantizationROICardProps> = ({ node }) => {
   const watts  = node.cpu_power_w ?? node.nvidia_power_draw_w ?? null;
   const w1k    = tps != null && watts != null && tps > 0 ? (watts / tps) * 1_000 : null;
   const wes    = tps != null && watts != null && tps > 0 && watts > 0
-    ? computeWes(tps, watts, node.thermal_state)
+    ? computeWES(tps, watts, node.thermal_state)
     : null;
 
   // ── Model name display — truncate tag after colon for readability ───────

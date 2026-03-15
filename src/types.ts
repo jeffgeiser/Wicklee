@@ -93,7 +93,11 @@ export interface FleetEvent {
     | 'throttle_resolved'
     | 'model_swap'
     | 'power_anomaly'
-    | 'error';
+    | 'error'
+    | 'model_eviction_predicted'
+    | 'keep_warm_taken'
+    | 'thermal_degradation_confirmed'
+    | 'fit_score_changed';
   nodeId: string;
   hostname?: string;
   /** Human-readable transition detail, e.g. "Normal → Serious" or "phi3:mini → llama3:8b" */
@@ -179,6 +183,8 @@ export interface FleetStreamState {
   peakTpsMap: Record<string, number>;
   /** Detected fleet events (online/offline/thermal), newest first, max 50. */
   fleetEvents: FleetEvent[];
+  /** Append a new event to the front of the fleet event list. */
+  addFleetEvent: (event: FleetEvent) => void;
   /** Whether the EventSource is currently connected. */
   connected: boolean;
   /** Transport type — 'sse' once connected, null before first open. */

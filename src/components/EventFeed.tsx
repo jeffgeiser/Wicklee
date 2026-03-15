@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check } from 'lucide-react';
+import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check, Clock, Flame, Target } from 'lucide-react';
 import { FleetEvent } from '../types';
 
 interface EventFeedProps {
@@ -72,6 +72,30 @@ function eventMeta(ev: FleetEvent): EventMeta {
         icon: <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />,
         label: ev.detail ?? 'error',
         cls: 'text-red-400',
+      };
+    case 'model_eviction_predicted':
+      return {
+        icon: <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />,
+        label: ev.detail ? `eviction: ${ev.detail}` : 'model eviction predicted',
+        cls: 'text-amber-400',
+      };
+    case 'keep_warm_taken':
+      return {
+        icon: <Flame className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" />,
+        label: ev.detail ? `kept warm: ${ev.detail}` : 'keep warm applied',
+        cls: 'text-green-400',
+      };
+    case 'thermal_degradation_confirmed':
+      return {
+        icon: <Thermometer className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />,
+        label: ev.detail ? `thermal: ${ev.detail}` : 'thermal degradation confirmed',
+        cls: 'text-red-400',
+      };
+    case 'fit_score_changed':
+      return {
+        icon: <Target className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />,
+        label: ev.detail ? `fit: ${ev.detail}` : 'fit score changed',
+        cls: 'text-blue-400',
       };
   }
 }

@@ -2001,6 +2001,56 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               )}
             </FleetCard>
 
+            {/* 4b. Idle Fleet Cost */}
+            {(() => {
+              const idleNodes = effectiveMetrics.filter(n => {
+                const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
+                const watts = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+                return watts != null && (tps == null || tps <= 0);
+              });
+
+              if (idleNodes.length === 0) return null;
+
+              const idleCosts = idleNodes.map(n => {
+                const ns    = getNodeSettings?.(n.node_id) ?? { pue: 1.0, kwhRate: fleetKwhRate };
+                const watts = n.cpu_power_w ?? n.nvidia_power_draw_w ?? 0;
+                return {
+                  hostname:  n.hostname ?? n.node_id,
+                  dailyCost: watts * ns.pue * 24 * (ns.kwhRate / 1000),
+                };
+              });
+
+              const fleetDailyTotal = idleCosts.reduce((sum, n) => sum + n.dailyCost, 0);
+
+              return (
+                <FleetCard
+                  label="Idle Fleet Cost"
+                  sub={
+                    <p className="text-[10px] text-gray-600 leading-tight">
+                      {idleNodes.length} idle node{idleNodes.length !== 1 ? 's' : ''} · est. electricity
+                    </p>
+                  }
+                >
+                  <div className="space-y-1 w-full">
+                    {idleCosts.map((n, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2 min-w-0">
+                        <span className="text-xs text-gray-500 truncate flex-1 min-w-0">{n.hostname}</span>
+                        <span className="font-telin text-xs text-amber-400 shrink-0">
+                          ${n.dailyCost.toFixed(2)}/day
+                        </span>
+                      </div>
+                    ))}
+                    {idleCosts.length > 1 && (
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-700/50">
+                        <span className="text-[10px] text-gray-600 uppercase tracking-widest">Total</span>
+                        <span className="font-telin text-xs text-amber-400">${fleetDailyTotal.toFixed(2)}/day</span>
+                      </div>
+                    )}
+                  </div>
+                </FleetCard>
+              );
+            })()}
+
             {/* 5. Node Cost / 1M — half-width, pairs with Best Route Now below */}
             {costEntries.some(e => e.costPer1mRaw != null || e.tps == null || e.tps <= 0) && (
               <FleetCard label="Node Cost / 1M Tokens">
