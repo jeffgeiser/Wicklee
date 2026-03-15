@@ -4,6 +4,41 @@
 
 ---
 
+## March 15, 2026 — WES v2 Sprint C: Thermal Cost % UI 🌡️
+
+**The Goal:** Surface Thermal Cost % as a first-class visible metric in the Fleet Status table, Best Route Now card, and WES tooltip. Wire rawWes / tcPct / thermalSource through the leaderboard data model. Fix formula errors in the `/docs` page.
+
+---
+
+### WES v2 Sprint C — UI Layer ✅ (commit `b61e661`)
+
+**What shipped:**
+
+- **`computeRawWES()`** added to `wes.ts` — WES without thermal penalty applied. Represents the hardware ceiling: what the node *would* score thermally unimpeded.
+- **`thermalCostPct(rawWes, penalizedWes)`** — `(Raw − Penalized) / Raw × 100`, rounded to integer. Returns 0 when either input is null (normal thermal or no data) — badge stays hidden, no false alarms.
+- **`thermalSourceLabel(source)`** — maps `'nvml'` → `'NVML'`, `'iokit'` → `'IOKit'`, `'sysfs'` → `'sysfs'`. Shown in tooltip for provenance.
+- **`-N% thermal` badge** in Fleet Status table — amber, `text-[9px]`, appears below the WES score when `tcPct > 0 && isOnline`. Zero visual noise on normal-thermal nodes.
+- **`WESEntry` extended** — `rawWes`, `tcPct`, `thermalSource` added to the leaderboard data model. Leaderboard continues to rank by penalized WES (operational reality); raw WES is available for gap analysis.
+- **Best Route Now card** — efficiency WES now shows the `-N% thermal` badge in the amber chip below the score.
+- **`wesBreakdownTitle()` v2** — tooltip now shows tok/s · Watts · Thermal state · Thermal Cost % · Thermal source on *all* WES values (was: only WES < 10). Diagnostic recommendation line included.
+- **`SentinelMetrics` v2 fields** — `penalty_avg`, `penalty_peak`, `thermal_source`, `sample_count`, `wes_version` typed as optional in `types.ts`. Backward-compatible: older agents that don't emit them work with TC% = 0.
+
+**What was learned:**
+- TC% badge threshold of `> 0` is the right gate. `thermalCostPct()` returns exactly 0 for Normal state (penalty 1.0), so the badge is invisible unless throttling is active. No need for a separate `> 5%` dead zone.
+- The tooltip is most useful when shown on *all* WES values, not just low ones. A high WES with a non-zero TC% is the most actionable signal — the node is performing well but leaving efficiency on the table.
+
+---
+
+### Docs Page — Formula + Multiplier Fixes ✅
+
+**Problems fixed in `src/pages/DocsPage.tsx`:**
+- Formula had spurious `× 10` scaling factor: `WES = (tok/s ÷ Watts) × 10 ÷ ThermalPenalty`. Corrected to: `WES = tok/s ÷ (Watts × ThermalPenalty)` — matches `wes.ts` exactly.
+- Penalty multiplier for Fair was `0.90×` (should be `0.80×` = 1/1.25).
+- Penalty multiplier for Serious was `0.75×` (should be `0.57×` ≈ 1/1.75).
+- Added **Thermal Cost %** callout block below the penalty table — formula, definition, and amber `-N% thermal` badge explanation.
+
+---
+
 ## March 14, 2026 — WES v2 Agent-Side + Documentation Hub + Site Polish 📄
 
 **The Goal:** Ship the WES v2 thermal sampler and NVML bitmask on the agent. Fix two Railway cloud build failures. Overhaul landing page Problem section copy. Launch a public `/docs` page with full content and wire it site-wide as the authoritative documentation hub.
