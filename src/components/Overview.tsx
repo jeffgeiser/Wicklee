@@ -1114,12 +1114,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     :                                                    'text-red-600 dark:text-red-500';
 
   // Tile 3 — TOTAL FLEET VRAM: utilization % + used / capacity
+  // Includes NVIDIA discrete VRAM + Apple Silicon GPU budget (iogpu.wired_limit_mb).
+  // CPU-only Linux/Windows nodes are excluded (no GPU memory to report).
   const totalVramMb         = calculateTotalVramMb(effectiveMetrics);
   const totalVramCapacityMb = calculateTotalVramCapacityMb(effectiveMetrics);
   const vramUtilPct         = totalVramCapacityMb > 0
     ? Math.round((totalVramMb / totalVramCapacityMb) * 100) : null;
   const vramUsedGB     = (totalVramMb / 1024).toFixed(1);
   const vramCapacityGB = (totalVramCapacityMb / 1024).toFixed(1);
+  // Subtitle hint: distinguish mixed fleets (Apple + NVIDIA) from single-type fleets
+  const hasAppleVram  = effectiveMetrics.some(m => m.memory_pressure_percent != null);
+  const hasNvidiaVram = effectiveMetrics.some(m => (m.nvidia_vram_total_mb ?? 0) > 0);
+  const vramSubHint   = hasAppleVram && hasNvidiaVram ? 'Apple + NVIDIA'
+                      : hasAppleVram                  ? 'Apple GPU budget'
+                      : hasNvidiaVram                 ? 'NVIDIA VRAM'
+                      : null;
 
   // Tile 4 — FLEET NODES: online / total
   // fleetTotalCount — all registered nodes (single source via useFleetCounts)
@@ -1418,7 +1427,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           label={isLocalMode ? 'Node VRAM' : 'Total Fleet VRAM'}
           value={vramUtilPct != null ? `${vramUtilPct}%` : effectiveMetrics.length > 0 ? `${vramUsedGB} GB` : '—'}
           valueCls={vramUtilPct == null && effectiveMetrics.length === 0 ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={vramUtilPct != null ? `${vramUsedGB} / ${vramCapacityGB} GB` : vramUtilPct == null && effectiveMetrics.length > 0 ? `${vramUsedGB} GB used` : undefined}
+          sub={vramUtilPct != null
+            ? `${vramUsedGB} / ${vramCapacityGB} GB${vramSubHint ? ` · ${vramSubHint}` : ''}`
+            : (vramUtilPct == null && effectiveMetrics.length > 0)
+              ? `${vramUsedGB} GB used${vramSubHint ? ` · ${vramSubHint}` : ''}`
+              : undefined}
           icon={Database}
           iconCls="text-blue-400"
         />
