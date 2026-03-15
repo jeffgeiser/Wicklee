@@ -640,14 +640,14 @@ ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
                       <Td>✅ powermetrics</Td>
                       <Td>✅ ioreg (GPU%)</Td>
                       <Td>✅ pmset + sysctl</Td>
-                      <Td>✅ unified mem</Td>
+                      <Td>✅ wired budget¹</Td>
                     </tr>
                     <tr>
                       <Td><span className="font-medium text-white">Linux — NVIDIA</span></Td>
                       <Td>✅ RAPL powercap</Td>
                       <Td>✅ NVML (sudoless)</Td>
                       <Td>✅ sysfs thermal</Td>
-                      <Td>✅ NVML</Td>
+                      <Td>✅ NVML²</Td>
                     </tr>
                     <tr>
                       <Td><span className="font-medium text-white">Linux — AMD CPU</span></Td>
@@ -673,7 +673,10 @@ ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
                   </tbody>
                 </table>
               </div>
-              <p className="mt-2 text-xs text-gray-500">musl Linux builds (e.g. Alpine) run without NVML — GPU metrics fall back gracefully to null.</p>
+              <div className="mt-3 space-y-1.5 text-xs text-gray-500">
+                <p><span className="text-gray-400">¹ Apple Silicon VRAM</span> — Apple Silicon has no dedicated VRAM. The GPU shares the unified memory pool. The dashboard shows available headroom against the <em>wired memory budget</em> (<code className="text-gray-400">iogpu.wired_limit_mb</code>), which is the maximum macOS will wire for GPU access — typically ~75% of physical RAM. On a 24 GB M2, expect a ~18 GB GPU budget, not 24 GB. Loading a model larger than the available headroom will trigger compression and swap, degrading throughput.</p>
+                <p><span className="text-gray-400">² Linux NVIDIA</span> — VRAM metrics require the <strong className="text-gray-300">GPU-enabled build</strong>. The default install script auto-detects an NVIDIA GPU (<code className="text-gray-400">nvidia-smi</code>) and downloads the glibc binary with NVML enabled. If you installed before this was added, re-run <code className="text-gray-400">curl -fsSL https://wicklee.dev/install.sh | bash</code>.</p>
+              </div>
             </div>
 
             {/* Metric availability by inference runtime */}
