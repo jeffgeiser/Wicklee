@@ -250,6 +250,13 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
           <p className="text-xs text-gray-600 mt-1">
             WES history builds as your fleet runs. Check back after a few inference cycles.
           </p>
+          {subscriptionTier === 'community' && (
+            <p className="mt-3 text-[11px] text-indigo-400/70">
+              DuckDB is active.{' '}
+              <span className="text-indigo-400 font-semibold">Pro</span>
+              {' '}unlocks 7-day historical trends.
+            </p>
+          )}
         </div>
       )}
 
