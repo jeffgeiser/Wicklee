@@ -163,13 +163,55 @@ jobs:
           name: wicklee-agent-linux-aarch64
           path: wicklee-agent-linux-aarch64
 
+  # ── Linux x64 (glibc — NVIDIA GPU metrics enabled) ───────────────────────────
+  # Parallel to the musl build. glibc allows dlopen of libnvidia-ml at runtime,
+  # so VRAM / GPU util / GPU temp / power draw all work on NVIDIA nodes.
+  # The install script detects nvidia-smi and pulls this asset automatically.
+  build-linux-x64-nvidia:
+    name: Build · Linux (x64, NVIDIA/glibc)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Build frontend
+        run: npm ci && npm run build:agent
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # nvml-wrapper bundles NVML C headers and uses bindgen; the CUDA nvml_dev
+      # sub-package installs libnvidia-ml.so stubs so the linker resolves the
+      # symbol at compile time. At runtime the real driver library is dlopen-ed.
+      - name: Install CUDA toolkit (NVML headers + link stub)
+        uses: Jimver/cuda-toolkit@v0.2.15
+        with:
+          cuda: '12.4.0'
+          method: network
+          sub-packages: '["nvml_dev"]'
+
+      - name: Build agent (glibc, NVML enabled)
+        run: cargo build --release
+        working-directory: agent
+
+      - name: Stage binary
+        run: cp agent/target/release/wicklee-agent wicklee-agent-linux-x86_64-nvidia
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wicklee-agent-linux-x86_64-nvidia
+          path: wicklee-agent-linux-x86_64-nvidia
+
   # ── Publish versioned release (v* tags only) ──────────────────────────────────
   # Creates a named GitHub release (e.g. v0.4.8), attaches all four binaries,
   # and marks it as the latest release. Never runs on branch pushes.
   release-versioned:
     name: Publish Release · ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64]
+    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64, build-linux-x64-nvidia]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/download-artifact@v4
@@ -197,13 +239,14 @@ jobs:
             wicklee-agent-windows-x86_64.exe
             wicklee-agent-linux-x86_64
             wicklee-agent-linux-aarch64
+            wicklee-agent-linux-x86_64-nvidia
 
   # ── Publish nightly release (main branch + manual dispatch) ───────────────────
   # Updates the rolling nightly pre-release. Never runs on tag pushes.
   release-nightly:
     name: Publish Nightly Release
     runs-on: ubuntu-latest
-    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64]
+    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64, build-linux-x64-nvidia]
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/download-artifact@v4
@@ -232,3 +275,4 @@ jobs:
             wicklee-agent-windows-x86_64.exe
             wicklee-agent-linux-x86_64
             wicklee-agent-linux-aarch64
+            wicklee-agent-linux-x86_64-nvidia
