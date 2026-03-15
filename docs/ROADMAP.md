@@ -56,7 +56,7 @@
 - [x] WES leaderboard in Insights tab
 - [x] getNodeSettings() helper: per-node kWh, currency, PUE override
 
-**WES v2 — Raw + Penalized + Thermal Cost** *(Sprint B — in progress)*
+**WES v2 — Raw + Penalized + Thermal Cost** *(Sprint B + C — shipped)*
 > Elevates WES from a snapshot to a window measurement. Introduces Thermal Cost %
 > as a named, visible quantity. Makes thermal penalty legible to operators.
 
@@ -64,9 +64,10 @@
 - [x] **MetricsPayload additions** — `penalty_avg`, `penalty_peak`, `thermal_source` (`iokit` | `nvml` | `sysfs` | `unavailable`), `sample_count`, `wes_version: 2`. All optional — no breaking changes.
 - [x] **Refined penalty mapping** — Serious: 1.75 (was 2.0), Critical: 2.0. ⚠ Breaking change to existing WES scores — version-stamp all benchmarks after this ships.
 - [x] **NVML throttle reason bitmask** — `device.current_throttle_reasons()` (nvml-wrapper API). Multi-reason: 2.5, HW_THERMAL: 2.0, SW_THERMAL/HW_SLOWDOWN: 1.25, pre-throttle (>90°C, no bits): 1.1. Source tag = `nvml` — hardware-authoritative, overrides temperature inference.
-- [ ] **Dual WES node card** — Raw WES + Penalized WES + Thermal Cost % on every node card. Thermal Cost % is the primary alert signal — not raw temperature, not WES alone.
-- [ ] **Fleet Leaderboard with Raw/Penalized columns** — rank by Penalized WES (operational reality), Raw WES as secondary. Gap = architectural vs thermal underperformance.
-- [ ] **"Why is my WES low?" tooltip** — inline calculation breakdown: tok/s ÷ Watts ÷ Penalty = WES, with Thermal Cost % and recommended action.
+- [x] **`SentinelMetrics` v2 fields** — `penalty_avg`, `penalty_peak`, `thermal_source`, `sample_count`, `wes_version` added as optional TypeScript fields. Backward-compatible — older agents that don't emit them continue to work.
+- [x] **Thermal Cost % UI** — `computeRawWES()` + `thermalCostPct()` in `wes.ts`. `-N% thermal` amber badge in Fleet Status table when TC% > 0. Hidden on normal-thermal nodes.
+- [x] **Fleet Leaderboard TC%** — `rawWes`, `tcPct`, `thermalSource` on every `WESEntry`. Ranks by penalized WES (operational reality); raw WES available for gap analysis. Best Route Now card shows `-N% thermal` below efficiency WES.
+- [x] **"Why is my WES low?" tooltip v2** — `wesBreakdownTitle()` shows tok/s · Watts · Thermal · Thermal Cost % · Thermal source on all WES values. Diagnostic recommendation inline.
 - [ ] **`wes_config.json`** — configurable penalty thresholds per platform. Sane defaults ship tuned for standard deployments. Operators can override for unusual hardware or environments.
 
 ### Local Intelligence Tab — Free Tier Insight Cards

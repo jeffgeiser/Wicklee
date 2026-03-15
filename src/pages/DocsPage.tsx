@@ -249,7 +249,7 @@ wicklee --install-service</Code>
             <div className="bg-gray-950 border border-indigo-500/20 rounded-xl p-5">
               <p className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-3">Formula (v2)</p>
               <pre className="font-mono text-sm text-white leading-loose">
-{`WES = (tok/s ÷ Watts) × 10 ÷ ThermalPenalty`}
+{`WES = tok/s ÷ (Watts × ThermalPenalty)`}
               </pre>
               <p className="mt-3 text-xs text-gray-500 leading-relaxed">
                 ThermalPenalty is applied as a divisor — acting as a <strong className="text-gray-300">multiplicative penalty</strong> on your WES score. A penalty of 1.75 (Serious) reduces your effective score to ~57% of its thermal-ideal value.
@@ -282,13 +282,13 @@ wicklee --install-service</Code>
                     <tr>
                       <Td><span className="text-yellow-400 font-medium">Fair</span></Td>
                       <Td mono>1.25</Td>
-                      <Td mono>0.90×</Td>
+                      <Td mono>0.80×</Td>
                       <Td>Minor thermal overhead</Td>
                     </tr>
                     <tr>
                       <Td><span className="text-orange-400 font-medium">Serious</span></Td>
                       <Td mono>1.75</Td>
-                      <Td mono>0.75×</Td>
+                      <Td mono>0.57×</Td>
                       <Td>Significant heat / throttling risk</Td>
                     </tr>
                     <tr>
@@ -301,6 +301,21 @@ wicklee --install-service</Code>
                 </table>
               </div>
             </div>
+
+            {/* Thermal Cost % */}
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-2">Thermal Cost %</p>
+              <p className="text-xs text-gray-400 leading-relaxed mb-2">
+                When thermal throttling is active, Wicklee shows a <code className="text-amber-300 font-mono">-N% thermal</code> badge below the WES score in the Fleet Status table. This is the Thermal Cost %: the fraction of potential efficiency lost to throttle state.
+              </p>
+              <pre className="font-mono text-xs text-gray-300 bg-gray-950 rounded-lg px-4 py-3">
+{`Thermal Cost % = (Raw WES − Penalized WES) / Raw WES × 100`}
+              </pre>
+              <p className="mt-2 text-xs text-gray-500 leading-relaxed">
+                Raw WES is computed without any thermal penalty — it represents the hardware ceiling. Penalized WES is the operationally adjusted score. The gap between them is the cost of running hot. A node at Serious thermal state loses ~43% of its potential efficiency.
+              </p>
+            </div>
+
 
             {/* Score interpretation table */}
             <div>
