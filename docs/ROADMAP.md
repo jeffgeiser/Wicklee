@@ -144,7 +144,7 @@
 ### WES Platform Expansion
 - [ ] **AMD CPU thermal** — k10temp + clock ratio derivation. Cache max boost at agent startup. Clock ratio thresholds: ≥0.95→1.0, ≥0.80→1.25, ≥0.60→1.75, <0.60→2.5. Temperature tie-breaker at >85°C. Flagged as `clock_ratio` source in UI.
 - [ ] **Intel CPU thermal** — `thermald` zone states (Linux) with clock ratio fallback. Same `clock_ratio` source annotation.
-- [ ] **WES history chart** — per-node time series. Raw WES as slow-moving baseline (hardware ceiling). Penalized WES as live line. Gap shaded as thermal cost area. Primary visualization for the benchmark research series.
+- [x] **WES history chart** — per-node time series. Penalized WES as filled indigo area. Raw WES (hardware ceiling) as dashed reference line — only visible when thermal gap exists. ComposedChart with time-range gating: 1H/24H Community, 7D Pro, 30D/90D Team. "Collecting data…" empty state includes Pro nudge when Community. Primary visualization for the benchmark research series.
 - [ ] **Thermal Cost % alerts** — Info >10%, Warning >25%, Critical >40%. Alert on rate-of-change as well as absolute — a 15% drop in 5 minutes is more urgent than a steady 20%.
 - [ ] **Benchmark report output format** — reproducible, citable: model, prompt, token count, date, Wicklee version, per-node Raw WES / Penalized WES / Thermal Cost % / Thermal Source. Enables the published research series.
 
