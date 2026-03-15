@@ -62,6 +62,7 @@ import InsightsTeaseCard  from './insights/InsightsTeaseCard';
 import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
 import WESHistoryChart from './WESHistoryChart';
+import MetricsHistoryChart from './MetricsHistoryChart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1084,6 +1085,15 @@ Format as Markdown with a "Strategic Optimization" header.`,
               {/* WES Trend Chart (cloud only) */}
               {!isLocalHost && getToken && (
                 <WESHistoryChart
+                  getToken={getToken}
+                  historyDays={historyDays}
+                  subscriptionTier={subscriptionTier}
+                />
+              )}
+
+              {/* Performance History — Tok/s · Power · GPU% · Mem% (cloud only) */}
+              {!isLocalHost && getToken && (
+                <MetricsHistoryChart
                   getToken={getToken}
                   historyDays={historyDays}
                   subscriptionTier={subscriptionTier}
