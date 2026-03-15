@@ -1542,6 +1542,192 @@ async fn handle_wes_history(
     Json(serde_json::json!({ "range": range, "nodes": nodes_data })).into_response()
 }
 
+/// GET /api/fleet/metrics-history?node_id=<optional>&range=1h|24h|7d|30d|90d
+///
+/// Returns time-series data for Tok/s, Power (W), GPU%, and Memory Pressure %
+/// for the authenticated user's fleet (or a single node).
+/// Short ranges (1h) pull from metrics_raw; longer ranges use metrics_5min aggregates.
+/// The tok_s_p95 field is only populated for 24h+ ranges (metrics_5min source).
+///
+/// Response: { "range": "24h", "nodes": [{ "node_id", "hostname", "points": [
+///   { ts_ms, tok_s, tok_s_p95, watts, gpu_pct, mem_pct }
+/// ] }] }
+async fn handle_metrics_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let range          = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
+    let node_id_filter = params.get("node_id").cloned();
+
+    let (lookback_ms, bucket_ms, use_raw): (i64, i64, bool) = match range.as_str() {
+        "1h"  => (3_600_000,      60_000,    true),
+        "24h" => (86_400_000,     300_000,   false),
+        "7d"  => (604_800_000,    1_800_000, false),
+        "30d" => (2_592_000_000,  7_200_000, false),
+        "90d" => (7_776_000_000,  21_600_000, false),
+        _     => (86_400_000,     300_000,   false),
+    };
+
+    // Authenticate
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db         = state.db.clone();
+    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        require_user(&token, &conn, &clerk_keys)
+    }).await.unwrap();
+
+    let user_id = match user_id {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    // Enumerate user's nodes from SQLite
+    let db2 = state.db.clone();
+    let uid  = user_id.clone();
+    let node_rows: Vec<(String, Option<String>)> = tokio::task::spawn_blocking(move || {
+        let conn = db2.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT wk_id, hostname FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![uid], |r| Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1).ok().flatten(),
+        ))).ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap().unwrap_or_default();
+
+    if node_rows.is_empty() {
+        return Json(serde_json::json!({ "range": range, "nodes": [] })).into_response();
+    }
+
+    // Enrich hostnames from live metrics cache
+    let node_rows: Vec<(String, Option<String>)> = {
+        let metrics_map = state.metrics.read().unwrap();
+        node_rows.into_iter().map(|(nid, stored_hostname)| {
+            let live_hostname = metrics_map.get(&nid)
+                .and_then(|e| e.metrics.as_ref())
+                .and_then(|m| m.hostname.clone());
+            (nid, live_hostname.or(stored_hostname))
+        }).collect()
+    };
+
+    // Filter to requested node (or all nodes)
+    let target_nodes: Vec<(String, Option<String>)> = match node_id_filter {
+        Some(ref id) => {
+            let found: Vec<_> = node_rows.into_iter().filter(|(nid, _)| nid == id).collect();
+            if found.is_empty() {
+                return (StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "Node not found" }))).into_response();
+            }
+            found
+        }
+        None => node_rows,
+    };
+
+    // Query DuckDB
+    let duck     = state.duck_db.clone();
+    let now      = now_ms() as i64;
+    let since_ms = now - lookback_ms;
+
+    let nodes_data: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
+        let conn = duck.lock().unwrap();
+        let mut out = Vec::new();
+
+        for (node_id, hostname) in &target_nodes {
+            let points: Vec<serde_json::Value> = if use_raw {
+                // 1h range — query metrics_raw, 60-second buckets
+                let sql = format!(
+                    "SELECT (ts_ms / {bkt}) * {bkt} AS bucket,
+                            AVG(tok_s)            AS tok_s,
+                            NULL::DOUBLE           AS tok_s_p95,
+                            AVG(watts)            AS watts,
+                            AVG(gpu_pct)          AS gpu_pct,
+                            AVG(mem_pressure_pct) AS mem_pct
+                     FROM metrics_raw
+                     WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
+                     GROUP BY bucket ORDER BY bucket",
+                    bkt = bucket_ms, uid = user_id, nid = node_id, since = since_ms
+                );
+                match conn.prepare(&sql).ok().and_then(|mut s| {
+                    s.query_map([], |r| Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Option<f64>>(1)?,
+                        r.get::<_, Option<f64>>(2)?,
+                        r.get::<_, Option<f64>>(3)?,
+                        r.get::<_, Option<f64>>(4)?,
+                        r.get::<_, Option<f64>>(5)?,
+                    ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                }) {
+                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem)| {
+                        serde_json::json!({
+                            "ts_ms":      ts,
+                            "tok_s":      toks,
+                            "tok_s_p95":  toksp95,
+                            "watts":      w,
+                            "gpu_pct":    gpu,
+                            "mem_pct":    mem,
+                        })
+                    }).collect(),
+                    None => vec![],
+                }
+            } else {
+                // 24h–90d — query metrics_5min aggregates
+                let sql = format!(
+                    "SELECT (ts_ms / {bkt}) * {bkt} AS bucket,
+                            AVG(tok_s_avg)            AS tok_s,
+                            AVG(tok_s_p95)            AS tok_s_p95,
+                            AVG(watts_avg)            AS watts,
+                            AVG(gpu_pct_avg)          AS gpu_pct,
+                            AVG(mem_pressure_pct_avg) AS mem_pct
+                     FROM metrics_5min
+                     WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
+                     GROUP BY bucket ORDER BY bucket",
+                    bkt = bucket_ms, uid = user_id, nid = node_id, since = since_ms
+                );
+                match conn.prepare(&sql).ok().and_then(|mut s| {
+                    s.query_map([], |r| Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Option<f64>>(1)?,
+                        r.get::<_, Option<f64>>(2)?,
+                        r.get::<_, Option<f64>>(3)?,
+                        r.get::<_, Option<f64>>(4)?,
+                        r.get::<_, Option<f64>>(5)?,
+                    ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                }) {
+                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem)| {
+                        serde_json::json!({
+                            "ts_ms":      ts,
+                            "tok_s":      toks,
+                            "tok_s_p95":  toksp95,
+                            "watts":      w,
+                            "gpu_pct":    gpu,
+                            "mem_pct":    mem,
+                        })
+                    }).collect(),
+                    None => vec![],
+                }
+            };
+
+            let display_hostname = hostname.clone().unwrap_or_else(|| node_id.clone());
+            out.push(serde_json::json!({
+                "node_id":  node_id,
+                "hostname": display_hostname,
+                "points":   points,
+            }));
+        }
+        out
+    }).await.unwrap_or_default();
+
+    Json(serde_json::json!({ "range": range, "nodes": nodes_data })).into_response()
+}
+
 /// POST /api/pair/activate — user enters 6-digit code from their terminal to link the node.
 #[derive(Deserialize)]
 struct ActivateRequest {
@@ -2208,7 +2394,8 @@ async fn main() {
         .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",              get(handle_fleet))
         .route("/api/fleet/stream",       get(handle_fleet_stream))
-        .route("/api/fleet/wes-history",  get(handle_wes_history))
+        .route("/api/fleet/wes-history",      get(handle_wes_history))
+        .route("/api/fleet/metrics-history",  get(handle_metrics_history))
         // ── Agent API v1 ──────────────────────────────────────────────────────
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))
