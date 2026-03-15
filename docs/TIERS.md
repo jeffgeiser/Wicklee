@@ -14,8 +14,11 @@
 | **Alerting** | Dashboard only | Slack (Single) | Slack & PagerDuty | SIEM / Webhooks |
 | **Insights** | Live + Core Educational | Persistent Cards | Trend Analysis | Predictive / Compliance |
 | **Keep Warm** | 1 Active Node | 3 Active Nodes | All Fleet Nodes | All Fleet Nodes |
-| **Sovereignty** | Cloud Relay | Cloud Relay | Cloud Relay | Airgapped (Custom) |
+| **Sovereignty** | Cloud Relay | Cloud Relay | Cloud Relay | **Airgapped — no outbound telemetry** |
 | **Artifacts** | — | — | CSV Exports | Signed PDF Audits |
+| **Prometheus / Grafana Export** | — | — | — | ✅ |
+| **Kubernetes Operator** | — | — | — | ✅ |
+| **SSO / SAML** | — | — | — | ✅ |
 
 ---
 
@@ -34,16 +37,26 @@
 - Data retention: 24h in cloud; no long-term DuckDB persistence at this tier
 - Local agent SQLite (localhost:7700): unaffected — always stores full local history
 
+### WES v2 Diagnostics — All Tiers
+- **WES (Wicklee Efficiency Score)** — available on every tier, computed from live SSE telemetry
+- **Raw WES** (`tok/s ÷ Watts`) and **Penalized WES** (`tok/s ÷ (Watts × ThermalPenalty)`) both visible everywhere
+- **Thermal Cost %** — `(RawWES − PenalizedWES) / RawWES × 100` — shown as an amber badge whenever TC% > 0
+  - Appears in: Fleet Status table WES column, Fleet Leaderboard, Best Route Now card, WES tooltip
+- **WES tooltip v2** — shows tok/s · Watts · Thermal state · TC% · Thermal data source on all WES values
+- **Penalty table** — `Normal: 1.0 · Fair: 1.25 · Serious: 1.75 · Critical: 2.0`
+- These are core observability signals. No tier gate. No upgrade prompt.
+
 ### Insights
 - **Live + Core Educational** — insight cards computed from current SSE frame + 24h rolling data; persist across sessions within the 24h window
-- Available cards:
-  - Model-to-Hardware Fit Score (full card — Community unlocked)
+- Available cards (all Community / free tier):
   - Thermal Degradation Correlation
   - Power Anomaly Detection
-  - Unified Memory Exhaustion Warning (Apple Silicon)
-  - Model Eviction Prediction (full card with Keep Warm action — 1 node)
-  - Idle Resource Notice
+  - Unified Memory Exhaustion Warning (Apple Silicon / NVIDIA)
+  - Model-to-Hardware Fit Score
+  - Model Eviction Prediction (with Keep Warm action — 1 node at Community)
+  - **Idle Resource Notice** — node idle ≥ 1 hr; shows estimated $/hr cost. Community-free.
   - Quantization ROI (live snapshot — tok/s, W/1K TKN, WES with educational copy)
+  - **Live WES Leaderboard** — ranks all connected nodes by penalized WES; shows TC% and thermal state badge per node. Community-free; no history required.
 - Cards persist via localStorage with 24h expiry; dismissed state survives tab close within the 24h window
 
 ### Alerting
@@ -58,7 +71,7 @@
 - UI: Keep Warm button active on ModelEvictionCard; shows loading → "kept warm ✓" state
 
 ### Fleet Intelligence
-- View-only access to: Fleet WES Leaderboard, Thermal Diversity Score, Inference Density Map, Idle Fleet Cost
+- View-only access to live fleet cards: Fleet Avg WES, Cost Efficiency, Tokens Per Watt, Thermal Diversity, Inference Density Map, Idle Fleet Cost (daily $/node estimate)
 - No alert configuration, no export
 
 ### Sovereignty
@@ -236,6 +249,8 @@ TEAM_INSIGHTS_API = true
 
 **Target user:** Defense contractor, HIPAA-governed healthcare, financial institution, or any operator with a compliance requirement that data never leave their sovereign boundary.
 
+> **The Enterprise differentiator is Sovereign Mode.** No outbound telemetry, no cloud pairing, no external network calls. The agent, dashboard, and backend all run on-premise. For every other tier, Wicklee routes telemetry through the cloud relay. Enterprise is the only tier where the cloud backend is optional — replaced by a self-hosted control plane on the operator's own infrastructure.
+
 ### Nodes
 - **Unlimited** paired nodes
 - Airgapped mode: no cloud pairing required — local-only fleet management
@@ -270,25 +285,37 @@ TEAM_INSIGHTS_API = true
 - Data residency map: visual indication of which nodes are forwarding vs. fully sovereign
 
 ### Sovereignty
-- **Airgapped (Custom)**
-- Sovereign Mode: no cloud pairing, no outbound telemetry, fully local operation
+- **Airgapped (Custom) — the key Enterprise differentiator**
+- **Sovereign Mode:** no cloud pairing, no outbound telemetry, fully local operation
 - On-premise Docker image + Helm chart for self-hosted fleet backend
+- **Kubernetes Operator:** deploy the Wicklee control plane to an existing K8s cluster; fleet nodes register via in-cluster service discovery; no cloud relay, no external DNS
 - Zero external network calls (agent + dashboard + backend all on-prem)
-- Custom deployment: bare metal, private cloud, air-gapped VPC
+- Custom deployment: bare metal, private cloud, air-gapped VPC, K8s namespace
 - Sovereignty audit log: full signed export
+
+### Observability Integrations
+- **Prometheus / Grafana Export:**
+  - Wicklee exposes a `/metrics` endpoint in Prometheus exposition format
+  - All WES, thermal, power, tok/s, and VRAM metrics available as labeled time series
+  - Pre-built Grafana dashboard JSON for fleet WES trend, thermal cost heatmap, node ranking panel
+  - Scraped by the operator's existing Prometheus instance — no Wicklee-specific sink required
+  - See Prometheus schema in `docs/metrics.md`
+- OpenTelemetry span export (planned): inference request traces with TTFT and TPOT labels
 
 ### Artifacts
 - **Signed PDF Audits**
 - Cryptographically signed PDF audit reports (CISO-ready compliance artifact)
-- Report includes: node inventory, metric history, alert history, egress event log, data residency summary
+- Report includes: node inventory, metric history, alert history, egress event log, data residency summary, cost allocation breakdown
 - Endpoint: `POST /api/v1/audit/export` → returns signed PDF
 - Signature: ECDSA with customer-provided or Wicklee-managed key
 
 ### API & Integrations
 - All Team API features
 - Sentinel Proxy routing (cross-node inference load balancer): ✅
-- SSO / SAML: ✅
+- SSO / SAML: ✅ (Okta, Azure AD, Google Workspace)
 - HIPAA / SOC2 BAA: ✅ (signed business associate agreement)
+- Prometheus `/metrics` endpoint: ✅
+- Kubernetes Operator: ✅
 - Priority support + SLA: ✅
 
 ### Gating Constants (frontend)
@@ -299,7 +326,9 @@ ENTERPRISE_KEEP_WARM = 'all_nodes'
 ENTERPRISE_INSIGHTS = 'predictive_compliance'
 ENTERPRISE_ALERTING = 'siem_webhooks'
 ENTERPRISE_ARTIFACTS = 'signed_pdf'
-ENTERPRISE_SOVEREIGN = true          // airgapped capable
+ENTERPRISE_SOVEREIGN = true          // airgapped capable — the key differentiator
+ENTERPRISE_PROMETHEUS = true         // /metrics Prometheus endpoint
+ENTERPRISE_K8S_OPERATOR = true       // Kubernetes Operator deployment
 ENTERPRISE_MCP = true
 ENTERPRISE_INSIGHTS_API = true
 ENTERPRISE_SENTINEL_PROXY = true
@@ -361,4 +390,4 @@ Node limit is enforced server-side at `/api/pair/activate` — client-side gates
 
 ---
 
-*Last updated: March 14, 2026. Source of truth for all subscription gating decisions.*
+*Last updated: March 15, 2026. Source of truth for all subscription gating decisions.*

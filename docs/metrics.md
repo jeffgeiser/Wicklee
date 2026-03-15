@@ -229,6 +229,123 @@ Apple Silicon is approximately 340× more WES-efficient than CPU-only inference 
 
 ---
 
+## Enterprise Contextual Metrics *(Phase 5)*
+
+These metrics are computed from existing telemetry + operator-configured context. No new agent instrumentation required.
+
+---
+
+### Cost Allocation
+
+**What it is:** Actual electricity cost attributed to a node over a time window, broken down by model and workload type.
+
+**Formula:**
+```
+Cost($) = kWh_consumed × electricity_rate
+        = (watts × hours / 1000) × $/kWh × PUE
+
+Per-token cost = Cost($) / tokens_generated
+
+WES-normalized cost = Cost($) / WES    // lower = more efficient per efficiency unit
+```
+
+**Why it matters:** At fleet scale, idle vs. active power draw diverges significantly across hardware generations. A 4090 idle at 50W costs more per hour than an M2 running inference at full throughput. Cost Allocation makes this explicit — operators can charge back inference cost per department, per model, or per time window.
+
+**Data sources:** `watts` from live telemetry × configured `kWh_rate` × `pue_multiplier` from node settings. Token count from `ollama_tokens_per_second` accumulated over the session.
+
+---
+
+### Departmental Multi-tenancy Isolation
+
+**What it is:** Per-department fleet segmentation — each department sees only their assigned nodes' metrics, costs, and alerts. Fleet-wide aggregates visible only to fleet owners.
+
+**Why it matters:** Enterprise teams share inference infrastructure across departments (ML research, product, internal tooling). Without isolation, one team's thermal incident shows up in another team's dashboard. With isolation, each department operates in a clean data boundary: their WES scores, their cost allocation, their alert history.
+
+**Implementation shape:**
+- Nodes tagged with `department_id` in Wicklee fleet config
+- Clerk organization roles gate which `department_id` values a session can query
+- Fleet API responses filtered by `department_id` claim in JWT
+- Cost allocation breakdowns grouped by `department_id` in DuckDB aggregates
+
+---
+
+## Prometheus Schema *(Enterprise — Phase 5)*
+
+Wicklee exposes a `/metrics` endpoint in [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) when `WICKLEE_PROMETHEUS_ENABLED=true`. All metrics are labeled by `node_id`, `hostname`, and `fleet_id`.
+
+### Gauge metrics (current value)
+
+```
+# HELP wicklee_wes_penalized Wicklee Efficiency Score with thermal penalty applied
+# TYPE wicklee_wes_penalized gauge
+wicklee_wes_penalized{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 181.5
+
+# HELP wicklee_wes_raw Wicklee Efficiency Score without thermal penalty (hardware ceiling)
+# TYPE wicklee_wes_raw gauge
+wicklee_wes_raw{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 181.5
+
+# HELP wicklee_thermal_cost_pct Percentage of WES lost to thermal throttling
+# TYPE wicklee_thermal_cost_pct gauge
+wicklee_thermal_cost_pct{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 0.0
+
+# HELP wicklee_tokens_per_second Current sampled inference throughput
+# TYPE wicklee_tokens_per_second gauge
+wicklee_tokens_per_second{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 108.9
+
+# HELP wicklee_power_watts Total board power draw in watts
+# TYPE wicklee_power_watts gauge
+wicklee_power_watts{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 0.6
+
+# HELP wicklee_gpu_utilization_percent GPU compute utilization percentage
+# TYPE wicklee_gpu_utilization_percent gauge
+wicklee_gpu_utilization_percent{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 87.0
+
+# HELP wicklee_vram_used_mb VRAM in use in megabytes (NVIDIA only)
+# TYPE wicklee_vram_used_mb gauge
+wicklee_vram_used_mb{node_id="WK-C133",hostname="GeiserBMC",fleet_id="fl_abc"} 18432.0
+
+# HELP wicklee_vram_total_mb Total VRAM in megabytes (NVIDIA only)
+# TYPE wicklee_vram_total_mb gauge
+wicklee_vram_total_mb{node_id="WK-C133",hostname="GeiserBMC",fleet_id="fl_abc"} 24576.0
+
+# HELP wicklee_memory_pressure_percent Kernel memory pressure score (Apple Silicon only)
+# TYPE wicklee_memory_pressure_percent gauge
+wicklee_memory_pressure_percent{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 32.0
+
+# HELP wicklee_thermal_penalty Current thermal penalty multiplier (1.0=Normal to 2.0=Critical)
+# TYPE wicklee_thermal_penalty gauge
+wicklee_thermal_penalty{node_id="WK-1EFC",hostname="GeiserM2",fleet_id="fl_abc"} 1.0
+```
+
+### State label metrics
+
+```
+# HELP wicklee_thermal_state_info Thermal state as a label (info metric, value always 1)
+# TYPE wicklee_thermal_state_info gauge
+wicklee_thermal_state_info{node_id="WK-1EFC",hostname="GeiserM2",thermal_state="normal"} 1
+
+# HELP wicklee_node_status_info Node online/offline status (1=online, 0=offline)
+# TYPE wicklee_node_status_info gauge
+wicklee_node_status_info{node_id="WK-1EFC",hostname="GeiserM2"} 1
+```
+
+### Scrape configuration example
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'wicklee'
+    static_configs:
+      - targets: ['wicklee.your-infra.internal:7700']  # self-hosted control plane
+    bearer_token: '<enterprise_api_key>'
+    scrape_interval: 15s
+    metrics_path: /metrics
+```
+
+> Pre-built Grafana dashboard JSON available at `docs/grafana-dashboard.json` (Phase 5).
+
+---
+
 ## A note on Apple Silicon vs. NVIDIA
 
 Wicklee is designed to work across both platforms without compromise:

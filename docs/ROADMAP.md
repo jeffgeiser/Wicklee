@@ -70,19 +70,19 @@
 - [x] **"Why is my WES low?" tooltip v2** — `wesBreakdownTitle()` shows tok/s · Watts · Thermal · Thermal Cost % · Thermal source on all WES values. Diagnostic recommendation inline.
 - [ ] **`wes_config.json`** — configurable penalty thresholds per platform. Sane defaults ship tuned for standard deployments. Operators can override for unusual hardware or environments.
 
-### Local Intelligence Tab — Free Tier Insight Cards
-- [ ] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded.
-- [ ] **Thermal Degradation Correlation:** Named insight card when thermal state transition + tok/s drop detected simultaneously. Shows before/after tok/s, causal chain, recommendation.
-- [ ] **Power Anomaly Detection:** Fires when board power exceeds 2× session baseline or when power/GPU utilization ratio is anomalous. Flags runaway processes invisible to standard monitoring.
-- [ ] **Unified Memory Exhaustion Warning (Apple Silicon):** Correlates Ollama model size + available unified memory + vm_stat pressure. Warns before swap storm — not after.
-- [ ] **Model Eviction Prediction:** Fires 2 minutes before predicted Ollama model unload based on `/api/ps` inactivity. Free: warning. Paid: "Keep Warm" toggle sends silent ping to reset `keep_alive` timer.
-- [ ] **Idle Resource Notice:** Node online >1hr with zero inference activity. Shows estimated electricity cost of idle time.
+### Local Intelligence Tab — Free Tier Insight Cards ✅
+- [x] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded. Community-free.
+- [x] **Thermal Degradation Correlation:** Named insight card fires when thermal_state = Serious|Critical. Shows estimated tok/s loss (based on v2 penalty table), causal chain, recommendation. Not dismissable.
+- [x] **Power Anomaly Detection:** Fires when board power > 2× session baseline OR watts > 50W at < 20% GPU utilization. Flags runaway processes invisible to standard monitoring.
+- [x] **Unified Memory Exhaustion Warning (Apple Silicon / NVIDIA):** Fires when headroom < 10% of total VRAM/unified memory with a model loaded. Warns before swap storm — not after.
+- [x] **Model Eviction Prediction:** Fires at 3 min inactivity (2 min before default Ollama keep_alive). Free: warning card. Keep Warm fires silent 1-token ping. Community: 1 node.
+- [x] **Idle Resource Notice:** Node idle ≥ 1 hr with zero inference. Shows $/hr estimate. Community-free. Clock resets on any tok/s > 0.
 
-### Fleet Intelligence Panel
-- [ ] **Fleet WES Leaderboard:** WES-ranked across all nodes. Cross-node efficiency comparison that accounts for thermal state — "which node is most efficient per token right now?" answered live.
-- [ ] **Fleet Thermal Diversity Score:** Distribution of thermal states across the fleet. "3/4 nodes thermally stressed — fleet is one spike from cascade failure." Free: score. Paid: Slack alert.
-- [ ] **Fleet Inference Density Map:** ✅ Hexagonal hive plot — glowing pulse on active inference nodes, cold dim on idle. Visual utilization map, demo-video-ready.
-- [ ] **Idle Fleet Cost Card:** Daily electricity cost of idle nodes with PUE multiplier support. Formula: `idle_watts × pue × hours × kwh_rate`. Shows "Node: $X/day · Facility: $Y/day (PUE 1.4)" so math is transparent.
+### Fleet Intelligence Panel ✅
+- [x] **Live WES Leaderboard:** Ranked by penalized WES with TC% badge and thermal state indicator per node. Top 4 shown. Community-free — no history required.
+- [x] **Fleet Thermal Diversity Score:** Live count of nodes per thermal state (Normal/Fair/Serious/Critical) in Fleet Intelligence panel. Cascade risk analysis teased — Team+.
+- [x] **Fleet Inference Density Map:** Hexagonal hive plot — glowing pulse on active inference nodes, cold dim on idle. Visual utilization map, demo-video-ready.
+- [x] **Idle Fleet Cost Card:** Daily electricity cost per idle node (watts × PUE × 24h × kWh rate). Per-node PUE from node settings. Fleet total shown when ≥ 2 idle nodes. Community-free.
 
 ### Settings ✅
 - [x] **Cost & Energy section:** kWh rate, currency, PUE multiplier with live cost preview
@@ -100,11 +100,11 @@
 - [x] Navigation restructure — single profile entry point lower left
 - [x] Profile dropdown cleanup — identity, Settings, Docs, Release notes, Sign out
 
-### Live Activity — New Event Types
-- [ ] Power anomaly detected/resolved
-- [ ] Model eviction predicted / Keep Warm action taken
-- [ ] Thermal degradation confirmed (causal chain, not just state change)
-- [ ] Fit score changed (model loaded/unloaded)
+### Live Activity — New Event Types ✅
+- [x] Power anomaly detected (`power_anomaly` event type — in EventFeed since Phase 3A)
+- [x] Model eviction predicted (`model_eviction_predicted`) / Keep Warm action taken (`keep_warm_taken`) — emitted from AIInsights, logged to Live Activity
+- [x] Thermal degradation confirmed (`thermal_degradation_confirmed`) — causal chain detail, fires on condition onset not every frame
+- [x] Fit score changed (`fit_score_changed`) — fired when ollama_active_model changes (load/unload transition)
 
 ### Agent-Native Foundation ✅
 > Wicklee is built for humans and their agents. The marketing site and blog
@@ -116,10 +116,10 @@
 - [x] **Path-based routing** — `currentPath` state + `navigate()` + `popstate` listener in App.tsx. Blog routes bypass auth entirely.
 - [x] **Blog nav link** — "Blog" added to LandingPage nav between Documentation and GitHub.
 - [x] **Blog auto-discovery via Vite plugin** ✅ — `blogIndexPlugin` in `vite.config.ts` scans `public/blog/*.md` at build time and dev server start. Writes `public/blog/index.json` sorted by frontmatter `date`. Flow: drop a `.md` → push to GitHub → Railway runs `vite build` → post is live. Zero manual manifest edits.
-- [ ] **First post content:** `wes-the-mpg-for-local-ai-inference.md` — WES formula, live fleet data, four-node comparison table, IPW academic citation (arXiv:2511.07885). *(placeholder live, full article pending)*
+- [x] **First post content:** `wes-the-mpg-for-local-ai-inference.md` — WES formula, thermal penalty table, four-node comparison, IPW academic citation (arXiv:2511.07885). Published `2026-03-15`.
 
 ### Launch Prep
-- [ ] Fix mock data on localhost fleet overview cards
+- [x] Fix mock data on localhost fleet overview cards — `MOCK_NODES_INITIAL` removed; AI prompt uses real SSE data
 - [ ] Andy_PC — install Ollama, capture RTX 3070 WES score
 - [ ] RTX 4090 Vast.ai test (~$0.50/hr) — complete four-node comparison table *(capture after WES v2 ships)*
 - [x] Update wicklee.dev hero — "Local AI inference, finally observable." + updated meta/OG tags
@@ -232,14 +232,17 @@
 
 ---
 
-## Phase 5 — Enterprise + MCP Server *(6+ months)*
+## Phase 5 — Enterprise & Orchestration *(6+ months)*
+
+> Goal: close the enterprise loop. Sovereign deployment, programmable orchestration,
+> Prometheus-native observability, and MCP-native agent integration.
 
 ### Sentinel Proxy
 - [ ] **Inference Interceptor:** OpenAI-compatible proxy endpoint. Clients point at Wicklee; Wicklee forwards to healthiest node.
 - [ ] **Automatic Rerouting:** Transparent workload shifting on thermal/load threshold breach. No client changes required.
 - [ ] **Routing Policy Config:** `lowest-wes`, `lowest-watt-per-token`, `lowest-thermal`, `lowest-load`, `round-robin`, `pinned` — selectable per model or client tag.
 
-### MCP Server *(new)*
+### MCP Server
 > Wicklee as an MCP server. Any Claude, GPT, or open-source agent with MCP support
 > calls Wicklee tools natively — no API wrapper required.
 > Listed in `/llms.txt` from Phase 3A. Agents discover and connect automatically.
@@ -252,16 +255,28 @@
 - [ ] **MCP server at `wss://wicklee.dev/mcp`**
 - [ ] **Listed in MCP registries** — Anthropic, open-source registries
 
-### Sovereignty / Compliance
-- [ ] **Cryptographically Signed Audit Export:** PDF signed by the Wicklee Agent's unique hardware ID (WK-XXXX). Tamper-evident. CISO-signable compliance artifact for HIPAA, financial services, defense-adjacent use cases.
-- [ ] **Sovereign Mode:** On-premise only — no cloud pairing, no outbound telemetry, airgapped operation.
-- [ ] **On-Premise Deployment:** Docker image + Helm chart for self-hosted fleet backend.
+### Observability Integrations
+- [ ] **Prometheus Exporter:** `/metrics` endpoint in Prometheus exposition format. WES, thermal state, tok/s, power draw, VRAM, and cost/token as labeled time series. Scraped by the operator's existing Prometheus instance — no Wicklee-specific sink required.
+- [ ] **Pre-built Grafana dashboard:** Fleet WES trend panel, thermal cost heatmap, node efficiency ranking. Importable JSON — drop into any Grafana instance.
+- [ ] **OpenTelemetry span export *(planned)*:** Inference request traces with TTFT and TPOT labels. Feeds directly into Jaeger, Honeycomb, Datadog.
+
+### Orchestration Integrations
+- [ ] **vLLM / Ray Serve awareness:** Consume vLLM's Prometheus `/metrics` endpoint at the orchestration layer. Surface per-model queue depth, KV cache hit rate, and TTFT alongside WES. Enables WES-aware routing across multi-model vLLM deployments.
+- [ ] **Ray Serve backend support:** Register Ray Serve replicas as Wicklee nodes. WES computed from Ray's built-in metrics. Route decisions account for replica thermal state.
+- [ ] **MIG (Multi-Instance GPU) awareness:** Detect NVIDIA MIG-partitioned instances via NVML. Report WES per MIG slice with correct power and VRAM fractions. Prevents over-routing to thermal-limited partitions.
+
+### Sovereign Deployment
+- [ ] **Sovereign Mode:** On-premise only — no cloud pairing, no outbound telemetry, airgapped operation. The key Enterprise differentiator.
+- [ ] **Docker image:** Self-hosted fleet backend. Single-container deploy — agent + cloud backend in one image.
+- [ ] **Helm chart:** Production-grade Kubernetes deployment with configurable replicas, PVCs, and ingress. Operators bring their own cluster.
+- [ ] **Kubernetes Operator:** Fleet nodes register via in-cluster service discovery. No cloud relay, no external DNS. Deploy to any K8s namespace.
+- [ ] **Cryptographically Signed Audit Export:** PDF signed by the Wicklee Agent's unique hardware ID (WK-XXXX). Tamper-evident. CISO-ready compliance artifact for HIPAA, financial services, defense-adjacent deployments.
 
 ### Enterprise Features
-- [ ] SSO / SAML
+- [ ] SSO / SAML (Okta, Azure AD, Google Workspace)
 - [ ] HIPAA / SOC2 BAA
 - [ ] AMD GPU support (ROCm)
-- [ ] Enterprise tier pricing ($199/mo or $X/node)
+- [ ] Enterprise tier pricing ($199/mo)
 
 ---
 
