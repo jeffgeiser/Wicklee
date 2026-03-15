@@ -35,6 +35,8 @@ yarn-error.log*
 
 # Rust / Cargo
 /target/
+agent/target/
+cloud/target/
 **/*.rs.bk
 Cargo.lock
 .claude/
