@@ -8,6 +8,7 @@
 
 import React from 'react';
 import type { SentinelMetrics } from '../../../types';
+import { INFERENCE_VRAM_THRESHOLD_MB } from '../../../utils/efficiency';
 import InsightCard from '../InsightCard';
 
 // ── Memory helpers ────────────────────────────────────────────────────────────
@@ -25,7 +26,7 @@ function getMemorySnapshot(node: SentinelMetrics): MemorySnapshot | null {
   const modelSizeGb = node.ollama_model_size_gb ?? null;
   if (modelSizeGb == null) return null;
 
-  const isNvidia = (node.nvidia_vram_total_mb ?? 0) > 0;
+  const isNvidia = (node.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB;
 
   const totalMb = isNvidia ? node.nvidia_vram_total_mb! : node.total_memory_mb;
   const usedMb: number | null = isNvidia

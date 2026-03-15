@@ -3,7 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu } from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
@@ -299,7 +299,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const tcPct  = thermalCostPct(rawWes, wes);
 
   // Memory / VRAM
-  const hasNvidia = m?.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0;
+  const hasNvidia = m?.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb >= INFERENCE_VRAM_THRESHOLD_MB;
   const memLabel  = hasNvidia ? 'VRAM' : 'Memory';
   // memory_pressure_percent is Apple Silicon only; fall back to used/total for Linux nodes.
   const memPctRaw = hasNvidia
@@ -1124,7 +1124,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const vramCapacityGB = (totalVramCapacityMb / 1024).toFixed(1);
   // Subtitle hint: distinguish mixed fleets (Apple + NVIDIA) from single-type fleets
   const hasAppleVram  = effectiveMetrics.some(m => m.memory_pressure_percent != null);
-  const hasNvidiaVram = effectiveMetrics.some(m => (m.nvidia_vram_total_mb ?? 0) > 0);
+  const hasNvidiaVram = effectiveMetrics.some(m => (m.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB);
   const vramSubHint   = hasAppleVram && hasNvidiaVram ? 'Apple + NVIDIA'
                       : hasAppleVram                  ? 'Apple GPU budget'
                       : hasNvidiaVram                 ? 'NVIDIA VRAM'

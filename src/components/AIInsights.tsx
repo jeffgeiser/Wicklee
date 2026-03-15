@@ -34,6 +34,7 @@ import {
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
+import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { buildReportFromLive } from '../utils/benchmarkReport';
 import type { BenchmarkReport } from '../utils/benchmarkReport';
 import BenchmarkReportModal from './BenchmarkReportModal';
@@ -87,7 +88,7 @@ function fmtWatts(w: number | null): string | null {
 
 /** Format VRAM percentage. */
 function fmtVram(m: SentinelMetrics): string | null {
-  const isNv = (m.nvidia_vram_total_mb ?? 0) > 0;
+  const isNv = (m.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB;
   const total = isNv ? (m.nvidia_vram_total_mb ?? 0) : m.total_memory_mb;
   const used  = isNv
     ? (m.nvidia_vram_used_mb ?? null)
@@ -433,7 +434,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const memNodes = effectiveNodes.filter(m => {
     if (!m.ollama_model_size_gb) return false;
-    const isNv    = (m.nvidia_vram_total_mb ?? 0) > 0;
+    const isNv    = (m.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB;
     const totalMb = isNv ? (m.nvidia_vram_total_mb ?? 0) : m.total_memory_mb;
     const usedMb  = isNv
       ? (m.nvidia_vram_used_mb ?? null)
@@ -605,12 +606,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   );
 
   const peakVramNode = effectiveNodes.reduce<SentinelMetrics | null>((worst, n) => {
-    const isNv  = (n.nvidia_vram_total_mb ?? 0) > 0;
+    const isNv  = (n.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB;
     const total = isNv ? (n.nvidia_vram_total_mb ?? 0) : n.total_memory_mb;
     const used  = isNv ? (n.nvidia_vram_used_mb ?? 0) : n.total_memory_mb - n.available_memory_mb;
     const pct   = total > 0 ? used / total : 0;
     if (worst == null) return n;
-    const wIsNv  = (worst.nvidia_vram_total_mb ?? 0) > 0;
+    const wIsNv  = (worst.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB;
     const wTotal = wIsNv ? (worst.nvidia_vram_total_mb ?? 0) : worst.total_memory_mb;
     const wUsed  = wIsNv ? (worst.nvidia_vram_used_mb ?? 0) : worst.total_memory_mb - worst.available_memory_mb;
     const wPct   = wTotal > 0 ? wUsed / wTotal : 0;
@@ -1212,7 +1213,7 @@ Format as Markdown with a "Strategic Optimization" header.`,
                   liveContent={(() => {
                     const pressureNode = effectiveNodes.find(n => n.memory_pressure_percent != null);
                     const pressure = pressureNode?.memory_pressure_percent ?? null;
-                    const vramNode = effectiveNodes.find(n => (n.nvidia_vram_total_mb ?? 0) > 0);
+                    const vramNode = effectiveNodes.find(n => (n.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB);
                     const vramPct = vramNode
                       ? (((vramNode.nvidia_vram_used_mb ?? 0) / (vramNode.nvidia_vram_total_mb ?? 1)) * 100)
                       : null;
