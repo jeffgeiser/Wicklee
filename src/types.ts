@@ -36,6 +36,12 @@ export interface SentinelMetrics {
   gpu_utilization_percent: number | null;
   memory_pressure_percent: number | null;
   thermal_state:           string | null;
+  /**
+   * GPU wired memory budget (MB) from `sysctl iogpu.wired_limit_mb`.
+   * Apple Silicon only — typically ~75% of physical RAM. Null everywhere else.
+   * Use this (not total_memory_mb) as the GPU capacity ceiling on M-series nodes.
+   */
+  gpu_wired_limit_mb?: number | null;
   // NVIDIA GPU fields (null on non-NVIDIA)
   nvidia_gpu_utilization_percent: number | null;
   nvidia_vram_used_mb:            number | null;

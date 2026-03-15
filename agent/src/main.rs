@@ -100,6 +100,10 @@ struct AppleSiliconMetrics {
     thermal_state:           Option<String>,
     /// Apple Silicon chip description, e.g. "Apple M3 Max"
     gpu_name:                Option<String>,
+    /// GPU wired memory budget (MB) from `sysctl iogpu.wired_limit_mb`.
+    /// This is the maximum unified memory macOS will wire for GPU use —
+    /// typically ~75% of total RAM. None on Intel Macs and non-macOS.
+    gpu_wired_limit_mb:      Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -127,6 +131,11 @@ struct MetricsPayload {
     gpu_utilization_percent: Option<f32>,
     memory_pressure_percent: Option<f32>,
     thermal_state:           Option<String>,
+    /// GPU wired memory budget in MB — from `sysctl iogpu.wired_limit_mb`.
+    /// Represents the maximum unified memory macOS reserves for GPU access
+    /// (typically ~75% of physical RAM). None on non-Apple-Silicon nodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gpu_wired_limit_mb:      Option<u64>,
     // NVIDIA GPU fields (null on non-NVIDIA platforms)
     nvidia_gpu_utilization_percent: Option<f32>,
     nvidia_vram_used_mb:            Option<u64>,
@@ -292,6 +301,20 @@ fn read_thermal_sysctl() -> Option<String> {
 #[cfg(target_os = "windows")]
 fn read_thermal_sysctl() -> Option<String> {
     None
+}
+
+/// GPU wired memory limit via `sysctl iogpu.wired_limit_mb` — Apple Silicon only.
+///
+/// macOS enforces a per-process GPU wired memory budget that is independent of
+/// total RAM. On M-series chips this is typically ~75% of physical memory.
+/// The sysctl exists only on Apple Silicon; returns None on Intel / non-macOS.
+/// No sudo required.
+#[cfg(target_os = "macos")]
+fn read_iogpu_wired_limit_mb() -> Option<u64> {
+    use sysctl::Sysctl;
+    let ctl = sysctl::Ctl::new("iogpu.wired_limit_mb").ok()?;
+    let s = ctl.value_string().ok()?;
+    s.trim().parse::<u64>().ok()
 }
 
 /// Thermal via `pmset -g therm` — works on Apple Silicon, no sudo.
@@ -2147,12 +2170,20 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
 
     tokio::spawn(async move {
         let chip_name = read_apple_chip_name().await;
+        // Read once at startup — iogpu.wired_limit_mb reflects the hardware
+        // budget, not runtime state. Apple Silicon only; None on Intel Macs.
+        #[cfg(target_os = "macos")]
+        let wired_limit_mb = read_iogpu_wired_limit_mb();
+        #[cfg(not(target_os = "macos"))]
+        let wired_limit_mb: Option<u64> = None;
+
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
             interval.tick().await;
 
             let mut m = AppleSiliconMetrics::default();
-            m.gpu_name = chip_name.clone();
+            m.gpu_name          = chip_name.clone();
+            m.gpu_wired_limit_mb = wired_limit_mb;
 
             // 1. Thermal: sysctl (Intel) → pmset (M-series)
             m.thermal_state = read_thermal_sysctl();
@@ -2387,6 +2418,7 @@ fn start_metrics_broadcaster(
                 pcpu_power_w:            apple.pcpu_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
+                gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
                 // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
                 thermal_state:           apple.thermal_state.or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone())),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
@@ -2610,6 +2642,7 @@ async fn handle_metrics(
                 pcpu_power_w:            apple.pcpu_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
+                gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
                 // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
                 thermal_state:           apple.thermal_state.or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone())),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,

@@ -335,11 +335,37 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
     : null;
   const vramPct = vramPctRaw != null ? Math.round(vramPctRaw * 10) / 10 : null;
+
+  // Apple Silicon GPU budget — iogpu.wired_limit_mb (exact, from agent sysctl)
+  // falls back to 75% of total RAM for older agents that don't emit the field.
+  // available_memory_mb (free + inactive pages) is how much the OS can still wire
+  // for a model load; capped at wired_limit_mb to avoid overstating headroom.
+  const wiredLimitMb = m?.gpu_wired_limit_mb
+    ?? (isAppleSilicon && m != null ? Math.round(m.total_memory_mb * 0.75) : null);
+  const gpuAvailMb  = (wiredLimitMb != null && m != null)
+    ? Math.max(0, Math.min(wiredLimitMb, m.available_memory_mb))
+    : null;
+  const gpuUsedPct  = (wiredLimitMb != null && gpuAvailMb != null)
+    ? Math.round(((wiredLimitMb - gpuAvailMb) / wiredLimitMb) * 100)
+    : null;
+  const gpuAvailGb  = gpuAvailMb  != null ? (gpuAvailMb  / 1024).toFixed(1) : null;
+  const gpuLimitGb  = wiredLimitMb != null ? Math.round(wiredLimitMb / 1024) : null;
+  const gpuLimitSrc = m?.gpu_wired_limit_mb != null ? 'iogpu.wired_limit_mb' : 'est.';
+
+  const unifiedColorCls = gpuUsedPct == null ? 'text-gray-400'
+    : gpuUsedPct >= 85 ? 'text-red-400'
+    : gpuUsedPct >= 65 ? 'text-amber-400'
+    : 'text-green-400';
+  const unifiedBarCls = gpuUsedPct == null ? 'bg-gray-600'
+    : gpuUsedPct >= 85 ? 'bg-red-400'
+    : gpuUsedPct >= 65 ? 'bg-amber-400'
+    : 'bg-green-400';
+
   // Tooltip explains why — differs by platform/install method
   const vramTooltip = hasNvidia
     ? `NVIDIA dedicated VRAM utilisation — ${vramPct}%`
     : isAppleSilicon
-    ? 'Apple Silicon uses unified memory shared with the CPU. Memory pressure is shown in the MEMORY column.'
+    ? `GPU budget (${gpuLimitSrc}): ${gpuLimitGb} GB  ·  Available for models: ${gpuAvailGb} GB. Apple Silicon wires unified memory for the GPU — loading a model larger than this will trigger swap.`
     : 'No NVIDIA GPU on this node. If an NVIDIA GPU is present, re-run the installer — it auto-detects and downloads the GPU-enabled build.';
   const vramColorCls = vramPct == null ? 'text-gray-500 dark:text-gray-600'
     : vramPct >= 90 ? 'text-red-400'
@@ -426,17 +452,25 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         title={vramTooltip}
       >
         {vramPct != null ? (
+          // NVIDIA: dedicated VRAM percentage + mini bar
           <div className="flex items-center gap-1.5">
             <span className={`text-xs font-telin tabular-nums ${vramColorCls}`}>{vramPct}%</span>
             <div className="w-10 h-1 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden shrink-0">
               <div className={`h-full ${vramBarCls} rounded-full`} style={{ width: `${Math.min(vramPct, 100)}%` }} />
             </div>
           </div>
-        ) : isAppleSilicon ? (
-          <span className="text-[10px] font-telin tracking-wide text-indigo-400/70 border border-indigo-500/20 rounded px-1 py-0.5 bg-indigo-500/5">
-            Unified
-          </span>
+        ) : isAppleSilicon && gpuAvailGb != null && gpuLimitGb != null ? (
+          // Apple Silicon: available / wired-limit GB with headroom bar
+          <div className="flex items-center gap-1.5">
+            <span className={`text-xs font-telin tabular-nums ${unifiedColorCls}`}>
+              {gpuAvailGb}<span className="text-gray-500 text-[10px]">/{gpuLimitGb}</span>
+            </span>
+            <div className="w-10 h-1 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden shrink-0">
+              <div className={`h-full ${unifiedBarCls} rounded-full`} style={{ width: `${Math.min(gpuUsedPct ?? 0, 100)}%` }} />
+            </div>
+          </div>
         ) : (
+          // CPU-only or no data
           <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
         )}
       </div>
