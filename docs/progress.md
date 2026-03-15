@@ -4,6 +4,75 @@
 
 ---
 
+## March 14, 2026 — WES v2 Agent-Side + Documentation Hub + Site Polish 📄
+
+**The Goal:** Ship the WES v2 thermal sampler and NVML bitmask on the agent. Fix two Railway cloud build failures. Overhaul landing page Problem section copy. Launch a public `/docs` page with full content and wire it site-wide as the authoritative documentation hub.
+
+---
+
+### WES v2 — Sprint B: Agent-Side Thermal Sampler ✅ (commit `74fd625`)
+
+**What shipped:**
+- Independent 2-second tokio sampling task (`start_wes_sampler`). Maintains a 30-sample (60s) `VecDeque` rolling window. Computes `penalty_avg` and `penalty_peak` from accumulated samples.
+- `WesMetrics` struct — `Arc<Mutex<WesMetrics>>` shared between the sampler, the 1 Hz broadcaster, and the SSE handler.
+- Refined penalty table: `Normal→1.00`, `Fair→1.25`, `Serious→1.75` (was 2.0 in v1), `Critical→2.00`. The v1→v2 break is intentional and version-stamped via `wes_version: 2` in every payload.
+- **NVML throttle-reason bitmask** — `device.current_throttle_reasons()` from nvml-wrapper. Priority order: multi-thermal (`>1 bit set`) → `HW_THERMAL_SLOWDOWN` → `SW_THERMAL/HW_SLOWDOWN/POWER_BRAKE` → pre-throttle (`≥90°C, no bits`). Source tagged `nvml` — hardware-authoritative, overrides temperature inference on all NVIDIA nodes.
+- Five new `MetricsPayload` fields: `penalty_avg`, `penalty_peak`, `thermal_source`, `sample_count`, `wes_version`. All optional (`skip_serializing_if = "Option::is_none"`) — zero breaking changes to existing consumers.
+- `main()` spawns the sampler, wires `Arc<Mutex<WesMetrics>>` into broadcaster and SSE handler via Axum `Extension`.
+
+**What was learned:**
+- The `nvml-wrapper` `ThrottleReasons` type must be imported as `bitmasks::device::ThrottleReasons` — it lives under `bitmasks`, not `enum_wrappers`. Gate the import behind the same `cfg` block as the rest of NVML.
+- Thermal source priority matters: prefer `nvml` (bitmask is authoritative) → `iokit` (Apple SMC) → `sysfs` (Linux thermal zones) → `unavailable`. This prevents a sysfs fallback from contradicting a hardware-confirmed NVML reading.
+
+---
+
+### Railway Build Fixes ✅ (commits `0d8a0ec`, `bde9f49`)
+
+**Problem 1 — "failed to find tool c++" on Railway build:**
+- DuckDB's `bundled` feature compiles ~500 KB of C++ via cmake. The `rust:1.88-slim` Debian image has no C++ compiler.
+- Fix: added `apt-get install -y --no-install-recommends build-essential cmake` to `cloud/Dockerfile` builder stage, before any cargo commands.
+
+**Problem 2 — Runtime panic: `zstd_compression_level`:**
+- Error: `"Catalog Error: unrecognized configuration parameter \"zstd_compression_level\""` — this DuckDB v1 setting doesn't exist (it was invented when writing the implementation).
+- Fix: removed `SET zstd_compression_level=3;` from `open_duck_db()`. Kept `SET force_compression='zstd';` which is valid.
+
+---
+
+### Landing Page — Problem Section Copy ✅ (commit `670dcf6`)
+
+Replaced the old framing with inference-layer positioning:
+- **Headline:** "Standard monitors stop at the hardware. We see the inference layer."
+- **Sub-headline:** Specifically calls out WES scores, wattage-per-token, and runtime health as the gap between standard hardware monitors and what operators actually need.
+- Removed the "Note" callout box (13 lines of JSX). Tightened spacing: `mb-6` + Note's `mb-10` → single `mb-10` on the sub-headline.
+
+---
+
+### UI Polish — Hero + Logo ✅ (commit `256e54b`)
+
+- **Hero sign-in button removed.** The Sign In CTA was already in the top-right nav — having it in the hero was redundant. CTA section simplified to a single centered button.
+- **Logo `connectionState` prop fixed site-wide.** `LandingPage.tsx`, `BlogPost.tsx`, `BlogListing.tsx` all passed the stale `active={true}` prop from before the Logo component was refactored. TypeScript doesn't error on extra props — all three were silently rendering a dim, non-pulsing logo. Fixed to `connectionState="connected"` across all three.
+
+---
+
+### Documentation Hub — `/docs` page ✅ (commits `50c91bc`, `5fcb74e`)
+
+**New page: `src/pages/DocsPage.tsx`**
+
+Five sections with full content:
+- **Quick Start** — Two-step flow: Step 1 (user-level curl, live-only, no sudo) → Step 2 (sudo service install). `NoteBox` callout explains *why* sudo is needed: launchd/systemd registration + direct hardware sensor and power-rail access. Frames it as a system-level hardware requirement, not a red flag.
+- **WES Score** — Formula with explicit "multiplicative penalty" framing. Penalty Impact table (State / Divisor / Score multiplier / Effect) with color-coded state labels. Score interpretation table. v1 vs v2 note with `wes_version` field explanation.
+- **Agent API v1** — Base URL, auth header, full endpoint table, `TipBox` implementation tip for `/route/best` (LangChain router / load balancer use case), route response JSON shape, rate limits per tier.
+- **Configuration** — Dashboard settings, env vars table, **Data Retention** table (Community: 24h / Team: 90d DuckDB / Enterprise: configurable), Ollama proxy `wicklee.toml` snippet.
+- **Platform Support** — Two tables: (1) agent platform support by OS × capability; (2) metric availability by inference runtime — WES Score / Wattage / GPU Temp / KV Cache Saturation. KV Cache marked `vLLM only` with a purple badge. Honesty-first: blanks are blanks, not omissions.
+
+**Wired site-wide:**
+- `App.tsx`: `/docs` route added before auth gate (same pattern as `/metrics`, `/blog`)
+- `Sidebar.tsx`: "Metrics Reference" → **"Documentation"**, route `/metrics` → `/docs` in avatar drop-up
+- `LandingPage.tsx`: nav + footer Documentation links wired to `onNavigate('/docs')`
+- `BlogPost.tsx`, `BlogListing.tsx`: nav Documentation links wired
+
+---
+
 ## March 14, 2026 — Utility-First Gating: Community Tier Expansion 🔓
 
 **The Goal:** Lower friction for early adopters by moving key diagnostic tools out of the Pro/Team paywall and into Community. Replace hard locks on Team cards with a "tease" pattern showing live data. Wire the Keep Warm button end-to-end. Persist insight dismissals for 24h across tab closes.

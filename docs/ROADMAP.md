@@ -114,6 +114,7 @@
 - [x] **Raw Markdown route** — every post served at `/blog/[slug]` (rendered) and `/blog/[slug].md` (raw text). Agents fetch the `.md` directly.
 - [x] **Path-based routing** — `currentPath` state + `navigate()` + `popstate` listener in App.tsx. Blog routes bypass auth entirely.
 - [x] **Blog nav link** — "Blog" added to LandingPage nav between Documentation and GitHub.
+- [x] **Blog auto-discovery via Vite plugin** ✅ — `blogIndexPlugin` in `vite.config.ts` scans `public/blog/*.md` at build time and dev server start. Writes `public/blog/index.json` sorted by frontmatter `date`. Flow: drop a `.md` → push to GitHub → Railway runs `vite build` → post is live. Zero manual manifest edits.
 - [ ] **First post content:** `wes-the-mpg-for-local-ai-inference.md` — WES formula, live fleet data, four-node comparison table, IPW academic citation (arXiv:2511.07885). *(placeholder live, full article pending)*
 
 ### Launch Prep
@@ -165,7 +166,7 @@
 - [x] **Developer Portal** — Quick Reference panel: base URL, auth header, endpoint table, auto-populated curl snippet. Two-click delete confirm.
 - [x] **"The Programmable Fleet" landing section** — between Sovereignty and How It Works. Three cards: Programmable Routing, Reactive Automation, Performance CI/CD.
 - [x] **Rate limiting** — 60 req/min (Community) / 600 req/min (Team) as an operational throttle, not a feature gate. API access is available on all tiers; node count is the tier differentiator.
-- [ ] **API docs at `/docs/api`** — human and agent readable
+- [x] **Public documentation page at `/docs`** ✅ — un-gated, human and agent readable. Five sections: Quick Start (two-step sudo framing), WES Score (v2 penalty table, multiplicative framing), Agent API v1 (endpoints, route response, rate limits), Configuration (env vars, data retention tiers, Ollama proxy), Platform Support (agent OS matrix + metric-by-runtime matrix with KV Cache scoped to vLLM only). Wired from nav, footer, sidebar, and all public pages.
 
 ### Sovereignty (Observability tab section)
 - [ ] **Sovereignty section in Observability tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network. Lives in the Observability tab — not a standalone tab.
