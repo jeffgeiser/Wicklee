@@ -17,7 +17,7 @@
 export const THERMAL_PENALTY: Record<string, number> = {
   normal:   1.0,
   fair:     1.25,
-  serious:  2.0,
+  serious:  1.75,
   critical: 2.0,
 };
 
@@ -58,6 +58,51 @@ export function formatWES(score: number | null): string {
   if (score >= 100) return score.toFixed(0);
   if (score >= 1)   return score.toFixed(1);
   return score.toFixed(2);
+}
+
+/**
+ * Compute the raw (un-penalized) WES for a node.
+ * Used alongside computeWES to derive the Thermal Cost %.
+ *
+ * @param tokensPerSec  Sampled tok/s — null if not running
+ * @param watts         Total board power — null if unavailable
+ * @param pue           Power Usage Effectiveness multiplier (default 1.0)
+ * @returns             Raw WES (no thermal penalty), or null if inputs insufficient
+ */
+export function computeRawWES(
+  tokensPerSec: number | null | undefined,
+  watts: number | null | undefined,
+  pue: number = 1.0,
+): number | null {
+  if (tokensPerSec == null || tokensPerSec <= 0) return null;
+  if (watts == null || watts <= 0) return null;
+  return tokensPerSec / (watts * pue);
+}
+
+/**
+ * Compute Thermal Cost % — the percentage of potential efficiency lost to thermal throttling.
+ *
+ * Formula: (RawWES - PenalizedWES) / RawWES × 100
+ *
+ * Returns 0 when there is no thermal gap (Normal state or null inputs).
+ */
+export function thermalCostPct(rawWes: number | null, penalizedWes: number | null): number {
+  if (rawWes == null || penalizedWes == null || rawWes <= 0) return 0;
+  return Math.round(((rawWes - penalizedWes) / rawWes) * 100);
+}
+
+/**
+ * Human-readable label for the thermal data source field from agent WES v2.
+ */
+export function thermalSourceLabel(source: string | null | undefined): string {
+  if (source == null) return 'unknown';
+  const map: Record<string, string> = {
+    nvml:        'NVML',
+    iokit:       'IOKit',
+    sysfs:       'sysfs',
+    unavailable: 'unavailable',
+  };
+  return map[source.toLowerCase()] ?? source;
 }
 
 /**

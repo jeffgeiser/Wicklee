@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu } from 'lucide-react';
-import { computeWES, formatWES, wesColorClass } from '../utils/wes';
+import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
@@ -294,7 +294,9 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const totalPowerW = pushOne('watts', hasPower ? rawTotalW : null, tsMs) ?? 0;
 
   // WES — only when actively inferencing
-  const wes = isActive ? computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue) : null;
+  const wes    = isActive ? computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue) : null;
+  const rawWes = isActive ? computeRawWES(tps, hasPower ? totalPowerW : null, pue) : null;
+  const tcPct  = thermalCostPct(rawWes, wes);
 
   // Memory / VRAM
   const hasNvidia = m?.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0;
@@ -453,18 +455,25 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       </div>
 
       {/* 4. WES */}
-      <div className="flex items-center gap-1 overflow-hidden">
-        {thermalWarn && isOnline && (
-          <AlertTriangle size={9} className="text-amber-400 shrink-0" title="Thermal throttling active" />
+      <div className="flex flex-col gap-0.5 overflow-hidden">
+        <div className="flex items-center gap-1">
+          {thermalWarn && isOnline && (
+            <AlertTriangle size={9} className="text-amber-400 shrink-0" title="Thermal throttling active" />
+          )}
+          <span
+            className={`${V} font-semibold ${wes != null ? wesColorClass(wes) : 'text-gray-500 dark:text-gray-600'}`}
+            title={wes != null
+              ? wesBreakdownTitle(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, m?.chip_name ?? m?.gpu_name ?? null, rawWes, wes, m?.thermal_source ?? null)
+              : WES_TOOLTIP}
+          >
+            {wes != null ? formatWES(wes) : '—'}
+          </span>
+        </div>
+        {tcPct > 0 && isOnline && (
+          <span className="text-[9px] font-telin text-amber-400/80 leading-none" title={`${tcPct}% of potential efficiency lost to thermal throttling`}>
+            -{tcPct}% thermal
+          </span>
         )}
-        <span
-          className={`${V} font-semibold ${wes != null ? wesColorClass(wes) : 'text-gray-500 dark:text-gray-600'}`}
-          title={wes != null && wes < 10
-            ? wesBreakdownTitle(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, m?.chip_name ?? m?.gpu_name ?? null)
-            : WES_TOOLTIP}
-        >
-          {wes != null ? formatWES(wes) : '—'}
-        </span>
       </div>
 
       {/* 5. TOK/S */}
@@ -551,12 +560,15 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   );
 };
 
-// ── WES breakdown tooltip (browser title attr, shown when WES < 10) ───────────
+// ── WES breakdown tooltip (browser title attr) ───────────────────────────────
 function wesBreakdownTitle(
   tps: number | null,
   watts: number | null,
   thermal: string | null,
   chipName: string | null | undefined,
+  rawWes?: number | null,
+  penalizedWes?: number | null,
+  thermalSource?: string | null,
 ): string {
   const isHot  = thermal != null && !['normal', 'nominal'].includes(thermal.toLowerCase());
   const lowTps = tps == null || tps < 5;
@@ -567,10 +579,17 @@ function wesBreakdownTitle(
   else if (lowTps)                 diagnosis = 'Runtime or configuration issue';
   else if (hiWatt)                 diagnosis = chipName ? `Expected for ${chipName} inference` : 'Expected for this hardware at inference load';
   else                             diagnosis = 'Check runtime and thermal state';
-  return [
-    `tok/s: ${tps != null ? tps.toFixed(1) : '—'}  ·  Watts: ${watts != null ? `${watts.toFixed(1)}W` : '—'}  ·  Thermal: ${thermal ?? '—'}`,
-    diagnosis,
-  ].join('\n');
+
+  const tc = thermalCostPct(rawWes ?? null, penalizedWes ?? null);
+  const tcStr = tc > 0 ? `  ·  Thermal cost: ${tc}%` : '';
+  const lines = [
+    `tok/s: ${tps != null ? tps.toFixed(1) : '—'}  ·  Watts: ${watts != null ? `${watts.toFixed(1)}W` : '—'}  ·  Thermal: ${thermal ?? '—'}${tcStr}`,
+  ];
+  if (thermalSource != null) {
+    lines.push(`Thermal source: ${thermalSourceLabel(thermalSource)}`);
+  }
+  lines.push(diagnosis);
+  return lines.join('\n');
 }
 
 // HexHive imported from src/components/shared/HexHive.tsx
@@ -1062,7 +1081,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : counts.total;
 
   // Tiles 5-7 — WES leaderboard + fleet average
-  interface WESEntry { nodeId: string; hostname: string; wes: number | null; tps: number | null; watts: number | null; thermalState: string | null; nullReason: string; costPer1mRaw: number | null; kwhRate: number; }
+  interface WESEntry { nodeId: string; hostname: string; wes: number | null; rawWes: number | null; tcPct: number; tps: number | null; watts: number | null; thermalState: string | null; thermalSource: string | null; nullReason: string; costPer1mRaw: number | null; kwhRate: number; }
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
     const _ollamaTps = m.ollama_tokens_per_second ?? null;
     const _vllmTps   = m.vllm_tokens_per_sec ?? null;
@@ -1077,6 +1096,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     const pue      = ns?.pue ?? 1.0;
     const kwhRate  = ns?.kwhRate ?? fleetKwhRate;
     const wes      = computeWES(tps, watts, m.thermal_state, pue);
+    const rawWes   = computeRawWES(tps, watts, pue);
+    const tcPct    = thermalCostPct(rawWes, wes);
     const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
     // Raw $/1M tokens: ($/hr facility cost) / (M tokens/hr throughput)
     //   $/hr         = watts × pue × kwhRate / 1000   (W → kW → $/hr)
@@ -1086,7 +1107,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     const costPer1mRaw = (tps != null && tps > 0 && watts != null)
       ? ((watts * pue * kwhRate) / (tps * 3.6))
       : null;
-    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, tps, watts, thermalState: m.thermal_state, nullReason, costPer1mRaw, kwhRate };
+    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, rawWes, tcPct, tps, watts, thermalState: m.thermal_state, thermalSource: m.thermal_source ?? null, nullReason, costPer1mRaw, kwhRate };
   });
   const pueValues = effectiveMetrics.map(m => getNodeSettings?.(m.node_id)?.pue ?? 1.0);
   const hasPerNodePueDiversity = new Set(pueValues).size > 1;
@@ -1918,7 +1939,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                       const firstRanked = rankedWES[0];
                       const m = effectiveMetrics.find(x => x.node_id === firstRanked?.nodeId);
                       const w = firstRanked?.watts;
-                      return wesBreakdownTitle(firstRanked?.tps ?? null, w ?? null, firstRanked?.thermalState ?? null, m?.chip_name ?? m?.gpu_name ?? null);
+                      return wesBreakdownTitle(firstRanked?.tps ?? null, w ?? null, firstRanked?.thermalState ?? null, m?.chip_name ?? m?.gpu_name ?? null, firstRanked?.rawWes ?? null, firstRanked?.wes ?? null, firstRanked?.thermalSource ?? null);
                     })()
                   : WES_TOOLTIP}
               >
@@ -2084,7 +2105,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Efficiency</span>
                     <span className="text-xs text-gray-400">→</span>
                     <span className="text-sm font-bold font-telin text-gray-200">{bestEffNode!.nodeId}</span>
-                    <span className={`text-xs font-telin ml-auto ${wesColorClass(bestEffNode!.wes)}`}>WES {formatWES(bestEffNode!.wes)}</span>
+                    <div className="ml-auto flex flex-col items-end gap-0">
+                      <span className={`text-xs font-telin ${wesColorClass(bestEffNode!.wes)}`}>WES {formatWES(bestEffNode!.wes)}</span>
+                      {bestEffNode!.tcPct > 0 && (
+                        <span className="text-[9px] font-telin text-amber-400/70" title={`${bestEffNode!.tcPct}% of potential efficiency lost to thermal throttling`}>
+                          -{bestEffNode!.tcPct}% thermal
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {/* Cost route — always shown when ≥2 active nodes have power data */}
                   {bestCostNode != null && activeCostEntries.length >= 2 && (
