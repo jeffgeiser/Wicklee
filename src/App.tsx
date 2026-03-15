@@ -91,38 +91,6 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
   );
 };
 
-const MOCK_NODES_INITIAL: NodeAgent[] = [
-  {
-    id: 'node-01',
-    hostname: 'wicklee-worker-01',
-    ip: '192.168.1.42',
-    status: 'online',
-    gpuTemp: 68,
-    vramUsed: 12.4,
-    vramTotal: 24,
-    powerUsage: 245,
-    tdp: 250,
-    requestsPerSecond: 4.2,
-    activeInterceptors: ['pii-redactor', 'logging'],
-    uptime: '14d 2h',
-    sentinelActive: true
-  },
-  {
-    id: 'node-02',
-    hostname: 'wicklee-worker-02',
-    ip: '192.168.1.45',
-    status: 'online',
-    gpuTemp: 82, // High temp to trigger sentinel UI
-    vramUsed: 4.1,
-    vramTotal: 80,
-    powerUsage: 110,
-    requestsPerSecond: 1.8,
-    activeInterceptors: ['logging'],
-    uptime: '3d 12h',
-    sentinelActive: true
-  }
-];
-
 const MOCK_TENANTS: Tenant[] = [
   { id: 'tnt-01', name: 'Wicklee Dev Ops' },
   { id: 'tnt-02', name: 'Acme AI Research' }
@@ -395,7 +363,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} />;
       case DashboardTab.TRACES:
-        return <TracesView nodes={nodes} tenantId={currentTenant.id} />;
+        return <TracesView nodes={nodes} tenantId={currentTenant.id} pairingInfo={pairingInfo} />;
       case DashboardTab.SCAFFOLDING:
         return permissions.canViewScaffolding ? <ScaffoldingView /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.AI_INSIGHTS:
