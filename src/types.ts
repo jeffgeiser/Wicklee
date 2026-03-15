@@ -69,6 +69,17 @@ export interface SentinelMetrics {
   vllm_requests_running?: number | null;
   /** Compile-time OS from agent — "macOS" | "Linux" | "Windows". Absent on older agents. */
   os?: string | null;
+  // WES v2 — agent-computed thermal telemetry (absent on older agents)
+  /** Average thermal penalty applied over the sample window (e.g. 1.75 for Serious). */
+  penalty_avg?:    number | null;
+  /** Peak thermal penalty seen in the sample window. */
+  penalty_peak?:   number | null;
+  /** Source of thermal data: 'nvml' | 'iokit' | 'sysfs' | 'unavailable'. */
+  thermal_source?: string | null;
+  /** Number of samples in the current WES window. */
+  sample_count?:   number | null;
+  /** Agent WES computation version (2 = v2 with penalty fields). */
+  wes_version?:    number;
 }
 
 export interface FleetEvent {
