@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend,
+  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer,
 } from 'recharts';
 import { TrendingUp, Lock, RefreshCw } from 'lucide-react';
 import { SubscriptionTier } from '../types';
@@ -35,7 +35,7 @@ interface WESNode {
 interface ChartPoint {
   label:          string;
   penalized_wes:  number | null;
-  thermal_gap:    number | null;
+  raw_wes:        number | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,18 +56,11 @@ const RANGE_CONFIG: Record<TimeRange, {
 const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d'];
 
 function buildChartPoints(points: WESPoint[], fmtTs: (ms: number) => string): ChartPoint[] {
-  return points.map(p => {
-    const penalized = p.penalized_wes;
-    const raw       = p.raw_wes;
-    const gap       = raw != null && penalized != null && raw > penalized
-      ? parseFloat((raw - penalized).toFixed(3))
-      : 0;
-    return {
-      label:         fmtTs(p.ts_ms),
-      penalized_wes: penalized != null ? parseFloat(penalized.toFixed(3)) : null,
-      thermal_gap:   gap > 0 ? gap : 0,
-    };
-  });
+  return points.map(p => ({
+    label:         fmtTs(p.ts_ms),
+    penalized_wes: p.penalized_wes != null ? parseFloat(p.penalized_wes.toFixed(3)) : null,
+    raw_wes:       p.raw_wes       != null ? parseFloat(p.raw_wes.toFixed(3))       : null,
+  }));
 }
 
 function tierUpgradeLabel(minTier: SubscriptionTier): string {
@@ -140,7 +133,9 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   const chartPoints   = selectedNode ? buildChartPoints(selectedNode.points, cfg.fmtTs) : [];
 
   const hasData = chartPoints.some(p => p.penalized_wes != null && p.penalized_wes > 0);
-  const hasThermalCost = chartPoints.some(p => (p.thermal_gap ?? 0) > 0);
+  const hasThermalCost = chartPoints.some(
+    p => p.raw_wes != null && p.penalized_wes != null && p.raw_wes > p.penalized_wes + 0.001
+  );
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -156,7 +151,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
           </h3>
           {hasThermalCost && (
             <span className="text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded px-1.5 py-0.5">
-              Thermal Cost Visible
+              Gap: Raw vs Penalized
             </span>
           )}
         </div>
@@ -264,15 +259,11 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       {!loading && !error && hasData && (
         <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartPoints} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <ComposedChart data={chartPoints} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="gradWES" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.25} />
                   <stop offset="95%" stopColor="#6366f1" stopOpacity={0.04} />
-                </linearGradient>
-                <linearGradient id="gradThermal" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%"  stopColor="#f59e0b" stopOpacity={0.45} />
-                  <stop offset="100%" stopColor="#f59e0b" stopOpacity={0.15} />
                 </linearGradient>
               </defs>
               <CartesianGrid
@@ -308,15 +299,14 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
                 labelStyle={{ color: '#9ca3af', marginBottom: 4 }}
                 formatter={(value: number, name: string) => {
                   if (name === 'penalized_wes') return [value?.toFixed(3) ?? '—', 'Penalized WES'];
-                  if (name === 'thermal_gap')   return [value?.toFixed(3) ?? '—', 'Thermal Cost'];
+                  if (name === 'raw_wes')       return [value?.toFixed(3) ?? '—', 'Raw WES (ceiling)'];
                   return [value, name];
                 }}
               />
-              {/* Penalized WES — main fill (indigo) */}
+              {/* Penalized WES — main filled area (indigo) */}
               <Area
                 type="monotone"
                 dataKey="penalized_wes"
-                stackId="wes"
                 stroke="#6366f1"
                 strokeWidth={1.5}
                 fill="url(#gradWES)"
@@ -324,19 +314,23 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
                 activeDot={{ r: 3, fill: '#6366f1' }}
                 connectNulls={false}
               />
-              {/* Thermal gap — amber band stacked on top of penalized WES */}
+              {/* Raw WES — dashed reference line (hardware ceiling).
+                  Only rendered when there is a meaningful thermal gap so the
+                  chart stays clean during normal-thermal operation. */}
               {hasThermalCost && (
-                <Area
+                <Line
                   type="monotone"
-                  dataKey="thermal_gap"
-                  stackId="wes"
-                  stroke="none"
-                  fill="url(#gradThermal)"
+                  dataKey="raw_wes"
+                  stroke="#6366f1"
+                  strokeWidth={1}
+                  strokeDasharray="4 3"
+                  strokeOpacity={0.45}
                   dot={false}
+                  activeDot={{ r: 3, fill: '#6366f1', opacity: 0.5 }}
                   connectNulls={false}
                 />
               )}
-            </AreaChart>
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
       )}
@@ -350,8 +344,10 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
           </div>
           {hasThermalCost && (
             <div className="flex items-center gap-1.5">
-              <div className="w-3 h-2 bg-amber-500/30 rounded-sm" />
-              <span className="text-[10px] text-gray-500">Thermal Cost</span>
+              <svg width="12" height="4" className="shrink-0">
+                <line x1="0" y1="2" x2="12" y2="2" stroke="#6366f1" strokeWidth="1.5" strokeDasharray="4 3" strokeOpacity="0.5" />
+              </svg>
+              <span className="text-[10px] text-gray-500">Raw WES (ceiling)</span>
             </div>
           )}
           {lastFetch > 0 && (
