@@ -44,6 +44,15 @@ export function calculateFleetHealthPct(metrics: SentinelMetrics[]): number | nu
 }
 
 /**
+ * Minimum NVIDIA VRAM (MB) required to treat a device as a real inference GPU.
+ * Filters out BMC/IPMI onboard graphics (ASPEED AST, tiny AMD framebuffers)
+ * that report <1 GB and are invisible to Ollama/vLLM workloads.
+ * Applied consistently in the tile aggregators AND the row hasNvidia check
+ * so the row and top tile always agree on what counts as usable VRAM.
+ */
+export const INFERENCE_VRAM_THRESHOLD_MB = 1024;
+
+/**
  * Apple Silicon GPU memory budget in MB for a single node.
  * Uses iogpu.wired_limit_mb if available (emitted by agent ≥ v0.4.4);
  * falls back to 75% of total RAM for older agents.
@@ -57,14 +66,14 @@ function appleGpuBudgetMb(m: SentinelMetrics): number | null {
 
 /**
  * Total GPU memory in use across the fleet, in MB.
- * - NVIDIA nodes:        nvidia_vram_used_mb
- * - Apple Silicon nodes: wired_limit − min(wired_limit, available_memory_mb)
- *                        i.e. how much of the GPU budget is not free.
- * - CPU-only nodes:      0 (excluded)
+ * - NVIDIA nodes ≥ 1 GB:  nvidia_vram_used_mb
+ * - Apple Silicon nodes:   wired_limit − min(wired_limit, available_memory_mb)
+ * - BMC/onboard graphics:  excluded (< INFERENCE_VRAM_THRESHOLD_MB)
+ * - CPU-only nodes:        0 (excluded)
  */
 export function calculateTotalVramMb(metrics: SentinelMetrics[]): number {
   return metrics.reduce((acc, m) => {
-    if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0) {
+    if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb >= INFERENCE_VRAM_THRESHOLD_MB) {
       return acc + (m.nvidia_vram_used_mb ?? 0);
     }
     const budget = appleGpuBudgetMb(m);
@@ -78,13 +87,14 @@ export function calculateTotalVramMb(metrics: SentinelMetrics[]): number {
 
 /**
  * Total GPU memory capacity across the fleet, in MB.
- * - NVIDIA nodes:        nvidia_vram_total_mb
- * - Apple Silicon nodes: iogpu.wired_limit_mb (or 75% of RAM for older agents)
- * - CPU-only nodes:      0 (excluded)
+ * - NVIDIA nodes ≥ 1 GB:  nvidia_vram_total_mb
+ * - Apple Silicon nodes:   iogpu.wired_limit_mb (or 75% of RAM for older agents)
+ * - BMC/onboard graphics:  excluded (< INFERENCE_VRAM_THRESHOLD_MB)
+ * - CPU-only nodes:        0 (excluded)
  */
 export function calculateTotalVramCapacityMb(metrics: SentinelMetrics[]): number {
   return metrics.reduce((acc, m) => {
-    if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0) {
+    if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb >= INFERENCE_VRAM_THRESHOLD_MB) {
       return acc + m.nvidia_vram_total_mb;
     }
     const budget = appleGpuBudgetMb(m);

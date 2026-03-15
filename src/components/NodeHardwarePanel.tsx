@@ -2,7 +2,7 @@ import React from 'react';
 import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessageSquare, AlertTriangle } from 'lucide-react';
 import { SentinelMetrics } from '../types';
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from '../utils/wes';
-import { WES_TOOLTIP } from '../utils/efficiency';
+import { WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 
 export const thermalColour = (state: string | null) => {
   switch (state?.toLowerCase()) {
@@ -91,7 +91,7 @@ export const HardwareDetailPanel: React.FC<{
   const chip          = (m.chip_name ?? m.gpu_name ?? '').toLowerCase();
   const isAppleSilicon = chip.includes('apple') || /\bm[1-4]\b/.test(chip) || m.memory_pressure_percent != null;
 
-  const nvidiaVramStr = m.nvidia_vram_used_mb != null && (m.nvidia_vram_total_mb ?? 0) > 0
+  const nvidiaVramStr = m.nvidia_vram_used_mb != null && (m.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB
     ? `${(m.nvidia_vram_used_mb / 1024).toFixed(1)} GB` : null;
   const nvidiaVramTotal = m.nvidia_vram_total_mb != null ? `of ${(m.nvidia_vram_total_mb / 1024).toFixed(0)} GB` : null;
   const nvidiaTempStr   = m.nvidia_gpu_temp_c   != null ? `${m.nvidia_gpu_temp_c}°C` : null;
