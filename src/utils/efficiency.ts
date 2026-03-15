@@ -44,30 +44,52 @@ export function calculateFleetHealthPct(metrics: SentinelMetrics[]): number | nu
 }
 
 /**
- * Total dedicated GPU VRAM in use across the fleet, in MB.
- * Only counts nodes with NVIDIA VRAM reported by NVML (nvidia_vram_total_mb non-null
- * and non-zero). Apple Silicon unified memory and CPU-only system RAM are excluded —
- * they are not discrete VRAM and must not inflate the fleet VRAM tile.
+ * Apple Silicon GPU memory budget in MB for a single node.
+ * Uses iogpu.wired_limit_mb if available (emitted by agent ≥ v0.4.4);
+ * falls back to 75% of total RAM for older agents.
+ * Returns null for NVIDIA nodes and CPU-only Linux/Windows nodes.
  */
-export function calculateTotalVramMb(metrics: SentinelMetrics[]): number {
-  return metrics.reduce((acc, m) =>
-    (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0)
-      ? acc + (m.nvidia_vram_used_mb ?? 0)
-      : acc,
-  0);
+function appleGpuBudgetMb(m: SentinelMetrics): number | null {
+  // memory_pressure_percent is strictly Apple Silicon (IOKit) — reliable platform detector
+  if (m.memory_pressure_percent == null) return null;
+  return m.gpu_wired_limit_mb ?? Math.round(m.total_memory_mb * 0.75);
 }
 
 /**
- * Total dedicated GPU VRAM capacity across the fleet, in MB.
- * Only counts nodes with NVIDIA VRAM reported by NVML (nvidia_vram_total_mb non-null
- * and non-zero). Apple Silicon and CPU-only nodes contribute 0 to this total.
+ * Total GPU memory in use across the fleet, in MB.
+ * - NVIDIA nodes:        nvidia_vram_used_mb
+ * - Apple Silicon nodes: wired_limit − min(wired_limit, available_memory_mb)
+ *                        i.e. how much of the GPU budget is not free.
+ * - CPU-only nodes:      0 (excluded)
+ */
+export function calculateTotalVramMb(metrics: SentinelMetrics[]): number {
+  return metrics.reduce((acc, m) => {
+    if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0) {
+      return acc + (m.nvidia_vram_used_mb ?? 0);
+    }
+    const budget = appleGpuBudgetMb(m);
+    if (budget != null) {
+      const avail = Math.max(0, Math.min(budget, m.available_memory_mb));
+      return acc + Math.max(0, budget - avail);
+    }
+    return acc;
+  }, 0);
+}
+
+/**
+ * Total GPU memory capacity across the fleet, in MB.
+ * - NVIDIA nodes:        nvidia_vram_total_mb
+ * - Apple Silicon nodes: iogpu.wired_limit_mb (or 75% of RAM for older agents)
+ * - CPU-only nodes:      0 (excluded)
  */
 export function calculateTotalVramCapacityMb(metrics: SentinelMetrics[]): number {
-  return metrics.reduce((acc, m) =>
-    (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0)
-      ? acc + m.nvidia_vram_total_mb
-      : acc,
-  0);
+  return metrics.reduce((acc, m) => {
+    if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0) {
+      return acc + m.nvidia_vram_total_mb;
+    }
+    const budget = appleGpuBudgetMb(m);
+    return budget != null ? acc + budget : acc;
+  }, 0);
 }
 
 /**
