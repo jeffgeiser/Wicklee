@@ -1,4 +1,6 @@
 {
   "_agent_note": "Machine-readable blog manifest. GET /blog/index.json to enumerate all published posts. Each slug maps to /blog/{slug}.md — standard markdown with optional YAML frontmatter (title, date, description, tags). Auto-generated at build/dev time from public/blog/*.md — do not edit manually.",
-  "posts": []
+  "posts": [
+    "wes-the-mpg-for-local-ai-inference"
+  ]
 }

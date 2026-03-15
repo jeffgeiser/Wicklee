@@ -93,7 +93,11 @@ export interface FleetEvent {
     | 'throttle_resolved'
     | 'model_swap'
     | 'power_anomaly'
-    | 'error';
+    | 'error'
+    | 'model_eviction_predicted'
+    | 'keep_warm_taken'
+    | 'thermal_degradation_confirmed'
+    | 'fit_score_changed';
   nodeId: string;
   hostname?: string;
   /** Human-readable transition detail, e.g. "Normal → Serious" or "phi3:mini → llama3:8b" */
@@ -179,6 +183,8 @@ export interface FleetStreamState {
   peakTpsMap: Record<string, number>;
   /** Detected fleet events (online/offline/thermal), newest first, max 50. */
   fleetEvents: FleetEvent[];
+  /** Append a new event to the front of the fleet event list. */
+  addFleetEvent: (event: FleetEvent) => void;
   /** Whether the EventSource is currently connected. */
   connected: boolean;
   /** Transport type — 'sse' once connected, null before first open. */
@@ -224,3 +230,14 @@ export interface CreateApiKeyResponse {
   name:       string;
   created_at: number;          // unix ms
 }
+
+// ── Tier badge display config ─────────────────────────────────────────────────
+// Used by InsightsLockedCard, UpgradePrompt, and feature-lock overlays.
+// Single source of truth for label text and Tailwind color tokens per tier.
+
+export const TIER_BADGE: Record<SubscriptionTier, { label: string; color: string }> = {
+  community:  { label: 'Community',  color: 'text-gray-400  bg-gray-500/10  border-gray-500/20'  },
+  pro:        { label: 'Pro',        color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' },
+  team:       { label: 'Team',       color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
+  enterprise: { label: 'Enterprise', color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
+};

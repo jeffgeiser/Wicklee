@@ -40,6 +40,8 @@ interface Props {
   showNodeHeader?: boolean;
   /** When true, the Keep Warm button fires a silent Ollama ping. All tiers. */
   canKeepWarm?:    boolean;
+  /** Called after Keep Warm fires successfully. */
+  onKeepWarm?:     () => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -49,6 +51,7 @@ const ModelEvictionCard: React.FC<Props> = ({
   lastActiveTsMs,
   showNodeHeader = false,
   canKeepWarm    = true,
+  onKeepWarm,
 }) => {
   const [keepWarmState, setKeepWarmState] = useState<'idle' | 'loading' | 'success'>('idle');
 
@@ -83,6 +86,7 @@ const ModelEvictionCard: React.FC<Props> = ({
       // Ping failure is non-fatal — still show success (model might still be warm)
     }
     setKeepWarmState('success');
+    onKeepWarm?.();
     setTimeout(() => setKeepWarmState('idle'), SUCCESS_DURATION_MS);
   };
 
