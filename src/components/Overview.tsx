@@ -333,6 +333,13 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
     : null;
   const vramPct = vramPctRaw != null ? Math.round(vramPctRaw * 10) / 10 : null;
+  // Tooltip explains why — differs by platform/install method
+  const isAppleNode = (m?.gpu_name ?? '').toLowerCase().includes('apple') || m?.cpu_power_w != null;
+  const vramTooltip = hasNvidia
+    ? `NVIDIA dedicated VRAM utilisation — ${vramPct}%`
+    : isAppleNode
+    ? 'Apple Silicon uses unified memory — shown in MEMORY column instead.'
+    : 'No NVIDIA GPU detected. If this node has an NVIDIA GPU, re-run the installer — it will auto-detect and download the GPU-enabled build.';
   const vramColorCls = vramPct == null ? 'text-gray-500 dark:text-gray-600'
     : vramPct >= 90 ? 'text-red-400'
     : vramPct >= 70 ? 'text-amber-400'
@@ -415,7 +422,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       {/* 2b. VRAM — NVIDIA dedicated VRAM only; Apple Silicon shows — (unified memory is architecturally distinct) */}
       <div
         className="hidden md:block min-w-0 overflow-hidden"
-        title="NVIDIA dedicated VRAM utilisation. Apple Silicon uses unified memory — shown in MEMORY column instead."
+        title={vramTooltip}
       >
         {vramPct != null ? (
           <div className="flex items-center gap-1.5">
