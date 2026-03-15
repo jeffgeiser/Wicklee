@@ -256,7 +256,7 @@ wicklee --install-service</Code>
                 ThermalPenalty is applied as a divisor — acting as a <strong className="text-gray-300">multiplicative penalty</strong> on your WES score. A penalty of 1.75 (Serious) reduces your effective score to ~57% of its thermal-ideal value.
               </p>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                On NVIDIA hardware, ThermalPenalty is derived from the NVML hardware throttle-reason bitmask rather than inferred from temperature — making it authoritative rather than estimated. Source is tagged <code className="text-gray-400">nvml</code> in the payload.
+                On NVIDIA hardware, ThermalPenalty is derived from the NVML hardware throttle-reason bitmask rather than inferred from temperature — making it authoritative rather than estimated. Source is tagged <code className="text-gray-400">nvml</code> in the payload. On AMD CPUs (Ryzen/EPYC), penalty is derived from the CPU clock ratio (<code className="text-gray-400">scaling_cur_freq ÷ cpuinfo_max_freq</code>) using the k10temp hwmon driver — catching throttle as it happens rather than after temperature peaks. Source is tagged <code className="text-gray-400">clock_ratio</code>. Non-AMD Linux nodes use <code className="text-gray-400">sysfs</code> (thermal zone max temperature). macOS uses <code className="text-gray-400">iokit</code> (pmset thermal level).
               </p>
             </div>
 
@@ -650,7 +650,14 @@ ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
                       <Td>✅ NVML</Td>
                     </tr>
                     <tr>
-                      <Td><span className="font-medium text-white">Linux — CPU only</span></Td>
+                      <Td><span className="font-medium text-white">Linux — AMD CPU</span></Td>
+                      <Td>✅ RAPL powercap</Td>
+                      <Td>—</Td>
+                      <Td>✅ k10temp clock ratio</Td>
+                      <Td>—</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">Linux — Intel CPU</span></Td>
                       <Td>✅ RAPL powercap</Td>
                       <Td>—</Td>
                       <Td>✅ sysfs thermal</Td>

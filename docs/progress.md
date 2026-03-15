@@ -4,6 +4,37 @@
 
 ---
 
+## March 15, 2026 — AMD CPU Thermal: k10temp + Clock Ratio 🔥
+
+**The Goal:** Implement AMD-specific thermal detection in the Rust agent. The generic sysfs path catches temperature after the fact; clock ratio catches throttle as it happens — the right signal for WES penalty derivation on Ryzen/EPYC nodes.
+
+---
+
+### AMD Thermal via k10temp + Clock Ratio ✅
+
+**Architecture change:** Replaced `Arc<Mutex<Option<String>>>` (bare state string) with `Arc<Mutex<Option<LinuxThermalResult>>>` throughout the thermal pipeline. `LinuxThermalResult` carries `{ state: String, source: &'static str, direct_penalty: Option<f32> }` — allows AMD path to pass a direct penalty (up to 2.5 for severe throttle) bypassing the state→penalty mapping, while the sysfs fallback still uses `thermal_penalty_v2(state)`.
+
+**AMD detection:**
+- `find_hwmon("k10temp")` scans `/sys/class/hwmon/*/name` — presence of k10temp driver is the AMD signal
+- `read_cpu_max_freq_khz()` reads `cpuinfo_max_freq` (hardware ceiling) once at startup — never re-polled
+- `read_avg_cur_freq_khz()` averages `scaling_cur_freq` across all cpu0…cpuN directories every 5s
+- Clock ratio = avg_cur / max; thresholds: ≥0.95→Normal(1.00), ≥0.80→Fair(1.25), ≥0.60→Serious(1.75), <0.60→Critical(2.50)
+- `read_k10temp_tdie_c()` tries `temp2_input` (Zen2+ Tdie) then `temp1_input`; Tdie > 85°C bumps to at least Serious as tie-breaker
+- `thermal_source: "clock_ratio"` — new source tag, visible in WES breakdown tooltip
+
+**Bug fix (all Linux nodes):** Generic sysfs path returned `"Elevated"` for 70–79°C. `thermal_penalty_v2` has no "Elevated" case — fell through to default (1.0). Corrected to `"Fair"` (1.25). Non-AMD Linux nodes in the warm zone now receive the correct WES penalty. **This is a WES score change for affected nodes — scores will decrease (more accurate).**
+
+**WES sampler:** Uses `direct_penalty` when `Some` (AMD path); falls back to `thermal_penalty_v2(state)` when `None` (sysfs). `lt.source` flows as `wes_metrics.thermal_source`.
+
+### What's Next (Rust agent)
+
+- Intel CPU thermal — thermald zone states (Linux) with clock ratio fallback
+- ANE Utilization — Apple Neural Engine
+- macOS CPU Power sudoless
+- `wes_config.json` — configurable penalty thresholds
+
+---
+
 ## March 15, 2026 — Phase 3B Closure + Phase 4A Historical Graphs 📈
 
 **The Goal:** Close out Phase 3B frontend — Sovereignty section (last open item) + dead code cleanup. Then immediately start Phase 4A with Historical Performance Graphs, making the accumulated DuckDB history visible for the first time.
