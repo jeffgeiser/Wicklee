@@ -34,16 +34,26 @@
 - Data retention: 24h in cloud; no long-term DuckDB persistence at this tier
 - Local agent SQLite (localhost:7700): unaffected — always stores full local history
 
+### WES v2 Diagnostics — All Tiers
+- **WES (Wicklee Efficiency Score)** — available on every tier, computed from live SSE telemetry
+- **Raw WES** (`tok/s ÷ Watts`) and **Penalized WES** (`tok/s ÷ (Watts × ThermalPenalty)`) both visible everywhere
+- **Thermal Cost %** — `(RawWES − PenalizedWES) / RawWES × 100` — shown as an amber badge whenever TC% > 0
+  - Appears in: Fleet Status table WES column, Fleet Leaderboard, Best Route Now card, WES tooltip
+- **WES tooltip v2** — shows tok/s · Watts · Thermal state · TC% · Thermal data source on all WES values
+- **Penalty table** — `Normal: 1.0 · Fair: 1.25 · Serious: 1.75 · Critical: 2.0`
+- These are core observability signals. No tier gate. No upgrade prompt.
+
 ### Insights
 - **Live + Core Educational** — insight cards computed from current SSE frame + 24h rolling data; persist across sessions within the 24h window
-- Available cards:
-  - Model-to-Hardware Fit Score (full card — Community unlocked)
+- Available cards (all Community / free tier):
   - Thermal Degradation Correlation
   - Power Anomaly Detection
-  - Unified Memory Exhaustion Warning (Apple Silicon)
-  - Model Eviction Prediction (full card with Keep Warm action — 1 node)
-  - Idle Resource Notice
+  - Unified Memory Exhaustion Warning (Apple Silicon / NVIDIA)
+  - Model-to-Hardware Fit Score
+  - Model Eviction Prediction (with Keep Warm action — 1 node at Community)
+  - **Idle Resource Notice** — node idle ≥ 1 hr; shows estimated $/hr cost. Community-free.
   - Quantization ROI (live snapshot — tok/s, W/1K TKN, WES with educational copy)
+  - **Live WES Leaderboard** — ranks all connected nodes by penalized WES; shows TC% and thermal state badge per node. Community-free; no history required.
 - Cards persist via localStorage with 24h expiry; dismissed state survives tab close within the 24h window
 
 ### Alerting
@@ -58,7 +68,7 @@
 - UI: Keep Warm button active on ModelEvictionCard; shows loading → "kept warm ✓" state
 
 ### Fleet Intelligence
-- View-only access to: Fleet WES Leaderboard, Thermal Diversity Score, Inference Density Map, Idle Fleet Cost
+- View-only access to live fleet cards: Fleet Avg WES, Cost Efficiency, Tokens Per Watt, Thermal Diversity, Inference Density Map, Idle Fleet Cost (daily $/node estimate)
 - No alert configuration, no export
 
 ### Sovereignty
@@ -361,4 +371,4 @@ Node limit is enforced server-side at `/api/pair/activate` — client-side gates
 
 ---
 
-*Last updated: March 14, 2026. Source of truth for all subscription gating decisions.*
+*Last updated: March 15, 2026. Source of truth for all subscription gating decisions.*

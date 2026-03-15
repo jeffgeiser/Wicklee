@@ -5,20 +5,14 @@
  * Not dismissable. Disappears when thermal state resolves.
  *
  * Estimated tok/s loss = ((ThermalPenalty - 1) / ThermalPenalty) × 100
- *   Serious → 2.0  → 50% loss
- *   Critical → 2.0+ → 50%+ loss
+ *   Serious  → 1.75 → ~43% loss
+ *   Critical → 2.0  → 50% loss
  */
 
 import React from 'react';
 import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
-
-// ── Thermal penalty lookup ────────────────────────────────────────────────────
-
-const THERMAL_PENALTY: Record<string, number> = {
-  serious:  2.0,
-  critical: 2.0,
-};
+import { THERMAL_PENALTY } from '../../../utils/wes';
 
 function estimatedLossPct(thermalState: string): string {
   const penalty = THERMAL_PENALTY[thermalState.toLowerCase()] ?? 2.0;

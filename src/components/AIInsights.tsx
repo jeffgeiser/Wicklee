@@ -26,8 +26,9 @@ import {
   Activity, Layers,
 } from 'lucide-react';
 
-import { NodeAgent, SentinelMetrics, InsightsTier } from '../types';
+import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
+import { computeWES } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { useSettings } from '../hooks/useSettings';
 
@@ -65,9 +66,7 @@ function computeNodeWes(m: SentinelMetrics): number | null {
   const tps   = m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null;
   const watts = m.cpu_power_w ?? m.nvidia_power_draw_w ?? null;
   if (tps == null || watts == null || tps <= 0 || watts <= 0) return null;
-  const th = m.thermal_state?.toLowerCase() ?? 'normal';
-  const penalty = th === 'critical' ? 2.0 : th === 'serious' ? 2.0 : th === 'fair' ? 1.25 : 1.0;
-  return tps / (watts * penalty);
+  return computeWES(tps, watts, m.thermal_state);
 }
 
 /** Format watts compactly. */
@@ -141,13 +140,29 @@ const Section2NominalRow: React.FC<{
 
 const WesLeaderboardLite: React.FC<{ nodes: SentinelMetrics[] }> = ({ nodes }) => {
   const ranked = nodes
-    .map(m => ({
-      nodeId:   m.hostname ?? m.node_id ?? 'unknown',
-      wes:      computeNodeWes(m),
-    }))
+    .map(m => {
+      const tps   = m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null;
+      const watts = m.cpu_power_w ?? m.nvidia_power_draw_w ?? null;
+      const wes   = computeNodeWes(m);
+      const rawWes = (tps != null && tps > 0 && watts != null && watts > 0)
+        ? tps / (watts)
+        : null;
+      const tcPct = (rawWes != null && wes != null && rawWes > 0)
+        ? Math.round(((rawWes - wes) / rawWes) * 100)
+        : 0;
+      const thermalState = m.thermal_state?.toLowerCase() ?? null;
+      const isHot = thermalState != null && !['normal', 'nominal'].includes(thermalState);
+      return {
+        nodeId:      m.hostname ?? m.node_id ?? 'unknown',
+        wes,
+        tcPct,
+        isHot,
+        thermalState: m.thermal_state,
+      };
+    })
     .filter(x => x.wes != null)
     .sort((a, b) => (b.wes ?? 0) - (a.wes ?? 0))
-    .slice(0, 3);
+    .slice(0, 4);
 
   if (ranked.length === 0) {
     return (
@@ -158,10 +173,20 @@ const WesLeaderboardLite: React.FC<{ nodes: SentinelMetrics[] }> = ({ nodes }) =
   return (
     <div className="space-y-1.5">
       {ranked.map((n, i) => (
-        <div key={n.nodeId} className="flex items-center gap-2">
-          <span className="font-telin text-[10px] text-gray-600 w-4 shrink-0">#{i + 1}</span>
-          <span className="text-xs text-gray-400 flex-1 truncate">{n.nodeId}</span>
-          <span className="font-telin text-xs text-cyan-400">{n.wes!.toFixed(1)}</span>
+        <div key={n.nodeId} className="flex items-center gap-2 min-w-0">
+          <span className="font-telin text-[10px] text-gray-600 w-4 shrink-0 text-right">#{i + 1}</span>
+          <span className="text-xs text-gray-400 flex-1 truncate min-w-0">{n.nodeId}</span>
+          {n.isHot && (
+            <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 shrink-0">
+              {n.thermalState}
+            </span>
+          )}
+          {n.tcPct > 0 && (
+            <span className="text-[9px] font-telin text-amber-400/80 shrink-0" title={`${n.tcPct}% potential efficiency lost to thermal`}>
+              -{n.tcPct}%
+            </span>
+          )}
+          <span className="font-telin text-xs text-cyan-400 shrink-0">{n.wes!.toFixed(1)}</span>
         </div>
       ))}
     </div>
@@ -176,6 +201,7 @@ interface AIInsightsProps {
   onNavigateToSecurity?: () => void;
   insightsTier: InsightsTier;
   canViewInsight: (id: number) => boolean;
+  onFleetEvent?: (event: FleetEvent) => void;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -186,6 +212,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   onNavigateToSecurity,
   insightsTier,
   canViewInsight,
+  onFleetEvent,
 }) => {
 
   // ── Hooks — all unconditional ──────────────────────────────────────────────
@@ -212,6 +239,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const powerFiredAtRef   = useRef<number | null>(null);
   const memFiredAtRef     = useRef<number | null>(null);
 
+  // Transition tracking for FleetEvent emissions
+  const prevThermalFiringRef  = useRef(false);
+  const prevEvictionActiveRef = useRef(false);
+  const prevFitModelRef       = useRef<string | null>(null);
+
   // ── Per-node activity tracking for Mission Control (fleet) ────────────────
   // Mirrors the Cockpit's lastActiveTsMs / firstMessageTs / hadAnyActivity
   // refs, but keyed by node_id so they work across an entire fleet.
@@ -220,7 +252,10 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const nodeHadActivityRef  = useRef<Record<string, boolean>>({});
 
   // Fleet data from SSE context
-  const { allNodeMetrics, lastSeenMsMap } = useFleetStream();
+  const { allNodeMetrics, lastSeenMsMap, addFleetEvent } = useFleetStream();
+
+  // Merged event emitter — prop takes precedence, falls back to context
+  const emitFleetEvent = onFleetEvent ?? addFleetEvent;
 
   const { getNodeSettings } = useSettings();
 
@@ -516,6 +551,68 @@ Format as Markdown with a "Strategic Optimization" header.`,
   const localNodeId   = m?.node_id ?? 'local';
   const localSettings = getNodeSettings(localNodeId);
 
+  // ── FleetEvent emission — transition-based ────────────────────────────────
+
+  useEffect(() => {
+    const now = Date.now();
+    const nodeId   = thermalNodes[0]?.node_id ?? 'unknown';
+    const hostname = thermalNodes[0]?.hostname ?? thermalNodes[0]?.node_id ?? 'unknown';
+    if (thermalFiring && !prevThermalFiringRef.current) {
+      emitFleetEvent({
+        id:       `${now}-thermal-confirmed`,
+        ts:       now,
+        type:     'thermal_degradation_confirmed',
+        nodeId,
+        hostname,
+        detail:   `${thermalNodes[0]?.thermal_state ?? 'critical'} — throttling confirmed`,
+      });
+    }
+    prevThermalFiringRef.current = thermalFiring;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thermalFiring]);
+
+  useEffect(() => {
+    if (!isLocalHost) return;
+    const now = Date.now();
+    if (tier2EvictionActive && !prevEvictionActiveRef.current && m) {
+      emitFleetEvent({
+        id:       `${now}-eviction`,
+        ts:       now,
+        type:     'model_eviction_predicted',
+        nodeId:   m.node_id,
+        hostname: m.hostname ?? m.node_id,
+        detail:   m.ollama_active_model ?? 'active model',
+      });
+    }
+    prevEvictionActiveRef.current = tier2EvictionActive;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier2EvictionActive, isLocalHost]);
+
+  const fitModelKey = effectiveNodes.map(n => n.ollama_active_model ?? '').join(',');
+  useEffect(() => {
+    const currentModel = effectiveNodes[0]?.ollama_active_model ?? null;
+    if (currentModel !== prevFitModelRef.current) {
+      const prev = prevFitModelRef.current;
+      prevFitModelRef.current = currentModel;
+      if (prev !== null || currentModel !== null) {
+        const nodeId   = effectiveNodes[0]?.node_id ?? 'local';
+        const hostname = effectiveNodes[0]?.hostname ?? nodeId;
+        const detail   = currentModel
+          ? `loaded: ${currentModel}`
+          : `unloaded: ${prev}`;
+        emitFleetEvent({
+          id:       `${Date.now()}-fit`,
+          ts:       Date.now(),
+          type:     'fit_score_changed',
+          nodeId,
+          hostname,
+          detail,
+        });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitModelKey]);
+
   // ── RENDER ────────────────────────────────────────────────────────────────
 
   return (
@@ -657,7 +754,19 @@ Format as Markdown with a "Strategic Optimization" header.`,
               // Cockpit: single-node, local SSE tracking
               tier2EvictionActive && m ? (
                 <div id="insight-model-eviction">
-                  <ModelEvictionCard node={m} lastActiveTsMs={lastActiveTsMs} canKeepWarm />
+                  <ModelEvictionCard
+                  node={m}
+                  lastActiveTsMs={lastActiveTsMs}
+                  canKeepWarm
+                  onKeepWarm={() => emitFleetEvent({
+                    id:       `${Date.now()}-keepwarm`,
+                    ts:       Date.now(),
+                    type:     'keep_warm_taken',
+                    nodeId:   m.node_id,
+                    hostname: m.hostname ?? m.node_id,
+                    detail:   m.ollama_active_model ?? 'active model',
+                  })}
+                />
                 </div>
               ) : (
                 <Section2NominalRow
@@ -678,6 +787,14 @@ Format as Markdown with a "Strategic Optimization" header.`,
                       lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now}
                       showNodeHeader={fleetEvictionNodes.length > 1}
                       canKeepWarm
+                      onKeepWarm={() => emitFleetEvent({
+                        id:       `${Date.now()}-keepwarm`,
+                        ts:       Date.now(),
+                        type:     'keep_warm_taken',
+                        nodeId:   n.node_id,
+                        hostname: n.hostname ?? n.node_id,
+                        detail:   n.ollama_active_model ?? 'active model',
+                      })}
                     />
                   </div>
                 ))}

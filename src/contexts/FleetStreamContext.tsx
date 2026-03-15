@@ -434,6 +434,10 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     : 'connected';
 
   // ── Memoised context value ─────────────────────────────────────────────────
+  const addFleetEvent = React.useCallback((event: FleetEvent) => {
+    setFleetEvents(prev => [event, ...prev].slice(0, MAX_EVENTS));
+  }, []);
+
   const value = useMemo<FleetStreamState>(() => ({
     allNodeMetrics,
     lastSeenMsMap,
@@ -441,11 +445,12 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     // SSE frame, the memo always re-runs and peaks stay current without extra state.
     peakTpsMap: { ...peakTpsRef.current },
     fleetEvents,
+    addFleetEvent,
     connected,
     transport,
     lastTelemetryMs,
     connectionState,
-  }), [allNodeMetrics, lastSeenMsMap, fleetEvents, connected, transport, lastTelemetryMs, connectionState]);
+  }), [allNodeMetrics, lastSeenMsMap, fleetEvents, addFleetEvent, connected, transport, lastTelemetryMs, connectionState]);
 
   return (
     <FleetStreamContext.Provider value={value}>

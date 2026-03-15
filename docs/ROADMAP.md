@@ -70,19 +70,19 @@
 - [x] **"Why is my WES low?" tooltip v2** — `wesBreakdownTitle()` shows tok/s · Watts · Thermal · Thermal Cost % · Thermal source on all WES values. Diagnostic recommendation inline.
 - [ ] **`wes_config.json`** — configurable penalty thresholds per platform. Sane defaults ship tuned for standard deployments. Operators can override for unusual hardware or environments.
 
-### Local Intelligence Tab — Free Tier Insight Cards
-- [ ] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded.
-- [ ] **Thermal Degradation Correlation:** Named insight card when thermal state transition + tok/s drop detected simultaneously. Shows before/after tok/s, causal chain, recommendation.
-- [ ] **Power Anomaly Detection:** Fires when board power exceeds 2× session baseline or when power/GPU utilization ratio is anomalous. Flags runaway processes invisible to standard monitoring.
-- [ ] **Unified Memory Exhaustion Warning (Apple Silicon):** Correlates Ollama model size + available unified memory + vm_stat pressure. Warns before swap storm — not after.
-- [ ] **Model Eviction Prediction:** Fires 2 minutes before predicted Ollama model unload based on `/api/ps` inactivity. Free: warning. Paid: "Keep Warm" toggle sends silent ping to reset `keep_alive` timer.
-- [ ] **Idle Resource Notice:** Node online >1hr with zero inference activity. Shows estimated electricity cost of idle time.
+### Local Intelligence Tab — Free Tier Insight Cards ✅
+- [x] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded. Community-free.
+- [x] **Thermal Degradation Correlation:** Named insight card fires when thermal_state = Serious|Critical. Shows estimated tok/s loss (based on v2 penalty table), causal chain, recommendation. Not dismissable.
+- [x] **Power Anomaly Detection:** Fires when board power > 2× session baseline OR watts > 50W at < 20% GPU utilization. Flags runaway processes invisible to standard monitoring.
+- [x] **Unified Memory Exhaustion Warning (Apple Silicon / NVIDIA):** Fires when headroom < 10% of total VRAM/unified memory with a model loaded. Warns before swap storm — not after.
+- [x] **Model Eviction Prediction:** Fires at 3 min inactivity (2 min before default Ollama keep_alive). Free: warning card. Keep Warm fires silent 1-token ping. Community: 1 node.
+- [x] **Idle Resource Notice:** Node idle ≥ 1 hr with zero inference. Shows $/hr estimate. Community-free. Clock resets on any tok/s > 0.
 
-### Fleet Intelligence Panel
-- [ ] **Fleet WES Leaderboard:** WES-ranked across all nodes. Cross-node efficiency comparison that accounts for thermal state — "which node is most efficient per token right now?" answered live.
-- [ ] **Fleet Thermal Diversity Score:** Distribution of thermal states across the fleet. "3/4 nodes thermally stressed — fleet is one spike from cascade failure." Free: score. Paid: Slack alert.
-- [ ] **Fleet Inference Density Map:** ✅ Hexagonal hive plot — glowing pulse on active inference nodes, cold dim on idle. Visual utilization map, demo-video-ready.
-- [ ] **Idle Fleet Cost Card:** Daily electricity cost of idle nodes with PUE multiplier support. Formula: `idle_watts × pue × hours × kwh_rate`. Shows "Node: $X/day · Facility: $Y/day (PUE 1.4)" so math is transparent.
+### Fleet Intelligence Panel ✅
+- [x] **Live WES Leaderboard:** Ranked by penalized WES with TC% badge and thermal state indicator per node. Top 4 shown. Community-free — no history required.
+- [x] **Fleet Thermal Diversity Score:** Live count of nodes per thermal state (Normal/Fair/Serious/Critical) in Fleet Intelligence panel. Cascade risk analysis teased — Team+.
+- [x] **Fleet Inference Density Map:** Hexagonal hive plot — glowing pulse on active inference nodes, cold dim on idle. Visual utilization map, demo-video-ready.
+- [x] **Idle Fleet Cost Card:** Daily electricity cost per idle node (watts × PUE × 24h × kWh rate). Per-node PUE from node settings. Fleet total shown when ≥ 2 idle nodes. Community-free.
 
 ### Settings ✅
 - [x] **Cost & Energy section:** kWh rate, currency, PUE multiplier with live cost preview
@@ -100,11 +100,11 @@
 - [x] Navigation restructure — single profile entry point lower left
 - [x] Profile dropdown cleanup — identity, Settings, Docs, Release notes, Sign out
 
-### Live Activity — New Event Types
-- [ ] Power anomaly detected/resolved
-- [ ] Model eviction predicted / Keep Warm action taken
-- [ ] Thermal degradation confirmed (causal chain, not just state change)
-- [ ] Fit score changed (model loaded/unloaded)
+### Live Activity — New Event Types ✅
+- [x] Power anomaly detected (`power_anomaly` event type — in EventFeed since Phase 3A)
+- [x] Model eviction predicted (`model_eviction_predicted`) / Keep Warm action taken (`keep_warm_taken`) — emitted from AIInsights, logged to Live Activity
+- [x] Thermal degradation confirmed (`thermal_degradation_confirmed`) — causal chain detail, fires on condition onset not every frame
+- [x] Fit score changed (`fit_score_changed`) — fired when ollama_active_model changes (load/unload transition)
 
 ### Agent-Native Foundation ✅
 > Wicklee is built for humans and their agents. The marketing site and blog
