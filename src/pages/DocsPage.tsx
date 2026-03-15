@@ -483,14 +483,19 @@ curl https://wicklee.dev/api/v1/fleet \\
                       <Td>—</Td>
                     </tr>
                     <tr>
+                      <Td><span className="text-indigo-400 font-medium">Pro</span></Td>
+                      <Td>24-hour rolling window</Td>
+                      <Td>7-day compressed archive</Td>
+                    </tr>
+                    <tr>
                       <Td><span className="text-blue-400 font-medium">Team</span></Td>
                       <Td>24-hour rolling window</Td>
                       <Td>90-day compressed archive</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-indigo-400 font-medium">Enterprise</span></Td>
+                      <Td><span className="text-amber-400 font-medium">Enterprise</span></Td>
                       <Td>Configurable</Td>
-                      <Td>Configurable + export</Td>
+                      <Td>Configurable + signed export</Td>
                     </tr>
                   </tbody>
                 </table>

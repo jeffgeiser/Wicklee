@@ -116,10 +116,10 @@
 - [x] **Path-based routing** — `currentPath` state + `navigate()` + `popstate` listener in App.tsx. Blog routes bypass auth entirely.
 - [x] **Blog nav link** — "Blog" added to LandingPage nav between Documentation and GitHub.
 - [x] **Blog auto-discovery via Vite plugin** ✅ — `blogIndexPlugin` in `vite.config.ts` scans `public/blog/*.md` at build time and dev server start. Writes `public/blog/index.json` sorted by frontmatter `date`. Flow: drop a `.md` → push to GitHub → Railway runs `vite build` → post is live. Zero manual manifest edits.
-- [ ] **First post content:** `wes-the-mpg-for-local-ai-inference.md` — WES formula, live fleet data, four-node comparison table, IPW academic citation (arXiv:2511.07885). *(placeholder live, full article pending)*
+- [x] **First post content:** `wes-the-mpg-for-local-ai-inference.md` — WES formula, thermal penalty table, four-node comparison, IPW academic citation (arXiv:2511.07885). Published `2026-03-15`.
 
 ### Launch Prep
-- [ ] Fix mock data on localhost fleet overview cards
+- [x] Fix mock data on localhost fleet overview cards — `MOCK_NODES_INITIAL` removed; AI prompt uses real SSE data
 - [ ] Andy_PC — install Ollama, capture RTX 3070 WES score
 - [ ] RTX 4090 Vast.ai test (~$0.50/hr) — complete four-node comparison table *(capture after WES v2 ships)*
 - [x] Update wicklee.dev hero — "Local AI inference, finally observable." + updated meta/OG tags
@@ -232,14 +232,17 @@
 
 ---
 
-## Phase 5 — Enterprise + MCP Server *(6+ months)*
+## Phase 5 — Enterprise & Orchestration *(6+ months)*
+
+> Goal: close the enterprise loop. Sovereign deployment, programmable orchestration,
+> Prometheus-native observability, and MCP-native agent integration.
 
 ### Sentinel Proxy
 - [ ] **Inference Interceptor:** OpenAI-compatible proxy endpoint. Clients point at Wicklee; Wicklee forwards to healthiest node.
 - [ ] **Automatic Rerouting:** Transparent workload shifting on thermal/load threshold breach. No client changes required.
 - [ ] **Routing Policy Config:** `lowest-wes`, `lowest-watt-per-token`, `lowest-thermal`, `lowest-load`, `round-robin`, `pinned` — selectable per model or client tag.
 
-### MCP Server *(new)*
+### MCP Server
 > Wicklee as an MCP server. Any Claude, GPT, or open-source agent with MCP support
 > calls Wicklee tools natively — no API wrapper required.
 > Listed in `/llms.txt` from Phase 3A. Agents discover and connect automatically.
@@ -252,16 +255,28 @@
 - [ ] **MCP server at `wss://wicklee.dev/mcp`**
 - [ ] **Listed in MCP registries** — Anthropic, open-source registries
 
-### Sovereignty / Compliance
-- [ ] **Cryptographically Signed Audit Export:** PDF signed by the Wicklee Agent's unique hardware ID (WK-XXXX). Tamper-evident. CISO-signable compliance artifact for HIPAA, financial services, defense-adjacent use cases.
-- [ ] **Sovereign Mode:** On-premise only — no cloud pairing, no outbound telemetry, airgapped operation.
-- [ ] **On-Premise Deployment:** Docker image + Helm chart for self-hosted fleet backend.
+### Observability Integrations
+- [ ] **Prometheus Exporter:** `/metrics` endpoint in Prometheus exposition format. WES, thermal state, tok/s, power draw, VRAM, and cost/token as labeled time series. Scraped by the operator's existing Prometheus instance — no Wicklee-specific sink required.
+- [ ] **Pre-built Grafana dashboard:** Fleet WES trend panel, thermal cost heatmap, node efficiency ranking. Importable JSON — drop into any Grafana instance.
+- [ ] **OpenTelemetry span export *(planned)*:** Inference request traces with TTFT and TPOT labels. Feeds directly into Jaeger, Honeycomb, Datadog.
+
+### Orchestration Integrations
+- [ ] **vLLM / Ray Serve awareness:** Consume vLLM's Prometheus `/metrics` endpoint at the orchestration layer. Surface per-model queue depth, KV cache hit rate, and TTFT alongside WES. Enables WES-aware routing across multi-model vLLM deployments.
+- [ ] **Ray Serve backend support:** Register Ray Serve replicas as Wicklee nodes. WES computed from Ray's built-in metrics. Route decisions account for replica thermal state.
+- [ ] **MIG (Multi-Instance GPU) awareness:** Detect NVIDIA MIG-partitioned instances via NVML. Report WES per MIG slice with correct power and VRAM fractions. Prevents over-routing to thermal-limited partitions.
+
+### Sovereign Deployment
+- [ ] **Sovereign Mode:** On-premise only — no cloud pairing, no outbound telemetry, airgapped operation. The key Enterprise differentiator.
+- [ ] **Docker image:** Self-hosted fleet backend. Single-container deploy — agent + cloud backend in one image.
+- [ ] **Helm chart:** Production-grade Kubernetes deployment with configurable replicas, PVCs, and ingress. Operators bring their own cluster.
+- [ ] **Kubernetes Operator:** Fleet nodes register via in-cluster service discovery. No cloud relay, no external DNS. Deploy to any K8s namespace.
+- [ ] **Cryptographically Signed Audit Export:** PDF signed by the Wicklee Agent's unique hardware ID (WK-XXXX). Tamper-evident. CISO-ready compliance artifact for HIPAA, financial services, defense-adjacent deployments.
 
 ### Enterprise Features
-- [ ] SSO / SAML
+- [ ] SSO / SAML (Okta, Azure AD, Google Workspace)
 - [ ] HIPAA / SOC2 BAA
 - [ ] AMD GPU support (ROCm)
-- [ ] Enterprise tier pricing ($199/mo or $X/node)
+- [ ] Enterprise tier pricing ($199/mo)
 
 ---
 

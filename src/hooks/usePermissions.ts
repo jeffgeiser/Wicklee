@@ -113,6 +113,14 @@ export const usePermissions = (user: User | null) => {
       : subscriptionTier === 'pro'     ? 3
       : Infinity,
 
+    // ── Enterprise capabilities ───────────────────────────────────────────
+    // canGoSovereign: Enterprise-only. Airgapped mode — no outbound telemetry,
+    //   no cloud pairing. On-prem Docker/Helm deployment path.
+    canGoSovereign: subscriptionTier === 'enterprise',
+    // hasPrometheusExport: Enterprise-only. Exposes /metrics endpoint in
+    //   Prometheus exposition format for operator scraping into existing infra.
+    hasPrometheusExport: subscriptionTier === 'enterprise',
+
     // ── Convenience booleans ──────────────────────────────────────────────
     isPro:        subscriptionTier !== 'community',
     isTeamOrAbove:  subscriptionTier === 'team' || subscriptionTier === 'enterprise',
