@@ -3,8 +3,11 @@ import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { TrendingUp, Lock, RefreshCw } from 'lucide-react';
+import { TrendingUp, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier } from '../types';
+import { buildReportFromHistory } from '../utils/benchmarkReport';
+import BenchmarkReportModal from './BenchmarkReportModal';
+import type { BenchmarkReport } from '../utils/benchmarkReport';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -84,12 +87,13 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   historyDays,
   subscriptionTier,
 }) => {
-  const [range,       setRange]       = useState<TimeRange>('24h');
-  const [nodes,       setNodes]       = useState<WESNode[]>([]);
-  const [selectedId,  setSelectedId]  = useState<string | null>(null);
-  const [loading,     setLoading]     = useState(false);
-  const [error,       setError]       = useState<string | null>(null);
-  const [lastFetch,   setLastFetch]   = useState(0);
+  const [range,        setRange]        = useState<TimeRange>('24h');
+  const [nodes,        setNodes]        = useState<WESNode[]>([]);
+  const [selectedId,   setSelectedId]   = useState<string | null>(null);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
+  const [lastFetch,    setLastFetch]    = useState(0);
+  const [exportReport, setExportReport] = useState<BenchmarkReport | null>(null);
 
   const fetchHistory = useCallback(async (r: TimeRange) => {
     setLoading(true);
@@ -137,9 +141,34 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     p => p.raw_wes != null && p.penalized_wes != null && p.raw_wes > p.penalized_wes + 0.001
   );
 
+  // ── Export handler ────────────────────────────────────────────────────────
+
+  const handleExport = () => {
+    if (!selectedNode || !hasData) return;
+    // Use the most recent point with valid WES data
+    const lastPoint = [...selectedNode.points].reverse().find(
+      p => p.penalized_wes != null || p.raw_wes != null
+    );
+    if (!lastPoint) return;
+    const report = buildReportFromHistory({
+      nodeId:       selectedNode.node_id,
+      hostname:     selectedNode.hostname,
+      rawWes:       lastPoint.raw_wes,
+      penalizedWes: lastPoint.penalized_wes,
+      thermalState: lastPoint.thermal_state,
+      tsMs:         lastPoint.ts_ms,
+      range,
+    });
+    setExportReport(report);
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
+    <>
+    {exportReport && (
+      <BenchmarkReportModal report={exportReport} onClose={() => setExportReport(null)} />
+    )}
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
 
       {/* Header */}
@@ -156,32 +185,46 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
           )}
         </div>
 
-        {/* Time range selector */}
-        <div className="flex items-center gap-1">
-          {RANGES.map(r => {
-            const rcfg    = RANGE_CONFIG[r];
-            const locked  = rcfg.historyMin > historyDays;
-            const active  = r === range;
-            return (
-              <button
-                key={r}
-                onClick={() => !locked && setRange(r)}
-                disabled={locked}
-                title={locked ? `Requires ${tierUpgradeLabel(rcfg.minTier)} plan` : undefined}
-                className={`
-                  flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors
-                  ${active && !locked
-                    ? 'bg-indigo-600 text-white'
-                    : locked
-                    ? 'text-gray-600 dark:text-gray-700 cursor-not-allowed'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}
-                `}
-              >
-                {locked && <Lock className="w-2.5 h-2.5" />}
-                {rcfg.label}
-              </button>
-            );
-          })}
+        <div className="flex items-center gap-2">
+          {/* Export benchmark report — only when data is loaded */}
+          {hasData && (
+            <button
+              onClick={handleExport}
+              title="Export benchmark report"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-800 dark:hover:bg-gray-800 transition-colors"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              Export
+            </button>
+          )}
+
+          {/* Time range selector */}
+          <div className="flex items-center gap-1">
+            {RANGES.map(r => {
+              const rcfg    = RANGE_CONFIG[r];
+              const locked  = rcfg.historyMin > historyDays;
+              const active  = r === range;
+              return (
+                <button
+                  key={r}
+                  onClick={() => !locked && setRange(r)}
+                  disabled={locked}
+                  title={locked ? `Requires ${tierUpgradeLabel(rcfg.minTier)} plan` : undefined}
+                  className={`
+                    flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors
+                    ${active && !locked
+                      ? 'bg-indigo-600 text-white'
+                      : locked
+                      ? 'text-gray-600 dark:text-gray-700 cursor-not-allowed'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}
+                  `}
+                >
+                  {locked && <Lock className="w-2.5 h-2.5" />}
+                  {rcfg.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -358,6 +401,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
     </div>
+    </>
   );
 };
 

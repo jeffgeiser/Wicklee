@@ -145,8 +145,8 @@
 - [ ] **AMD CPU thermal** — k10temp + clock ratio derivation. Cache max boost at agent startup. Clock ratio thresholds: ≥0.95→1.0, ≥0.80→1.25, ≥0.60→1.75, <0.60→2.5. Temperature tie-breaker at >85°C. Flagged as `clock_ratio` source in UI.
 - [ ] **Intel CPU thermal** — `thermald` zone states (Linux) with clock ratio fallback. Same `clock_ratio` source annotation.
 - [x] **WES history chart** — per-node time series. Penalized WES as filled indigo area. Raw WES (hardware ceiling) as dashed reference line — only visible when thermal gap exists. ComposedChart with time-range gating: 1H/24H Community, 7D Pro, 30D/90D Team. "Collecting data…" empty state includes Pro nudge when Community. Primary visualization for the benchmark research series.
-- [ ] **Thermal Cost % alerts** — Info >10%, Warning >25%, Critical >40%. Alert on rate-of-change as well as absolute — a 15% drop in 5 minutes is more urgent than a steady 20%.
-- [ ] **Benchmark report output format** — reproducible, citable: model, prompt, token count, date, Wicklee version, per-node Raw WES / Penalized WES / Thermal Cost % / Thermal Source. Enables the published research series.
+- [x] **Thermal Cost % alerts** — Info >10%, Warning >25%, Critical >40%. Rate-of-change escalation: TC% rise ≥15pp in rolling 30-frame window bumps severity one level. Cards suppressed when ThermalDegradationCard already firing (Serious/Critical state) to avoid double-alerting. `ThermalCostAlertCard` lives in Triage tab alongside existing Alert Quartet; dormant monitoring row shows peak TC% when below threshold.
+- [x] **Benchmark report output format** — reproducible, citable snapshot: model, quantization, tok/s, watts, Raw WES, Penalized WES, Thermal Cost %, Thermal State+Source, WES version, Wicklee version. `buildReportFromLive()` + `buildReportFromHistory()` factory functions. `BenchmarkReportModal` with Markdown/JSON tab toggle, copy-to-clipboard, `.md` + `.json` download. Export button in Insights → Performance tab (live snapshot) and WES Trend chart header (history point).
 
 ### Agent API v1 ✅
 > The first machine-readable interface to Wicklee fleet data.
