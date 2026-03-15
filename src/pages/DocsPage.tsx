@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {
@@ -47,6 +47,22 @@ const Code: React.FC<{ children: string; lang?: string }> = ({ children, lang })
   </div>
 );
 
+// ── Callout boxes ─────────────────────────────────────────────────────────────
+
+const NoteBox: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="flex gap-3 bg-blue-500/5 border border-blue-500/20 rounded-xl px-4 py-3 text-sm text-gray-400 leading-relaxed">
+    <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+    <span>{children}</span>
+  </div>
+);
+
+const TipBox: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="flex gap-3 bg-amber-500/5 border border-amber-500/20 rounded-xl px-4 py-3 text-sm text-gray-400 leading-relaxed">
+    <Lightbulb className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+    <span>{children}</span>
+  </div>
+);
+
 // ── Section heading ───────────────────────────────────────────────────────────
 
 const Section: React.FC<{
@@ -69,14 +85,14 @@ const Section: React.FC<{
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
-const Th: React.FC<{ children: React.ReactNode }> = ({ c: _c, children }) => (
-  <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-6">
+const Th: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => (
+  <th className={`text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-6 ${className ?? ''}`}>
     {children}
   </th>
 );
 
-const Td: React.FC<{ children: React.ReactNode; mono?: boolean }> = ({ children, mono }) => (
-  <td className={`py-2.5 pr-6 text-sm border-b border-gray-800/60 text-gray-300 ${mono ? 'font-mono text-xs' : ''}`}>
+const Td: React.FC<{ children: React.ReactNode; mono?: boolean; className?: string }> = ({ children, mono, className }) => (
+  <td className={`py-2.5 pr-6 text-sm border-b border-gray-800/60 text-gray-300 ${mono ? 'font-mono text-xs' : ''} ${className ?? ''}`}>
     {children}
   </td>
 );
@@ -175,26 +191,46 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
           >
             <p>Install the Wicklee agent with a single command. No account required — the agent runs a full local dashboard at <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">localhost:7700</code>.</p>
 
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
-              <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | sh</Code>
+            {/* Step 1 */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">1</span>
+                <p className="font-semibold text-white text-sm">Download &amp; run — no elevated permissions needed</p>
+              </div>
+              <p>This downloads the binary and starts a live-only session. Your hardware telemetry appears immediately in the local dashboard — no service registration, no commitment.</p>
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
+                <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | sh</Code>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Windows (PowerShell)</p>
+                <Code lang="powershell">irm https://wicklee.dev/install.ps1 | iex</Code>
+              </div>
+              <p>Open <a href="http://localhost:7700" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">localhost:7700</a> in your browser to see your local dashboard.</p>
             </div>
 
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Windows (PowerShell)</p>
-              <Code lang="powershell">irm https://wicklee.dev/install.ps1 | iex</Code>
-            </div>
+            {/* Step 2 */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">2</span>
+                <p className="font-semibold text-white text-sm">Permanent monitoring — register as a system service</p>
+              </div>
+              <p>When you're ready for always-on monitoring that survives reboots, install the background service:</p>
+              <Code lang="shell"># macOS / Linux — registers with launchd / systemd, starts on every boot
+sudo wicklee --install-service
 
-            <p>After install, the agent starts automatically. Open <a href="http://localhost:7700" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">localhost:7700</a> in your browser to see your local dashboard.</p>
-
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-              <p className="text-xs font-bold text-white mb-2">Run as a service (optional)</p>
-              <Code lang="shell"># macOS / Linux — starts on every boot
+# Windows
 wicklee --install-service</Code>
-              <Code lang="powershell"># Windows
-wicklee --install-service</Code>
+
+              <NoteBox>
+                <span>
+                  <strong className="text-white">Why sudo?</strong>{' '}
+                  <code className="font-mono text-xs text-gray-300">sudo</code> is required specifically to register the background service (launchd / systemd) and to grant the agent direct access to hardware thermal sensors and power rails. You can run the binary <em>without</em> sudo for a live-only test — Step 1 above does exactly that.
+                </span>
+              </NoteBox>
             </div>
 
+            {/* Fleet pairing */}
             <div>
               <p className="font-semibold text-white mb-2">Connect to your fleet dashboard</p>
               <p>To add a node to your hosted fleet at wicklee.dev, generate a 6-digit pairing code from the agent UI and enter it at <span className="text-gray-300">wicklee.dev → Pair a node</span>. No SSH, no firewall changes — the agent initiates the outbound connection.</p>
@@ -210,20 +246,63 @@ wicklee --install-service</Code>
           >
             <p>WES is the primary efficiency metric in Wicklee. It measures how many tokens a node generates per watt of board power, adjusted for thermal throttle state.</p>
 
-            <div className="bg-gray-900 border border-indigo-500/20 rounded-xl p-5">
+            <div className="bg-gray-950 border border-indigo-500/20 rounded-xl p-5">
               <p className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-3">Formula (v2)</p>
               <pre className="font-mono text-sm text-white leading-loose">
-{`WES = (tok/s ÷ Watts) × 10 ÷ ThermalPenalty
-
-ThermalPenalty (v2):
-  Normal   → 1.00  (no throttle)
-  Fair     → 1.25  (light throttle)
-  Serious  → 1.75  (active throttle)
-  Critical → 2.00  (severe throttle)`}
+{`WES = (tok/s ÷ Watts) × 10 ÷ ThermalPenalty`}
               </pre>
-              <p className="mt-3 text-xs text-gray-500">On NVIDIA hardware, ThermalPenalty is derived from the NVML hardware throttle-reason bitmask rather than inferred from temperature — making it authoritative rather than estimated. Source is tagged <code className="text-gray-300">nvml</code> in the payload.</p>
+              <p className="mt-3 text-xs text-gray-500 leading-relaxed">
+                ThermalPenalty is applied as a divisor — acting as a <strong className="text-gray-300">multiplicative penalty</strong> on your WES score. A penalty of 1.75 (Serious) reduces your effective score to ~57% of its thermal-ideal value.
+              </p>
+              <p className="mt-2 text-xs text-gray-500 leading-relaxed">
+                On NVIDIA hardware, ThermalPenalty is derived from the NVML hardware throttle-reason bitmask rather than inferred from temperature — making it authoritative rather than estimated. Source is tagged <code className="text-gray-400">nvml</code> in the payload.
+              </p>
             </div>
 
+            {/* Penalty impact table */}
+            <div>
+              <p className="font-semibold text-white mb-2">Penalty impact by thermal state</p>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <Th>State</Th>
+                      <Th>Divisor</Th>
+                      <Th>Score multiplier</Th>
+                      <Th>Effect</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <Td><span className="text-green-400 font-medium">Normal</span></Td>
+                      <Td mono>1.00</Td>
+                      <Td mono>1.00×</Td>
+                      <Td>No throttle — full score</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="text-yellow-400 font-medium">Fair</span></Td>
+                      <Td mono>1.25</Td>
+                      <Td mono>0.90×</Td>
+                      <Td>Minor thermal overhead</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="text-orange-400 font-medium">Serious</span></Td>
+                      <Td mono>1.75</Td>
+                      <Td mono>0.75×</Td>
+                      <Td>Significant heat / throttling risk</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="text-red-400 font-medium">Critical</span></Td>
+                      <Td mono>2.00</Td>
+                      <Td mono>0.50×</Td>
+                      <Td>Critical threshold — WES halved</Td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Score interpretation table */}
             <div>
               <p className="font-semibold text-white mb-2">Reading WES scores</p>
               <div className="overflow-x-auto">
@@ -257,7 +336,7 @@ ThermalPenalty (v2):
           >
             <p>The Agent API provides machine-readable access to your live fleet. All endpoints return JSON. Authenticate with your API key — create one in the <strong className="text-white">API Keys</strong> tab of your fleet dashboard.</p>
 
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
               <div>
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Base URL</p>
                 <code className="font-mono text-sm text-cyan-300">https://wicklee.dev</code>
@@ -301,7 +380,14 @@ curl https://wicklee.dev/api/v1/fleet \\
               </table>
             </div>
 
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <TipBox>
+              <span>
+                <strong className="text-white">Implementation tip — <code className="font-mono text-xs">/api/v1/route/best</code>:</strong>{' '}
+                Use this to feed your existing load balancer or LangChain router with real-time health data. Poll at 1–5s intervals and forward the <code className="font-mono text-xs text-gray-300">default</code> node recommendation upstream — no custom scoring logic required.
+              </span>
+            </TipBox>
+
+            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
               <p className="text-xs font-bold text-white mb-2">Route response shape</p>
               <Code lang="json">{`{
   "latency":    { "node": "WK-C133", "tok_s": 240, "reason": "Highest throughput" },
@@ -365,6 +451,39 @@ curl https://wicklee.dev/api/v1/fleet \\
             </div>
 
             <div>
+              <p className="font-semibold text-white mb-2">Data retention</p>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <Th>Tier</Th>
+                      <Th>Telemetry window</Th>
+                      <Th>DuckDB analytics archive</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <Td><span className="text-gray-300 font-medium">Community</span></Td>
+                      <Td>24-hour rolling window</Td>
+                      <Td>—</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="text-blue-400 font-medium">Team</span></Td>
+                      <Td>24-hour rolling window</Td>
+                      <Td>90-day compressed archive</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="text-indigo-400 font-medium">Enterprise</span></Td>
+                      <Td>Configurable</Td>
+                      <Td>Configurable + export</Td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-gray-500">DuckDB traces are stored with zstd compression and streamed to the Traces view in the fleet dashboard. Community tier data is evicted after 24 hours; Team tier retains 90 days of trace history.</p>
+            </div>
+
+            <div>
               <p className="font-semibold text-white mb-2">Ollama transparent proxy (optional)</p>
               <p>Enable the proxy in your <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">wicklee.toml</code> config to get zero-lag inference detection and exact tok/s from done packets instead of the 30s sampled probe:</p>
               <Code lang="toml">{`[ollama_proxy]
@@ -380,54 +499,107 @@ ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
             accent="border-green-500/20"
             title="Platform Support"
           >
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <Th>Platform</Th>
-                    <Th>CPU power</Th>
-                    <Th>GPU metrics</Th>
-                    <Th>Thermal state</Th>
-                    <Th>VRAM</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <Td><span className="font-medium text-white">macOS — Apple Silicon</span></Td>
-                    <Td>✅ powermetrics</Td>
-                    <Td>✅ ioreg (GPU%)</Td>
-                    <Td>✅ pmset + sysctl</Td>
-                    <Td>✅ unified mem</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-white">Linux — NVIDIA</span></Td>
-                    <Td>✅ RAPL powercap</Td>
-                    <Td>✅ NVML (sudoless)</Td>
-                    <Td>✅ sysfs thermal</Td>
-                    <Td>✅ NVML</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-white">Linux — CPU only</span></Td>
-                    <Td>✅ RAPL powercap</Td>
-                    <Td>—</Td>
-                    <Td>✅ sysfs thermal</Td>
-                    <Td>—</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-white">Windows — NVIDIA</span></Td>
-                    <Td>—</Td>
-                    <Td>✅ NVML</Td>
-                    <Td>⚠ estimated</Td>
-                    <Td>✅ NVML</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-white">Inference runtimes</span></Td>
-                    <Td colSpan={4}><span className="text-gray-300">Ollama (auto-detect :11434) · vLLM (auto-detect :8000 Prometheus metrics)</span></Td>
-                  </tr>
-                </tbody>
-              </table>
+            {/* Runtime support matrix */}
+            <div>
+              <p className="font-semibold text-white mb-2">Agent platform support</p>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <Th>Platform</Th>
+                      <Th>CPU power</Th>
+                      <Th>GPU metrics</Th>
+                      <Th>Thermal state</Th>
+                      <Th>VRAM</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <Td><span className="font-medium text-white">macOS — Apple Silicon</span></Td>
+                      <Td>✅ powermetrics</Td>
+                      <Td>✅ ioreg (GPU%)</Td>
+                      <Td>✅ pmset + sysctl</Td>
+                      <Td>✅ unified mem</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">Linux — NVIDIA</span></Td>
+                      <Td>✅ RAPL powercap</Td>
+                      <Td>✅ NVML (sudoless)</Td>
+                      <Td>✅ sysfs thermal</Td>
+                      <Td>✅ NVML</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">Linux — CPU only</span></Td>
+                      <Td>✅ RAPL powercap</Td>
+                      <Td>—</Td>
+                      <Td>✅ sysfs thermal</Td>
+                      <Td>—</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">Windows — NVIDIA</span></Td>
+                      <Td>—</Td>
+                      <Td>✅ NVML</Td>
+                      <Td>⚠ estimated</Td>
+                      <Td>✅ NVML</Td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-gray-500">musl Linux builds (e.g. Alpine) run without NVML — GPU metrics fall back gracefully to null.</p>
             </div>
-            <p className="text-xs text-gray-500">musl Linux builds (e.g. Alpine, older glibc-free servers) run without NVML — GPU metrics fall back gracefully to null.</p>
+
+            {/* Metric availability by inference runtime */}
+            <div>
+              <p className="font-semibold text-white mb-2">Metric availability by inference runtime</p>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <Th>Metric</Th>
+                      <Th>macOS</Th>
+                      <Th>Linux (NVIDIA)</Th>
+                      <Th>vLLM</Th>
+                      <Th>Ollama</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <Td><span className="font-medium text-white">WES Score</span></Td>
+                      <Td>✅</Td>
+                      <Td>✅</Td>
+                      <Td>✅</Td>
+                      <Td>✅</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">Wattage</span></Td>
+                      <Td>✅</Td>
+                      <Td>✅</Td>
+                      <Td>—</Td>
+                      <Td>—</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">GPU Temp</span></Td>
+                      <Td>✅</Td>
+                      <Td>✅</Td>
+                      <Td>—</Td>
+                      <Td>—</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">KV Cache Saturation</span></Td>
+                      <Td>—</Td>
+                      <Td>—</Td>
+                      <Td>
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-purple-400 bg-purple-400/10 px-2 py-0.5 rounded-full">
+                          vLLM only
+                        </span>
+                      </Td>
+                      <Td>—</Td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-gray-500">Wattage and GPU Temp are sourced from the OS hardware layer (powermetrics / NVML / RAPL), not from the inference runtime. KV Cache Saturation requires the vLLM Prometheus metrics endpoint at <code className="text-gray-400">:8000/metrics</code>.</p>
+            </div>
           </Section>
 
           {/* Footer */}
