@@ -170,7 +170,7 @@
 - [x] **Public documentation page at `/docs`** ✅ — un-gated, human and agent readable. Five sections: Quick Start (two-step sudo framing), WES Score (v2 penalty table, multiplicative framing), Agent API v1 (endpoints, route response, rate limits), Configuration (env vars, data retention tiers, Ollama proxy), Platform Support (agent OS matrix + metric-by-runtime matrix with KV Cache scoped to vLLM only). Wired from nav, footer, sidebar, and all public pages.
 
 ### Sovereignty (Observability tab section)
-- [ ] **Sovereignty section in Observability tab:** Pairing event log, telemetry destination, outbound connection manifest. Structural proof that inference data never left the network. Lives in the Observability tab — not a standalone tab.
+- [x] **Sovereignty section in Observability tab:** Telemetry destination card (fleet URL or "local only"), outbound connection manifest (Ollama probe / fleet telemetry / Clerk auth — with active/inactive status and data-type label per row), connection event log from FleetStreamContext (node_online/offline events, live pulse). Two sub-lists: what IS transmitted (CPU/GPU metrics, WES, model name) vs what NEVER leaves (inference content, prompts, responses). Replaces the old HostedPlaceholder on cloud dashboard — now the trust case is made explicitly at wicklee.dev, not just on localhost. Trace table remains localhost-only below.
 - [ ] **Audit Log Export (Free):** Exportable pairing and telemetry history.
 
 ### Launch Content
@@ -192,8 +192,8 @@
   - Storage math: ~3 MB per user per 90 days (5-min aggregates). Railway 10 GB volume covers ~3 000+ users.
   - duckdb crate v1.10500.0 (bundled — compiles on Railway). `DUCK_DB_PATH` env var for volume mount.
   - `thermal_cost_pct` and `agent_version` columns reserved; populated when WES v2 ships (Phase 4B).
-- [ ] **Historical Performance Graphs:** Same metric selector as live graph but spanning 1hr/24hr/7d/30d/90d.
-- [ ] **Percentile Baselines:** P50/P95 for tok/s, power, CPU per node — shown as reference lines on graphs.
+- [x] **Historical Performance Graphs:** `MetricsHistoryChart` — 4-metric selector (Tok/s / Power / GPU% / Mem%), per-metric gradient area chart (indigo/amber/violet/cyan). Backend: `GET /api/fleet/metrics-history` — 1h from `metrics_raw` (60s buckets), 24h–90d from `metrics_5min` aggregates. Dashed P95 reference line for tok/s on 24h+ ranges. Live SSE value as horizontal reference line. Time-range gating mirrors WES chart (1H/24H Community, 7D Pro, 30D/90D Team). Placed in Insights → Performance tab below WES Trend.
+- [x] **Percentile Baselines (tok/s):** P95 dashed reference line for tok/s on `MetricsHistoryChart` when source is `metrics_5min` (24h+ ranges). P50/P95 cross-metric expansion (power, memory) remains open for a future pass.
 - [ ] **Per-model WES normalization** — WES at 3B vs 70B is not directly comparable. Normalize against per-model historical baseline in DuckDB. Requires history to establish baseline before normalization is meaningful.
 
 ### Insights AI *(new)*

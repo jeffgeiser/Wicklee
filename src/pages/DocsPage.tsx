@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {
@@ -104,6 +104,7 @@ const NAV = [
   { id: 'wes',         label: 'WES Score' },
   { id: 'api',         label: 'Agent API v1' },
   { id: 'config',      label: 'Configuration' },
+  { id: 'sovereignty', label: 'Sovereignty' },
   { id: 'platforms',   label: 'Platform Support' },
 ];
 
@@ -551,6 +552,65 @@ curl https://wicklee.dev/api/v1/fleet \\
 enabled     = true
 ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
             </div>
+          </Section>
+
+          {/* ── Sovereignty ── */}
+          <Section
+            id="sovereignty"
+            icon={<Shield className="w-5 h-5" />}
+            accent="border-green-500/20"
+            title="Sovereignty"
+          >
+            <p>
+              Wicklee is built on a single design constraint: <strong className="text-white">inference content never leaves the machine that runs it.</strong> The Observability tab in your dashboard shows this in real time — telemetry destination, outbound connection manifest, and a live connection event log.
+            </p>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">What is transmitted to the fleet</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                    <th className="pb-2 pr-4">Data</th>
+                    <th className="pb-2 pr-4">Destination</th>
+                    <th className="pb-2">Transmitted</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm divide-y divide-gray-800/50">
+                  <tr><td className="py-2 pr-4 text-gray-300">CPU / GPU / memory metrics</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">fleet URL</td><td className="py-2 text-indigo-400">Yes — when paired</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">WES score + thermal state</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">fleet URL</td><td className="py-2 text-indigo-400">Yes — when paired</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Active model name</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">fleet URL</td><td className="py-2 text-indigo-400">Yes — when paired</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Inference content / prompts</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">—</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Request payloads / responses</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">—</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">User conversations</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">—</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">Outbound connections</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                    <th className="pb-2 pr-4">Connection</th>
+                    <th className="pb-2 pr-4">Endpoint</th>
+                    <th className="pb-2">Data</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm divide-y divide-gray-800/50">
+                  <tr><td className="py-2 pr-4 text-gray-300">Ollama probe</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">localhost:11434</td><td className="py-2 text-gray-400">Local only — 3-token throughput sample</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Fleet telemetry</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">your fleet URL</td><td className="py-2 text-gray-400">System metrics + WES — paired nodes only</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Clerk auth</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">api.clerk.dev</td><td className="py-2 text-gray-400">Session JWT — cloud dashboard only</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <NoteBox>
+              The Observability tab in your fleet dashboard shows a live version of this manifest, updated in real time from your active pairing state. The connection event log records every node connect and disconnect for the current session.
+            </NoteBox>
+
+            <p className="mt-4 text-sm text-gray-400">
+              Unpaired nodes running only the local agent at <code className="text-gray-300">localhost:7700</code> make zero outbound connections. All metrics remain on-device. The fleet pairing is opt-in and can be revoked at any time from <strong className="text-white">Settings → Account & Data</strong>.
+            </p>
           </Section>
 
           {/* ── Platform support ── */}
