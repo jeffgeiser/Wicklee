@@ -524,7 +524,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
           model: 'phi3:mini',
           prompt: `Analyze this AI fleet data and provide a concise strategic optimization report.
 Fleet Snapshot:
-${JSON.stringify(nodes, null, 2)}
+${JSON.stringify(effectiveNodes, null, 2)}
 
 Requirements:
 1. Identify critical nodes based on Thermal (>75°C) or VRAM (>90% usage).

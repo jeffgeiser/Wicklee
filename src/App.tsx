@@ -175,7 +175,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
-  const [nodes, setNodes] = useState<NodeAgent[]>(isLocalHost ? MOCK_NODES_INITIAL : []);
+  const [nodes, setNodes] = useState<NodeAgent[]>([]);
   // True until the first /api/fleet fetch settles (or Clerk hasn't loaded yet).
   // Prevents EmptyFleetState from flashing on page refresh while auth resolves.
   const [nodesLoading, setNodesLoading] = useState(!isLocalHost);
