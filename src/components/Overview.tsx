@@ -135,8 +135,8 @@ const FLEET_GRID_CLS = [
   '[grid-template-columns:140px_200px_80px_80px_1fr]',
   // sm: + THERMAL
   'sm:[grid-template-columns:140px_200px_80px_80px_100px_1fr]',
-  // md: full set
-  'md:[grid-template-columns:140px_120px_80px_200px_80px_80px_80px_80px_80px_100px_1fr]',
+  // md: full set — VRAM bumped 80→100px; 1fr spacer absorbs the difference
+  'md:[grid-template-columns:140px_120px_100px_200px_80px_80px_80px_80px_80px_100px_1fr]',
 ].join(' ');
 
 const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
