@@ -406,6 +406,9 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
             onNavigateToSecurity={() => setActiveTab(DashboardTab.SECURITY)}
             insightsTier={permissions.insightsTier}
             canViewInsight={permissions.canViewInsight}
+            getToken={getToken}
+            historyDays={permissions.historyDays}
+            subscriptionTier={permissions.subscriptionTier}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>

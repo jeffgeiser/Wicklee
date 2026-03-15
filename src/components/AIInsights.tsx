@@ -26,7 +26,7 @@ import {
   Activity, Layers,
 } from 'lucide-react';
 
-import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent } from '../types';
+import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { computeWES } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
@@ -52,6 +52,7 @@ import InsightsLiteCard   from './insights/InsightsLiteCard';
 import InsightsTeaseCard  from './insights/InsightsTeaseCard';
 import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
+import WESHistoryChart from './WESHistoryChart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -202,6 +203,12 @@ interface AIInsightsProps {
   insightsTier: InsightsTier;
   canViewInsight: (id: number) => boolean;
   onFleetEvent?: (event: FleetEvent) => void;
+  /** Cloud session token getter — used for WES history fetch (cloud/Mission Control only). */
+  getToken?: () => Promise<string | null>;
+  /** Days of retained history the user's tier unlocks. */
+  historyDays?: number;
+  /** Subscription tier for history range gating. */
+  subscriptionTier?: SubscriptionTier;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -212,6 +219,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   onNavigateToSecurity,
   insightsTier,
   canViewInsight,
+  getToken,
+  historyDays = 1,
+  subscriptionTier = 'community',
   onFleetEvent,
 }) => {
 
@@ -872,6 +882,17 @@ Format as Markdown with a "Strategic Optimization" header.`,
 
           </div>
         </section>
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            WES TREND — WES history chart  [Community+, gated by range]
+        ═══════════════════════════════════════════════════════════════════ */}
+        {!isLocalHost && getToken && (
+          <WESHistoryChart
+            getToken={getToken}
+            historyDays={historyDays}
+            subscriptionTier={subscriptionTier}
+          />
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════════
             SECTION 3 — Analytics & Forensics  [Team / Enterprise]
