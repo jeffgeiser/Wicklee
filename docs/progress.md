@@ -4,6 +4,70 @@
 
 ---
 
+## March 15, 2026 — Phase 3B Closure + Phase 4A Historical Graphs 📈
+
+**The Goal:** Close out Phase 3B frontend — Sovereignty section (last open item) + dead code cleanup. Then immediately start Phase 4A with Historical Performance Graphs, making the accumulated DuckDB history visible for the first time.
+
+---
+
+### Housekeeping ✅
+
+Removed dead `MOCK_NODES_INITIAL` constant from `App.tsx`. Defined but never referenced — fleet data has been live SSE-only since Phase 2. No behaviour change; cleaner codebase.
+
+### Sovereignty Section (Observability Tab) ✅
+
+`TracesView.tsx` fully rewritten. The old `HostedPlaceholder` ("traces run locally, go to localhost:7700") replaced with a full **Sovereignty** section visible on both the cloud dashboard and localhost:
+
+**Telemetry Destination card:**
+- Paired: shows fleet URL with "Fleet connected" badge (indigo)
+- Unpaired/localhost-only: shows `localhost:7700` with "Local only" badge (green)
+- Two explicit sub-lists: what IS transmitted (CPU/GPU metrics, WES score, active model name) and what NEVER leaves (inference content, prompts, responses, user conversations)
+- The "never leaves" list uses green `CheckCircle` icons — the trust signal is visual, not just text
+
+**Outbound Connection Manifest:**
+- Three rows: Ollama probe (localhost:11434 / local), Fleet telemetry (fleet URL / active or inactive), Clerk auth (api.clerk.dev / cloud only)
+- Status badges: green "local", indigo "active", gray "inactive" — state-driven from current `pairingInfo`
+- Footnote: "No inference data appears in any outbound connection"
+
+**Connection Event Log:**
+- Pulls `node_online` / `node_offline` events live from `FleetStreamContext`
+- Live pulse dot when SSE connected
+- Empty state: "No connection events in this session"
+
+**Localhost:** Trace table still renders below the Sovereignty section. Cloud: Sovereignty section is now the full content of the Observability tab — makes the trust case to wicklee.dev visitors explicitly, not just on localhost.
+
+### Historical Performance Graphs ✅
+
+Phase 4A unlocked. DuckDB has been accumulating data since `e8c6b47` — now it's visible.
+
+**Backend — `GET /api/fleet/metrics-history`:**
+- Same auth + DuckDB bucketing architecture as `wes-history`
+- 1h range: `metrics_raw` at 60-second buckets — tok_s, watts, gpu_pct, mem_pressure_pct
+- 24h–90d: `metrics_5min` aggregates — tok_s_avg + tok_s_p95, watts_avg, gpu_pct_avg, mem_pressure_pct_avg
+- Response: `{ range, nodes: [{ node_id, hostname, points: [{ ts_ms, tok_s, tok_s_p95, watts, gpu_pct, mem_pct }] }] }`
+
+**Frontend — `MetricsHistoryChart.tsx`:**
+- 4-metric selector: Tok/s (indigo) · Power/W (amber) · GPU% (violet) · Mem% (cyan)
+- Each metric has its own gradient fill + colour — switching metric re-renders the area and defs
+- **P95 dashed reference line** for tok/s on 24h+ ranges (from `metrics_5min` `tok_s_p95`) — shows headroom vs average
+- **Live SSE reference line** — current value from `useFleetStream()` as a horizontal `ReferenceLine` labeled "Now: X unit" — anchors historical trend to present state
+- Time-range gating: 1H/24H Community, 7D Pro, 30D/90D Team (lock icons on gated buttons)
+- Node tabs for multi-node fleet selection
+- "Collecting data" empty state with Pro nudge on Community 24h view
+
+**Placement:** Insights → Performance tab, below WES Trend chart.
+
+### What's Next
+
+**Phase 3B remaining (Rust agent):**
+- AMD CPU thermal — k10temp + clock ratio
+- Intel CPU thermal — thermald zone states
+- ANE Utilization — Apple Neural Engine
+- macOS CPU Power sudoless
+- `wes_config.json` — configurable penalty thresholds
+
+---
+
 ## March 15, 2026 — WES v2 Sprint D: Insights Restructure + Thermal Alerts + Benchmark Reports 📊
 
 **The Goal:** Close the WES v2 UI loop — restructure Insights into a 3-tab hierarchy, add strategic doc updates (TIERS.md, ROADMAP.md Phase 5, metrics.md Prometheus schema), implement WES history chart (raw vs penalized), Thermal Cost % alerts, and benchmark report output format.
