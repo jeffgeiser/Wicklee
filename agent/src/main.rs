@@ -551,70 +551,190 @@ fn start_rapl_harvester() -> Arc<Mutex<Option<f32>>> {
     shared
 }
 
-// ── Linux thermal state (/sys/class/thermal) ──────────────────────────────────
+// ── Linux thermal state ────────────────────────────────────────────────────────
 //
-// Reads every thermal_zone*/temp file under /sys/class/thermal, each of which
-// contains a temperature in millidegrees Celsius.  Takes the maximum across all
-// zones, then maps to the four-state scale used by the macOS pmset path:
+// Two paths, tried in priority order:
 //
-//   < 70 °C  → "Normal"
-//   70–79 °C → "Elevated"
-//   80–89 °C → "Serious"
-//   ≥  90 °C → "Critical"
+//   1. AMD (k10temp present) — clock ratio + Tdie temperature tie-breaker.
+//      Clock ratio = avg(scaling_cur_freq) / cpuinfo_max_freq.
+//      Thresholds:  ≥0.95 → Normal (1.00)
+//                   ≥0.80 → Fair   (1.25)
+//                   ≥0.60 → Serious (1.75)
+//                   < 0.60 → Critical (2.50)
+//      Tie-breaker: Tdie > 85 °C bumps to at least Serious.
+//      Source tag: "clock_ratio"
 //
-// Returns None when:
-//   • /sys/class/thermal does not exist (pre-4.9 kernels, some containers)
-//   • No thermal_zone* directories are present
-//   • All temp files fail to read or parse (permissions, no hwmon driver)
-// Never panics.
+//   2. Generic sysfs — max temp across all /sys/class/thermal/thermal_zone*/temp.
+//      < 70 °C → Normal  |  70–79 °C → Fair  |  80–89 °C → Serious  |  ≥90 °C → Critical
+//      Source tag: "sysfs"
+//
+// Returns None when no thermal interface is available on this kernel/container.
+
+/// Shared result from the Linux thermal harvester.  Carried alongside the state
+/// string so the WES sampler can use direct_penalty (AMD clock-ratio path) or fall
+/// back to thermal_penalty_v2(state) (generic sysfs path).
+#[derive(Clone)]
+struct LinuxThermalResult {
+    state:          String,       // "Normal" | "Fair" | "Serious" | "Critical"
+    source:         &'static str, // "clock_ratio" | "sysfs"
+    direct_penalty: Option<f32>,  // Some on AMD path (can exceed 2.0); None on sysfs path
+}
+
+// Helper functions — Linux only.
 
 #[cfg(target_os = "linux")]
-fn harvest_linux_thermal() -> Option<String> {
+fn find_hwmon(target: &str) -> Option<std::path::PathBuf> {
+    let dir = std::path::Path::new("/sys/class/hwmon");
+    if !dir.exists() { return None; }
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        if let Ok(name) = std::fs::read_to_string(entry.path().join("name")) {
+            if name.trim() == target { return Some(entry.path()); }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+/// Read Tdie from k10temp hwmon (millidegrees → °C).
+/// Tries temp2_input (Zen2+ Tdie) then temp1_input (older Zen / Tctl).
+fn read_k10temp_tdie_c(hwmon: &std::path::Path) -> Option<f64> {
+    for name in &["temp2_input", "temp1_input"] {
+        if let Ok(raw) = std::fs::read_to_string(hwmon.join(name)) {
+            if let Ok(mc) = raw.trim().parse::<i64>() {
+                return Some(mc as f64 / 1000.0);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+/// Hardware-max CPU frequency (kHz).  Reads cpuinfo_max_freq first (true hardware
+/// ceiling), falls back to scaling_max_freq (OS-set limit, usually the same).
+fn read_cpu_max_freq_khz() -> Option<u64> {
+    let base = std::path::Path::new("/sys/devices/system/cpu/cpu0/cpufreq");
+    for file in &["cpuinfo_max_freq", "scaling_max_freq"] {
+        if let Ok(raw) = std::fs::read_to_string(base.join(file)) {
+            if let Ok(khz) = raw.trim().parse::<u64>() {
+                if khz > 0 { return Some(khz); }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+/// Average scaling_cur_freq across all logical CPUs (cpu0…cpuN directories).
+fn read_avg_cur_freq_khz() -> Option<u64> {
+    let cpu_dir = std::path::Path::new("/sys/devices/system/cpu");
+    let mut sum: u64 = 0;
+    let mut count: u32 = 0;
+    for entry in std::fs::read_dir(cpu_dir).ok()?.flatten() {
+        let fname = entry.file_name();
+        let s = fname.to_string_lossy();
+        // Match cpu0, cpu1, … cpuN — skip cpufreq, cpuidle, power, etc.
+        if s.starts_with("cpu") && s[3..].parse::<u32>().is_ok() {
+            if let Ok(raw) = std::fs::read_to_string(
+                entry.path().join("cpufreq/scaling_cur_freq")
+            ) {
+                if let Ok(khz) = raw.trim().parse::<u64>() {
+                    sum += khz;
+                    count += 1;
+                }
+            }
+        }
+    }
+    if count == 0 { return None; }
+    Some(sum / count as u64)
+}
+
+#[cfg(target_os = "linux")]
+/// Convert AMD clock ratio + optional Tdie into a `LinuxThermalResult`.
+fn amd_clock_ratio_result(ratio: f64, tdie_c: Option<f64>) -> LinuxThermalResult {
+    let (state, penalty): (&str, f32) = if ratio >= 0.95 {
+        ("Normal",   1.00)
+    } else if ratio >= 0.80 {
+        ("Fair",     1.25)
+    } else if ratio >= 0.60 {
+        ("Serious",  1.75)
+    } else {
+        ("Critical", 2.50)   // severe throttle — higher than the 4-state cap of 2.0
+    };
+
+    // Temperature tie-breaker: Tdie > 85 °C → at least Serious.
+    let (state, penalty) = match tdie_c {
+        Some(t) if t > 85.0 && penalty < 1.75 => ("Serious", 1.75_f32),
+        _ => (state, penalty),
+    };
+
+    LinuxThermalResult {
+        state:          state.to_string(),
+        source:         "clock_ratio",
+        direct_penalty: Some(penalty),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult> {
+    // ── AMD path: k10temp + clock ratio ──────────────────────────────────────
+    if let Some(hwmon) = find_hwmon("k10temp") {
+        if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
+            if max_khz > 0 {
+                let ratio  = cur_khz as f64 / max_khz as f64;
+                let tdie_c = read_k10temp_tdie_c(&hwmon);
+                return Some(amd_clock_ratio_result(ratio, tdie_c));
+            }
+        }
+        // k10temp present but cpufreq unavailable — fall through to generic path.
+    }
+
+    // ── Generic path: /sys/class/thermal zone max ─────────────────────────────
     let thermal_dir = std::path::Path::new("/sys/class/thermal");
     if !thermal_dir.exists() { return None; }
 
     let mut max_temp_c: Option<f64> = None;
-
-    let entries = std::fs::read_dir(thermal_dir).ok()?;
-    for entry in entries.flatten() {
+    for entry in std::fs::read_dir(thermal_dir).ok()?.flatten() {
         let name = entry.file_name();
         if !name.to_string_lossy().starts_with("thermal_zone") { continue; }
-
-        let temp_path = entry.path().join("temp");
-        let Ok(raw) = std::fs::read_to_string(&temp_path) else { continue; };
-        let Ok(milli_c): Result<i64, _> = raw.trim().parse() else { continue; };
-        let temp_c = milli_c as f64 / 1000.0;
-
-        max_temp_c = Some(max_temp_c.map_or(temp_c, |prev: f64| prev.max(temp_c)));
+        let Ok(raw) = std::fs::read_to_string(entry.path().join("temp")) else { continue; };
+        let Ok(mc): Result<i64, _> = raw.trim().parse() else { continue; };
+        let temp_c = mc as f64 / 1000.0;
+        max_temp_c = Some(max_temp_c.map_or(temp_c, |p: f64| p.max(temp_c)));
     }
 
     let temp = max_temp_c?;
-    Some(match temp {
+    let state = match temp {
         t if t < 70.0 => "Normal",
-        t if t < 80.0 => "Elevated",
+        t if t < 80.0 => "Fair",      // canonical name (was "Elevated" — penalty was wrongly 1.0)
         t if t < 90.0 => "Serious",
         _              => "Critical",
-    }.to_string())
+    };
+    Some(LinuxThermalResult {
+        state:          state.to_string(),
+        source:         "sysfs",
+        direct_penalty: None,   // derived via thermal_penalty_v2(state)
+    })
 }
 
-/// Returns a shared `Option<String>` updated every 5 s with the Linux thermal state.
-/// Stays `None` on non-Linux targets and when /sys/class/thermal is unavailable.
-fn start_linux_thermal_harvester() -> Arc<Mutex<Option<String>>> {
-    let shared = Arc::new(Mutex::new(None::<String>));
+/// Returns a shared `Option<LinuxThermalResult>` updated every 5 s.
+/// Stays `None` on non-Linux targets and when no thermal interface is available.
+fn start_linux_thermal_harvester() -> Arc<Mutex<Option<LinuxThermalResult>>> {
+    let shared = Arc::new(Mutex::new(None::<LinuxThermalResult>));
 
     #[cfg(target_os = "linux")]
     {
         let shared_clone = Arc::clone(&shared);
         tokio::spawn(async move {
-            // Bail early if the sysfs interface doesn't exist on this kernel/container.
-            if !std::path::Path::new("/sys/class/thermal").exists() { return; }
+            // Cache hardware-max frequency once — it never changes at runtime.
+            // Used by the AMD clock-ratio path; None on non-AMD or no cpufreq.
+            let max_freq_khz = read_cpu_max_freq_khz();
 
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             loop {
                 interval.tick().await;
-                let state = harvest_linux_thermal();
+                let result = harvest_linux_thermal(max_freq_khz);
                 if let Ok(mut guard) = shared_clone.lock() {
-                    *guard = state;
+                    *guard = result;
                 }
             }
         });
@@ -2082,10 +2202,11 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
 //   Critical → 2.00
 //
 // Source tags:
-//   "nvml"        — NVML throttle-reason bitmask (hardware-authoritative; NVIDIA only)
-//   "iokit"       — macOS pmset / sysctl thermal level
-//   "sysfs"       — Linux /sys/class/thermal zone max
-//   "unavailable" — no thermal data on this platform
+//   "nvml"         — NVML throttle-reason bitmask (hardware-authoritative; NVIDIA only)
+//   "iokit"        — macOS pmset / sysctl thermal level
+//   "clock_ratio"  — AMD k10temp + scaling_cur_freq / cpuinfo_max_freq ratio
+//   "sysfs"        — Linux /sys/class/thermal zone max (non-AMD fallback)
+//   "unavailable"  — no thermal data on this platform
 
 /// Maps a thermal-state string to the WES v2 penalty factor.
 fn thermal_penalty_v2(state: &str) -> f32 {
@@ -2125,7 +2246,7 @@ struct WesMetrics {
 fn start_wes_sampler(
     apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
     nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
-    linux_thermal_metrics: Arc<Mutex<Option<String>>>,
+    linux_thermal_metrics: Arc<Mutex<Option<LinuxThermalResult>>>,
 ) -> Arc<Mutex<WesMetrics>> {
     let shared = Arc::new(Mutex::new(WesMetrics::default()));
     let shared_clone = Arc::clone(&shared);
@@ -2146,13 +2267,17 @@ fn start_wes_sampler(
             let linux  = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
 
             // Determine penalty + source (highest-quality source wins).
+            // AMD clock_ratio path carries a direct_penalty (can exceed 2.0 for
+            // severe throttle); sysfs path uses thermal_penalty_v2(state).
             let (penalty, source): (f32, &'static str) =
                 if let Some(p) = nvidia.nvidia_throttle_penalty {
                     (p, "nvml")
                 } else if let Some(ref state) = apple.thermal_state {
                     (thermal_penalty_v2(state.as_str()), "iokit")
-                } else if let Some(ref state) = linux {
-                    (thermal_penalty_v2(state.as_str()), "sysfs")
+                } else if let Some(ref lt) = linux {
+                    let p = lt.direct_penalty
+                        .unwrap_or_else(|| thermal_penalty_v2(lt.state.as_str()));
+                    (p, lt.source)
                 } else {
                     (1.0, "unavailable")
                 };
@@ -2196,7 +2321,7 @@ fn start_metrics_broadcaster(
     nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
     ollama_metrics:        Arc<Mutex<OllamaMetrics>>,
     rapl_metrics:          Arc<Mutex<Option<f32>>>,
-    linux_thermal_metrics: Arc<Mutex<Option<String>>>,
+    linux_thermal_metrics: Arc<Mutex<Option<LinuxThermalResult>>>,
     vllm_metrics:          Arc<Mutex<VllmMetrics>>,
     live_events:           Arc<Mutex<Vec<LiveActivityEvent>>>,
     wes_metrics:           Arc<Mutex<WesMetrics>>,
@@ -2263,7 +2388,7 @@ fn start_metrics_broadcaster(
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
-                thermal_state:           apple.thermal_state.or(linux_thermal),
+                thermal_state:           apple.thermal_state.or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone())),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
@@ -2428,7 +2553,7 @@ async fn handle_metrics(
     axum::extract::Extension(nvidia_metrics):        axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
     axum::extract::Extension(ollama_metrics):        axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
     axum::extract::Extension(rapl_metrics):          axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
-    axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<String>>>>,
+    axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<LinuxThermalResult>>>>,
     axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
     axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
@@ -2486,7 +2611,7 @@ async fn handle_metrics(
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
-                thermal_state:           apple.thermal_state.or(linux_thermal),
+                thermal_state:           apple.thermal_state.or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone())),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
