@@ -1971,7 +1971,7 @@ async fn handle_activate(
         if count >= MAX_FREE_NODES {
             return (StatusCode::PAYMENT_REQUIRED,
                 Json(serde_json::json!({
-                    "error": format!("Free tier limit reached ({MAX_FREE_NODES} nodes). Upgrade to add more.")
+                    "error": format!("Free tier limit reached ({MAX_FREE_NODES} nodes). Upgrade to Wicklee Pro to add more.")
                 }))).into_response();
         }
     }

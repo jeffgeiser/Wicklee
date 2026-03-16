@@ -68,7 +68,7 @@ function buildChartPoints(points: WESPoint[], fmtTs: (ms: number) => string): Ch
 
 function tierUpgradeLabel(minTier: SubscriptionTier): string {
   return minTier === 'pro'  ? 'Pro' :
-         minTier === 'team' ? 'Team' : '';
+         minTier === 'team' ? 'Pro' : '';
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
