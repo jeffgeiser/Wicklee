@@ -6,28 +6,62 @@
  *    patterns, indigo for performance patterns).
  *  - Thin confidence progress bar at bottom when confidence === 'building'.
  *  - One-click copy buttons for each operator action.
+ *  - Dismiss button: hides the card for 1h. If the condition persists after
+ *    1h the pattern engine re-fires and the card resurfaces automatically.
  *  - Node hostname badge when multiple nodes are in the fleet.
  */
 
 import React, { useState, useCallback } from 'react';
-import { Copy, Check, Thermometer, Zap, Server } from 'lucide-react';
+import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X } from 'lucide-react';
 import type { DetectedInsight } from '../../lib/patternEngine';
 
-// ── Icon mapping by patternId ─────────────────────────────────────────────────
+// ── Dismiss helpers ───────────────────────────────────────────────────────────
+
+const DISMISS_RESURFACE_MS = 60 * 60 * 1000;   // resurface after 1h
+
+function dismissKey(patternId: string, nodeId: string): string {
+  return `obs-dismissed:${patternId}:${nodeId}`;
+}
+
+function readDismissed(patternId: string, nodeId: string): boolean {
+  try {
+    const raw = localStorage.getItem(dismissKey(patternId, nodeId));
+    if (!raw) return false;
+    const { dismissedAt } = JSON.parse(raw) as { dismissedAt: number };
+    return typeof dismissedAt === 'number' && Date.now() - dismissedAt < DISMISS_RESURFACE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function writeDismissed(patternId: string, nodeId: string): void {
+  try {
+    localStorage.setItem(
+      dismissKey(patternId, nodeId),
+      JSON.stringify({ dismissedAt: Date.now() }),
+    );
+  } catch { /* storage unavailable — degrade gracefully */ }
+}
+
+// ── Icon + colour mapping by patternId ───────────────────────────────────────
 
 function patternIcon(patternId: string) {
   switch (patternId) {
-    case 'thermal_drain': return <Thermometer className="w-4 h-4 text-amber-400" />;
-    case 'phantom_load':  return <Zap          className="w-4 h-4 text-violet-400" />;
-    default:              return <Server        className="w-4 h-4 text-gray-400"  />;
+    case 'thermal_drain':      return <Thermometer  className="w-4 h-4 text-amber-400"  />;
+    case 'phantom_load':       return <Zap          className="w-4 h-4 text-violet-400" />;
+    case 'wes_velocity_drop':  return <TrendingDown className="w-4 h-4 text-indigo-400" />;
+    case 'memory_trajectory':  return <MemoryStick  className="w-4 h-4 text-cyan-400"   />;
+    default:                   return <Server       className="w-4 h-4 text-gray-400"   />;
   }
 }
 
 function hookColor(patternId: string): string {
   switch (patternId) {
-    case 'thermal_drain': return 'text-amber-400';
-    case 'phantom_load':  return 'text-violet-400';
-    default:              return 'text-indigo-400';
+    case 'thermal_drain':      return 'text-amber-400';
+    case 'phantom_load':       return 'text-violet-400';
+    case 'wes_velocity_drop':  return 'text-indigo-400';
+    case 'memory_trajectory':  return 'text-cyan-400';
+    default:                   return 'text-indigo-400';
   }
 }
 
@@ -103,6 +137,18 @@ interface ObservationCardProps {
 }
 
 const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHeader }) => {
+  // Initialise from localStorage so dismiss state survives hot-reloads
+  const [dismissed, setDismissed] = useState(
+    () => readDismissed(insight.patternId, insight.nodeId),
+  );
+
+  const handleDismiss = useCallback(() => {
+    writeDismissed(insight.patternId, insight.nodeId);
+    setDismissed(true);
+  }, [insight.patternId, insight.nodeId]);
+
+  if (dismissed) return null;
+
   const isBuilding = insight.confidence === 'building';
 
   return (
@@ -125,14 +171,24 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
           </div>
         </div>
 
-        {/* Quantified hook — the "so what" number */}
-        <div className="shrink-0 text-right">
-          <p className={`text-base font-bold font-mono ${hookColor(insight.patternId)}`}>
-            {insight.hook}
-          </p>
-          {showNodeHeader && (
-            <p className="text-[10px] text-gray-500 mt-0.5">{insight.hostname}</p>
-          )}
+        {/* Right side: hook + dismiss */}
+        <div className="shrink-0 flex items-start gap-2">
+          <div className="text-right">
+            <p className={`text-base font-bold font-mono ${hookColor(insight.patternId)}`}>
+              {insight.hook}
+            </p>
+            {showNodeHeader && (
+              <p className="text-[10px] text-gray-500 mt-0.5">{insight.hostname}</p>
+            )}
+          </div>
+          <button
+            onClick={handleDismiss}
+            title="Dismiss for 1 hour"
+            className="mt-0.5 p-1 rounded-lg text-gray-600 hover:text-gray-400
+                       hover:bg-gray-800 transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
