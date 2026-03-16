@@ -769,7 +769,9 @@ const NodesList: React.FC<NodesListProps> = ({
       return;
     }
     // Second click fires.
-    if (!getToken || !cloudUrl || disconnecting) return;
+    // cloudUrl may be '' (empty string) in same-origin proxy mode — that's valid.
+    // Use == null to allow empty string while still blocking undefined/null.
+    if (!getToken || cloudUrl == null || disconnecting) return;
     if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
     setDisconnecting(true);
     setDisconnectConfirming(false);
