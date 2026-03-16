@@ -9,7 +9,6 @@
  *     Alert Trio  — stacked dormant monitoring panel → expands per-card on fire
  *     Model Eviction · Idle Resource Cost
  *     Model Fit Score
- *     Local AI Analysis (Cockpit only)
  *   Tab: Performance
  *     WES Leaderboard · Inference Density Map (2-col)
  *     WES Trend Chart (cloud only)
@@ -23,12 +22,11 @@
  *   Mission Control        — FleetStreamContext allNodeMetrics, multi-node
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  BrainCircuit, Loader2, Sparkles, AlertCircle,
   Thermometer, Zap, HardDrive, Target, BarChart2,
   TrendingDown, Database, Scale, Cpu, Globe, Shield,
-  Activity, Layers,
+  Activity, Layers, CheckCircle, ChevronDown, History, Clock,
 } from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier } from '../types';
@@ -100,6 +98,143 @@ function fmtVram(m: SentinelMetrics): string | null {
   if (used == null || total <= 0) return null;
   return `${((used / total) * 100).toFixed(0)}%`;
 }
+
+// ── Alert statefulness — types & constants ────────────────────────────────────
+
+/** Time the raw condition must be continuously true before the card surfaces. */
+const ALERT_ONSET_MS  = 15_000;         // 15 s
+/** Minimum time a tier-1 alert card stays visible after condition clears. */
+const ALERT_HOLD_MS   = 5 * 60_000;    // 5 min
+/** Minimum time a pattern observation stays visible after condition stops firing. */
+const OBS_HOLD_MS     = 10 * 60_000;   // 10 min
+/** Maximum entries stored in the Recent Activity log. */
+const MAX_LOG_ENTRIES = 50;
+
+/** Cached pattern-engine observation with lifecycle timestamps. */
+interface ObsEntry {
+  insight:      DetectedInsight;
+  firstFiredMs: number;   // preserved across re-evaluations
+  resolvedMs:   number | null; // null = still actively firing
+}
+
+/** An entry in the session-scoped Recent Activity log. */
+export interface AlertLogEntry {
+  id:         string;
+  title:      string;
+  nodeLabel:  string;
+  severity:   'red' | 'amber' | 'observation';
+  firedAt:    number;
+  resolvedAt: number;
+}
+
+function fmtLogDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60)  return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60)  return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+function fmtLogAge(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60)  return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60)  return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ago`;
+}
+
+// ── useAlertLatch — debounce + hold hook for tier-1 alert cards ───────────────
+//
+// Onset gate: condition must be continuously true for ALERT_ONSET_MS before
+// the card renders. Prevents single-frame thermal spikes from flashing on screen.
+//
+// Hold period: once shown, the card stays visible for ALERT_HOLD_MS after the
+// condition clears. During this time a green "✓ Resolved" badge overlays the
+// card so engineers can see what just fired without it vanishing immediately.
+//
+// On expiry: the card disappears and `onClear` fires — used to append to the
+// session alert log.
+
+interface AlertLatchState {
+  showing:  boolean;
+  resolved: boolean;
+  firedAt:  number | null;  // when the latch first fired (after onset gate)
+}
+
+function useAlertLatch(
+  condition: boolean,
+  {
+    onsetMs = ALERT_ONSET_MS,
+    holdMs  = ALERT_HOLD_MS,
+    onClear,
+  }: {
+    onsetMs?: number;
+    holdMs?:  number;
+    onClear?: (info: { firedAt: number; resolvedAt: number }) => void;
+  } = {},
+): AlertLatchState {
+  const [showing,  setShowing]  = useState(false);
+  const [resolved, setResolved] = useState(false);
+  const firedAtRef   = useRef<number | null>(null);
+  const onsetTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onClearRef   = useRef(onClear);
+  onClearRef.current = onClear;
+
+  useEffect(() => {
+    if (condition) {
+      // Re-activated: cancel any pending hold, clear resolved badge
+      if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; }
+      setResolved(false);
+      // Start onset timer only if not already showing / timing
+      if (!onsetTimer.current && firedAtRef.current === null) {
+        onsetTimer.current = setTimeout(() => {
+          onsetTimer.current = null;
+          firedAtRef.current = Date.now();
+          setShowing(true);
+        }, onsetMs);
+      }
+    } else {
+      // Condition gone: cancel onset if it hasn't fired yet
+      if (onsetTimer.current) { clearTimeout(onsetTimer.current); onsetTimer.current = null; }
+      // If we were showing, start the hold countdown
+      if (firedAtRef.current !== null && !holdTimer.current) {
+        const resolvedAt = Date.now();
+        setResolved(true);
+        holdTimer.current = setTimeout(() => {
+          holdTimer.current = null;
+          const firedAt = firedAtRef.current!;
+          firedAtRef.current = null;
+          setShowing(false);
+          setResolved(false);
+          onClearRef.current?.({ firedAt, resolvedAt });
+        }, holdMs);
+      }
+    }
+  }, [condition, onsetMs, holdMs]);
+
+  // Cleanup timers on unmount
+  useEffect(() => () => {
+    if (onsetTimer.current) clearTimeout(onsetTimer.current);
+    if (holdTimer.current)  clearTimeout(holdTimer.current);
+  }, []);
+
+  return { showing, resolved, firedAt: firedAtRef.current };
+}
+
+// ── ResolvedBanner — overlays a resolved tier-1 card with a green badge ──────
+
+const ResolvedBanner: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="relative opacity-70">
+    {children}
+    <div className="absolute inset-0 rounded-2xl pointer-events-none flex items-start justify-end p-3">
+      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-500/10 border border-green-500/20 backdrop-blur-sm">
+        <CheckCircle className="w-3 h-3 text-green-400" />
+        <span className="text-[10px] font-semibold text-green-400 font-telin tracking-wide uppercase">Resolved</span>
+      </span>
+    </div>
+  </div>
+);
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -252,8 +387,6 @@ const InsightsTabBar: React.FC<{
 
 interface AIInsightsProps {
   nodes: NodeAgent[];
-  userApiKey?: string;
-  onNavigateToSecurity?: () => void;
   insightsTier: InsightsTier;
   canViewInsight: (id: number) => boolean;
   onFleetEvent?: (event: FleetEvent) => void;
@@ -269,8 +402,6 @@ interface AIInsightsProps {
 
 const AIInsights: React.FC<AIInsightsProps> = ({
   nodes,
-  userApiKey,
-  onNavigateToSecurity,
   insightsTier,
   canViewInsight,
   getToken,
@@ -281,8 +412,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   // ── Hooks — all unconditional ──────────────────────────────────────────────
 
-  const [loading, setLoading]             = useState(false);
-  const [insight, setInsight]             = useState<string | null>(null);
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
   const [now, setNow]                     = useState(() => Date.now());
   const [activeTab, setActiveTab]         = useState<InsightsTab>('triage');
@@ -300,11 +429,26 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const hadActivityRef    = useRef<boolean>(false);
   const [hadAnyActivity, setHadAnyActivity] = useState(false);
 
-  // Alert firing timestamps — track when each condition first fired
-  const thermalFiredAtRef = useRef<number | null>(null);
-  const powerFiredAtRef   = useRef<number | null>(null);
-  const memFiredAtRef     = useRef<number | null>(null);
-  const tcFiredAtRef      = useRef<number | null>(null);
+  // ── Alert log (session-scoped, Recent Activity panel) ─────────────────────
+  const [alertLog, setAlertLog] = useState<AlertLogEntry[]>(() => {
+    try {
+      const raw = sessionStorage.getItem('wicklee-alert-log');
+      return raw ? (JSON.parse(raw) as AlertLogEntry[]) : [];
+    } catch { return []; }
+  });
+  const [logExpanded, setLogExpanded] = useState(false);
+
+  const appendToLog = useCallback((entry: AlertLogEntry) => {
+    setAlertLog(prev => {
+      const updated = [entry, ...prev].slice(0, MAX_LOG_ENTRIES);
+      try { sessionStorage.setItem('wicklee-alert-log', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  }, []);
+
+  // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
+  const obsCacheRef  = useRef(new Map<string, ObsEntry>());
+  const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
 
   // Thermal Cost % rolling history — 30-frame window per node for rate-of-change detection.
   // At typical SSE cadence (~1 frame/s), 30 frames ≈ 30 seconds; adjust window as needed.
@@ -457,6 +601,62 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       });
       allObservations.push(...results);
     }
+
+    // ── Observation cache: sticky firstFiredMs + hold-after-clear ─────────
+    const cache  = obsCacheRef.current;
+    const nowMs2 = Date.now();
+
+    // Merge newly-active observations — preserve firstFiredMs across re-evals
+    for (const result of allObservations) {
+      const key      = `${result.patternId}:${result.nodeId}`;
+      const existing = cache.get(key);
+      cache.set(key, {
+        insight:      result,
+        firstFiredMs: existing?.firstFiredMs ?? nowMs2,
+        resolvedMs:   null,   // still firing — clear any prior resolved timestamp
+      });
+    }
+
+    // Mark entries that are no longer firing as resolved; evict after OBS_HOLD_MS
+    const pendingLog: AlertLogEntry[] = [];
+    for (const [key, entry] of cache.entries()) {
+      const stillActive = allObservations.some(r => `${r.patternId}:${r.nodeId}` === key);
+      if (!stillActive) {
+        if (entry.resolvedMs === null) {
+          cache.set(key, { ...entry, resolvedMs: nowMs2 });
+        } else if (nowMs2 - entry.resolvedMs > OBS_HOLD_MS) {
+          pendingLog.push({
+            id:        key,
+            title:     entry.insight.title,
+            nodeLabel: entry.insight.hostname,
+            severity:  'observation',
+            firedAt:   entry.firstFiredMs,
+            resolvedAt: entry.resolvedMs,
+          });
+          cache.delete(key);
+        }
+      }
+    }
+
+    // Flush evicted entries into the session log
+    if (pendingLog.length > 0) {
+      setAlertLog(prev => {
+        const updated = [...pendingLog, ...prev].slice(0, MAX_LOG_ENTRIES);
+        try { sessionStorage.setItem('wicklee-alert-log', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+    }
+
+    // Build sorted display list: active first, then resolved; newest first within each group
+    const sorted: ObsEntry[] = [...cache.values()].sort((a, b) => {
+      if ((a.resolvedMs === null) !== (b.resolvedMs === null)) {
+        return a.resolvedMs === null ? -1 : 1;
+      }
+      return b.firstFiredMs - a.firstFiredMs;
+    });
+    setObsEntries(sorted);
+
+    // Keep legacy observations state in sync (used by some downstream consumers)
     setObservations(allObservations);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allNodeMetrics, localSentinel]);
@@ -510,13 +710,16 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const memFiring     = memNodes.length > 0;
   const powerFiring   = powerNodes.length > 0;
 
-  // Track firing onset timestamps
-  if (thermalFiring && thermalFiredAtRef.current === null) thermalFiredAtRef.current = now;
-  if (!thermalFiring) thermalFiredAtRef.current = null;
-  if (memFiring && memFiredAtRef.current === null) memFiredAtRef.current = now;
-  if (!memFiring) memFiredAtRef.current = null;
-  if (powerFiring && powerFiredAtRef.current === null) powerFiredAtRef.current = now;
-  if (!powerFiring) powerFiredAtRef.current = null;
+  // Capture node labels while conditions are active (used by onClear log entries)
+  const thermalNodeLabelRef = useRef('');
+  const powerNodeLabelRef   = useRef('');
+  const memNodeLabelRef     = useRef('');
+  if (thermalFiring && thermalNodes.length > 0)
+    thermalNodeLabelRef.current = thermalNodes.map(n => n.hostname ?? n.node_id ?? '').join(', ');
+  if (powerFiring && powerNodes.length > 0)
+    powerNodeLabelRef.current = powerNodes.map(n => n.hostname ?? n.node_id ?? '').join(', ');
+  if (memFiring && memNodes.length > 0)
+    memNodeLabelRef.current = memNodes.map(n => n.hostname ?? n.node_id ?? '').join(', ');
 
   // ── Tier 2 conditions ─────────────────────────────────────────────────────
 
@@ -588,9 +791,37 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const tcFiring = tcAlertNodes.length > 0;
 
-  // Track firing onset timestamp for the status rail
-  if (tcFiring && tcFiredAtRef.current === null) tcFiredAtRef.current = now;
-  if (!tcFiring) tcFiredAtRef.current = null;
+  const tcNodeLabelRef = useRef('');
+  if (tcFiring && tcAlertNodes.length > 0)
+    tcNodeLabelRef.current = tcAlertNodes.map(n => n.hostname ?? n.node_id ?? '').join(', ');
+
+  // ── Tier-1 alert latches — debounce (15 s onset) + hold (5 min after clear) ─
+  // useAlertLatch is a stable custom hook; always called in the same order.
+
+  const thermalLatch = useAlertLatch(thermalFiring, {
+    onClear: ({ firedAt, resolvedAt }) => appendToLog({
+      id: `thermal-${firedAt}`, title: 'Thermal Degradation',
+      nodeLabel: thermalNodeLabelRef.current, severity: 'red', firedAt, resolvedAt,
+    }),
+  });
+  const powerLatch = useAlertLatch(powerFiring, {
+    onClear: ({ firedAt, resolvedAt }) => appendToLog({
+      id: `power-${firedAt}`, title: 'Power Anomaly',
+      nodeLabel: powerNodeLabelRef.current, severity: 'amber', firedAt, resolvedAt,
+    }),
+  });
+  const memLatch = useAlertLatch(memFiring, {
+    onClear: ({ firedAt, resolvedAt }) => appendToLog({
+      id: `memory-${firedAt}`, title: 'Memory Exhaustion',
+      nodeLabel: memNodeLabelRef.current, severity: 'amber', firedAt, resolvedAt,
+    }),
+  });
+  const tcLatch = useAlertLatch(tcFiring, {
+    onClear: ({ firedAt, resolvedAt }) => appendToLog({
+      id: `tc-${firedAt}`, title: 'Thermal Cost',
+      nodeLabel: tcNodeLabelRef.current, severity: 'amber', firedAt, resolvedAt,
+    }),
+  });
 
   // ── Fleet stats for Status Rail ───────────────────────────────────────────
 
@@ -605,37 +836,40 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     return (sum ?? 0) + t;
   }, null);
 
-  // ── Firing alerts array ───────────────────────────────────────────────────
+  // ── Firing alerts array — fed from latch state (not raw condition) ─────────
+  // Only latched (confirmed + onset-gated) alerts reach the Status Rail.
+  // Resolved alerts (in hold period) still show on the Status Rail so engineers
+  // can track exactly when conditions cleared.
 
   const firingAlerts: FiringAlert[] = [
-    ...thermalNodes.map(n => ({
+    ...(thermalLatch.showing ? thermalNodes.map(n => ({
       id:        `thermal-${n.node_id}`,
-      name:      'Thermal Degradation',
+      name:      thermalLatch.resolved ? 'Thermal Degradation ✓' : 'Thermal Degradation',
       nodeId:    n.hostname ?? n.node_id ?? '—',
-      elapsedMs: thermalFiredAtRef.current ? now - thermalFiredAtRef.current : 0,
+      elapsedMs: thermalLatch.firedAt ? now - thermalLatch.firedAt : 0,
       severity:  'red' as const,
-    })),
-    ...powerNodes.map(n => ({
+    })) : []),
+    ...(powerLatch.showing ? powerNodes.map(n => ({
       id:        `power-${n.node_id}`,
-      name:      'Power Anomaly',
+      name:      powerLatch.resolved ? 'Power Anomaly ✓' : 'Power Anomaly',
       nodeId:    n.hostname ?? n.node_id ?? '—',
-      elapsedMs: powerFiredAtRef.current ? now - powerFiredAtRef.current : 0,
+      elapsedMs: powerLatch.firedAt ? now - powerLatch.firedAt : 0,
       severity:  'amber' as const,
-    })),
-    ...memNodes.map(n => ({
+    })) : []),
+    ...(memLatch.showing ? memNodes.map(n => ({
       id:        `memory-${n.node_id}`,
-      name:      'Memory Exhaustion',
+      name:      memLatch.resolved ? 'Memory Exhaustion ✓' : 'Memory Exhaustion',
       nodeId:    n.hostname ?? n.node_id ?? '—',
-      elapsedMs: memFiredAtRef.current ? now - memFiredAtRef.current : 0,
+      elapsedMs: memLatch.firedAt ? now - memLatch.firedAt : 0,
       severity:  'amber' as const,
-    })),
-    ...tcAlertNodes.map(n => ({
+    })) : []),
+    ...(tcLatch.showing ? tcAlertNodes.map(n => ({
       id:        `tc-cost-${n.node_id}`,
-      name:      'Thermal Cost',
+      name:      tcLatch.resolved ? 'Thermal Cost ✓' : 'Thermal Cost',
       nodeId:    n.hostname ?? n.node_id ?? '—',
-      elapsedMs: tcFiredAtRef.current ? now - tcFiredAtRef.current : 0,
+      elapsedMs: tcLatch.firedAt ? now - tcLatch.firedAt : 0,
       severity:  ((tcPctByNode[n.node_id] ?? 0) >= 40 ? 'red' : 'amber') as 'red' | 'amber',
-    })),
+    })) : []),
   ];
 
   // ── Per-node readings for dormant monitoring rows ─────────────────────────
@@ -686,41 +920,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // ── Forensics unlock gate ─────────────────────────────────────────────────
 
   const isTeamOrAbove = insightsTier === 'trend' || insightsTier === 'predictive';
-
-  // ── Local AI analysis (Cockpit only) ──────────────────────────────────────
-
-  const analyzeFleet = async () => {
-    setLoading(true);
-    try {
-      if (!userApiKey) throw new Error('Local Ollama not configured.');
-      const response = await fetch(`${userApiKey}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'phi3:mini',
-          prompt: `Analyze this AI fleet data and provide a concise strategic optimization report.
-Fleet Snapshot:
-${JSON.stringify(effectiveNodes, null, 2)}
-
-Requirements:
-1. Identify critical nodes based on Thermal (>75°C) or VRAM (>90% usage).
-2. Suggest if load balancing should be shifted.
-3. Recommend specific efficiency improvements.
-
-Format as Markdown with a "Strategic Optimization" header.`,
-          stream: false,
-        }),
-      });
-      if (!response.ok) throw new Error(`Ollama returned ${response.status}`);
-      const data = await response.json();
-      setInsight(data.response || 'Failed to generate insights.');
-    } catch (error) {
-      console.error(error);
-      setInsight('Error communicating with local model. Ensure Ollama is running.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // ── Cockpit settings ──────────────────────────────────────────────────────
 
@@ -837,43 +1036,49 @@ Format as Markdown with a "Strategic Optimization" header.`,
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'triage' && (
             <>
-              {/* Alert Quartet — firing cards above dormant monitoring panel */}
+              {/* Alert Quartet — surfaced only after 15 s sustained onset gate.
+                  Resolved cards stay visible for 5 min with a green "✓ Resolved" overlay. */}
               <div className="space-y-3">
-                {thermalFiring && thermalNodes.map(n => (
+                {thermalLatch.showing && thermalNodes.map(n => (
                   <div key={n.node_id} id={`insight-thermal-${n.node_id}`}>
-                    <ThermalDegradationCard node={n} showNodeHeader={effectiveNodes.length > 1} />
+                    {thermalLatch.resolved
+                      ? <ResolvedBanner><ThermalDegradationCard node={n} showNodeHeader={effectiveNodes.length > 1} /></ResolvedBanner>
+                      : <ThermalDegradationCard node={n} showNodeHeader={effectiveNodes.length > 1} />}
                   </div>
                 ))}
-                {powerFiring && powerNodes.map(n => (
+                {powerLatch.showing && powerNodes.map(n => (
                   <div key={n.node_id} id={`insight-power-${n.node_id}`}>
-                    <PowerAnomalyCard node={n} baselineWatts={isLocalHost ? sessionBaselineWatts : null} showNodeHeader={effectiveNodes.length > 1} />
+                    {powerLatch.resolved
+                      ? <ResolvedBanner><PowerAnomalyCard node={n} baselineWatts={isLocalHost ? sessionBaselineWatts : null} showNodeHeader={effectiveNodes.length > 1} /></ResolvedBanner>
+                      : <PowerAnomalyCard node={n} baselineWatts={isLocalHost ? sessionBaselineWatts : null} showNodeHeader={effectiveNodes.length > 1} />}
                   </div>
                 ))}
-                {memFiring && memNodes.map(n => (
+                {memLatch.showing && memNodes.map(n => (
                   <div key={n.node_id} id={`insight-memory-${n.node_id}`}>
-                    <MemoryExhaustionCard node={n} showNodeHeader={effectiveNodes.length > 1} />
+                    {memLatch.resolved
+                      ? <ResolvedBanner><MemoryExhaustionCard node={n} showNodeHeader={effectiveNodes.length > 1} /></ResolvedBanner>
+                      : <MemoryExhaustionCard node={n} showNodeHeader={effectiveNodes.length > 1} />}
                   </div>
                 ))}
-                {tcFiring && tcAlertNodes.map(n => (
+                {tcLatch.showing && tcAlertNodes.map(n => (
                   <div key={n.node_id} id={`insight-thermal-cost-${n.node_id}`}>
-                    <ThermalCostAlertCard
-                      node={n}
-                      tcPct={tcPctByNode[n.node_id] ?? 0}
-                      rateOfChangePct={tcRateByNode[n.node_id] ?? 0}
-                      showNodeHeader={effectiveNodes.length > 1}
-                    />
+                    {tcLatch.resolved
+                      ? <ResolvedBanner>
+                          <ThermalCostAlertCard node={n} tcPct={tcPctByNode[n.node_id] ?? 0} rateOfChangePct={tcRateByNode[n.node_id] ?? 0} showNodeHeader={effectiveNodes.length > 1} />
+                        </ResolvedBanner>
+                      : <ThermalCostAlertCard node={n} tcPct={tcPctByNode[n.node_id] ?? 0} rateOfChangePct={tcRateByNode[n.node_id] ?? 0} showNodeHeader={effectiveNodes.length > 1} />}
                   </div>
                 ))}
 
-                {/* Dormant monitoring rows for non-firing conditions.
-                    Build an ordered array so isFirst/isLast track correctly
-                    regardless of how many are currently dormant. */}
+                {/* Dormant monitoring rows — shown for conditions that are NOT latched.
+                    Resolved (hold-period) conditions skip the dormant row since the
+                    card above is still visible. */}
                 {(() => {
                   const dormant = [
-                    ...(!thermalFiring ? [{ key: 'thermal', icon: <Thermometer className="w-3.5 h-3.5" />, label: 'Thermal Degradation', reading: thermalReading }] : []),
-                    ...(!powerFiring   ? [{ key: 'power',   icon: <Zap          className="w-3.5 h-3.5" />, label: 'Power Anomaly',       reading: powerReading   }] : []),
-                    ...(!memFiring     ? [{ key: 'mem',     icon: <HardDrive    className="w-3.5 h-3.5" />, label: 'Memory Exhaustion',   reading: memReading     }] : []),
-                    ...(!tcFiring      ? [{ key: 'tc',      icon: <Thermometer  className="w-3.5 h-3.5" />, label: 'Thermal Cost',         reading: tcReading      }] : []),
+                    ...(!thermalLatch.showing ? [{ key: 'thermal', icon: <Thermometer className="w-3.5 h-3.5" />, label: 'Thermal Degradation', reading: thermalReading }] : []),
+                    ...(!powerLatch.showing   ? [{ key: 'power',   icon: <Zap          className="w-3.5 h-3.5" />, label: 'Power Anomaly',       reading: powerReading   }] : []),
+                    ...(!memLatch.showing     ? [{ key: 'mem',     icon: <HardDrive    className="w-3.5 h-3.5" />, label: 'Memory Exhaustion',   reading: memReading     }] : []),
+                    ...(!tcLatch.showing      ? [{ key: 'tc',      icon: <Thermometer  className="w-3.5 h-3.5" />, label: 'Thermal Cost',         reading: tcReading      }] : []),
                   ];
                   if (dormant.length === 0) return null;
                   return (
@@ -1037,73 +1242,100 @@ Format as Markdown with a "Strategic Optimization" header.`,
                 }
               </div>
 
-              {/* ── Observations — pattern engine briefing feed ── */}
-              {observations.length > 0 && (
+              {/* ── Observations — pattern engine briefing feed ─────────────
+                  Active observations are shown first; resolved (hold-period) entries
+                  appear dimmed below with a "✓ Resolved" chip.
+                  "Clear All Resolved" removes just the held entries so engineers
+                  can acknowledge them like an inbox. */}
+              {obsEntries.length > 0 && (
                 <div className="space-y-3">
-                  <SectionHeader>Observations</SectionHeader>
-                  {observations.map(obs => (
+                  <div className="flex items-center justify-between">
+                    <SectionHeader>Observations</SectionHeader>
+                    {obsEntries.some(e => e.resolvedMs !== null) && (
+                      <button
+                        onClick={() => {
+                          // Evict all resolved entries from cache and state
+                          for (const [key, entry] of obsCacheRef.current.entries()) {
+                            if (entry.resolvedMs !== null) obsCacheRef.current.delete(key);
+                          }
+                          setObsEntries(prev => prev.filter(e => e.resolvedMs === null));
+                        }}
+                        className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors -mt-4 mb-4"
+                      >
+                        <CheckCircle className="w-3 h-3" />
+                        Clear resolved
+                      </button>
+                    )}
+                  </div>
+                  {obsEntries.map(entry => (
                     <ObservationCard
-                      key={`${obs.patternId}-${obs.nodeId}`}
-                      insight={obs}
+                      key={`${entry.insight.patternId}-${entry.insight.nodeId}`}
+                      insight={{ ...entry.insight, firstFiredMs: entry.firstFiredMs }}
                       showNodeHeader={effectiveNodes.length > 1}
+                      resolvedMs={entry.resolvedMs}
                     />
                   ))}
                 </div>
               )}
 
-              {/* Local AI Analysis (Cockpit only) */}
-              {isLocalHost && (
-                <div className="space-y-4">
-                  <SectionHeader>Local AI Analysis</SectionHeader>
-
-                  {!userApiKey && (
-                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
-                        <p className="text-sm text-amber-600 dark:text-amber-200">
-                          Connect a local Ollama instance to enable fleet intelligence.
-                          Recommended: phi3:mini or qwen2.5:1.5b
-                        </p>
-                      </div>
-                      <button
-                        onClick={onNavigateToSecurity}
-                        className="text-xs font-bold text-amber-600 dark:text-amber-200 hover:underline shrink-0 ml-4"
-                      >
-                        Configure →
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="bg-gradient-to-br from-blue-600/20 to-cyan-400/20 border border-blue-500/20 rounded-2xl p-8 flex flex-col items-center text-center">
-                    <div className="w-16 h-16 rounded-2xl bg-blue-600 flex items-center justify-center shadow-xl shadow-blue-500/40 mb-6">
-                      <BrainCircuit className="w-8 h-8 text-white" />
-                    </div>
-                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                      Fleet Analysis
-                    </h2>
-                    <p className="text-gray-600 dark:text-gray-400 max-w-lg mb-8">
-                      Powered by your local Ollama model — fleet data never leaves your network.
-                    </p>
+              {/* ── Recent Activity — session-scoped alert history ──────────── */}
+              {alertLog.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
                     <button
-                      onClick={analyzeFleet}
-                      disabled={loading}
-                      className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-blue-500/20 flex items-center gap-2"
+                      onClick={() => setLogExpanded(v => !v)}
+                      className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-400 transition-colors"
                     >
-                      {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                      {loading ? 'Analyzing…' : 'Analyze My Fleet'}
+                      <History className="w-3.5 h-3.5" />
+                      Recent Activity ({alertLog.length})
+                      <ChevronDown className={`w-3 h-3 transition-transform duration-150 ${logExpanded ? 'rotate-180' : ''}`} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAlertLog([]);
+                        try { sessionStorage.removeItem('wicklee-alert-log'); } catch {}
+                      }}
+                      className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors"
+                    >
+                      Clear all
                     </button>
                   </div>
 
-                  {insight && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 prose prose-invert max-w-none">
-                      <div className="flex items-center gap-2 mb-4 text-cyan-400 text-sm font-bold uppercase tracking-widest">
-                        <Sparkles className="w-4 h-4" />
-                        Local Model Output
-                      </div>
-                      <div className="whitespace-pre-wrap leading-relaxed text-gray-300">{insight}</div>
+                  {logExpanded && (
+                    <div className="rounded-2xl border border-gray-800 overflow-hidden">
+                      {alertLog.map((entry, i) => (
+                        <div
+                          key={entry.id}
+                          className={`flex items-center gap-3 px-4 py-2.5 ${
+                            i < alertLog.length - 1 ? 'border-b border-gray-800/60' : ''
+                          } bg-gray-900`}
+                        >
+                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            entry.severity === 'red'
+                              ? 'bg-red-500/50'
+                              : entry.severity === 'amber'
+                              ? 'bg-amber-500/50'
+                              : 'bg-indigo-500/50'
+                          }`} />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs text-gray-400">{entry.title}</span>
+                            {entry.nodeLabel && (
+                              <span className="text-[10px] text-gray-600 ml-2 font-telin">{entry.nodeLabel}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="font-telin text-[10px] text-gray-600 flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5" />
+                              {fmtLogDuration(entry.resolvedAt - entry.firedAt)}
+                            </span>
+                            <span className="font-telin text-[10px] text-gray-700">
+                              {fmtLogAge(now - entry.resolvedAt)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
-
                 </div>
               )}
             </>
