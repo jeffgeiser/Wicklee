@@ -64,6 +64,10 @@ import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
 import WESHistoryChart from './WESHistoryChart';
 import MetricsHistoryChart from './MetricsHistoryChart';
+import ObservationCard from './insights/ObservationCard';
+import { useMetricHistory, metricsToSample } from '../hooks/useMetricHistory';
+import { evaluatePatterns } from '../lib/patternEngine';
+import type { DetectedInsight } from '../lib/patternEngine';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -326,6 +330,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const { getNodeSettings } = useSettings();
 
+  // ── Pattern engine — time-windowed deterministic observations ─────────────
+  const metricHistory                               = useMetricHistory();
+  const [observations, setObservations]             = useState<DetectedInsight[]>([]);
+  const lastObsEvalRef                              = useRef<number>(0);
+
   // Tick every 10s to keep elapsed times fresh in the status rail
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 10_000);
@@ -407,6 +416,45 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       }
     }
   }, [allNodeMetrics]);
+
+  // ── Pattern engine: push samples + evaluate ───────────────────────────────
+  // Runs on every telemetry update (allNodeMetrics or localSentinel).
+  // Downsampling is handled inside useMetricHistory.push() — rapid SSE frames
+  // are deduplicated to one sample per 30-second bucket automatically.
+  useEffect(() => {
+    const metricsToProcess: SentinelMetrics[] = isLocalHost && localSentinel
+      ? [localSentinel]
+      : Object.values(allNodeMetrics);
+
+    for (const m of metricsToProcess) {
+      const wesScore = computeNodeWes(m);
+      const sample   = metricsToSample(m, wesScore);
+      metricHistory.push(m.node_id, sample);
+    }
+
+    // Throttle evaluation to at most once per 30s to match sample interval
+    const nowMs = Date.now();
+    if (nowMs - lastObsEvalRef.current < 30_000) return;
+    lastObsEvalRef.current = nowMs;
+
+    // Prune stale history once per eval cycle
+    metricHistory.prune();
+
+    const allObservations: DetectedInsight[] = [];
+    for (const m of metricsToProcess) {
+      const ns      = getNodeSettings(m.node_id);
+      const history = metricHistory.getHistory(m.node_id);
+      const results = evaluatePatterns({
+        nodeId:   m.node_id,
+        hostname: m.hostname ?? m.node_id,
+        history,
+        kwhRate:  ns.kwhRate,
+      });
+      allObservations.push(...results);
+    }
+    setObservations(allObservations);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allNodeMetrics, localSentinel]);
 
   // ── Effective node list ────────────────────────────────────────────────────
 
@@ -983,6 +1031,20 @@ Format as Markdown with a "Strategic Optimization" header.`,
                     )
                 }
               </div>
+
+              {/* ── Observations — pattern engine briefing feed ── */}
+              {observations.length > 0 && (
+                <div className="space-y-3">
+                  <SectionHeader>Observations</SectionHeader>
+                  {observations.map(obs => (
+                    <ObservationCard
+                      key={`${obs.patternId}-${obs.nodeId}`}
+                      insight={obs}
+                      showNodeHeader={effectiveNodes.length > 1}
+                    />
+                  ))}
+                </div>
+              )}
 
               {/* Local AI Analysis (Cockpit only) */}
               {isLocalHost && (
