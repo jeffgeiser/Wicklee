@@ -102,6 +102,7 @@ const Td: React.FC<{ children: React.ReactNode; mono?: boolean; className?: stri
 const NAV = [
   { id: 'quickstart',  label: 'Quick Start' },
   { id: 'wes',         label: 'WES Score' },
+  { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'api',         label: 'Agent API v1' },
   { id: 'config',      label: 'Configuration' },
   { id: 'sovereignty', label: 'Sovereignty' },
@@ -342,6 +343,44 @@ wicklee --install-service</Code>
 
             <p className="text-xs text-gray-500">WES v1 used Serious = 2.0. WES v2 (current) uses Serious = 1.75. The <code className="text-gray-400">wes_version</code> field in the API payload version-stamps each reading so benchmarks remain comparable across releases.</p>
 
+            {/* Derived metrics reference */}
+            <div>
+              <p className="font-semibold text-white mb-2">Derived metrics — formulas</p>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <Th>Metric</Th>
+                      <Th>Formula</Th>
+                      <Th>Notes</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <Td><span className="font-medium text-white">Cost / 1M tokens</span></Td>
+                      <Td mono>(kWh_rate × watts) ÷ (tok_s × 3600) × 1,000,000 ÷ 1000</Td>
+                      <Td>Displayed to 3 decimal places; shows <code className="text-gray-400">&lt; $0.001</code> for very efficient hardware (Apple Silicon at idle-speed inference). PUE applied when set.</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">W / 1k tokens</span></Td>
+                      <Td mono>fleet_watts ÷ (fleet_tok_s ÷ 1000)</Td>
+                      <Td>Only reachable nodes (last-seen within 30 s) contribute to <code className="text-gray-400">fleet_watts</code>. Offline nodes are excluded to prevent wattage inflation.</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">Throughput label</span></Td>
+                      <Td mono>LIVE · IDLE-SPD · BUSY</Td>
+                      <Td><strong className="text-gray-300">LIVE</strong>: active inference (tok/s &gt; 0). <strong className="text-gray-300">IDLE-SPD</strong>: online, no inference — idle-speed baseline. <strong className="text-gray-300">BUSY</strong>: GPU loaded, no inference (non-inference workload).</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="font-medium text-white">Display smoothing</span></Td>
+                      <Td mono>rolling average</Td>
+                      <Td>Node tiles: 8-frame window. Fleet aggregates: 12-frame window. Prevents single-frame spikes from skewing dashboard readings.</Td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             {/* Benchmark Report */}
             <div>
               <p className="font-semibold text-white mb-2">Benchmark Report — reproducible snapshots</p>
@@ -350,8 +389,8 @@ wicklee --install-service</Code>
               </p>
               <Code lang="markdown">{`# Wicklee Benchmark Report
 
-Generated:       2026-03-15T14:23:00Z
-Wicklee:         v0.4.3
+Generated:       2026-03-16T14:23:00Z
+Wicklee:         v0.4.15
 
 ## Node
 Node ID:         WK-C133
@@ -382,6 +421,74 @@ WES Version:     2
                 The WES Trend chart (Mission Control, Pro+) also includes a per-node <strong className="text-white">Export</strong> button that snapshots the most recent history point from the selected time window.
               </p>
             </div>
+          </Section>
+
+          {/* ── Pattern Intelligence ── */}
+          <Section
+            id="intelligence"
+            icon={<Cpu className="w-5 h-5" />}
+            accent="border-violet-500/20"
+            title="Pattern Intelligence"
+          >
+            <p>
+              The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. All computation is local; no data leaves the machine.
+            </p>
+
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <Th>Pattern</Th>
+                    <Th>What it detects</Th>
+                    <Th>Evidence window</Th>
+                    <Th>Tier</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td><span className="font-medium text-amber-400">Thermal Drain</span></Td>
+                    <Td>Sustained throttle state reducing tok/s vs. the node's own Normal-temperature baseline (&gt; 8% degradation)</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-violet-400">Phantom Load</span></Td>
+                    <Td>Significant power draw + VRAM allocated with zero inference activity — idle model burning electricity</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-indigo-400">WES Velocity Drop</span></Td>
+                    <Td>Efficiency score declining at a sustained rate before thermal state has changed — early warning pattern</Td>
+                    <Td mono>10 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-cyan-400">Memory Trajectory</span></Td>
+                    <Td>Rising memory pressure projected to hit the critical threshold (&gt; 85%) within 30 minutes</Td>
+                    <Td mono>10 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2">
+              <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Alert lifecycle</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <strong className="text-white">Onset gate (15 s):</strong> tier-1 alert cards (Thermal Degradation, Power Anomaly, Memory Exhaustion, Thermal Cost) require the condition to be continuously true for 15 seconds before rendering. This prevents single-frame metric spikes from flashing on screen.
+              </p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <strong className="text-white">Hold period (5 min):</strong> once shown, an alert card stays visible for 5 minutes after the condition clears — displaying a <code className="text-gray-300">✓ Resolved</code> badge. Engineers can read the full context before the card disappears.
+              </p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <strong className="text-white">Recent Activity log:</strong> when an alert expires its hold period, it moves to the collapsible Recent Activity feed at the bottom of the Triage tab. The log is session-scoped and shows duration + age for each resolved event. Use <em>Clear resolved</em> in the Observations section to acknowledge pattern findings inbox-style.
+              </p>
+            </div>
+
+            <NoteBox>
+              Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window.
+            </NoteBox>
           </Section>
 
           {/* ── Agent API v1 ── */}
@@ -508,12 +615,13 @@ curl https://wicklee.dev/api/v1/fleet \\
             </div>
 
             <div>
-              <p className="font-semibold text-white mb-2">Data retention</p>
+              <p className="font-semibold text-white mb-2">Tiers &amp; fleet limits</p>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr>
                       <Th>Tier</Th>
+                      <Th>Fleet nodes</Th>
                       <Th>Telemetry window</Th>
                       <Th>DuckDB analytics archive</Th>
                     </tr>
@@ -521,28 +629,28 @@ curl https://wicklee.dev/api/v1/fleet \\
                   <tbody>
                     <tr>
                       <Td><span className="text-gray-300 font-medium">Community</span></Td>
+                      <Td>3 nodes free</Td>
                       <Td>24-hour rolling window</Td>
                       <Td>—</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-indigo-400 font-medium">Pro</span></Td>
-                      <Td>24-hour rolling window</Td>
-                      <Td>7-day compressed archive</Td>
-                    </tr>
-                    <tr>
                       <Td><span className="text-blue-400 font-medium">Team</span></Td>
+                      <Td>Unlimited</Td>
                       <Td>24-hour rolling window</Td>
                       <Td>90-day compressed archive</Td>
                     </tr>
                     <tr>
                       <Td><span className="text-amber-400 font-medium">Enterprise</span></Td>
+                      <Td>Unlimited</Td>
                       <Td>Configurable</Td>
                       <Td>Configurable + signed export</Td>
                     </tr>
                   </tbody>
                 </table>
               </div>
-              <p className="mt-2 text-xs text-gray-500">DuckDB traces are stored with zstd compression and streamed to the Traces view in the fleet dashboard. Community tier data is evicted after 24 hours; Team tier retains 90 days of trace history.</p>
+              <p className="mt-2 text-xs text-gray-500">
+                Nodes 4+ on Community connect and send heartbeats but their metrics are restricted in the fleet dashboard. Upgrade to Team to unlock full telemetry, alert wiring, and 90-day DuckDB history. DuckDB traces are stored with zstd compression and streamed to the Traces view.
+              </p>
             </div>
 
             <div>
