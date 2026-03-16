@@ -697,6 +697,8 @@ const NodesList: React.FC<NodesListProps> = ({
   // Two-step confirmation: first click arms, second click fires.
   const [disconnectConfirming, setDisconnectConfirming] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
+  const confirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const esRef    = useRef<EventSource | null>(null);
   const sortRef  = useRef<HTMLDivElement>(null);
@@ -759,13 +761,16 @@ const NodesList: React.FC<NodesListProps> = ({
   const handleBulkDisconnect = useCallback(async () => {
     // First click arms the confirmation state.
     if (!disconnectConfirming) {
+      setDisconnectError(null);
       setDisconnectConfirming(true);
-      // Auto-cancel confirmation after 4 s if user doesn't follow through.
-      setTimeout(() => setDisconnectConfirming(false), 4000);
+      // Clear any previous timeout, then auto-cancel after 6s if not confirmed.
+      if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
+      confirmTimeoutRef.current = setTimeout(() => setDisconnectConfirming(false), 6000);
       return;
     }
     // Second click fires.
     if (!getToken || !cloudUrl || disconnecting) return;
+    if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
     setDisconnecting(true);
     setDisconnectConfirming(false);
     try {
@@ -779,10 +784,14 @@ const NodesList: React.FC<NodesListProps> = ({
           })
         )
       );
+      // Only treat 204 No Content (or any 2xx) as genuine success.
+      // 404 is NOT treated as success — a 404 can mean the backend route
+      // doesn't exist yet, not that the node was already removed.
       const removed = ids.filter((_, i) => {
         const r = results[i];
-        return r.status === 'fulfilled' && (r.value.ok || r.value.status === 404);
+        return r.status === 'fulfilled' && r.value.ok;
       });
+      const failCount = ids.length - removed.length;
       if (removed.length > 0) {
         setSelectedNodes(prev => {
           const next = new Set(prev);
@@ -791,6 +800,20 @@ const NodesList: React.FC<NodesListProps> = ({
         });
         onNodesRemoved?.(removed);
       }
+      if (failCount > 0) {
+        // Surface the HTTP status of the first failure so it's diagnosable.
+        const firstFail = results.find(r =>
+          r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)
+        );
+        const statusHint = firstFail?.status === 'fulfilled'
+          ? ` (${firstFail.value.status})`
+          : '';
+        setDisconnectError(
+          `${failCount} node${failCount !== 1 ? 's' : ''} could not be removed${statusHint}. Try again in a moment.`
+        );
+      }
+    } catch {
+      setDisconnectError('Request failed. Check your connection and try again.');
     } finally {
       setDisconnecting(false);
     }
@@ -1271,10 +1294,23 @@ const NodesList: React.FC<NodesListProps> = ({
           </button>
           <div className="w-px h-4 bg-gray-700 shrink-0" />
           <button
-            onClick={() => setSelectedNodes(new Set())}
+            onClick={() => { setSelectedNodes(new Set()); setDisconnectError(null); }}
             className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
             <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Error toast — appears below the bulk bar when a disconnect fails */}
+      {disconnectError && (
+        <div className="fixed bottom-[72px] left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 bg-red-950 border border-red-800/60 rounded-xl shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <span className="text-xs text-red-300">{disconnectError}</span>
+          <button
+            onClick={() => setDisconnectError(null)}
+            className="text-red-500 hover:text-red-300 transition-colors ml-1"
+          >
+            <X className="w-3 h-3" />
           </button>
         </div>
       )}
