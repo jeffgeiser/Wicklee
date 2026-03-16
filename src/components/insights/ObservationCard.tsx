@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X } from 'lucide-react';
+import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle } from 'lucide-react';
 import type { DetectedInsight } from '../../lib/patternEngine';
 
 // ── Dismiss helpers ───────────────────────────────────────────────────────────
@@ -134,9 +134,19 @@ function ConfidenceBar({ insight }: { insight: DetectedInsight }) {
 interface ObservationCardProps {
   insight:        DetectedInsight;
   showNodeHeader: boolean;
+  /** If set, the pattern has stopped firing; card shows a resolved badge. */
+  resolvedMs?:    number | null;
 }
 
-const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHeader }) => {
+function fmtResolvedAge(resolvedMs: number): string {
+  const elapsed = Date.now() - resolvedMs;
+  const m = Math.round(elapsed / 60_000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ago`;
+}
+
+const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHeader, resolvedMs }) => {
   // Initialise from localStorage so dismiss state survives hot-reloads
   const [dismissed, setDismissed] = useState(
     () => readDismissed(insight.patternId, insight.nodeId),
@@ -150,9 +160,14 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
   if (dismissed) return null;
 
   const isBuilding = insight.confidence === 'building';
+  const isResolved = resolvedMs != null;
 
   return (
-    <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 space-y-3">
+    <div className={`border rounded-2xl p-4 space-y-3 transition-opacity ${
+      isResolved
+        ? 'bg-gray-900/30 border-gray-800/50 opacity-70'
+        : 'bg-gray-900/60 border-gray-800'
+    }`}>
 
       {/* Header row */}
       <div className="flex items-start justify-between gap-3">
@@ -161,9 +176,14 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
               Observation
-              {isBuilding && (
+              {isBuilding && !isResolved && (
                 <span className="ml-2 text-indigo-400/70 normal-case tracking-normal">
                   · Building
+                </span>
+              )}
+              {isResolved && (
+                <span className="ml-2 text-green-400/80 normal-case tracking-normal flex-inline items-center gap-1">
+                  · <CheckCircle className="w-2.5 h-2.5 inline -mt-px" /> Resolved {fmtResolvedAge(resolvedMs)}
                 </span>
               )}
             </p>
@@ -174,7 +194,7 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
         {/* Right side: hook + dismiss */}
         <div className="shrink-0 flex items-start gap-2">
           <div className="text-right">
-            <p className={`text-base font-bold font-mono ${hookColor(insight.patternId)}`}>
+            <p className={`text-base font-bold font-mono ${isResolved ? 'text-gray-500' : hookColor(insight.patternId)}`}>
               {insight.hook}
             </p>
             {showNodeHeader && (
@@ -195,8 +215,8 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
       {/* Body */}
       <p className="text-xs text-gray-400 leading-relaxed">{insight.body}</p>
 
-      {/* Action copy buttons */}
-      {insight.actions.length > 0 && (
+      {/* Action copy buttons — hidden when resolved (condition is gone) */}
+      {insight.actions.length > 0 && !isResolved && (
         <div className="flex flex-wrap gap-2">
           {insight.actions.map(action => (
             <CopyButton
@@ -208,8 +228,8 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
         </div>
       )}
 
-      {/* Confidence bar — only shown while building */}
-      {isBuilding && <ConfidenceBar insight={insight} />}
+      {/* Confidence bar — only shown while building and not resolved */}
+      {isBuilding && !isResolved && <ConfidenceBar insight={insight} />}
     </div>
   );
 };

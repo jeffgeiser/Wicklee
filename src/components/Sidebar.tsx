@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Cloud, CloudLightning, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog } from 'lucide-react';
 import { useClerk } from '@clerk/clerk-react';
-import { ConnectionState, DashboardTab, User, UserRole, PairingInfo } from '../types';
+import { ConnectionState, DashboardTab, User, UserRole } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
@@ -17,8 +17,6 @@ interface SidebarProps {
   theme?: 'light' | 'dark';
   isLocalMode?: boolean;
   isLocalHost?: boolean;
-  pairingInfo?: PairingInfo | null;
-  onOpenPairing?: () => void;
   onNavigate?: (path: string) => void;
 }
 
@@ -51,7 +49,7 @@ const ClerkAccountActions: React.FC<{
   );
 };
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalMode = true, isLocalHost = false, pairingInfo, onOpenPairing, onNavigate }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalMode = true, isLocalHost = false, onNavigate }) => {
   const permissions = usePermissions(currentUser);
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -115,42 +113,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
       </nav>
 
       <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-1">
-        {/* Fleet Connect pill — localhost only */}
-        {isLocalHost && (() => {
-          const status = pairingInfo?.status;
-          const nodeId = pairingInfo?.node_id;
-          const isPending = status === 'pending';
-          const isConnectedFleet = status === 'connected';
-          const borderClass = isConnectedFleet
-            ? 'border-green-500/30 hover:border-green-500/50'
-            : isPending
-            ? 'border-amber-500/30 hover:border-amber-500/50'
-            : 'border-gray-700/50 hover:border-gray-600/50';
-          return (
-            <button
-              onClick={onOpenPairing}
-              className={`w-full flex items-center justify-center group-hover/nav:justify-start group-hover/nav:gap-2 group-hover/nav:px-4 py-2.5 rounded-xl border transition-all mb-2 ${borderClass}`}
-            >
-              {isConnectedFleet ? (
-                <CloudLightning className="w-4 h-4 text-green-400 shrink-0" />
-              ) : (
-                <Cloud className={`w-4 h-4 shrink-0 ${isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
-              )}
-              <div className="opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100 min-w-0 text-left">
-                <p className={`text-xs font-semibold whitespace-nowrap leading-tight ${isConnectedFleet ? 'text-green-400' : isPending ? 'text-amber-400' : 'text-gray-400'}`}>
-                  {isConnectedFleet ? 'Fleet Connected' : isPending ? 'Pairing…' : 'Sovereign Mode'}
-                </p>
-                {nodeId && (
-                  <p className="text-[10px] font-telin text-gray-500 truncate">{nodeId}</p>
-                )}
-                {!isConnectedFleet && !isPending && (
-                  <p className="text-[10px] text-indigo-400">Connect →</p>
-                )}
-              </div>
-            </button>
-          );
-        })()}
-
         {/* Avatar / profile — dropdown opens upward; only reachable when nav is expanded.
             Collapsed state: avatar centered in the rail (justify-center, no gap/px).
             Expanded state:  left-aligned with gap + px-3 padding (group-hover/nav variants). */}
