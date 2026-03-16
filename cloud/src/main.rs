@@ -51,6 +51,8 @@ struct MetricsPayload {
     cpu_core_count:                 usize,
     timestamp_ms:                   u64,
     // Apple Silicon deep-metal
+    #[serde(default)]
+    gpu_wired_limit_mb:             Option<u64>,
     cpu_power_w:                    Option<f32>,
     ecpu_power_w:                   Option<f32>,
     pcpu_power_w:                   Option<f32>,
@@ -860,6 +862,54 @@ async fn handle_v1_list_keys(
         None    => (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
         Some(k) => Json(serde_json::json!({ "keys": k })).into_response(),
+    }
+}
+
+/// DELETE /api/nodes/:node_id
+/// Removes a node from the authenticated user's fleet and erases its stored
+/// metrics. The node slot is freed immediately — the user can pair a new node
+/// without hitting the Community tier limit.
+async fn handle_delete_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<usize> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        // Delete from nodes table — scoped to user so users can only remove their own.
+        let n = conn.execute(
+            "DELETE FROM nodes WHERE wk_id = ?1 AND user_id = ?2",
+            params![node_id, user_id],
+        ).unwrap_or(0);
+        if n == 0 { return Some(0); }
+        // Purge stored metrics so the slot is truly clean.
+        let _ = conn.execute(
+            "DELETE FROM metrics_raw WHERE node_id = ?1 AND tenant_id = ?2",
+            params![node_id, user_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM metrics_5min WHERE node_id = ?1 AND tenant_id = ?2",
+            params![node_id, user_id],
+        );
+        Some(n)
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(0) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
+        Some(_) => StatusCode::NO_CONTENT.into_response(),
     }
 }
 
@@ -3692,6 +3742,7 @@ async fn main() {
         .route("/api/auth/stream-token", get(handle_stream_token))
         .route("/api/pair/claim",    post(handle_claim))
         .route("/api/pair/activate", post(handle_activate))
+        .route("/api/nodes/:node_id",     delete(handle_delete_node))
         .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",              get(handle_fleet))
         .route("/api/fleet/stream",       get(handle_fleet_stream))
