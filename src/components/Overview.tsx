@@ -350,6 +350,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : null;
   const gpuAvailGb  = gpuAvailMb  != null ? (gpuAvailMb  / 1024).toFixed(1) : null;
   const gpuLimitGb  = wiredLimitMb != null ? Math.round(wiredLimitMb / 1024) : null;
+  // gpuUsedGb: wired memory actually consumed — matches the tile aggregator's
+  // (budget − avail) formula so the row value and the fleet tile are always in sync.
+  const gpuUsedGb   = (wiredLimitMb != null && gpuAvailMb != null)
+    ? ((wiredLimitMb - gpuAvailMb) / 1024).toFixed(1)
+    : null;
   const gpuLimitSrc = m?.gpu_wired_limit_mb != null ? 'iogpu.wired_limit_mb' : 'est.';
 
   const unifiedColorCls = gpuUsedPct == null ? 'text-gray-400'
@@ -459,11 +464,13 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
               <div className={`h-full ${vramBarCls} rounded-full`} style={{ width: `${Math.min(vramPct, 100)}%` }} />
             </div>
           </div>
-        ) : isAppleSilicon && gpuAvailGb != null && gpuLimitGb != null ? (
-          // Apple Silicon: available / wired-limit GB with headroom bar
+        ) : isAppleSilicon && gpuUsedGb != null && gpuLimitGb != null ? (
+          // Apple Silicon: used / wired-limit GB — matches tile aggregator (budget − avail).
+          // Headroom (gpuAvailGb) is surfaced in the tooltip, not the cell, to avoid
+          // the previous confusion where the row showed "available" and the tile showed "used".
           <div className="flex items-center gap-1.5">
             <span className={`text-xs font-telin tabular-nums ${unifiedColorCls}`}>
-              {gpuAvailGb}<span className="text-gray-500 text-[10px]">/{gpuLimitGb}</span>
+              {gpuUsedGb}<span className="text-gray-500 text-[10px]">/{gpuLimitGb}</span>
             </span>
             <div className="w-10 h-1 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden shrink-0">
               <div className={`h-full ${unifiedBarCls} rounded-full`} style={{ width: `${Math.min(gpuUsedPct ?? 0, 100)}%` }} />
