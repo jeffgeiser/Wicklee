@@ -2733,10 +2733,14 @@ fn serve_asset(path: &str) -> Response<Body> {
 // suppress the warning rather than clutter with complex cfg(not(any(…))) guards.
 #[allow(unreachable_code)]
 fn agent_platform() -> &'static str {
-    #[cfg(all(target_os = "macos",   target_arch = "aarch64"))] { return "darwin-aarch64"; }
-    #[cfg(all(target_os = "linux",   target_arch = "x86_64"))]  { return "linux-x86_64";  }
-    #[cfg(all(target_os = "linux",   target_arch = "aarch64"))] { return "linux-aarch64"; }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]  { return "windows-x86_64"; }
+    #[cfg(all(target_os = "macos",   target_arch = "aarch64"))]              { return "darwin-aarch64";      }
+    // Linux x86_64 has two release binaries: the glibc/NVML build (no `no_nvml`
+    // cfg) and the musl/static build (compiled with `RUSTFLAGS='--cfg no_nvml'`).
+    // They must pull their own binary on auto-update — swapping them loses GPU metrics.
+    #[cfg(all(target_os = "linux",   target_arch = "x86_64", not(no_nvml)))] { return "linux-x86_64-nvidia"; }
+    #[cfg(all(target_os = "linux",   target_arch = "x86_64", no_nvml))]      { return "linux-x86_64";        }
+    #[cfg(all(target_os = "linux",   target_arch = "aarch64"))]              { return "linux-aarch64";       }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]              { return "windows-x86_64";      }
     "unknown"
 }
 
