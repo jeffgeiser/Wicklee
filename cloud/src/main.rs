@@ -327,6 +327,85 @@ fn run_migrations(conn: &Connection) {
         );
         CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
     ").expect("api_keys migration failed");
+
+    // ── Phase 4A: Billing tier columns on users ────────────────────────────────
+    // subscription_tier: 'community' | 'team' | 'enterprise'
+    // Ignored on re-run (ALTER TABLE ADD COLUMN is idempotent via let _ =).
+    let _ = conn.execute_batch(
+        "ALTER TABLE users ADD COLUMN subscription_tier TEXT NOT NULL DEFAULT 'community';"
+    );
+    let _ = conn.execute_batch("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT;");
+    let _ = conn.execute_batch("ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT;");
+
+    // ── Phase 4A: Alerting tables ──────────────────────────────────────────────
+
+    // notification_channels — where to deliver alerts (Slack webhook URL or email).
+    // config_json holds channel-type-specific fields:
+    //   slack: { "webhook_url": "https://hooks.slack.com/..." }
+    //   email: { "address": "ops@example.com" }
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS notification_channels (
+            id           TEXT PRIMARY KEY,
+            user_id      TEXT NOT NULL,
+            channel_type TEXT NOT NULL CHECK (channel_type IN ('slack', 'email')),
+            name         TEXT NOT NULL,
+            config_json  TEXT NOT NULL,
+            verified     INTEGER NOT NULL DEFAULT 0,
+            created_at   INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_notif_channels_user
+            ON notification_channels(user_id);
+    ").expect("notification_channels migration failed");
+
+    // alert_rules — one row per configured alert trigger.
+    // node_id NULL means fleet-wide (any node for this user).
+    // event_type values: 'thermal_serious' | 'thermal_critical' | 'node_offline' |
+    //   'memory_pressure_high' | 'wes_drop' | 'idle_digest'
+    // urgency values: 'immediate' | 'debounce_5m' | 'debounce_15m' | 'digest_daily'
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS alert_rules (
+            id              TEXT PRIMARY KEY,
+            user_id         TEXT NOT NULL,
+            node_id         TEXT,
+            event_type      TEXT NOT NULL,
+            threshold_value REAL,
+            urgency         TEXT NOT NULL DEFAULT 'immediate',
+            channel_id      TEXT NOT NULL,
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      INTEGER NOT NULL,
+            FOREIGN KEY (user_id)    REFERENCES users(id)                 ON DELETE CASCADE,
+            FOREIGN KEY (channel_id) REFERENCES notification_channels(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_rules_user    ON alert_rules(user_id);
+        CREATE INDEX IF NOT EXISTS idx_alert_rules_channel ON alert_rules(channel_id);
+    ").expect("alert_rules migration failed");
+
+    // alert_events — firing history; drives debounce, resolution, and audit trail.
+    //
+    // State machine per (rule_id, node_id):
+    //   resolved_at IS NULL  → alert is currently open (firing)
+    //   resolved_at NOT NULL → alert resolved; quiet_until_ms enforces flap suppression
+    //
+    // quiet_until_ms: set to resolved_at + 300_000 (5 min) on resolution.
+    //   The evaluation loop skips re-firing while now_ms < quiet_until_ms.
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS alert_events (
+            id                   TEXT PRIMARY KEY,
+            rule_id              TEXT NOT NULL,
+            node_id              TEXT NOT NULL,
+            triggered_at         INTEGER NOT NULL,
+            resolved_at          INTEGER,
+            quiet_until_ms       INTEGER,
+            metrics_snapshot_json TEXT,
+            FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_events_rule_node
+            ON alert_events(rule_id, node_id);
+        CREATE INDEX IF NOT EXISTS idx_alert_events_open
+            ON alert_events(resolved_at)
+            WHERE resolved_at IS NULL;
+    ").expect("alert_events migration failed");
 }
 
 // ── Tier constants ────────────────────────────────────────────────────────────
@@ -337,6 +416,15 @@ const MAX_FREE_NODES: usize = 3;
 /// Agent API v1 rate limits (requests per 60-second sliding window).
 const API_RATE_COMMUNITY: usize = 60;
 const API_RATE_TEAM:      usize = 600;
+
+/// Flap-suppression quiet period after an alert resolves (milliseconds).
+/// Prevents a node hovering on a threshold boundary from firing repeatedly.
+const ALERT_QUIET_PERIOD_MS: u64 = 300_000; // 5 minutes
+
+/// Returns true if the account has Team or Enterprise tier (alerting unlocked).
+fn is_team_or_above(tier: &str) -> bool {
+    matches!(tier, "team" | "enterprise")
+}
 
 /// Nodes not seen within this window are considered offline.
 const ONLINE_THRESHOLD_MS: u64 = 30_000;
@@ -1277,6 +1365,9 @@ async fn handle_telemetry(
     // Derive the DuckDB row BEFORE moving payload into the in-memory map.
     let duck_row = metrics_row_from_payload(&payload, ts);
 
+    // Clone for alert evaluation (payload is moved into the map below).
+    let metrics_snap: Option<MetricsPayload> = Some(payload.clone());
+
     // Update in-memory snapshot.
     {
         let mut map = state.metrics.write().unwrap();
@@ -1284,7 +1375,6 @@ async fn handle_telemetry(
             entry.last_seen_ms = ts;
             entry.metrics      = Some(payload);
         } else {
-            // Accept telemetry even if the node reconnects after a restart.
             map.insert(node_id.clone(), MetricsEntry { last_seen_ms: ts, metrics: Some(payload) });
         }
     }
@@ -1315,10 +1405,22 @@ async fn handle_telemetry(
             params![nid],
             |r| r.get::<_, String>(0),
         ) {
-            let row = MetricsRow { tenant_id, ..duck_row };
-            // try_send is non-blocking; drops the row if the channel is full
-            // (8 192-slot buffer means this should never happen in practice).
+            let row = MetricsRow { tenant_id: tenant_id.clone(), ..duck_row };
             let _ = metrics_tx.try_send(row);
+
+            // Evaluate alert rules if user is Team+ tier.
+            let tier: String = conn.query_row(
+                "SELECT subscription_tier FROM users WHERE id = ?1",
+                params![tenant_id],
+                |r| r.get(0),
+            ).unwrap_or_else(|_| "community".to_string());
+            if is_team_or_above(&tier) {
+                // Borrow the payload from the in-memory map for rule evaluation.
+                // We already moved `payload` into the map above, so re-fetch it.
+                if let Some(ref metrics_snapshot) = metrics_snap {
+                    evaluate_alerts(&tenant_id, &nid, metrics_snapshot, &conn);
+                }
+            }
         }
     }).await.ok();
 
@@ -2276,6 +2378,786 @@ async fn nightly_task(duck: DuckDb) {
     }
 }
 
+// ── Alerting — structs ────────────────────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+struct AlertChannel {
+    id:           String,
+    channel_type: String,
+    name:         String,
+    config_json:  String,
+    verified:     bool,
+    created_at:   i64,
+}
+
+#[derive(Serialize, Clone)]
+struct AlertRule {
+    id:              String,
+    node_id:         Option<String>,
+    event_type:      String,
+    threshold_value: Option<f64>,
+    urgency:         String,
+    channel_id:      String,
+    enabled:         bool,
+    created_at:      i64,
+}
+
+#[derive(Deserialize)]
+struct CreateChannelRequest {
+    channel_type: String,  // "slack" | "email"
+    name:         String,
+    config_json:  String,  // { "webhook_url": "..." } or { "address": "..." }
+}
+
+#[derive(Deserialize)]
+struct CreateRuleRequest {
+    node_id:         Option<String>,
+    event_type:      String,
+    threshold_value: Option<f64>,
+    urgency:         Option<String>,
+    channel_id:      String,
+}
+
+// ── Alerting — notification delivery ─────────────────────────────────────────
+
+/// Post a message to a Slack incoming webhook URL.
+/// Returns true on success.
+fn send_slack(webhook_url: &str, blocks_json: &str) -> bool {
+    let body = format!(r#"{{"blocks":{blocks_json}}}"#);
+    match ureq::post(webhook_url)
+        .set("Content-Type", "application/json")
+        .send_string(&body)
+    {
+        Ok(_)  => true,
+        Err(e) => { eprintln!("[slack] delivery failed: {e}"); false }
+    }
+}
+
+/// Send a transactional email via Resend.
+/// RESEND_API_KEY env var must be set.  FROM_EMAIL defaults to alerts@wicklee.dev.
+fn send_email(to: &str, subject: &str, text: &str, html: &str) -> bool {
+    let api_key = match std::env::var("RESEND_API_KEY") {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("[email] RESEND_API_KEY not set — skipping delivery");
+            return false;
+        }
+    };
+    let from = std::env::var("FROM_EMAIL")
+        .unwrap_or_else(|_| "Wicklee Alerts <alerts@wicklee.dev>".to_string());
+
+    let payload = serde_json::json!({
+        "from":    from,
+        "to":      [to],
+        "subject": subject,
+        "text":    text,
+        "html":    html,
+    });
+
+    match ureq::post("https://api.resend.com/emails")
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Content-Type", "application/json")
+        .send_string(&payload.to_string())
+    {
+        Ok(_)  => true,
+        Err(e) => { eprintln!("[email] Resend delivery failed: {e}"); false }
+    }
+}
+
+// ── Alerting — payload builders ───────────────────────────────────────────────
+
+/// Build a Slack Block Kit payload for a firing alert.
+fn slack_alert_blocks(
+    node_id:    &str,
+    event_type: &str,
+    detail:     &str,
+    resolved:   bool,
+) -> String {
+    let (icon, color_word) = if resolved {
+        ("✅", "Recovered")
+    } else {
+        match event_type {
+            "thermal_critical"      => ("🔥", "Critical"),
+            "thermal_serious"       => ("⚠️",  "Warning"),
+            "memory_pressure_high"  => ("💾", "Warning"),
+            "wes_drop"              => ("📉", "Warning"),
+            "node_offline"          => ("🔴", "Offline"),
+            _                       => ("⚡", "Alert"),
+        }
+    };
+    let title = if resolved {
+        format!("{icon} {node_id} — Recovered ({event_type})")
+    } else {
+        format!("{icon} {node_id} — {color_word}")
+    };
+    serde_json::json!([
+        {
+            "type": "header",
+            "text": { "type": "plain_text", "text": title }
+        },
+        {
+            "type": "section",
+            "text": { "type": "mrkdwn", "text": detail }
+        },
+        {
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": format!("Wicklee · <https://wicklee.dev|View Dashboard>")
+            }]
+        }
+    ]).to_string()
+}
+
+/// Build plain-text + HTML email body for an alert.
+fn email_alert_body(
+    node_id:    &str,
+    event_type: &str,
+    detail:     &str,
+    resolved:   bool,
+) -> (String, String) {
+    let state_word = if resolved { "RECOVERED" } else { "FIRING" };
+    let subject_prefix = if resolved { "✅ Recovered" } else { "⚠️ Alert" };
+    let text = format!(
+        "{subject_prefix}: {node_id} — {event_type}\n\n{detail}\n\nView dashboard: https://wicklee.dev",
+    );
+    let html = format!(
+        r#"<html><body style="font-family:monospace;background:#030712;color:#e5e7eb;padding:24px">
+<h2 style="color:{color}">{state_word}: {node_id}</h2>
+<p style="color:#9ca3af;font-size:12px;text-transform:uppercase">{event_type}</p>
+<pre style="background:#111827;padding:16px;border-radius:8px;color:#d1d5db">{detail}</pre>
+<p><a href="https://wicklee.dev" style="color:#6366f1">View Dashboard →</a></p>
+</body></html>"#,
+        color = if resolved { "#4ade80" } else { "#fb923c" },
+    );
+    (text, html)
+}
+
+// ── Alerting — core evaluation ────────────────────────────────────────────────
+
+/// Evaluate active alert rules for a single telemetry frame.
+/// Called synchronously inside `handle_telemetry`'s spawn_blocking block.
+fn evaluate_alerts(
+    user_id:  &str,
+    node_id:  &str,
+    metrics:  &MetricsPayload,
+    conn:     &Connection,
+) {
+    // Load enabled rules for this user that apply to this node (or fleet-wide).
+    let mut stmt = match conn.prepare(
+        "SELECT ar.id, ar.event_type, ar.threshold_value, ar.urgency,
+                nc.channel_type, nc.config_json
+         FROM   alert_rules ar
+         JOIN   notification_channels nc ON nc.id = ar.channel_id
+         WHERE  ar.user_id  = ?1
+           AND  ar.enabled  = 1
+           AND  (ar.node_id IS NULL OR ar.node_id = ?2)",
+    ) {
+        Ok(s)  => s,
+        Err(e) => { eprintln!("[alerts] prepare failed: {e}"); return; }
+    };
+
+    struct RuleRow {
+        id:              String,
+        event_type:      String,
+        threshold_value: f64,
+        urgency:         String,
+        channel_type:    String,
+        config_json:     String,
+    }
+
+    let rules: Vec<RuleRow> = match stmt.query_map(params![user_id, node_id], |r| {
+        Ok(RuleRow {
+            id:              r.get(0)?,
+            event_type:      r.get(1)?,
+            threshold_value: r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+            urgency:         r.get(3)?,
+            channel_type:    r.get(4)?,
+            config_json:     r.get(5)?,
+        })
+    }) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(e)   => { eprintln!("[alerts] query failed: {e}"); return; }
+    };
+
+    let now = now_ms();
+
+    for rule in &rules {
+        // ── Evaluate condition ──────────────────────────────────────────────
+        let firing = match rule.event_type.as_str() {
+            "thermal_serious"  => matches!(
+                metrics.thermal_state.as_deref(),
+                Some("Serious") | Some("Critical")
+            ),
+            "thermal_critical" => matches!(
+                metrics.thermal_state.as_deref(),
+                Some("Critical")
+            ),
+            "memory_pressure_high" => {
+                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 85.0 };
+                metrics.memory_pressure_percent
+                    .map(|p| p > threshold)
+                    .unwrap_or(false)
+            }
+            "wes_drop" => {
+                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 5.0 };
+                wes_for_payload(metrics)
+                    .map(|w| w < threshold)
+                    .unwrap_or(false)
+            }
+            _ => continue, // node_offline is handled by the interval task
+        };
+
+        // ── Check existing open alert for this rule + node ──────────────────
+        let open_event: Option<(String, Option<i64>)> = conn.query_row(
+            "SELECT id, quiet_until_ms FROM alert_events
+             WHERE rule_id = ?1 AND node_id = ?2 AND resolved_at IS NULL
+             ORDER BY triggered_at DESC LIMIT 1",
+            params![rule.id, node_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)),
+        ).ok();
+
+        // ── Debounce / urgency window check ────────────────────────────────
+        let debounce_ms: u64 = match rule.urgency.as_str() {
+            "immediate"      => 0,
+            "debounce_5m"    => 5 * 60_000,
+            "debounce_15m"   => 15 * 60_000,
+            _                => 0,
+        };
+
+        if firing {
+            // Skip if in flap-suppression quiet period
+            if let Some((_, Some(quiet_until))) = &open_event {
+                if now < *quiet_until as u64 { continue; }
+            }
+            // Skip if already open (don't re-fire same alert)
+            if open_event.is_some() { continue; }
+
+            // Check last resolved event for debounce window
+            if debounce_ms > 0 {
+                let last_resolved_at: Option<i64> = conn.query_row(
+                    "SELECT MAX(resolved_at) FROM alert_events
+                     WHERE rule_id = ?1 AND node_id = ?2 AND resolved_at IS NOT NULL",
+                    params![rule.id, node_id],
+                    |r| r.get(0),
+                ).ok().flatten();
+                if let Some(last_res) = last_resolved_at {
+                    if now < (last_res as u64).saturating_add(debounce_ms) { continue; }
+                }
+            }
+
+            // ── Build detail string ─────────────────────────────────────────
+            let detail = match rule.event_type.as_str() {
+                "thermal_serious" | "thermal_critical" => format!(
+                    "Thermal state: *{}*\nWES: {:.1} · Watts: {:.1}W",
+                    metrics.thermal_state.as_deref().unwrap_or("—"),
+                    wes_for_payload(metrics).unwrap_or(0.0),
+                    metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
+                ),
+                "memory_pressure_high" => format!(
+                    "Memory pressure: *{:.0}%*  (threshold: {:.0}%)\n{:.1} GB used / {:.1} GB total",
+                    metrics.memory_pressure_percent.unwrap_or(0.0),
+                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 85.0 },
+                    metrics.used_memory_mb as f64 / 1024.0,
+                    metrics.total_memory_mb as f64 / 1024.0,
+                ),
+                "wes_drop" => format!(
+                    "WES: *{:.1}*  (threshold: {:.1})\nTok/s: {:.1}  Watts: {:.1}W  Thermal: {}",
+                    wes_for_payload(metrics).unwrap_or(0.0),
+                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 5.0 },
+                    metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec).unwrap_or(0.0),
+                    metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
+                    metrics.thermal_state.as_deref().unwrap_or("—"),
+                ),
+                _ => String::new(),
+            };
+
+            // ── Fire notification ───────────────────────────────────────────
+            let fired = deliver_alert(
+                &rule.channel_type,
+                &rule.config_json,
+                node_id,
+                &rule.event_type,
+                &detail,
+                false,
+            );
+            if fired {
+                let event_id = Uuid::new_v4().to_string();
+                let _ = conn.execute(
+                    "INSERT INTO alert_events (id, rule_id, node_id, triggered_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![event_id, rule.id, node_id, now as i64],
+                );
+                println!("[alerts] fired {}/{node_id} → {}", rule.event_type, rule.channel_type);
+            }
+
+        } else {
+            // Condition cleared — resolve any open alert and send recovery notification.
+            if let Some((event_id, _)) = open_event {
+                let quiet_until = (now + ALERT_QUIET_PERIOD_MS) as i64;
+                let _ = conn.execute(
+                    "UPDATE alert_events SET resolved_at = ?1, quiet_until_ms = ?2
+                     WHERE id = ?3",
+                    params![now as i64, quiet_until, event_id],
+                );
+                // Only send recovery message for immediate urgency (not digests)
+                if rule.urgency == "immediate" || rule.urgency == "debounce_5m" {
+                    deliver_alert(
+                        &rule.channel_type,
+                        &rule.config_json,
+                        node_id,
+                        &rule.event_type,
+                        "Condition has cleared.",
+                        true,
+                    );
+                }
+                println!("[alerts] resolved {}/{node_id}", rule.event_type);
+            }
+        }
+    }
+}
+
+/// Dispatch a notification to the configured channel.
+/// Returns true if delivery succeeded.
+fn deliver_alert(
+    channel_type: &str,
+    config_json:  &str,
+    node_id:      &str,
+    event_type:   &str,
+    detail:       &str,
+    resolved:     bool,
+) -> bool {
+    let cfg: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
+    match channel_type {
+        "slack" => {
+            let url = match cfg.get("webhook_url").and_then(|v| v.as_str()) {
+                Some(u) => u.to_owned(),
+                None => { eprintln!("[alerts] slack channel missing webhook_url"); return false; }
+            };
+            let blocks = slack_alert_blocks(node_id, event_type, detail, resolved);
+            send_slack(&url, &blocks)
+        }
+        "email" => {
+            let addr = match cfg.get("address").and_then(|v| v.as_str()) {
+                Some(a) => a.to_owned(),
+                None => { eprintln!("[alerts] email channel missing address"); return false; }
+            };
+            let subject_prefix = if resolved { "✅ Recovered" } else { "⚠️ Alert" };
+            let subject = format!("{subject_prefix}: {node_id} — {event_type}");
+            let (text, html) = email_alert_body(node_id, event_type, detail, resolved);
+            send_email(&addr, &subject, &text, &html)
+        }
+        _ => { eprintln!("[alerts] unknown channel_type: {channel_type}"); false }
+    }
+}
+
+// ── Alerting — node offline interval task ────────────────────────────────────
+
+/// Runs every 60 seconds. Fires `node_offline` alerts for nodes not seen in
+/// the last 5 minutes, but only once per outage (stateful via alert_events).
+async fn node_offline_alert_task(state: AppState) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    interval.tick().await; // skip immediate first tick
+    loop {
+        interval.tick().await;
+        let state2 = state.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = state2.db.lock().unwrap();
+            let now  = now_ms();
+            let offline_threshold_ms = 5 * 60_000_u64; // 5 minutes
+
+            // Load all user_id → node_id pairs with their last_seen timestamps.
+            let nodes: Vec<(String, String, u64)> = {
+                let mut stmt = match conn.prepare(
+                    "SELECT user_id, wk_id, last_seen FROM nodes WHERE user_id IS NOT NULL"
+                ) { Ok(s) => s, Err(_) => return };
+                match stmt.query_map([], |r| Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2).map(|v| v as u64)?,
+                ))) {
+                    Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                    Err(_)   => return,
+                }
+            };
+
+            for (user_id, node_id, last_seen) in nodes {
+                let elapsed = now.saturating_sub(last_seen);
+                if elapsed < offline_threshold_ms { continue; }
+
+                // Check subscription tier — alerting is Team+.
+                let tier: Option<String> = conn.query_row(
+                    "SELECT subscription_tier FROM users WHERE id = ?1",
+                    params![user_id],
+                    |r| r.get(0),
+                ).ok();
+                if !is_team_or_above(tier.as_deref().unwrap_or("community")) { continue; }
+
+                // Load node_offline rules for this user.
+                let rules: Vec<(String, String, String)> = {
+                    let mut stmt = match conn.prepare(
+                        "SELECT ar.id, nc.channel_type, nc.config_json
+                         FROM   alert_rules ar
+                         JOIN   notification_channels nc ON nc.id = ar.channel_id
+                         WHERE  ar.user_id = ?1
+                           AND  ar.event_type = 'node_offline'
+                           AND  ar.enabled = 1
+                           AND  (ar.node_id IS NULL OR ar.node_id = ?2)",
+                    ) { Ok(s) => s, Err(_) => continue };
+                    match stmt.query_map(params![user_id, node_id], |r| Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))) {
+                        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                        Err(_)   => continue,
+                    }
+                };
+
+                for (rule_id, channel_type, config_json) in rules {
+                    // Only fire once per outage — skip if open alert already exists.
+                    let open: Option<String> = conn.query_row(
+                        "SELECT id FROM alert_events
+                         WHERE rule_id = ?1 AND node_id = ?2 AND resolved_at IS NULL
+                         LIMIT 1",
+                        params![rule_id, node_id],
+                        |r| r.get(0),
+                    ).ok();
+                    if open.is_some() { continue; }
+
+                    let minutes = elapsed / 60_000;
+                    let detail  = format!("Node has not reported telemetry in *{minutes} minutes*.");
+                    let fired   = deliver_alert(&channel_type, &config_json, &node_id, "node_offline", &detail, false);
+                    if fired {
+                        let event_id = Uuid::new_v4().to_string();
+                        let _ = conn.execute(
+                            "INSERT INTO alert_events (id, rule_id, node_id, triggered_at)
+                             VALUES (?1, ?2, ?3, ?4)",
+                            params![event_id, rule_id, node_id, now as i64],
+                        );
+                        println!("[alerts] node_offline fired for {node_id}");
+                    }
+                }
+            }
+        }).await.ok();
+    }
+}
+
+// ── Alerting — CRUD handlers ──────────────────────────────────────────────────
+
+/// POST /api/alerts/channels — create a notification channel (Slack or email).
+async fn handle_create_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateChannelRequest>,
+) -> impl IntoResponse {
+    if !matches!(body.channel_type.as_str(), "slack" | "email") {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "channel_type must be 'slack' or 'email'" }))).into_response();
+    }
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db   = state.db.clone();
+    let body = body;
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+
+        // Tier gate — alerting is Team+.
+        let tier: String = conn.query_row(
+            "SELECT subscription_tier FROM users WHERE id = ?1",
+            params![user_id],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| "community".to_string());
+        if !is_team_or_above(&tier) {
+            return None; // caller maps None → 402 Upgrade Required
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let ts = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO notification_channels (id, user_id, channel_type, name, config_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, user_id, body.channel_type, body.name, body.config_json, ts],
+        ).ok()?;
+        Some(AlertChannel {
+            id,
+            channel_type: body.channel_type,
+            name: body.name,
+            config_json: body.config_json,
+            verified: false,
+            created_at: ts,
+        })
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Alerting requires Team tier" }))).into_response(),
+        Some(c) => (StatusCode::CREATED, Json(c)).into_response(),
+    }
+}
+
+/// GET /api/alerts/channels
+async fn handle_list_channels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<Vec<AlertChannel>> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_type, name, config_json, verified, created_at
+             FROM notification_channels WHERE user_id = ?1 ORDER BY created_at DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![user_id], |r| Ok(AlertChannel {
+            id:           r.get(0)?,
+            channel_type: r.get(1)?,
+            name:         r.get(2)?,
+            config_json:  r.get(3)?,
+            verified:     r.get::<_, i32>(4)? != 0,
+            created_at:   r.get(5)?,
+        })).ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(c) => Json(serde_json::json!({ "channels": c })).into_response(),
+    }
+}
+
+/// DELETE /api/alerts/channels/:id
+async fn handle_delete_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(channel_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<bool> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let rows = conn.execute(
+            "DELETE FROM notification_channels WHERE id = ?1 AND user_id = ?2",
+            params![channel_id, user_id],
+        ).unwrap_or(0);
+        Some(rows > 0)
+    }).await.unwrap();
+
+    match result {
+        None         => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(false)  => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Channel not found" }))).into_response(),
+        Some(true)   => Json(serde_json::json!({ "ok": true })).into_response(),
+    }
+}
+
+/// POST /api/alerts/rules
+async fn handle_create_rule(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateRuleRequest>,
+) -> impl IntoResponse {
+    const VALID_TYPES: &[&str] = &[
+        "thermal_serious", "thermal_critical", "memory_pressure_high", "wes_drop", "node_offline",
+    ];
+    if !VALID_TYPES.contains(&body.event_type.as_str()) {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid event_type" }))).into_response();
+    }
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db   = state.db.clone();
+    let body = body;
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+
+        let tier: String = conn.query_row(
+            "SELECT subscription_tier FROM users WHERE id = ?1",
+            params![user_id],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| "community".to_string());
+        if !is_team_or_above(&tier) { return None; }
+
+        // Verify the channel belongs to this user.
+        let channel_owner: Option<String> = conn.query_row(
+            "SELECT user_id FROM notification_channels WHERE id = ?1",
+            params![body.channel_id],
+            |r| r.get(0),
+        ).ok();
+        if channel_owner.as_deref() != Some(&user_id) { return None; }
+
+        let id      = Uuid::new_v4().to_string();
+        let urgency = body.urgency.as_deref().unwrap_or("immediate").to_string();
+        let ts      = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO alert_rules
+             (id, user_id, node_id, event_type, threshold_value, urgency, channel_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id, user_id, body.node_id, body.event_type,
+                body.threshold_value, urgency, body.channel_id, ts
+            ],
+        ).ok()?;
+        Some(AlertRule {
+            id,
+            node_id:         body.node_id,
+            event_type:      body.event_type,
+            threshold_value: body.threshold_value,
+            urgency,
+            channel_id:      body.channel_id,
+            enabled:         true,
+            created_at:      ts,
+        })
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Alerting requires Team tier or channel not found" }))).into_response(),
+        Some(r) => (StatusCode::CREATED, Json(r)).into_response(),
+    }
+}
+
+/// GET /api/alerts/rules
+async fn handle_list_rules(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<Vec<AlertRule>> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, node_id, event_type, threshold_value, urgency, channel_id, enabled, created_at
+             FROM alert_rules WHERE user_id = ?1 ORDER BY created_at DESC"
+        ).ok()?;
+        Some(stmt.query_map(params![user_id], |r| Ok(AlertRule {
+            id:              r.get(0)?,
+            node_id:         r.get(1)?,
+            event_type:      r.get(2)?,
+            threshold_value: r.get(3)?,
+            urgency:         r.get(4)?,
+            channel_id:      r.get(5)?,
+            enabled:         r.get::<_, i32>(6)? != 0,
+            created_at:      r.get(7)?,
+        })).ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    match result {
+        None    => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(r) => Json(serde_json::json!({ "rules": r })).into_response(),
+    }
+}
+
+/// DELETE /api/alerts/rules/:id
+async fn handle_delete_rule(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result: Option<bool> = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let rows = conn.execute(
+            "DELETE FROM alert_rules WHERE id = ?1 AND user_id = ?2",
+            params![rule_id, user_id],
+        ).unwrap_or(0);
+        Some(rows > 0)
+    }).await.unwrap();
+
+    match result {
+        None        => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+        Some(false) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Rule not found" }))).into_response(),
+        Some(true)  => Json(serde_json::json!({ "ok": true })).into_response(),
+    }
+}
+
+/// POST /api/alerts/channels/:id/test — fire a test notification immediately.
+async fn handle_test_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(channel_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn    = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let row: Option<(String, String)> = conn.query_row(
+            "SELECT channel_type, config_json FROM notification_channels
+             WHERE id = ?1 AND user_id = ?2",
+            params![channel_id, user_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).ok();
+        row.map(|(ct, cfg)| {
+            deliver_alert(
+                &ct, &cfg, "WK-TEST", "test",
+                "This is a test notification from Wicklee. Your alert channel is working correctly.",
+                false,
+            )
+        })
+    }).await.unwrap();
+
+    match result {
+        None        => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session or channel not found" }))).into_response(),
+        Some(false) => (StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": "Delivery failed — check webhook URL or email address" }))).into_response(),
+        Some(true)  => Json(serde_json::json!({ "ok": true, "message": "Test notification sent" })).into_response(),
+    }
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -2352,6 +3234,9 @@ async fn main() {
     // Spawn nightly maintenance (CHECKPOINT + ANALYZE at 3 AM UTC).
     tokio::spawn(nightly_task(duck.clone()));
 
+    // Spawn node-offline alert task (checks every 60 s; fires once per outage).
+    tokio::spawn(node_offline_alert_task(state.clone()));
+
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.
     if let Some(url) = jwks_url {
         tokio::spawn(async move {
@@ -2404,6 +3289,14 @@ async fn main() {
         .route("/api/v1/fleet/wes",      get(handle_v1_fleet_wes))
         .route("/api/v1/nodes/:id",      get(handle_v1_node))
         .route("/api/v1/route/best",     get(handle_v1_route_best))
+        // ── Alerting (Phase 4A) ───────────────────────────────────────────────
+        .route("/api/alerts/channels",          post(handle_create_channel))
+        .route("/api/alerts/channels",          get(handle_list_channels))
+        .route("/api/alerts/channels/:id",      delete(handle_delete_channel))
+        .route("/api/alerts/channels/:id/test", post(handle_test_channel))
+        .route("/api/alerts/rules",             post(handle_create_rule))
+        .route("/api/alerts/rules",             get(handle_list_rules))
+        .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
         .with_state(state)
         .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
 
@@ -2419,17 +3312,26 @@ async fn main() {
         .expect("Failed to bind");
 
     println!("╔══════════════════════════════════════════════╗");
-    println!("║  Wicklee Cloud  (Phase 4A — DuckDB active)   ║");
+    println!("║  Wicklee Cloud  (Phase 4A — Alerts active)   ║");
     println!("║  POST /api/auth/signup                       ║");
     println!("║  POST /api/auth/login                        ║");
     println!("║  GET  /api/auth/me                           ║");
     println!("║  GET  /api/auth/stream-token                 ║");
     println!("║  POST /api/pair/claim                        ║");
     println!("║  POST /api/pair/activate                     ║");
-    println!("║  POST /api/telemetry  → DuckDB metrics_raw   ║");
+    println!("║  POST /api/telemetry  → DuckDB + alerts      ║");
     println!("║  GET  /api/fleet                             ║");
     println!("║  GET  /api/fleet/stream                      ║");
     println!("║  GET  /api/fleet/wes-history                 ║");
+    println!("║  GET  /api/fleet/metrics-history             ║");
+    println!("║  ── Alerting (Team+) ─────────────────────  ║");
+    println!("║  POST   /api/alerts/channels                 ║");
+    println!("║  GET    /api/alerts/channels                 ║");
+    println!("║  DELETE /api/alerts/channels/:id             ║");
+    println!("║  POST   /api/alerts/channels/:id/test        ║");
+    println!("║  POST   /api/alerts/rules                    ║");
+    println!("║  GET    /api/alerts/rules                    ║");
+    println!("║  DELETE /api/alerts/rules/:id                ║");
     println!("║  ── Agent API v1 ─────────────────────────  ║");
     println!("║  POST   /api/v1/keys                         ║");
     println!("║  GET    /api/v1/keys                         ║");
