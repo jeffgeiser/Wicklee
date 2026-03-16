@@ -1,10 +1,133 @@
-import React, { useState } from 'react';
-import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Lock } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock } from 'lucide-react';
 import type { NodeAgent, PairingInfo } from '../types';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
 } from '../hooks/useSettings';
+
+// ── Cloud URL (matches WESHistoryChart pattern) ────────────────────────────────
+
+const CLOUD_URL = (() => {
+  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
+  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  if (v === '/') return '';
+  return v.startsWith('http') ? v : `https://${v}`;
+})();
+
+// ── Alert types ────────────────────────────────────────────────────────────────
+
+interface AlertChannel {
+  id: string;
+  channel_type: 'slack' | 'email';
+  name: string;
+  config_json: string;
+  verified: boolean;
+  created_at: number;
+}
+
+interface AlertRule {
+  id: string;
+  node_id: string | null;
+  event_type: string;
+  threshold_value: number | null;
+  urgency: string;
+  channel_id: string;
+  enabled: boolean;
+  created_at: number;
+}
+
+const EVENT_TYPES: { value: string; label: string; hasThreshold: boolean; thresholdLabel?: string; defaultThreshold?: number }[] = [
+  { value: 'thermal_serious',      label: 'Thermal — Serious or Critical',  hasThreshold: false },
+  { value: 'thermal_critical',     label: 'Thermal — Critical only',         hasThreshold: false },
+  { value: 'node_offline',         label: 'Node offline (>5 min)',           hasThreshold: false },
+  { value: 'memory_pressure_high', label: 'Memory pressure high',            hasThreshold: true, thresholdLabel: '% threshold', defaultThreshold: 85 },
+  { value: 'wes_drop',             label: 'WES drops below threshold',       hasThreshold: true, thresholdLabel: 'Min WES',     defaultThreshold: 5  },
+];
+
+const URGENCY_OPTIONS = [
+  { value: 'immediate',    label: 'Immediate' },
+  { value: 'debounce_5m',  label: '5-min debounce' },
+  { value: 'debounce_15m', label: '15-min debounce' },
+];
+
+// ── useAlerts hook ─────────────────────────────────────────────────────────────
+
+function useAlerts(getToken: (() => Promise<string | null>) | undefined, isCloudMode: boolean) {
+  const [channels, setChannels]   = useState<AlertChannel[]>([]);
+  const [rules,    setRules]      = useState<AlertRule[]>([]);
+  const [loading,  setLoading]    = useState(false);
+  const [error,    setError]      = useState<string | null>(null);
+
+  const authFetch = useCallback(async (path: string, opts?: RequestInit) => {
+    if (!getToken) return null;
+    const token = await getToken();
+    if (!token) return null;
+    const res = await fetch(`${CLOUD_URL}${path}`, {
+      ...opts,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    }
+    return res.json();
+  }, [getToken]);
+
+  const refresh = useCallback(async () => {
+    if (!isCloudMode) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const [cRes, rRes] = await Promise.all([
+        authFetch('/api/alerts/channels'),
+        authFetch('/api/alerts/rules'),
+      ]);
+      setChannels(cRes?.channels ?? []);
+      setRules(rRes?.rules ?? []);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [authFetch, isCloudMode]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const createChannel = useCallback(async (channel_type: string, name: string, config_json: string) => {
+    await authFetch('/api/alerts/channels', { method: 'POST', body: JSON.stringify({ channel_type, name, config_json }) });
+    await refresh();
+  }, [authFetch, refresh]);
+
+  const deleteChannel = useCallback(async (id: string) => {
+    await authFetch(`/api/alerts/channels/${id}`, { method: 'DELETE' });
+    await refresh();
+  }, [authFetch, refresh]);
+
+  const testChannel = useCallback(async (id: string): Promise<string> => {
+    try {
+      await authFetch(`/api/alerts/channels/${id}/test`, { method: 'POST' });
+      return 'ok';
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }, [authFetch]);
+
+  const createRule = useCallback(async (payload: {
+    node_id: string | null; event_type: string;
+    threshold_value: number | null; urgency: string; channel_id: string;
+  }) => {
+    await authFetch('/api/alerts/rules', { method: 'POST', body: JSON.stringify(payload) });
+    await refresh();
+  }, [authFetch, refresh]);
+
+  const deleteRule = useCallback(async (id: string) => {
+    await authFetch(`/api/alerts/rules/${id}`, { method: 'DELETE' });
+    await refresh();
+  }, [authFetch, refresh]);
+
+  return { channels, rules, loading, error, refresh, createChannel, deleteChannel, testChannel, createRule, deleteRule };
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -21,6 +144,8 @@ interface SettingsViewProps {
   onThemeChange: (t: 'dark' | 'light' | 'system') => void;
   onNavigateToManagement: () => void;
   pairingInfo: PairingInfo | null;
+  getToken?: () => Promise<string | null>;
+  subscriptionTier?: string;
 }
 
 // ── Section ───────────────────────────────────────────────────────────────────
@@ -97,6 +222,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   onThemeChange,
   onNavigateToManagement,
   pairingInfo,
+  getToken,
+  subscriptionTier = 'community',
 }) => {
   // ── Fleet defaults drafts (numbers need validation before commit) ───────────
   const [kwhDraft, setKwhDraft] = useState(settings.fleet.kwhRate.toString());
@@ -445,37 +572,12 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       </Section>
 
       {/* ── ④ ALERTS & NOTIFICATIONS ─────────────────────────────────────── */}
-      <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
-        <div className="px-6 py-5 space-y-4">
-          <div className="flex items-start gap-3">
-            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider shrink-0 mt-0.5">
-              <Lock size={9} /> Phase 4A
-            </span>
-            <p className="text-xs text-gray-500">
-              Alert rules and notification channels are coming in the next major release.
-            </p>
-          </div>
-          <div className="space-y-2 opacity-40 pointer-events-none select-none">
-            {[
-              { label: 'Thermal threshold',  desc: 'Alert when any node exceeds a set temperature' },
-              { label: 'Node offline',        desc: 'Alert when a node stops reporting telemetry' },
-              { label: 'High power draw',     desc: 'Alert when fleet power exceeds a wattage budget' },
-              { label: 'Cost overrun',        desc: 'Alert when projected monthly cost exceeds a limit' },
-            ].map(item => (
-              <div
-                key={item.label}
-                className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40"
-              >
-                <div>
-                  <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">{item.label}</p>
-                  <p className="text-[10px] text-gray-500">{item.desc}</p>
-                </div>
-                <div className="w-8 h-4 rounded-full bg-gray-200 dark:bg-gray-700 shrink-0" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </Section>
+      <AlertsSection
+        pairingInfo={pairingInfo}
+        subscriptionTier={subscriptionTier}
+        getToken={getToken}
+        nodes={nodes}
+      />
 
       {/* ── ⑤ ACCOUNT & DATA ─────────────────────────────────────────────── */}
       <Section id="account" title="Account & Data" icon={User} iconBg="bg-gray-500/10" iconCls="text-gray-400">
@@ -562,6 +664,433 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       )}
     </div>
+  );
+};
+
+// ── Alerts & Notifications section ───────────────────────────────────────────
+
+const AlertsSection: React.FC<{
+  pairingInfo: PairingInfo | null;
+  subscriptionTier: string;
+  getToken?: () => Promise<string | null>;
+  nodes: NodeAgent[];
+}> = ({ pairingInfo, subscriptionTier, getToken, nodes }) => {
+  const isCloudMode  = pairingInfo?.status === 'connected';
+  const isTeam       = subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const { channels, rules, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule } =
+    useAlerts(getToken, isCloudMode && isTeam);
+
+  // ── Channel form state ────────────────────────────────────────────────────
+  const [showChanForm,  setShowChanForm]  = useState(false);
+  const [chanType,      setChanType]      = useState<'slack' | 'email'>('slack');
+  const [chanName,      setChanName]      = useState('');
+  const [chanValue,     setChanValue]     = useState('');  // webhook URL or email
+  const [chanSaving,    setChanSaving]    = useState(false);
+  const [chanError,     setChanError]     = useState<string | null>(null);
+
+  // ── Rule form state ───────────────────────────────────────────────────────
+  const [showRuleForm,  setShowRuleForm]  = useState(false);
+  const [ruleEventType, setRuleEventType] = useState(EVENT_TYPES[0].value);
+  const [ruleChannelId, setRuleChannelId] = useState('');
+  const [ruleNodeId,    setRuleNodeId]    = useState('');    // '' = fleet-wide
+  const [ruleUrgency,   setRuleUrgency]   = useState('immediate');
+  const [ruleThreshold, setRuleThreshold] = useState('');
+  const [ruleSaving,    setRuleSaving]    = useState(false);
+  const [ruleError,     setRuleError]     = useState<string | null>(null);
+
+  // ── Test state per channel ────────────────────────────────────────────────
+  const [testState, setTestState] = useState<Record<string, 'idle' | 'sending' | 'ok' | 'fail'>>({});
+
+  const selectedEventType = EVENT_TYPES.find(e => e.value === ruleEventType)!;
+
+  const handleAddChannel = async () => {
+    if (!chanName.trim() || !chanValue.trim()) return;
+    setChanSaving(true);
+    setChanError(null);
+    try {
+      const configJson = chanType === 'slack'
+        ? JSON.stringify({ webhook_url: chanValue.trim() })
+        : JSON.stringify({ address: chanValue.trim() });
+      await createChannel(chanType, chanName.trim(), configJson);
+      setChanName(''); setChanValue(''); setShowChanForm(false);
+    } catch (e) {
+      setChanError((e as Error).message);
+    } finally {
+      setChanSaving(false);
+    }
+  };
+
+  const handleAddRule = async () => {
+    if (!ruleChannelId) return;
+    setRuleSaving(true);
+    setRuleError(null);
+    try {
+      await createRule({
+        node_id:         ruleNodeId || null,
+        event_type:      ruleEventType,
+        threshold_value: selectedEventType.hasThreshold && ruleThreshold
+          ? parseFloat(ruleThreshold) : null,
+        urgency:         ruleUrgency,
+        channel_id:      ruleChannelId,
+      });
+      setShowRuleForm(false);
+      setRuleThreshold('');
+    } catch (e) {
+      setRuleError((e as Error).message);
+    } finally {
+      setRuleSaving(false);
+    }
+  };
+
+  const handleTest = async (id: string) => {
+    setTestState(s => ({ ...s, [id]: 'sending' }));
+    const result = await testChannel(id);
+    setTestState(s => ({ ...s, [id]: result === 'ok' ? 'ok' : 'fail' }));
+    setTimeout(() => setTestState(s => ({ ...s, [id]: 'idle' })), 3000);
+  };
+
+  const chanNameForId = (id: string) =>
+    channels.find(c => c.id === id)?.name ?? id.slice(0, 8);
+
+  const eventLabel = (et: string) =>
+    EVENT_TYPES.find(e => e.value === et)?.label ?? et;
+
+  // ── Locked — not connected to fleet ───────────────────────────────────────
+  if (!isCloudMode) {
+    return (
+      <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
+        <div className="px-6 py-8 flex flex-col items-center gap-3 text-center">
+          <Lock size={20} className="text-gray-600" />
+          <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet connection required</p>
+          <p className="text-xs text-gray-500 max-w-xs">
+            Alerts are delivered via the cloud backend. Connect this node to a fleet to configure notification channels and rules.
+          </p>
+        </div>
+      </Section>
+    );
+  }
+
+  // ── Locked — Community tier ───────────────────────────────────────────────
+  if (!isTeam) {
+    return (
+      <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
+        <div className="px-6 py-6 space-y-4">
+          <div className="rounded-xl bg-indigo-500/5 border border-indigo-500/20 px-5 py-4 flex items-start gap-3">
+            <Bell size={14} className="text-indigo-400 mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-gray-200">Alerts & Notifications — Team Edition</p>
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                Slack and email alerts for thermal events, node offline, WES drops, and memory pressure. Stateful — fires once per outage, resolves automatically, 5-min flap suppression.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-2 opacity-40 pointer-events-none select-none">
+            {EVENT_TYPES.map(et => (
+              <div key={et.value} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40">
+                <div>
+                  <p className="text-xs font-semibold text-gray-300">{et.label}</p>
+                </div>
+                <div className="w-8 h-4 rounded-full bg-gray-700 shrink-0" />
+              </div>
+            ))}
+          </div>
+          <button className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors">
+            Upgrade to Team — $29/mo
+          </button>
+        </div>
+      </Section>
+    );
+  }
+
+  // ── Full UI — Team+ ───────────────────────────────────────────────────────
+  return (
+    <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
+      <div className="divide-y divide-gray-100 dark:divide-gray-800">
+
+        {error && (
+          <div className="px-6 py-3 flex items-center gap-2 bg-rose-500/5 border-b border-rose-500/20">
+            <AlertTriangle size={12} className="text-rose-400 shrink-0" />
+            <p className="text-xs text-rose-400">{error}</p>
+          </div>
+        )}
+
+        {/* ── Notification Channels ─────────────────────────────────────── */}
+        <div className="px-6 py-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">Notification Channels</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">Where alerts are delivered — Slack webhook or email address.</p>
+            </div>
+            <button
+              onClick={() => { setShowChanForm(v => !v); setChanError(null); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400 transition-colors"
+            >
+              <Plus size={11} /> Add channel
+            </button>
+          </div>
+
+          {/* Add channel form */}
+          {showChanForm && (
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-4 space-y-3">
+              {/* Type toggle */}
+              <div className="flex items-center gap-2">
+                {(['slack', 'email'] as const).map(t => (
+                  <button
+                    key={t}
+                    onClick={() => { setChanType(t); setChanValue(''); }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      chanType === t
+                        ? 'bg-indigo-600 border-indigo-600 text-white'
+                        : 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400'
+                    }`}
+                  >
+                    {t === 'slack' ? <Slack size={11} /> : <Mail size={11} />}
+                    {t === 'slack' ? 'Slack Webhook' : 'Email'}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Name</label>
+                  <input
+                    type="text"
+                    value={chanName}
+                    onChange={e => setChanName(e.target.value)}
+                    placeholder="e.g. Ops Slack"
+                    className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+                    {chanType === 'slack' ? 'Webhook URL' : 'Email address'}
+                  </label>
+                  <input
+                    type={chanType === 'email' ? 'email' : 'url'}
+                    value={chanValue}
+                    onChange={e => setChanValue(e.target.value)}
+                    placeholder={chanType === 'slack' ? 'https://hooks.slack.com/...' : 'ops@example.com'}
+                    className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full font-telin text-xs`}
+                  />
+                </div>
+              </div>
+              {chanError && <p className="text-[10px] text-rose-400">{chanError}</p>}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAddChannel}
+                  disabled={chanSaving || !chanName.trim() || !chanValue.trim()}
+                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-semibold text-white transition-colors"
+                >
+                  {chanSaving ? 'Saving…' : 'Save channel'}
+                </button>
+                <button onClick={() => setShowChanForm(false)} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Channel list */}
+          {loading && channels.length === 0 ? (
+            <p className="text-xs text-gray-500 py-2">Loading…</p>
+          ) : channels.length === 0 ? (
+            <p className="text-[11px] text-gray-500 py-1">No channels configured yet. Add one above to start receiving alerts.</p>
+          ) : (
+            <div className="space-y-2">
+              {channels.map(ch => {
+                const ts = testState[ch.id] ?? 'idle';
+                const cfg = JSON.parse(ch.config_json ?? '{}');
+                const detail = ch.channel_type === 'slack'
+                  ? (cfg.webhook_url as string ?? '').replace('https://hooks.slack.com/services/', '…/services/')
+                  : cfg.address ?? '';
+                return (
+                  <div key={ch.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {ch.channel_type === 'slack'
+                        ? <Slack size={13} className="text-indigo-400 shrink-0" />
+                        : <Mail  size={13} className="text-blue-400 shrink-0" />}
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-gray-200 truncate">{ch.name}</p>
+                        <p className="text-[10px] text-gray-500 font-telin truncate">{detail}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => handleTest(ch.id)}
+                        disabled={ts === 'sending'}
+                        title="Send a test notification"
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium border transition-colors ${
+                          ts === 'ok'   ? 'border-green-500/40 text-green-400 bg-green-500/5' :
+                          ts === 'fail' ? 'border-rose-500/40 text-rose-400 bg-rose-500/5' :
+                          'border-gray-700 text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400'
+                        }`}
+                      >
+                        {ts === 'sending' ? '…' : ts === 'ok' ? <><Check size={9} /> Sent</> : ts === 'fail' ? 'Failed' : <><Send size={9} /> Test</>}
+                      </button>
+                      <button
+                        onClick={() => deleteChannel(ch.id)}
+                        className="p-1 rounded text-gray-600 hover:text-rose-400 transition-colors"
+                        title="Delete channel"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ── Alert Rules ───────────────────────────────────────────────── */}
+        <div className="px-6 py-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">Alert Rules</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">When to fire and where to send. One rule per event type + channel pair.</p>
+            </div>
+            <button
+              onClick={() => { setShowRuleForm(v => !v); setRuleError(null); if (channels.length > 0) setRuleChannelId(channels[0].id); }}
+              disabled={channels.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <Plus size={11} /> Add rule
+            </button>
+          </div>
+
+          {/* Add rule form */}
+          {showRuleForm && (
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-4 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Event type */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Event</label>
+                  <div className="relative">
+                    <select
+                      value={ruleEventType}
+                      onChange={e => { setRuleEventType(e.target.value); setRuleThreshold(''); }}
+                      className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full appearance-none pr-7`}
+                    >
+                      {EVENT_TYPES.map(et => <option key={et.value} value={et.value}>{et.label}</option>)}
+                    </select>
+                    <ChevronDown size={12} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                </div>
+
+                {/* Channel */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Send to</label>
+                  <div className="relative">
+                    <select
+                      value={ruleChannelId}
+                      onChange={e => setRuleChannelId(e.target.value)}
+                      className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full appearance-none pr-7`}
+                    >
+                      {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <ChevronDown size={12} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                </div>
+
+                {/* Node scope */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Node scope</label>
+                  <div className="relative">
+                    <select
+                      value={ruleNodeId}
+                      onChange={e => setRuleNodeId(e.target.value)}
+                      className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full appearance-none pr-7`}
+                    >
+                      <option value="">Fleet-wide (any node)</option>
+                      {nodes.map(n => <option key={n.id} value={n.id}>{n.id}{n.hostname ? ` · ${n.hostname}` : ''}</option>)}
+                    </select>
+                    <ChevronDown size={12} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                </div>
+
+                {/* Urgency */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Urgency</label>
+                  <div className="relative">
+                    <select
+                      value={ruleUrgency}
+                      onChange={e => setRuleUrgency(e.target.value)}
+                      className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full appearance-none pr-7`}
+                    >
+                      {URGENCY_OPTIONS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+                    </select>
+                    <ChevronDown size={12} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                </div>
+
+                {/* Threshold — only shown when event type uses it */}
+                {selectedEventType.hasThreshold && (
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+                      {selectedEventType.thresholdLabel}
+                    </label>
+                    <input
+                      type="number"
+                      value={ruleThreshold}
+                      onChange={e => setRuleThreshold(e.target.value)}
+                      placeholder={selectedEventType.defaultThreshold?.toString()}
+                      className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full tabular-nums`}
+                    />
+                  </div>
+                )}
+              </div>
+              {ruleError && <p className="text-[10px] text-rose-400">{ruleError}</p>}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAddRule}
+                  disabled={ruleSaving || !ruleChannelId}
+                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-semibold text-white transition-colors"
+                >
+                  {ruleSaving ? 'Saving…' : 'Save rule'}
+                </button>
+                <button onClick={() => setShowRuleForm(false)} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Rules list */}
+          {rules.length === 0 ? (
+            <p className="text-[11px] text-gray-500 py-1">No rules yet. Add a channel first, then create a rule to start receiving alerts.</p>
+          ) : (
+            <div className="space-y-2">
+              {rules.map(rule => (
+                <div key={rule.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 gap-3">
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-semibold text-gray-200">{eventLabel(rule.event_type)}</span>
+                      {rule.threshold_value != null && (
+                        <span className="text-[10px] font-telin text-amber-400">@ {rule.threshold_value}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                      <span>{rule.node_id ?? 'Fleet-wide'}</span>
+                      <span>·</span>
+                      <span>{URGENCY_OPTIONS.find(u => u.value === rule.urgency)?.label ?? rule.urgency}</span>
+                      <span>·</span>
+                      <span className="text-indigo-400/70">{chanNameForId(rule.channel_id)}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => deleteRule(rule.id)}
+                    className="p-1 rounded text-gray-600 hover:text-rose-400 transition-colors shrink-0"
+                    title="Delete rule"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+      </div>
+    </Section>
   );
 };
 
