@@ -4,6 +4,109 @@
 
 ---
 
+## March 15, 2026 — Phase 4A: Alerting Engine + Settings UI + VRAM Fixes 🔔
+
+**The Goal:** Ship the full Phase 4A notification pipeline (Slack + Resend delivery, stateful eval loop, CRUD API), build the Settings UI for Alerts & Notifications, fix VRAM display for Apple Silicon and EPYC nodes, and tighten the sidebar profile menu.
+
+---
+
+### VRAM Column — Apple Silicon Wired Budget ✅
+
+Apple M-series nodes have unified memory — VRAM is not a separate pool. macOS exposes the actual GPU memory budget via `iogpu.wired_limit_mb` (sysctl), which represents the maximum the GPU may wire at any time (~75% of RAM on typical configs). The VRAM column now shows `headroom_available / wired_limit` for Apple nodes as a utilization bar, with a `Unified` badge to distinguish it from discrete VRAM.
+
+The fleet-wide Total VRAM tile was updated to use `gpu_wired_limit_mb` as the capacity figure for Apple nodes (was previously zero, causing the tile to under-count).
+
+**The "Ghost 0.8 GB" Problem:** EPYC and server nodes with BMC/IPMI graphics chips (ASPEED AST, Matrox, etc.) were reporting ~840 MB of VRAM — real hardware, zero inference value. Added `INFERENCE_VRAM_THRESHOLD_MB = 1024` filter in `efficiency.ts` and `Overview.tsx`. Any VRAM device below 1 GB is excluded from fleet totals and the VRAM column. The column shows `—` for nodes with no qualifying GPU.
+
+Key changes:
+- `efficiency.ts`: exported `INFERENCE_VRAM_THRESHOLD_MB = 1024`; `calculateTotalVramMb` and `calculateTotalVramCapacityMb` both apply the threshold.
+- `Overview.tsx`: `hasNvidia` guard uses `>= INFERENCE_VRAM_THRESHOLD_MB`; Apple Silicon bar reads `gpu_wired_limit_mb`; fleet tile capacity uses same field.
+- VRAM column widened 80→100px to accommodate `available/limit` format.
+- `DocsPage.tsx`: three new footnotes — Apple Silicon unified memory / wired budget, Linux NVIDIA glibc requirement, ≥1 GB threshold excluding BMC chips.
+
+---
+
+### Phase 4A Alerting Engine ✅
+
+Full notification pipeline shipped in `cloud/src/main.rs`.
+
+**Schema additions** (run_migrations):
+- `notification_channels`: id, user_id, channel_type ('slack'|'email'), name, config_json, verified, created_at
+- `alert_rules`: id, user_id, node_id (NULL = fleet-wide), event_type, threshold_value, urgency ('immediate'|'debounce_5m'|'debounce_15m'), channel_id, enabled, created_at
+- `alert_events`: id, rule_id, node_id, triggered_at, resolved_at, quiet_until_ms, metrics_snapshot_json
+- `ALTER TABLE users ADD COLUMN subscription_tier TEXT NOT NULL DEFAULT 'community'`
+- `ALTER TABLE users ADD COLUMN stripe_customer_id TEXT`
+- `ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT`
+
+**Delivery layer:**
+- `send_slack()`: posts Slack Block Kit JSON (header + section + context with dashboard link).
+- `send_email()`: POSTs to Resend API (`https://api.resend.com/emails`) with HTML + plain-text fallback. Reads `RESEND_API_KEY` + `FROM_EMAIL` env vars.
+- `deliver_alert()`: routes to Slack or email based on channel_type; logs on failure without panicking.
+
+**Evaluation state machine (`evaluate_alerts`):**
+- Called from `handle_telemetry` spawn_blocking for Team+ users.
+- Evaluates 4 event types: `thermal_serious`, `thermal_critical`, `memory_pressure_high`, `wes_drop`.
+- Open/resolved state tracked in `alert_events`. `quiet_until_ms = resolved_at + 300_000` enforces 5-min flap suppression after resolution.
+- Debounce: 'immediate' fires on every qualifying telemetry tick; 'debounce_5m'/'debounce_15m' only re-fires after `resolved_at + debounce_ms`.
+- Resolution notifications sent when a previously-triggered condition clears.
+
+**Node offline detection (`node_offline_alert_task`):**
+- Independent Tokio interval task (60s). Checks `last_seen` in SQLite for all paired nodes.
+- Fires once per outage — checks `alert_events` for an existing open `node_offline` alert before firing.
+- Resolves the event when the node comes back online.
+
+**Tier gating:**
+- `is_team_or_above()` helper checks `subscription_tier`.
+- All alert CRUD endpoints return `402 Payment Required` for community tier.
+- `evaluate_alerts` is a no-op for community users.
+
+**CRUD API (7 handlers):**
+- `POST /api/alerts/channels` — create notification channel
+- `GET /api/alerts/channels` — list channels for authenticated user
+- `DELETE /api/alerts/channels/:id` — delete channel
+- `POST /api/alerts/channels/:id/test` — send test message
+- `POST /api/alerts/rules` — create alert rule
+- `GET /api/alerts/rules` — list rules
+- `DELETE /api/alerts/rules/:id` — delete rule
+
+**CORS fix:** Added `DELETE` to allowed methods in the cloud CORS middleware (was `GET, POST, OPTIONS` only — blocked browser preflight for delete operations).
+
+---
+
+### Settings UI — Alerts & Notifications ✅
+
+Full replacement of the locked Phase 4A placeholder in `SettingsView.tsx`.
+
+Three states based on context:
+1. **Local mode** (not paired to fleet): shows lock icon + "Connect your fleet" message.
+2. **Community tier**: upgrade prompt with feature list and "Upgrade to Team" CTA.
+3. **Team+ tier**: full configuration UI.
+
+Team+ UI has two sections:
+
+**Notification Channels:**
+- Add form with Slack/email toggle. Slack: webhook URL input. Email: address input.
+- Test button with three visual states: sending → ok (green check) / fail (red X).
+- Delete with confirmation. Displays channel name, type badge, created date.
+
+**Alert Rules:**
+- Form: event type selector (5 types with `hasThreshold` flag), notification channel picker, node scope (all nodes or specific node), urgency selector, conditional threshold input (only shown for threshold-based events).
+- Rule list: event type + node scope + urgency displayed per row, delete button.
+
+New types in `types.ts`: `ApiKey` (key_id, name, created_at, last_used_ms).
+New props on `SettingsViewProps`: `getToken?: () => Promise<string | null>`, `subscriptionTier?: string`.
+`App.tsx` passes `getToken={getToken}` and `subscriptionTier={clerkTier}` to `<SettingsView>`.
+
+---
+
+### Sidebar — Profile Menu Fix ✅
+
+Profile menu (JS state) stayed open when the sidebar collapsed on mouse leave — CSS `hover:w-64` drives the width but has no JS counterpart.
+
+Fix: added `onMouseLeave={() => setIsAvatarMenuOpen(false)}` to the `<aside>` element in `Sidebar.tsx`. One line. Profile menu now closes automatically when the cursor exits the sidebar.
+
+---
+
 ## March 15, 2026 — WES v2 Sprint D: Insights Restructure + Thermal Alerts + Benchmark Reports 📊
 
 **The Goal:** Close the WES v2 UI loop — restructure Insights into a 3-tab hierarchy, add strategic doc updates (TIERS.md, ROADMAP.md Phase 5, metrics.md Prometheus schema), implement WES history chart (raw vs penalized), Thermal Cost % alerts, and benchmark report output format.
