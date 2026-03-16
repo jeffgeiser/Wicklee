@@ -13,6 +13,7 @@ export interface NodeAgent {
   activeInterceptors: string[];
   uptime: string;
   sentinelActive?: boolean;
+  restricted?: boolean;
 }
 
 // Live telemetry payload — mirrors MetricsPayload in agent/src/main.rs
@@ -236,6 +237,7 @@ export interface FleetNode {
   node_id: string;
   last_seen_ms: number;
   metrics: SentinelMetrics | null;
+  restricted?: boolean;
 }
 
 /** Values exposed by FleetStreamContext to consumers via useFleetStream(). */
@@ -244,6 +246,8 @@ export interface FleetStreamState {
   allNodeMetrics: Record<string, SentinelMetrics>;
   /** Per-node last_seen_ms from the SSE stream. */
   lastSeenMsMap: Record<string, number>;
+  /** Set of node_ids that are restricted (beyond the free tier limit). */
+  restrictedNodeIds: ReadonlySet<string>;
   /**
    * Session-scoped per-node peak tok/s high-water mark.
    * Resets on model swap so the baseline stays relevant to the loaded model.

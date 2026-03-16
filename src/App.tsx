@@ -50,17 +50,17 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-white">Unlock Fleet Orchestration</h2>
+            <h2 className="text-2xl font-bold text-white">Unlock Team Fleet</h2>
             <p className="text-gray-400 text-sm">
-              Upgrade to Wicklee Pro to access advanced telemetry, autonomous failover, and sovereign AI insights.
+              Upgrade to Wicklee Team to connect unlimited nodes and unlock Accelerator-tier patterns across your entire fleet.
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 text-left">
             {[
-              { icon: Zap, title: 'Sentinel Auto-Failover', desc: 'Autonomous node recovery & routing.' },
-              { icon: Shield, title: 'Advanced Observability', desc: 'Full DuckDB trace history & analytics.' },
-              { icon: Globe, title: 'Sustainability Engine', desc: 'Real-time carbon & thermal tracking.' }
+              { icon: Zap, title: 'Unlimited Fleet Nodes', desc: 'Connect 4+ nodes — no restrictions on active fleet size.' },
+              { icon: Shield, title: 'Full Alert Wiring', desc: 'Slack + email alerts for all pattern engine events.' },
+              { icon: Globe, title: 'API Access (600 req/min)', desc: 'Build automation on live fleet telemetry via REST API.' }
             ].map((item, i) => (
               <div key={i} className="flex items-start gap-4 p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl">
                 <div className="p-2 bg-blue-600/10 rounded-lg">
@@ -75,11 +75,11 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
           </div>
 
           <div className="pt-4 space-y-3">
-            <button 
+            <button
               onClick={onUpgrade}
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-500/20"
             >
-              Upgrade to Pro — $39/mo
+              Upgrade to Team
             </button>
             <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
               Maybe later
@@ -209,6 +209,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
           activeInterceptors: [],
           uptime: '—',
           sentinelActive: false,
+          restricted: n.restricted ?? false,
         }));
         setNodes(mappedNodes);
       }
@@ -225,17 +226,20 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
     handleNodeAdded();
   }, [isSignedIn, handleNodeAdded]);
 
-  // Callback for FleetStreamProvider — patches node hostnames when real metrics arrive.
+  // Callback for FleetStreamProvider — patches node hostnames and restricted flag when real metrics arrive.
   const handleNodesSnapshot = useCallback((snapshot: FleetNode[]) => {
-    if (snapshot.some(n => n.metrics)) {
-      setNodes(prev => prev.map(node => {
-        const match = snapshot.find(n => n.node_id === node.id);
-        if (match?.metrics?.hostname && node.hostname === node.id) {
-          return { ...node, hostname: match.metrics.hostname };
-        }
-        return node;
-      }));
-    }
+    setNodes(prev => prev.map(node => {
+      const match = snapshot.find(n => n.node_id === node.id);
+      if (!match) return node;
+      const updates: Partial<typeof node> = {};
+      if (match.metrics?.hostname && node.hostname === node.id) {
+        updates.hostname = match.metrics.hostname;
+      }
+      if (match.restricted !== undefined && match.restricted !== node.restricted) {
+        updates.restricted = match.restricted;
+      }
+      return Object.keys(updates).length > 0 ? { ...node, ...updates } : node;
+    }));
   }, []);
 
   const permissions = usePermissions(currentUser);
@@ -285,9 +289,22 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
 
-  const handleUpgrade = () => {
+  const handleUpgrade = useCallback(async () => {
     setIsUpgradeModalOpen(false);
-  };
+    try {
+      const token = await getToken();
+      const r = await fetch(`${CLOUD_URL}/api/billing/checkout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const { url } = await r.json();
+        if (url) window.location.href = url;
+      }
+    } catch {
+      // Billing unavailable — silently fail, user can try again
+    }
+  }, [getToken]);
 
   const handleToggleSentinel = (nodeId: string) => {
     setNodes(prev => prev.map(node => 
@@ -359,7 +376,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} />;
       case DashboardTab.TRACES:
@@ -420,7 +437,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       case DashboardTab.BILLING:
         return <PricingPage />;
       default:
-        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
   };
 
