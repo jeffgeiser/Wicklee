@@ -82,15 +82,17 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     // Collapsed (default): 64px icon rail, fixed position so it never pushes content.
     // Expanded (hover):    transitions to 256px, overlays the content area.
     // group/nav drives label opacity so text appears only when expanded.
-    <aside className={[
-      'hidden md:flex fixed left-0 top-0 bottom-0 z-30 flex-col',
-      'w-16 hover:w-64',
-      'transition-[width] duration-200 ease-out',
-      'overflow-hidden',
-      'border-r border-gray-200 dark:border-gray-800',
-      'bg-white dark:bg-gray-900',
-      'group/nav',
-    ].join(' ')}>
+    <aside
+      onMouseLeave={() => setIsAvatarMenuOpen(false)}
+      className={[
+        'hidden md:flex fixed left-0 top-0 bottom-0 z-30 flex-col',
+        'w-16 hover:w-64',
+        'transition-[width] duration-200 ease-out',
+        'overflow-hidden',
+        'border-r border-gray-200 dark:border-gray-800',
+        'bg-white dark:bg-gray-900',
+        'group/nav',
+      ].join(' ')}>
 
       {/* Nav items — pt-16 clears the sticky header zone (header height = 64px = 4rem) */}
       <nav className="flex-1 px-3 space-y-1 pt-16 pb-4 overflow-hidden">
