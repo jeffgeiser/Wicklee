@@ -1165,6 +1165,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Whether any inferring node has the Wicklee proxy active (exact tok/s, not estimated)
   const anyProxyActive = tpsNodes.some(m => m.ollama_proxy_active === true);
 
+  // Three-state throughput label for the single-node cockpit THROUGHPUT tile.
+  // Mirrors the DiagnosticRail / FleetStatusRow logic — reuses sentinel so no new data needed.
+  const localGpuPct = sentinel
+    ? (sentinel.nvidia_gpu_utilization_percent ?? sentinel.gpu_utilization_percent ?? null)
+    : null;
+  const localInferenceActive = sentinel?.ollama_inference_active ?? null;
+  const localIsInferring = sentinel != null && (
+    localInferenceActive === true ||
+    (sentinel.vllm_running === true && (sentinel.vllm_tokens_per_sec ?? 0) > 0)
+  );
+  const localIsBusy = sentinel != null && !localIsInferring &&
+    localInferenceActive === false && (localGpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  const localIsIdleSpeed = sentinel != null && !localIsInferring && !localIsBusy &&
+    (tpsNodes.length > 0);
+
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
   const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics);
   const fleetHealthCls = fleetHealthPct == null        ? 'text-gray-400 dark:text-gray-600'
@@ -1188,6 +1203,22 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                       : hasAppleVram                  ? 'wired budget'
                       : hasNvidiaVram                 ? 'NVIDIA VRAM'
                       : null;
+
+  // Apple Silicon wired-budget for NODE VRAM tile (isLocalMode only).
+  // Mirrors FleetStatusRow: wired_limit_mb (exact from sysctl) or 75% of total RAM fallback.
+  // available_memory_mb (free + inactive pages) is capped at wired_limit to avoid overstating.
+  const localIsAppleSilicon = sentinel?.memory_pressure_percent != null;
+  const localWiredLimitMb = sentinel?.gpu_wired_limit_mb
+    ?? (localIsAppleSilicon && sentinel != null ? Math.round(sentinel.total_memory_mb * 0.75) : null);
+  const localGpuAvailMb = (localWiredLimitMb != null && sentinel != null)
+    ? Math.max(0, Math.min(localWiredLimitMb, sentinel.available_memory_mb))
+    : null;
+  const localGpuUsedGb = (localWiredLimitMb != null && localGpuAvailMb != null)
+    ? ((localWiredLimitMb - localGpuAvailMb) / 1024).toFixed(1)
+    : null;
+  const localWiredLimitGb = localWiredLimitMb != null
+    ? (localWiredLimitMb / 1024).toFixed(1)
+    : null;
 
   // Tile 4 — FLEET NODES: online / total
   // fleetTotalCount — all registered nodes (single source via useFleetCounts)
@@ -1289,8 +1320,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   // Tile 6 — WATTAGE / 1K TKN: total power ÷ fleet throughput × 1000
   // wattPowerNodes exposed so the tile subtitle can show the contributing node count.
+  // Offline/unreachable nodes are excluded: a node's last stored metrics may have power
+  // data but zero live tok/s, inflating the numerator without contributing to the denominator.
+  const _nowForReachability = Date.now();
+  const reachableIdSet = new Set<string>(
+    isLocalHost
+      ? (sentinel != null ? [sentinel.node_id] : [])
+      : Object.keys(lastSeenMsMap).filter(
+          id => _nowForReachability - (lastSeenMsMap[id] ?? 0) <= NODE_REACHABLE_MS,
+        ),
+  );
   const wattPowerNodes = (fleetTps != null && fleetTps >= MIN_COST_TPS)
-    ? tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null)
+    ? tpsNodes.filter(m =>
+        reachableIdSet.has(m.node_id) &&
+        (m.cpu_power_w != null || m.nvidia_power_draw_w != null)
+      )
     : [];
   const wattPer1k = (() => {
     if (fleetTps == null || fleetTps < MIN_COST_TPS) return null;
@@ -1466,7 +1510,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           valueCls={displayFleetTps == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={fleetTps != null
             ? isLocalMode
-              ? (anyInferring ? (anyProxyActive ? 'live' : 'live estimate') : 'idle-spd baseline')
+              ? localIsInferring
+                ? 'live · inferring'
+                : localIsBusy
+                ? 'busy · non-inference'
+                : localIsIdleSpeed
+                ? 'idle-spd baseline'
+                : 'this node'
               : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · ${anyInferring ? (anyProxyActive ? 'live' : 'live estimate') : 'idle-spd baseline'}`
             : (hasAnyOllama || hasAnyVllm) ? 'sampling every 30s' : 'no inference runtime'}
           icon={Activity}
@@ -1486,13 +1536,38 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* 3. TOTAL FLEET / NODE VRAM */}
         <InsightTile
           label={isLocalMode ? 'Node VRAM' : 'Total Fleet VRAM'}
-          value={vramUtilPct != null ? `${vramUtilPct}%` : effectiveMetrics.length > 0 ? `${vramUsedGB} GB` : '—'}
-          valueCls={vramUtilPct == null && effectiveMetrics.length === 0 ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={vramUtilPct != null
-            ? `${vramUsedGB} / ${vramCapacityGB} GB${vramSubHint ? ` · ${vramSubHint}` : ''}`
-            : (vramUtilPct == null && effectiveMetrics.length > 0)
+          value={
+            isLocalMode && localIsAppleSilicon
+              ? (localGpuUsedGb != null ? `${localGpuUsedGb} GB` : '—')
+              : vramUtilPct != null
+              ? `${vramUtilPct}%`
+              : effectiveMetrics.length > 0
+              ? `${vramUsedGB} GB`
+              : '—'
+          }
+          valueCls={
+            isLocalMode && localIsAppleSilicon
+              ? (localGpuUsedGb == null ? 'text-gray-400 dark:text-gray-600' : undefined)
+              : vramUtilPct == null && effectiveMetrics.length === 0
+              ? 'text-gray-400 dark:text-gray-600'
+              : undefined
+          }
+          sub={
+            isLocalMode && localIsAppleSilicon
+              ? (localGpuUsedGb != null && localWiredLimitGb != null
+                  ? `${localGpuUsedGb} GB used · wired budget`
+                  : undefined)
+              : vramUtilPct != null
+              ? `${vramUsedGB} / ${vramCapacityGB} GB${vramSubHint ? ` · ${vramSubHint}` : ''}`
+              : (vramUtilPct == null && effectiveMetrics.length > 0)
               ? `${vramUsedGB} GB used${vramSubHint ? ` · ${vramSubHint}` : ''}`
-              : undefined}
+              : undefined
+          }
+          sub2={
+            isLocalMode && localIsAppleSilicon && localWiredLimitGb != null
+              ? `${localWiredLimitGb} GB total`
+              : undefined
+          }
           icon={Database}
           iconCls="text-blue-400"
         />
