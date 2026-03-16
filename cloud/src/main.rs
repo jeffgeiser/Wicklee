@@ -361,7 +361,8 @@ fn run_migrations(conn: &Connection) {
     // alert_rules — one row per configured alert trigger.
     // node_id NULL means fleet-wide (any node for this user).
     // event_type values: 'thermal_serious' | 'thermal_critical' | 'node_offline' |
-    //   'memory_pressure_high' | 'wes_drop' | 'idle_digest'
+    //   'memory_pressure_high' | 'wes_drop' | 'idle_digest' |
+    //   'thermal_drain' | 'phantom_load' | 'wes_velocity_drop' | 'memory_trajectory'
     // urgency values: 'immediate' | 'debounce_5m' | 'debounce_15m' | 'digest_daily'
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS alert_rules (
@@ -2552,8 +2553,12 @@ fn slack_alert_blocks(
         match event_type {
             "thermal_critical"      => ("🔥", "Critical"),
             "thermal_serious"       => ("⚠️",  "Warning"),
+            "thermal_drain"         => ("🌡️",  "Thermal Drain"),
             "memory_pressure_high"  => ("💾", "Warning"),
+            "memory_trajectory"     => ("📈", "Memory Trajectory"),
             "wes_drop"              => ("📉", "Warning"),
+            "wes_velocity_drop"     => ("📉", "WES Declining"),
+            "phantom_load"          => ("⚡", "Phantom Load"),
             "node_offline"          => ("🔴", "Offline"),
             _                       => ("⚡", "Alert"),
         }
@@ -2678,6 +2683,66 @@ fn evaluate_alerts(
                     .map(|w| w < threshold)
                     .unwrap_or(false)
             }
+            // ── Pattern Engine alert types ──────────────────────────────────────
+            //
+            // These are server-side proxy conditions that approximate the client-side
+            // pattern engine's time-windowed detections. They fire on a single telemetry
+            // frame; the frontend pattern engine provides richer trend-based analysis.
+            //
+            // thermal_drain: non-Normal thermal state with a measurable efficiency
+            //   penalty (penalized WES below threshold). Fires before thermal_critical
+            //   but after the node has crossed into Fair/Serious thermal territory.
+            //   Default threshold: WES < 6.0 (penalized).
+            "thermal_drain" => {
+                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 6.0 };
+                let is_throttled = matches!(
+                    metrics.thermal_state.as_deref(),
+                    Some("Fair") | Some("Serious") | Some("Critical")
+                );
+                if !is_throttled { false } else {
+                    wes_for_payload(metrics).map(|w| w < threshold).unwrap_or(false)
+                }
+            }
+            // phantom_load: a model is loaded and drawing power but no inference
+            //   activity is happening. Proxy: watts > threshold AND vram > 1 GB (or
+            //   an Ollama model is active) AND tok/s is effectively zero.
+            //   Default threshold: watts > 15W.
+            "phantom_load" => {
+                let watts_threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 15.0 };
+                let watts = metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0);
+                let tok_s  = if metrics.vllm_running {
+                    metrics.vllm_tokens_per_sec
+                } else {
+                    metrics.ollama_tokens_per_second
+                };
+                let model_loaded = metrics.nvidia_vram_used_mb.map(|v| v >= 1024).unwrap_or(false)
+                    || metrics.ollama_active_model.is_some();
+                watts > watts_threshold
+                    && model_loaded
+                    && tok_s.map(|t| t < 0.5).unwrap_or(true)
+            }
+            // wes_velocity_drop: WES is in a "warning zone" — below the velocity-drop
+            //   threshold but NOT yet at the critical wes_drop level, AND thermal state
+            //   is not already Serious/Critical (avoids duplicate with thermal_serious).
+            //   Acts as an early-warning complement to wes_drop.
+            //   Default threshold: WES < 7.0 (penalized).
+            "wes_velocity_drop" => {
+                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 7.0 };
+                let not_thermal = !matches!(
+                    metrics.thermal_state.as_deref(),
+                    Some("Serious") | Some("Critical")
+                );
+                not_thermal && wes_for_payload(metrics).map(|w| w < threshold).unwrap_or(false)
+            }
+            // memory_trajectory: memory pressure is in the early-warning zone before
+            //   the memory_pressure_high threshold — fires between 65% and 80%.
+            //   Default threshold: 65% (pattern engine suppresses at ≥ 80%).
+            "memory_trajectory" => {
+                let lo_threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 65.0 };
+                metrics.memory_pressure_percent
+                    .map(|p| p >= lo_threshold && p < 80.0)
+                    .unwrap_or(false)
+            }
             _ => continue, // node_offline is handled by the interval task
         };
 
@@ -2741,6 +2806,50 @@ fn evaluate_alerts(
                     metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec).unwrap_or(0.0),
                     metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
                     metrics.thermal_state.as_deref().unwrap_or("—"),
+                ),
+                "thermal_drain" => {
+                    let penalty = thermal_penalty_for(metrics.thermal_state.as_deref());
+                    format!(
+                        "Thermal: *{}*  (penalty ×{:.2})\nWES: {:.1}  Tok/s: {:.1}  Watts: {:.1}W\n\
+                         Route requests away to preserve throughput.",
+                        metrics.thermal_state.as_deref().unwrap_or("—"),
+                        penalty,
+                        wes_for_payload(metrics).unwrap_or(0.0),
+                        metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec).unwrap_or(0.0),
+                        metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
+                    )
+                }
+                "phantom_load" => {
+                    let watts  = metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0);
+                    let vram   = metrics.nvidia_vram_used_mb.unwrap_or(0);
+                    let model  = metrics.ollama_active_model.as_deref().unwrap_or("unknown");
+                    format!(
+                        "Drawing *{:.0}W* with {:.1} GB VRAM allocated — no inference activity.\n\
+                         Model: {}  |  Tok/s: 0\n\
+                         Unload the idle model to reclaim VRAM and reduce power draw.",
+                        watts,
+                        vram as f64 / 1024.0,
+                        model,
+                    )
+                }
+                "wes_velocity_drop" => format!(
+                    "WES: *{:.1}*  (early-warning threshold: {:.1})\n\
+                     Tok/s: {:.1}  Watts: {:.1}W  Thermal: {}\n\
+                     Efficiency is declining — check for thermal buildup or competing processes.",
+                    wes_for_payload(metrics).unwrap_or(0.0),
+                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 7.0 },
+                    metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec).unwrap_or(0.0),
+                    metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
+                    metrics.thermal_state.as_deref().unwrap_or("Normal"),
+                ),
+                "memory_trajectory" => format!(
+                    "Memory pressure: *{:.0}%*  (warning threshold: {:.0}%  |  critical: 85%)\n\
+                     {:.1} GB used / {:.1} GB total\n\
+                     Pressure is rising — unload models or stop background processes now.",
+                    metrics.memory_pressure_percent.unwrap_or(0.0),
+                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 65.0 },
+                    metrics.used_memory_mb as f64 / 1024.0,
+                    metrics.total_memory_mb as f64 / 1024.0,
                 ),
                 _ => String::new(),
             };

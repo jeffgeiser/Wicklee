@@ -2813,7 +2813,7 @@ async fn check_and_apply_update(
         return;
     }
 
-    let new_version = info.latest.clone();
+    let new_version = info.latest.trim_start_matches('v').to_string();
     eprintln!("[update] update available: v{current} → v{new_version}  downloading...");
 
     // ── Download binary ────────────────────────────────────────────────────────
