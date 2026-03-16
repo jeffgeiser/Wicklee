@@ -1133,7 +1133,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const hasAppleVram  = effectiveMetrics.some(m => m.memory_pressure_percent != null);
   const hasNvidiaVram = effectiveMetrics.some(m => (m.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB);
   const vramSubHint   = hasAppleVram && hasNvidiaVram ? 'Apple + NVIDIA'
-                      : hasAppleVram                  ? 'Apple GPU budget'
+                      : hasAppleVram                  ? 'wired budget'
                       : hasNvidiaVram                 ? 'NVIDIA VRAM'
                       : null;
 
