@@ -4,6 +4,32 @@
 
 ---
 
+## March 16, 2026 — NVIDIA Accelerator Tier: Type Contract Stubs 🖥️
+
+**The Goal:** Lay the type-level foundation for NVIDIA Accelerator Tier support (Hopper, Blackwell DC, GB10 Grace Blackwell) without touching any runtime logic or UI. Zero cost today; stable contract for Phase 5 implementation.
+
+**What shipped:**
+- `vram_is_unified?: boolean | null` — GB10/Grace Blackwell unified memory flag. False on all discrete NVIDIA. Null on Apple Silicon (uses `gpu_wired_limit_mb`).
+- `cooling_type?: 'active' | 'passive' | null` — Passive = DGX Spark conduction-only. Pattern A will use a lower thermal trigger threshold for passive nodes (no fan curve = no recovery headroom).
+- `wes_tier?: 'workstation' | 'server' | 'accelerator' | null` — prevents cross-tier WES score comparisons from being meaningless. Calibration constants TBD (Phase 5).
+- `gpu_count?: number | null` + `host_id?: string | null` — multi-GPU node grouping contract. DGX H100/B200 nodes share a `host_id`; Fleet Status will group sub-GPU rows under a single host header.
+- `nvlink_peer_node_id?: string | null` — NVLink bond identifier. Pattern E (Fleet Load Imbalance) will skip the node independence assumption for bonded pairs. VRAM aggregation will treat pairs as one logical unit.
+- `nvlink_bandwidth_gbps?: number | null` — inter-node NVLink utilization from NVML `nvmlDeviceGetNvLinkUtilizationCounter`. Null until an NVLink-capable node appears.
+- `MIGInstance` interface — `profile`, `vram_used_mb`, `vram_total_mb`, `gpu_util_pct`, `power_draw_w`. Referenced by `mig_instances?: MIGInstance[]` on `SentinelMetrics`.
+
+**What's deferred to Phase 5:**
+- Node platform badges in Fleet Status
+- Expandable node detail drawer (platform-specific depth)
+- MIG slice sub-rows in Fleet Status
+- Multi-GPU host header grouping
+- NVLink peer detection in the Rust agent (NVML call)
+- WES tier normalization baseline calibration
+- Adaptive tile label extension (`Unified Alloc` for GB10 rows)
+
+**Key architectural decision:** RTX 4090/5090 (primary local inference segment) have no NVLink and are completely unaffected. All new fields are optional/nullable — older agents continue working unchanged. Phase 5 wires the Rust agent reads; the frontend just checks for null.
+
+---
+
 ## March 15, 2026 — Sprint 1: Pattern Engine + Observations Briefing Feed 🧠
 
 **The Goal:** Build the "Infrastructure of Time" for the Insights tab — a deterministic, time-windowed rules engine that transforms raw telemetry history into actionable operator briefings. No external AI. No threshold crossings. Sustained evidence only.

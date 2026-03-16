@@ -48,6 +48,55 @@ export interface SentinelMetrics {
   nvidia_vram_total_mb:           number | null;
   nvidia_gpu_temp_c:              number | null;
   nvidia_power_draw_w:            number | null;
+  // ── NVIDIA Accelerator Tier stubs (Phase 5) ──────────────────────────────
+  /**
+   * True when VRAM and system RAM share a unified pool (GB10 Grace Blackwell).
+   * False on all discrete GPU nodes (RTX, H100, B200).
+   * Null on Apple Silicon (uses gpu_wired_limit_mb instead).
+   */
+  vram_is_unified?: boolean | null;
+  /**
+   * 'active' = fan-cooled. 'passive' = conduction-only (DGX Spark).
+   * Pattern A (Thermal Drain) uses a lower trigger threshold on passive nodes —
+   * no fan curve means no recovery headroom.
+   */
+  cooling_type?: 'active' | 'passive' | null;
+  /**
+   * WES normalization tier. Prevents cross-tier score comparisons from being
+   * meaningless. workstation = RTX/M-series, server = EPYC+A-series,
+   * accelerator = H100/B200/GB10.
+   */
+  wes_tier?: 'workstation' | 'server' | 'accelerator' | null;
+  /**
+   * Number of physical GPUs on this host. >1 = multi-GPU node (DGX H100/B200).
+   * Fleet Status groups rows under a host header when gpu_count > 1.
+   */
+  gpu_count?: number | null;
+  /**
+   * Shared host identifier for multi-GPU nodes. All GPUs on a DGX report the
+   * same host_id. Fleet Status uses this to group sub-GPU rows under one header.
+   * Null on single-GPU nodes.
+   */
+  host_id?: string | null;
+  /**
+   * NVLink-bonded peer node ID. Set when NVML reports an active NVLink
+   * connection to another Wicklee node. Pattern E (Fleet Load Imbalance) skips
+   * the independence assumption for bonded pairs. VRAM aggregation treats
+   * bonded pairs as a single logical unit, not two independent nodes.
+   */
+  nvlink_peer_node_id?: string | null;
+  /**
+   * Inter-node NVLink bandwidth utilization (GB/s). Null on non-NVLink hardware.
+   * Populated via nvmlDeviceGetNvLinkUtilizationCounter when nvlink_peer_node_id
+   * is set.
+   */
+  nvlink_bandwidth_gbps?: number | null;
+  /**
+   * MIG (Multi-Instance GPU) slices active on this node. Present only when the
+   * device is MIG-partitioned (Hopper / Blackwell datacenter class). Each slice
+   * renders as a virtual sub-row in Fleet Status with independent WES and VRAM.
+   */
+  mig_instances?: MIGInstance[] | null;
   // Ollama runtime (absent/false when not running)
   ollama_running?:           boolean;
   ollama_active_model?:      string | null;
@@ -86,6 +135,21 @@ export interface SentinelMetrics {
   sample_count?:   number | null;
   /** Agent WES computation version (2 = v2 with penalty fields). */
   wes_version?:    number;
+}
+
+/**
+ * A single MIG (Multi-Instance GPU) slice on an NVIDIA Hopper or Blackwell device.
+ * Reported when the device is MIG-partitioned. Each slice surfaces as a virtual
+ * sub-row in Fleet Status — independent WES, VRAM, and thermal attribution.
+ */
+export interface MIGInstance {
+  /** MIG profile name, e.g. "3g.40gb" or "1g.10gb" */
+  profile:       string;
+  vram_used_mb:  number;
+  vram_total_mb: number;
+  gpu_util_pct:  number | null;
+  /** Fractional power draw attributed to this slice (board_power / num_slices). Estimated. */
+  power_draw_w:  number | null;
 }
 
 export interface FleetEvent {

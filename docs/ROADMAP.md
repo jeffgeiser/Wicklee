@@ -290,6 +290,37 @@
 - [ ] **Pre-built Grafana dashboard:** Fleet WES trend panel, thermal cost heatmap, node efficiency ranking. Importable JSON — drop into any Grafana instance.
 - [ ] **OpenTelemetry span export *(planned)*:** Inference request traces with TTFT and TPOT labels. Feeds directly into Jaeger, Honeycomb, Datadog.
 
+### NVIDIA Accelerator Tier
+> Applies broadly to Hopper, Blackwell datacenter, and GB10 Grace Blackwell. Not GB10-specific.
+> RTX 4090/5090 (the primary local inference segment) is unaffected — they have no NVLink and
+> already work on the current NVML path.
+
+**Type contract stubs (shipped ✅)**
+- [x] `vram_is_unified` — unified vs. discrete VRAM flag (GB10/Grace only). Null on Apple Silicon.
+- [x] `cooling_type` — `'active' | 'passive'`. Pattern A uses a lower thermal trigger on passive nodes.
+- [x] `wes_tier` — `'workstation' | 'server' | 'accelerator'`. Prevents cross-tier WES comparisons.
+- [x] `gpu_count` + `host_id` — multi-GPU node grouping contract (DGX H100/B200).
+- [x] `nvlink_peer_node_id` — NVLink bond stub. Pattern E skips independence assumption for bonded pairs.
+- [x] `nvlink_bandwidth_gbps` — inter-node NVLink utilization, populated by NVML when peer is set.
+- [x] `MIGInstance` interface — profile, vram_used/total, gpu_util_pct, power_draw_w.
+- [x] `mig_instances?: MIGInstance[]` on `SentinelMetrics`.
+
+**Platform Detection & Badges (planned)**
+- [ ] **Node platform badge** in Fleet Status NODE cell — `M3 Max` / `RTX 4090` / `H100 SXM` / `GB10`. Color-coded by tier (gray workstation · blue accelerator). Zero new columns.
+- [ ] **`vram_is_unified` detection in Rust agent** — probe NVML `nvmlSystemGetDriverVersion` + device name heuristic to set flag. GB10 reports unified; all discrete cards report false.
+- [ ] **`cooling_type` detection** — passive if device name contains "Spark" or DGX SKU; active otherwise.
+- [ ] **NVLink peer detection** — `nvmlDeviceGetNvLinkState` on all links; resolve peer UUID to Wicklee node_id; populate `nvlink_peer_node_id` + `nvlink_bandwidth_gbps`.
+
+**Fleet Status UI (planned)**
+- [ ] **Expandable node detail drawer** — click any row → slide-in panel with platform-specific depth. Apple: ANE + wired budget. RTX: GDDR6X BW + PCIe. H100: HBM3 BW + MIG slices + NVLink peer. GB10: unified pool + passive thermal headroom.
+- [ ] **MIG slice sub-rows** — nodes with `mig_instances` get a ▶ expander. Slices render as virtual sub-rows with independent WES/VRAM/tok/s. No NodeAgent rearchitecture needed.
+- [ ] **Multi-GPU host grouping** — nodes sharing `host_id` collapse under a single host header row with aggregate metrics. Sub-rows expand per GPU. Near-term: agent reports each GPU as a separate stream with shared `host_id` prefix.
+- [ ] **NVLink bonded pair indicator** — Fleet Status shows a link icon between bonded nodes; VRAM aggregation treats them as one logical unit.
+
+**WES Tier Normalization (planned)**
+- [ ] **`wes_tier` baseline calibration** — Workstation: M3/RTX reference. Server: EPYC+A100. Accelerator: H100/GB10. WES normalizes within tier; cross-tier shows `relative_wes` (Workstation = 1.0×).
+- [ ] **Adaptive tile labels** — "Total Fleet VRAM" tile subtitle adapts to `vram_is_unified` nodes (`Unified Alloc` per row). NVLink topology tile surfaces only when ≥ 2 bonded nodes detected.
+
 ### Orchestration Integrations
 - [ ] **vLLM / Ray Serve awareness:** Consume vLLM's Prometheus `/metrics` endpoint at the orchestration layer. Surface per-model queue depth, KV cache hit rate, and TTFT alongside WES. Enables WES-aware routing across multi-model vLLM deployments.
 - [ ] **Ray Serve backend support:** Register Ray Serve replicas as Wicklee nodes. WES computed from Ray's built-in metrics. Route decisions account for replica thermal state.
