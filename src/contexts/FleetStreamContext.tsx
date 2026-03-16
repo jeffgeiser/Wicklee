@@ -79,6 +79,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   const [connected, setConnected]           = useState(false);
   const [transport, setTransport]           = useState<'sse' | null>(null);
   const [lastTelemetryMs, setLastTelemetryMs] = useState<number | null>(null);
+  const [restrictedNodeIds, setRestrictedNodeIds] = useState<ReadonlySet<string>>(new Set());
 
   // ── Observation refs (persist across SSE frames without triggering re-render) ─
   const prevLiveRef    = useRef<Record<string, boolean>>({});
@@ -388,6 +389,12 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             setFleetEvents(prev => [...newEvents, ...prev].slice(0, MAX_EVENTS));
           }
 
+          // Derive restricted node set from the latest snapshot.
+          const newRestrictedIds = new Set(
+            fleet.nodes.filter(n => n.restricted).map(n => n.node_id)
+          );
+          setRestrictedNodeIds(newRestrictedIds);
+
           // Notify App.tsx so it can patch node hostnames.
           onNodesSnapshotRef.current?.(fleet.nodes);
         } catch { /* malformed frame */ }
@@ -450,7 +457,8 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     transport,
     lastTelemetryMs,
     connectionState,
-  }), [allNodeMetrics, lastSeenMsMap, fleetEvents, addFleetEvent, connected, transport, lastTelemetryMs, connectionState]);
+    restrictedNodeIds,
+  }), [allNodeMetrics, lastSeenMsMap, fleetEvents, addFleetEvent, connected, transport, lastTelemetryMs, connectionState, restrictedNodeIds]);
 
   return (
     <FleetStreamContext.Provider value={value}>

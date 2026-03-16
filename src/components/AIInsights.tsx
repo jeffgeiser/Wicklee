@@ -422,6 +422,10 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // Downsampling is handled inside useMetricHistory.push() — rapid SSE frames
   // are deduplicated to one sample per 30-second bucket automatically.
   useEffect(() => {
+    // Build set of restricted node IDs — these nodes still get history pushed
+    // (so we don't lose telemetry data) but are excluded from pattern evaluation.
+    const restrictedIdSet = new Set(nodes.filter(n => n.restricted).map(n => n.id));
+
     const metricsToProcess: SentinelMetrics[] = isLocalHost && localSentinel
       ? [localSentinel]
       : Object.values(allNodeMetrics);
@@ -441,7 +445,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     metricHistory.prune();
 
     const allObservations: DetectedInsight[] = [];
-    for (const m of metricsToProcess) {
+    // Only evaluate patterns for non-restricted nodes
+    for (const m of metricsToProcess.filter(m => !restrictedIdSet.has(m.node_id))) {
       const ns      = getNodeSettings(m.node_id);
       const history = metricHistory.getHistory(m.node_id);
       const results = evaluatePatterns({

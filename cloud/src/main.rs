@@ -176,6 +176,7 @@ struct NodeSummary {
     fleet_url:    String,
     last_seen_ms: u64,
     metrics:      Option<MetricsPayload>,
+    restricted:   bool,
 }
 
 #[derive(Serialize)]
@@ -425,6 +426,30 @@ const ALERT_QUIET_PERIOD_MS: u64 = 300_000; // 5 minutes
 /// Returns true if the account has Team or Enterprise tier (alerting unlocked).
 fn is_team_or_above(tier: &str) -> bool {
     matches!(tier, "team" | "enterprise")
+}
+
+/// Number of nodes available for free on the Community tier.
+const FREE_NODE_LIMIT: usize = 3;
+
+/// Returns the set of node_ids that are restricted for this user.
+/// For community tier: all nodes beyond the first FREE_NODE_LIMIT (by paired_at ASC).
+/// For team/enterprise: empty set (all nodes unrestricted).
+#[allow(dead_code)]
+fn restricted_node_set(user_id: &str, tier: &str, conn: &rusqlite::Connection) -> std::collections::HashSet<String> {
+    if is_team_or_above(tier) {
+        return std::collections::HashSet::new();
+    }
+    let mut stmt = match conn.prepare(
+        "SELECT wk_id FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
+    ) {
+        Ok(s) => s,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    let all_nodes: Vec<String> = stmt.query_map(params![user_id], |r| r.get(0))
+        .ok()
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default();
+    all_nodes.into_iter().skip(FREE_NODE_LIMIT).collect()
 }
 
 /// Nodes not seen within this window are considered offline.
@@ -1441,34 +1466,46 @@ async fn handle_fleet(
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let db = state.db.clone();
-    let result: Option<Vec<(String, String, i64)>> = tokio::task::spawn_blocking(move || {
+    let result: Option<(String, Vec<(String, String, i64)>)> = tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
         let user_id = require_user(&token, &conn, &clerk_keys)?;
+        let tier: String = conn.query_row(
+            "SELECT subscription_tier FROM users WHERE id = ?1",
+            params![user_id],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| "community".to_string());
         let mut stmt = conn.prepare(
-            "SELECT wk_id, fleet_url, last_seen FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
+            "SELECT wk_id, fleet_url, paired_at FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
         ).ok()?;
-        Some(stmt.query_map(params![user_id], |r| Ok((
+        let rows = stmt.query_map(params![user_id], |r| Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, i64>(2)?,
         )))
         .ok()?
         .filter_map(|r| r.ok())
-        .collect())
+        .collect();
+        Some((tier, rows))
     }).await.unwrap();
 
-    let persisted = match result {
-        Some(rows) => rows,
+    let (tier, persisted) = match result {
+        Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+
+    let restricted: std::collections::HashSet<String> = persisted.iter()
+        .skip(if is_team_or_above(&tier) { usize::MAX } else { FREE_NODE_LIMIT })
+        .map(|(id, _, _)| id.clone())
+        .collect();
 
     let metrics_map = state.metrics.read().unwrap();
     let nodes: Vec<NodeSummary> = persisted.into_iter().map(|(node_id, fleet_url, last_seen_db)| {
         let (last_seen_ms, metrics) = metrics_map.get(&node_id)
             .map(|e| (e.last_seen_ms, e.metrics.clone()))
             .unwrap_or((last_seen_db as u64, None));
-        NodeSummary { node_id, fleet_url, last_seen_ms, metrics }
+        let is_restricted = restricted.contains(&node_id);
+        NodeSummary { node_id, fleet_url, last_seen_ms, metrics, restricted: is_restricted }
     }).collect();
 
     Json(FleetResponse { nodes }).into_response()
@@ -1953,12 +1990,27 @@ async fn handle_fleet_stream(
             Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
 
-    // Load initial node set for this user.
+    // Load initial node set and tier for this user.
     let db = state.db.clone();
     let uid2 = user_id.clone();
-    let initial_nodes: HashSet<String> = tokio::task::spawn_blocking(move || {
+    let initial: (HashSet<String>, Vec<String>, String) = tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
-        user_node_set(&uid2, &conn)
+        let node_set = user_node_set(&uid2, &conn);
+        // Ordered list (by paired_at ASC) for restricted-set computation.
+        let ordered: Vec<String> = conn.prepare(
+            "SELECT wk_id FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
+        ).ok()
+        .map(|mut stmt| stmt.query_map(params![uid2], |r| r.get::<_, String>(0))
+            .ok()
+            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+            .unwrap_or_default())
+        .unwrap_or_default();
+        let tier: String = conn.query_row(
+            "SELECT subscription_tier FROM users WHERE id = ?1",
+            params![uid2],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| "community".to_string());
+        (node_set, ordered, tier)
     }).await.unwrap();
 
     let interval_stream = tokio_stream::wrappers::IntervalStream::new(
@@ -1967,7 +2019,10 @@ async fn handle_fleet_stream(
 
     let db_stream  = state.db.clone();
     let uid_stream = user_id.clone();
-    let mut nodes  = initial_nodes;
+    let (initial_nodes, initial_ordered, initial_tier) = initial;
+    let mut nodes          = initial_nodes;
+    let mut ordered_nodes  = initial_ordered;
+    let mut tier           = initial_tier;
     let mut tick: u32 = 0;
 
     let stream = interval_stream.map(move |_| {
@@ -1975,11 +2030,36 @@ async fn handle_fleet_stream(
         // Refresh the user's node list every 30 ticks (~60 s) to pick up
         // newly paired nodes without restarting the stream.
         if tick % 30 == 0 {
-            nodes = tokio::task::block_in_place(|| {
+            let uid_ref = uid_stream.clone();
+            let (new_nodes, new_ordered, new_tier) = tokio::task::block_in_place(|| {
                 let conn = db_stream.lock().unwrap();
-                user_node_set(&uid_stream, &conn)
+                let node_set = user_node_set(&uid_ref, &conn);
+                let ordered: Vec<String> = conn.prepare(
+                    "SELECT wk_id FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
+                ).ok()
+                .map(|mut stmt| stmt.query_map(params![uid_ref], |r| r.get::<_, String>(0))
+                    .ok()
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                    .unwrap_or_default())
+                .unwrap_or_default();
+                let t: String = conn.query_row(
+                    "SELECT subscription_tier FROM users WHERE id = ?1",
+                    params![uid_ref],
+                    |r| r.get(0),
+                ).unwrap_or_else(|_| "community".to_string());
+                (node_set, ordered, t)
             });
+            nodes         = new_nodes;
+            ordered_nodes = new_ordered;
+            tier          = new_tier;
         }
+
+        // Compute restricted set from the ordered node list.
+        let restricted_ids: HashSet<&str> = if is_team_or_above(&tier) {
+            HashSet::new()
+        } else {
+            ordered_nodes.iter().skip(FREE_NODE_LIMIT).map(|s| s.as_str()).collect()
+        };
 
         let metrics_map = state.metrics.read().unwrap();
         let node_list: Vec<serde_json::Value> = metrics_map
@@ -1990,6 +2070,7 @@ async fn handle_fleet_stream(
                     "node_id":      node_id,
                     "last_seen_ms": entry.last_seen_ms,
                     "metrics":      entry.metrics,
+                    "restricted":   restricted_ids.contains(node_id.as_str()),
                 })
             })
             .collect();
@@ -3340,6 +3421,158 @@ async fn handle_test_channel(
     }
 }
 
+// ── Billing handlers ──────────────────────────────────────────────────────────
+
+/// POST /api/billing/checkout
+/// Creates a Stripe Checkout session (subscription mode) for the authenticated user.
+/// Reads STRIPE_SECRET_KEY and STRIPE_PRICE_ID env vars.
+/// Returns: { "url": "https://checkout.stripe.com/..." }
+async fn handle_billing_checkout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let secret_key = match std::env::var("STRIPE_SECRET_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => return (StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Billing not configured" }))).into_response(),
+    };
+    let price_id = std::env::var("STRIPE_PRICE_ID")
+        .unwrap_or_else(|_| "price_placeholder".to_string());
+    let base_url = std::env::var("APP_URL")
+        .unwrap_or_else(|_| "https://wicklee.dev".to_string());
+
+    let db = state.db.clone();
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let email: Option<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let user_id = require_user(&token, &conn, &clerk_keys)?;
+        conn.query_row(
+            "SELECT email FROM users WHERE id = ?1",
+            params![user_id],
+            |r| r.get(0),
+        ).ok()
+    }).await.unwrap();
+
+    let email = match email {
+        Some(e) => e,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid session" }))).into_response(),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        let body = format!(
+            "mode=subscription\
+             &line_items[0][price]={price_id}\
+             &line_items[0][quantity]=1\
+             &customer_email={email}\
+             &success_url={base_url}/dashboard?upgraded=1\
+             &cancel_url={base_url}/dashboard"
+        );
+        match ureq::post("https://api.stripe.com/v1/checkout/sessions")
+            .set("Authorization", &format!("Bearer {secret_key}"))
+            .set("Content-Type", "application/x-www-form-urlencoded")
+            .send_string(&body)
+        {
+            Ok(r) => r.into_json::<serde_json::Value>().ok(),
+            Err(e) => { eprintln!("[billing] checkout failed: {e}"); None }
+        }
+    }).await.unwrap();
+
+    match result.and_then(|v| v["url"].as_str().map(|s| s.to_string())) {
+        Some(url) => Json(serde_json::json!({ "url": url })).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to create checkout session" }))).into_response(),
+    }
+}
+
+/// POST /api/webhooks/stripe
+/// Handles Stripe webhook events. Verifies HMAC-SHA256 signature if
+/// STRIPE_WEBHOOK_SECRET is set. Processes checkout.session.completed
+/// (upgrades user to 'team') and customer.subscription.deleted (downgrades to 'community').
+async fn handle_stripe_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    // Verify Stripe-Signature header if STRIPE_WEBHOOK_SECRET is set
+    if let Ok(secret) = std::env::var("STRIPE_WEBHOOK_SECRET") {
+        let sig_header = headers.get("stripe-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let ts = sig_header.split(',')
+            .find(|p| p.starts_with("t="))
+            .and_then(|p| p.strip_prefix("t="))
+            .unwrap_or("");
+        let expected = sig_header.split(',')
+            .find(|p| p.starts_with("v1="))
+            .and_then(|p| p.strip_prefix("v1="))
+            .unwrap_or("");
+        let payload = format!("{}.{}", ts, String::from_utf8_lossy(&body));
+        use hmac::{Hmac, Mac};
+        type HmacSha256 = Hmac<sha2::Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .expect("HMAC can take any key length");
+        mac.update(payload.as_bytes());
+        let computed = hex::encode(mac.finalize().into_bytes());
+        let sig_ok: bool = subtle::ConstantTimeEq::ct_eq(computed.as_bytes(), expected.as_bytes()).into();
+        if !sig_ok {
+            return (StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Invalid signature" }))).into_response();
+        }
+    } else {
+        eprintln!("[billing] STRIPE_WEBHOOK_SECRET not set — skipping signature verification");
+    }
+
+    let event: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("Invalid JSON: {e}") }))).into_response(),
+    };
+
+    let event_type = event["type"].as_str().unwrap_or("");
+    match event_type {
+        "checkout.session.completed" => {
+            let customer_id     = event["data"]["object"]["customer"].as_str().unwrap_or("").to_string();
+            let subscription_id = event["data"]["object"]["subscription"].as_str().unwrap_or("").to_string();
+            let customer_email  = event["data"]["object"]["customer_email"].as_str().unwrap_or("").to_string();
+            let db = state.db.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let conn = db.lock().unwrap();
+                let _ = conn.execute(
+                    "UPDATE users SET subscription_tier = 'team',
+                         stripe_customer_id = ?1, stripe_subscription_id = ?2
+                     WHERE email = ?3",
+                    params![customer_id, subscription_id, customer_email],
+                );
+                println!("[billing] upgraded {customer_email} → team (customer={customer_id})");
+            }).await;
+        }
+        "customer.subscription.deleted" => {
+            let customer_id = event["data"]["object"]["customer"].as_str().unwrap_or("").to_string();
+            let db = state.db.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let conn = db.lock().unwrap();
+                let _ = conn.execute(
+                    "UPDATE users SET subscription_tier = 'community',
+                         stripe_subscription_id = NULL
+                     WHERE stripe_customer_id = ?1",
+                    params![customer_id],
+                );
+                println!("[billing] downgraded customer={customer_id} → community");
+            }).await;
+        }
+        _ => {} // Ignore other event types
+    }
+
+    StatusCode::OK.into_response()
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -3480,6 +3713,9 @@ async fn main() {
         .route("/api/alerts/rules",             post(handle_create_rule))
         .route("/api/alerts/rules",             get(handle_list_rules))
         .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
+        // ── Billing (Stripe) ──────────────────────────────────────────────────
+        .route("/api/billing/checkout",  post(handle_billing_checkout))
+        .route("/api/webhooks/stripe",   post(handle_stripe_webhook))
         .with_state(state)
         .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
 
