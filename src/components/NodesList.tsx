@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search, X, ArrowUpDown, ChevronDown,
   Cloud, Lock, CheckSquare, Square,
@@ -663,12 +663,20 @@ interface NodesListProps {
   getNodeSettings?:      (nodeId: string) => NodeEffectiveSettings;
   onNavigateToSettings?: () => void;
   pairingInfo?:          PairingInfo | null;
+  /** Clerk / session token factory — present in hosted (non-local) builds. */
+  getToken?:             () => Promise<string | null>;
+  /** Cloud base URL for management API calls. */
+  cloudUrl?:             string;
+  /** Called after one or more nodes are successfully removed so the parent
+   *  can refresh its fleet list and free up the node slot count. */
+  onNodesRemoved?:       (removedIds: string[]) => void;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
 const NodesList: React.FC<NodesListProps> = ({
   nodes, getNodeSettings, onNavigateToSettings, pairingInfo,
+  getToken, cloudUrl, onNodesRemoved,
 }) => {
   const {
     allNodeMetrics: cloudMetrics,
@@ -686,6 +694,9 @@ const NodesList: React.FC<NodesListProps> = ({
   const [statusFilter, setStatusFilter]   = useState<StatusFilter>('all');
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
+  // Two-step confirmation: first click arms, second click fires.
+  const [disconnectConfirming, setDisconnectConfirming] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   const esRef    = useRef<EventSource | null>(null);
   const sortRef  = useRef<HTMLDivElement>(null);
@@ -744,6 +755,46 @@ const NodesList: React.FC<NodesListProps> = ({
     a.href = url; a.download = `wicklee-audit-${Date.now()}.json`; a.click();
     URL.revokeObjectURL(url);
   };
+
+  const handleBulkDisconnect = useCallback(async () => {
+    // First click arms the confirmation state.
+    if (!disconnectConfirming) {
+      setDisconnectConfirming(true);
+      // Auto-cancel confirmation after 4 s if user doesn't follow through.
+      setTimeout(() => setDisconnectConfirming(false), 4000);
+      return;
+    }
+    // Second click fires.
+    if (!getToken || !cloudUrl || disconnecting) return;
+    setDisconnecting(true);
+    setDisconnectConfirming(false);
+    try {
+      const token = await getToken();
+      const ids   = [...selectedNodes];
+      const results = await Promise.allSettled(
+        ids.map(id =>
+          fetch(`${cloudUrl}/api/nodes/${encodeURIComponent(id)}`, {
+            method:  'DELETE',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          })
+        )
+      );
+      const removed = ids.filter((_, i) => {
+        const r = results[i];
+        return r.status === 'fulfilled' && (r.value.ok || r.value.status === 404);
+      });
+      if (removed.length > 0) {
+        setSelectedNodes(prev => {
+          const next = new Set(prev);
+          removed.forEach(id => next.delete(id));
+          return next;
+        });
+        onNodesRemoved?.(removed);
+      }
+    } finally {
+      setDisconnecting(false);
+    }
+  }, [disconnectConfirming, disconnecting, getToken, cloudUrl, selectedNodes, onNodesRemoved]);
 
   const toggleSelect = (id: string) =>
     setSelectedNodes(prev => {
@@ -1202,8 +1253,21 @@ const NodesList: React.FC<NodesListProps> = ({
             Export Audit
           </button>
           <div className="w-px h-4 bg-gray-700 shrink-0" />
-          <button className="text-xs font-medium text-red-400 hover:text-red-300 transition-colors">
-            Disconnect
+          <button
+            onClick={handleBulkDisconnect}
+            disabled={disconnecting || !getToken}
+            className={`text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              disconnectConfirming
+                ? 'text-red-300 font-semibold animate-pulse'
+                : 'text-red-400 hover:text-red-300'
+            }`}
+            title={!getToken ? 'Sign in to remove nodes' : disconnectConfirming ? 'Click again to confirm removal' : `Remove ${selectedNodes.size} node${selectedNodes.size !== 1 ? 's' : ''} from fleet`}
+          >
+            {disconnecting
+              ? 'Removing…'
+              : disconnectConfirming
+              ? 'Confirm remove?'
+              : 'Disconnect'}
           </button>
           <div className="w-px h-4 bg-gray-700 shrink-0" />
           <button
