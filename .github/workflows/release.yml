@@ -183,15 +183,21 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # nvml-wrapper bundles NVML C headers and uses bindgen; the CUDA nvml_dev
-      # sub-package installs libnvidia-ml.so stubs so the linker resolves the
-      # symbol at compile time. At runtime the real driver library is dlopen-ed.
-      - name: Install CUDA toolkit (NVML headers + link stub)
-        uses: Jimver/cuda-toolkit@v0.2.15
-        with:
-          cuda: '12.4.0'
-          method: network
-          sub-packages: '["nvml_dev"]'
+      # nvml-wrapper bundles NVML C headers and uses bindgen; we need the
+      # libnvidia-ml.so link stub so the linker resolves the symbol at compile
+      # time. At runtime the real driver library is dlopen-ed by the OS.
+      #
+      # We install directly via the CUDA keyring rather than the Jimver action
+      # because the action generates "cuda-nvml_dev-12-4" (underscore) while the
+      # actual apt package is "cuda-nvml-dev-12-4" (hyphen) — causing E: Unable
+      # to locate package on ubuntu-22.04 runners.
+      - name: Install NVML dev headers
+        run: |
+          wget -qO /tmp/cuda-keyring.deb \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y cuda-nvml-dev-12-4
 
       - name: Build agent (glibc, NVML enabled)
         run: cargo build --release
