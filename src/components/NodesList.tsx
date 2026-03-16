@@ -795,11 +795,9 @@ const NodesList: React.FC<NodesListProps> = ({
       });
       const failCount = ids.length - removed.length;
       if (removed.length > 0) {
-        setSelectedNodes(prev => {
-          const next = new Set(prev);
-          removed.forEach(id => next.delete(id));
-          return next;
-        });
+        // Clear ALL selections after a successful delete, not just the removed
+        // ones — prevents stale selections from being caught in the next confirm.
+        setSelectedNodes(new Set());
         onNodesRemoved?.(removed);
       }
       if (failCount > 0) {
@@ -1291,7 +1289,7 @@ const NodesList: React.FC<NodesListProps> = ({
             {disconnecting
               ? 'Removing…'
               : disconnectConfirming
-              ? 'Confirm remove?'
+              ? `Confirm remove ${selectedNodes.size} node${selectedNodes.size !== 1 ? 's' : ''}?`
               : 'Disconnect'}
           </button>
           <div className="w-px h-4 bg-gray-700 shrink-0" />
