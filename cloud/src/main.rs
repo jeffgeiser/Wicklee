@@ -2006,6 +2006,79 @@ async fn handle_health() -> StatusCode {
     StatusCode::OK
 }
 
+/// GET /api/agent/version?platform=<platform>
+///
+/// Queries the GitHub releases API for the latest wicklee-agent release and
+/// returns the version tag + platform-specific download URL. Called by the
+/// agent's auto-updater on startup. No auth required — public endpoint.
+///
+/// Response: { "latest": "v0.4.9", "download_url": "https://..." }
+///
+/// Platform → asset mapping:
+///   darwin-aarch64        → wicklee-agent-darwin-aarch64
+///   linux-x86_64          → wicklee-agent-linux-x86_64
+///   linux-aarch64         → wicklee-agent-linux-aarch64
+///   linux-x86_64-nvidia   → wicklee-agent-linux-x86_64-nvidia
+///   windows-x86_64        → wicklee-agent-windows-x86_64.exe
+async fn handle_agent_version(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let platform = params.get("platform").cloned().unwrap_or_default();
+
+    let asset_name = match platform.as_str() {
+        "darwin-aarch64"      => "wicklee-agent-darwin-aarch64",
+        "linux-x86_64"        => "wicklee-agent-linux-x86_64",
+        "linux-aarch64"       => "wicklee-agent-linux-aarch64",
+        "linux-x86_64-nvidia" => "wicklee-agent-linux-x86_64-nvidia",
+        "windows-x86_64"      => "wicklee-agent-windows-x86_64.exe",
+        _ => {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "unrecognised platform" }))).into_response();
+        }
+    };
+
+    // Query GitHub releases API in a blocking task (ureq is synchronous).
+    let result = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
+        let resp = ureq::get("https://api.github.com/repos/jeffgeiser/Wicklee/releases/latest")
+            .set("User-Agent", "wicklee-cloud/1.0")
+            .set("Accept", "application/vnd.github+json")
+            .call()
+            .map_err(|e| format!("github api request failed: {e}"))?;
+
+        let body: serde_json::Value = resp.into_json()
+            .map_err(|e| format!("github api json parse failed: {e}"))?;
+
+        let tag = body["tag_name"]
+            .as_str()
+            .ok_or_else(|| "missing tag_name in github response".to_string())?
+            .to_string();
+
+        // Build direct download URL from the release tag + known asset name.
+        let download_url = format!(
+            "https://github.com/jeffgeiser/Wicklee/releases/download/{tag}/{asset_name}"
+        );
+
+        Ok((tag, download_url))
+    }).await;
+
+    match result {
+        Ok(Ok((latest, download_url))) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "latest": latest, "download_url": download_url })),
+        ).into_response(),
+        Ok(Err(e)) => {
+            eprintln!("[agent-version] upstream error: {e}");
+            (StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": "could not fetch latest release" }))).into_response()
+        }
+        Err(e) => {
+            eprintln!("[agent-version] task error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "internal error" }))).into_response()
+        }
+    }
+}
+
 // ── CORS middleware ───────────────────────────────────────────────────────────
 //
 // Injected directly into the response so Railway's proxy cannot strip the
@@ -3269,7 +3342,8 @@ async fn main() {
     });
 
     let app = Router::new()
-        .route("/health",            get(handle_health))
+        .route("/health",                  get(handle_health))
+        .route("/api/agent/version",       get(handle_agent_version))
         .route("/api/auth/signup",       post(handle_signup))
         .route("/api/auth/login",        post(handle_login))
         .route("/api/auth/me",           get(handle_me))
