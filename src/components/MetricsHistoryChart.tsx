@@ -139,7 +139,7 @@ const RANGE_CONFIG: Record<TimeRange, {
 const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d'];
 
 function tierUpgradeLabel(minTier: SubscriptionTier): string {
-  return minTier === 'pro' ? 'Pro' : minTier === 'team' ? 'Team' : '';
+  return minTier === 'pro' ? 'Pro' : minTier === 'team' ? 'Pro' : '';
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────

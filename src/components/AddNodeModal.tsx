@@ -146,7 +146,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
         setError(
           res.status === 429 ? `Too many attempts — try again in ${retryAfter ?? '60'}s.` :
           res.status === 401 ? 'Session expired. Sign out and sign back in to continue.' :
-          res.status === 402 ? 'Node limit reached. Upgrade to Team Edition to pair unlimited nodes.' :
+          res.status === 402 ? 'Node limit reached. Upgrade to Wicklee Pro to pair unlimited nodes.' :
           res.status >= 500  ? 'Wicklee is temporarily unavailable. Please try again shortly.' :
           (serverMsg ?? 'Pairing failed. Check the code and try again.')
         );

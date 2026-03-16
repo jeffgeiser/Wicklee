@@ -50,9 +50,9 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-white">Unlock Team Fleet</h2>
+            <h2 className="text-2xl font-bold text-white">Unlock Wicklee Pro</h2>
             <p className="text-gray-400 text-sm">
-              Upgrade to Wicklee Team to connect unlimited nodes and unlock Accelerator-tier patterns across your entire fleet.
+              Upgrade to Wicklee Pro to connect unlimited nodes and unlock Accelerator-tier patterns across your entire fleet.
             </p>
           </div>
 
@@ -79,7 +79,7 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
               onClick={onUpgrade}
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-500/20"
             >
-              Upgrade to Team
+              Upgrade to Pro
             </button>
             <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
               Maybe later
