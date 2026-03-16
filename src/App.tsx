@@ -402,6 +402,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
           }}
           onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
           pairingInfo={pairingInfo}
+          getToken={getToken}
+          subscriptionTier={clerkTier}
         />;
       case DashboardTab.PROFILE:
         return <ProfileView currentUser={currentUser} />;
