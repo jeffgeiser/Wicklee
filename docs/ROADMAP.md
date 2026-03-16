@@ -205,8 +205,37 @@
 - [ ] **Anomaly Explanation:** Natural language explanation of WES drops, thermal spikes, tok/s regression. Causal chain with recommended action — not just a state label.
 - [ ] **`GET /api/v1/insights/latest`** — same briefing as JSON. Orchestration agents consume Wicklee intelligence, not just raw metrics.
 
+### Pattern Engine — Deterministic Intelligence Briefing Feed *(Sprint 1 shipped)*
+
+> Time-windowed rules engine. Patterns require sustained evidence (`minObservationWindowMs` gate)
+> before firing — no false positives from model-loading spikes. Each insight carries a quantified
+> hook ($/day or tok/s delta) and one-click copy actions. Complementary to the Alert Quartet
+> (which fires on threshold crossings); patterns live in a new "Observations" section in Triage.
+
+**Infrastructure (Sprint 1 ✅)**
+- [x] **`useMetricHistory` hook:** 30s downsampled localStorage rolling buffer. 2,880 samples/node (24h). Stable push/getHistory/getRecent/getWindow/prune API. `metricsToSample()` applies 1024 MB VRAM filter at write time. No re-renders on push.
+- [x] **`patternEngine.ts`:** Pure deterministic evaluator `evaluatePatterns()`. Same inputs → same outputs. Returns `DetectedInsight[]` with `hook`, `body`, `confidence` (building/moderate/high), `confidenceRatio`, tier gate, and copy-button actions.
+- [x] **`ObservationCard`:** Intelligence briefing layout — quantified hook top-right (amber/violet/indigo by type), copy-to-clipboard action buttons (shell command or API endpoint), thin confidence progress bar while building.
+- [x] **Triage tab wiring:** Observations section renders above Local AI Analysis when patterns fire; hidden when no observations active. Pattern evaluator throttled to 30s cycles; samples pushed on every telemetry frame.
+
+**Pattern A — Thermal Performance Drain** (Community ✅)
+- [x] 5-min observation window. Baseline tok/s drawn **only from Normal-thermal samples** so the delta is against the node's own clean-state performance, not a hot vs. slightly-less-hot comparison. Fires when sustained degradation >8%. Hook: `-X tok/s (Y% below Normal baseline)`. Actions: `/api/v1/route/best` endpoint + `curl` health check.
+
+**Pattern B — Phantom Load** (Community ✅)
+- [x] 5-min observation window. Fires when VRAM allocated + watts above idle AND zero inference activity. 1024 MB VRAM filter applied at `metricsToSample()` layer — BMC chips never trigger. Hook: `-$X.XX/day` at configured kWh rate. Actions: `ollama stop` + `ollama ps`.
+
+**Sprint 2 — Planned**
+- [ ] **Pattern C — WES Velocity Drop:** Rate-of-change on WES score over a 10-min window. "Early warning" pattern — fires before thermal state changes. `minObservationWindowMs` = 10 min (highest sensitivity → highest gate). Not in original INSIGHTS.md; new capability from localStorage history.
+- [ ] **Pattern F — Memory Pressure Trajectory:** Rate-of-change on `memory_pressure_percent` → ETA to critical. Pure frontend, no DuckDB required — uses localStorage 24h history. Supersedes the DuckDB-required implementation in Phase 4A for the ETA calculation.
+- [ ] **Observation dismissal:** Per-patternId dismiss (localStorage), resurfaces if condition persists >1h after dismiss.
+- [ ] **Alert wiring:** Map pattern IDs to `alert_rules` event_types in the Slack/email delivery layer (Team+).
+
+**Planned Patterns (future sprints)**
+- [ ] **Pattern D — Power-GPU Decoupling:** High watts + low GPU% = runaway background process. 5-min gate. Cross-correlates board power and GPU utilization.
+- [ ] **Pattern E — Fleet Load Imbalance (Team+):** One node saturated while others idle. Fires after 10 min imbalance. Routes recommendation via `/api/v1/route/best`.
+
 ### Paid Intelligence Insights
-- [ ] **Memory Pressure Forecasting:** Rate-of-change on memory pressure → ETA to critical. "At current rate, this node hits critical in ~7 minutes." Slack alert at 15min and 5min thresholds.
+- [ ] **Memory Pressure Forecasting:** Rate-of-change on memory pressure → ETA to critical. "At current rate, this node hits critical in ~7 minutes." Slack alert at 15min and 5min thresholds. *(Pattern F covers frontend ETA; this item is the Slack alert layer.)*
 - [ ] **Tok/s Regression Detection:** Current probe vs 7-day P50 baseline per node. Alert when >20% degradation.
 - [ ] **Quantization ROI Measurement:** Per-model, per-quant tok/s and W/1K TKN stored in DuckDB. "Q4 vs Q8 on YOUR hardware at YOUR thermal state" — live hardware-specific answer.
 - [ ] **Efficiency Regression per Model:** "WK-C133 used to run llama3.1:8b at 17 tok/s. It now runs it at 11 tok/s." Baseline history required. Slack alert when >20% regression.

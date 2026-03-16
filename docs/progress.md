@@ -4,6 +4,58 @@
 
 ---
 
+## March 15, 2026 — Sprint 1: Pattern Engine + Observations Briefing Feed 🧠
+
+**The Goal:** Build the "Infrastructure of Time" for the Insights tab — a deterministic, time-windowed rules engine that transforms raw telemetry history into actionable operator briefings. No external AI. No threshold crossings. Sustained evidence only.
+
+---
+
+### useMetricHistory Hook ✅
+
+`src/hooks/useMetricHistory.ts` — the memory layer that makes patterns possible.
+
+- **Downsampled storage:** One sample per 30-second bucket per node. Deduplication by bucket timestamp means rapid SSE frames don't bloat the buffer.
+- **Rolling 24h buffer:** 2,880 samples/node max (`24h × 2/min × 60min`). Oldest entries evicted automatically. Survives page refreshes via localStorage.
+- **`metricsToSample()` helper:** Converts live `SentinelMetrics` to a `MetricSample`. Applies `INFERENCE_VRAM_THRESHOLD_MB = 1024` filter at write time — BMC/ASPEED chips never appear in VRAM history.
+- **Stable imperative API:** `push`, `getHistory`, `getRecent`, `getWindow`, `prune`, `clear`. No re-renders on push — callers feed the engine from `useEffect` without causing render loops.
+- **QuotaExceededError handling:** Falls back to trimming the oldest half of all node histories before retrying the localStorage write.
+
+### patternEngine.ts ✅
+
+`src/lib/patternEngine.ts` — the deterministic evaluator.
+
+- **Architecture:** `evaluatePatterns(input)` takes node history + config, returns `DetectedInsight[]`. Pure function — same inputs → same outputs. No side effects, no time.now() divergence except at the call site.
+- **`DetectedInsight` shape:** `patternId`, `hook` (the quantified "so what"), `body`, `confidence` (building/moderate/high), `confidenceRatio` (0–1 for the progress bar), `tier` gate, `actions[]` with copy-text and endpoint flag.
+- **`toConfidence()` helper:** `ratio < 0.5` → building, `< 0.9` → moderate, else high.
+
+**Pattern A — Thermal Performance Drain** (Community)
+- 5-min observation window (10 samples). Baseline tok/s drawn **exclusively from Normal-thermal samples** in history — this was the key refinement. Without it, the delta is "hot vs. slightly less hot" instead of "hot vs. the node's own clean-state capability." Fires when sustained degradation > 8%. Hook: `-X tok/s (Y% below Normal baseline)`.
+
+**Pattern B — Phantom Load** (Community)
+- 5-min observation window. Fires when: watts > idle threshold AND VRAM allocated (`vram_used_mb > 0` after 1024 MB filter) AND tok/s < 0.5 (no meaningful inference). The VRAM gate is what separates this from plain idle cost — a model is loaded, holding VRAM, drawing power, and not serving. Hook: `-$X.XX/day` at configured kWh rate.
+
+### ObservationCard + Triage Wiring ✅
+
+`src/components/insights/ObservationCard.tsx`:
+- **Intelligence briefing layout**: quantified hook top-right in pattern-specific color (amber for thermal drain, violet for phantom load), body paragraph, copy-to-clipboard action buttons.
+- **Confidence progress bar**: renders only when `confidence === 'building'`. Shows "Observing: Xm of Ym required" so operators know the finding is still accumulating evidence — not a false positive.
+- **Copy buttons**: both shell commands (`ollama stop ...`) and API endpoints (`GET /api/v1/route/best`) render as monospace copy chips.
+
+`AIInsights.tsx` wiring:
+- `useMetricHistory` + `evaluatePatterns` added to the component's hook chain.
+- Samples pushed on every telemetry frame (SSE or local); evaluator throttled to 30s cycles via `lastObsEvalRef`.
+- `prune()` called once per eval cycle to evict stale 24h+ entries.
+- "Observations" section renders in Triage tab above Local AI Analysis when patterns fire; hidden when `observations.length === 0`.
+
+### What's Next (Sprint 2)
+
+- **Pattern C — WES Velocity Drop:** 10-min gate. Rate-of-change on WES score — fires before thermal state changes. The true "leading indicator."
+- **Pattern F — Memory Pressure Trajectory:** ETA to critical from localStorage rate-of-change. No DuckDB required — supersedes the Phase 4A DuckDB implementation for the ETA calculation.
+- **Observation dismissal:** Per-patternId dismiss with 1h snooze.
+- **Alert wiring:** Map pattern IDs to `alert_rules` event_types (Team+ delivery via Slack/email).
+
+---
+
 ## March 15, 2026 — Phase 4A: Alerting Engine + Settings UI + VRAM Fixes 🔔
 
 **The Goal:** Ship the full Phase 4A notification pipeline (Slack + Resend delivery, stateful eval loop, CRUD API), build the Settings UI for Alerts & Notifications, fix VRAM display for Apple Silicon and EPYC nodes, and tighten the sidebar profile menu.

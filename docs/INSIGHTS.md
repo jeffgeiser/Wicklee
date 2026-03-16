@@ -63,7 +63,37 @@ WES is the primary input to three of the 15 insights:
 
 ---
 
-## The 15 Insights
+## Implementation Status
+
+| # | Insight | Status | Mechanism | Tier |
+|---|---|---|---|---|
+| 1 | Unified Memory Exhaustion Warning | ✅ Shipped (Phase 3A) | Threshold crossing, live | Community |
+| 2 | Fleet WES Leaderboard | ✅ Shipped (Phase 3A) | Live calculation | Community |
+| 3 | Thermal Degradation Correlation | ✅ Shipped (Phase 3A) | Threshold crossing, live | Community |
+| 4 | Idle Fleet Cost | ✅ Shipped (Phase 3A) | Live calculation | Community |
+| 5 | Model-to-Hardware Fit Score | ✅ Shipped (Phase 3A) | Live calculation | Community |
+| 6 | Cross-Node Inference Routing | 🔲 Phase 5 | Sentinel Proxy | Enterprise |
+| 7 | Memory Pressure Forecasting | 🔲 Phase 4A open | DuckDB rate-of-change | Team+ |
+| 8 | Cold Start Detection | ✅ Shipped (Phase 3B) | Hardware pattern | Community |
+| 9 | Quantization ROI | ✅ Live card (Phase 3A) · 🔲 Historical (Phase 4A) | Live / DuckDB | Community / Team+ |
+| 10 | Fleet Thermal Diversity Score | ✅ Shipped (Phase 3A) | Live distribution | Community |
+| 11 | Power Anomaly Detection | ✅ Shipped (Phase 3A) | Cross-correlated live | Community |
+| 12 | Sovereignty Audit Trail | ✅ UI (Phase 3B) · 🔲 Signed export (Phase 5) | UI / Enterprise | Community+ |
+| 13 | Model Eviction Prediction | ✅ Shipped (Phase 3A) | /api/ps + timer | Community |
+| 14 | Fleet Inference Density Map | ✅ Shipped (Phase 3A) | HexHive visualization | Community |
+| 15 | Efficiency Regression per Model | 🔲 Phase 4A open | DuckDB per-model baseline | Team+ |
+| A | Thermal Performance Drain *(Pattern Engine)* | ✅ Shipped (Sprint 1) | Time-windowed, localStorage | Community |
+| B | Phantom Load *(Pattern Engine)* | ✅ Shipped (Sprint 1) | Time-windowed, localStorage | Community |
+| C | WES Velocity Drop *(Pattern Engine)* | 🔲 Sprint 2 | Rate-of-change, localStorage | Community |
+| F | Memory Pressure Trajectory *(Pattern Engine)* | 🔲 Sprint 2 | Rate-of-change, localStorage | Community |
+| D | Power-GPU Decoupling *(Pattern Engine)* | 🔲 Sprint 3 | Cross-correlated, localStorage | Community |
+| E | Fleet Load Imbalance *(Pattern Engine)* | 🔲 Sprint 3 | Fleet-wide, localStorage | Team+ |
+
+**11 of 15 original insights shipped.** 2 pattern engine observations also live. 4 open items remain: #7 (Memory Forecasting alert layer), #15 (Efficiency Regression), #6 (Sentinel Proxy), #9 historical.
+
+---
+
+## The 15 Original Insights
 
 ### #1 — Unified Memory Exhaustion Warning
 **Tagline:** Warns before the swap storm hits — not after.
@@ -301,6 +331,130 @@ Per-node, per-model efficiency regression is invisible without baseline history.
 - **Free:** No
 - **Paid:** Team Edition — Slack alert when regression >20% vs 7-day baseline
 - **Phase:** Phase 4A — requires per-model DuckDB history
+
+---
+
+---
+
+## Pattern Engine — Time-Windowed Intelligence
+
+> The 15 original insights are threshold-crossing cards — they fire the moment a condition
+> is detected. The Pattern Engine is a complementary layer: deterministic time-windowed rules
+> that require sustained evidence before surfacing a finding. No false positives from
+> model-loading spikes. No AI required.
+>
+> Pattern findings appear in an **"Observations"** section in the Insights → Triage tab,
+> styled as an intelligence briefing feed rather than alert cards.
+
+### Architecture
+
+```
+useMetricHistory (hook)          patternEngine.ts (evaluator)
+┌──────────────────────────┐     ┌────────────────────────────────┐
+│ localStorage rolling buf │     │ evaluatePatterns(input)         │
+│ 1 sample / 30s / node    │────▶│   → DetectedInsight[]           │
+│ 2,880 samples = 24h      │     │                                 │
+│ metricsToSample() applies│     │ Each insight:                   │
+│ 1024 MB VRAM filter      │     │   hook     — quantified "$-or-  │
+└──────────────────────────┘     │             metric" number      │
+                                 │   body     — causal explanation │
+         AIInsights.tsx          │   confidence — building/mod/high│
+         pushes samples on       │   actions  — copy-to-clipboard  │
+         every SSE frame         │             shell or endpoint   │
+         evaluates every 30s     └────────────────────────────────┘
+```
+
+### Pattern A — Thermal Performance Drain ✅ (Sprint 1, Community)
+
+**What:** Node sustaining elevated thermal penalty with measurable tok/s loss vs. its own Normal-thermal baseline.
+
+**Key design decisions:**
+- Baseline tok/s drawn **only from Normal-thermal samples** in the 24h history. This was the critical refinement — without it the delta is "hot vs. slightly less hot" rather than "hot vs. the node's clean-state capability."
+- `minObservationWindowMs = 5 min` (10 samples). Thermal loading spikes during model load don't trigger it.
+- Fires only when sustained degradation > 8%.
+
+**Hook:** `-X tok/s (Y% below Normal baseline)`
+**Action:** `GET /api/v1/route/best` · `curl localhost:7700/api/health | jq '.thermal_state'`
+**Relationship to #3:** #3 (Thermal Degradation Correlation) fires immediately on `thermal_state` change. Pattern A requires 5 min of sustained evidence and provides a quantified tok/s delta against a clean baseline — not just a state label.
+
+---
+
+### Pattern B — Phantom Load ✅ (Sprint 1, Community)
+
+**What:** A model is loaded and holding VRAM + drawing power with zero inference activity. Pure OpEx waste.
+
+**Key design decisions:**
+- VRAM gate: `vram_used_mb > 0` using the 1024 MB filtered field in `MetricSample`. BMC/ASPEED/Matrox chips never appear here — the filter is applied at `metricsToSample()` write time, not at eval time.
+- Watts gate: `> 5W idle baseline` (excludes truly idle CPU-only nodes).
+- Inference gate: `tok_s < 0.5` (no meaningful inference activity).
+- `minObservationWindowMs = 5 min` (70% of samples must match).
+
+**Hook:** `-$X.XX/day` at configured kWh rate
+**Action:** `ollama stop $(ollama ps | awk 'NR>1 {print $1}')` · `ollama ps`
+**Relationship to #4/#11:** #4 (Idle Fleet Cost) fires when a node is idle ≥1 hr (no inference). #11 (Power Anomaly) fires on high watts at low GPU%. Pattern B is their intersection: model loaded + VRAM held + power drawn + zero inference. More specific and more immediately actionable.
+
+---
+
+### Pattern C — WES Velocity Drop 🔲 (Sprint 2, Community)
+
+**What:** Rate-of-change on WES score over a 10-min window is sharply negative — WES is dropping before thermal state changes or thresholds are crossed.
+
+**Why it matters:** The leading indicator. Thermal state transitions happen after throttle is already occurring. WES velocity captures the inflection point — the first 3–5 minutes of degradation before any threshold fires.
+
+**Design constraints:**
+- `minObservationWindowMs = 10 min` — highest gate of all patterns. WES is sensitive to tok/s probe noise; requiring 10 min prevents model-loading dips from triggering.
+- Baseline: WES P50 from last 60 samples (30 min). Velocity: slope of last 20 samples (10 min). Fires when slope < −5% per sample window AND absolute WES has dropped > 15%.
+
+**Hook:** `-Y% WES in 10 min (dropping)`
+**Relationship:** Not in original INSIGHTS.md. New capability unlocked by the localStorage history layer.
+
+---
+
+### Pattern F — Memory Pressure Trajectory 🔲 (Sprint 2, Community)
+
+**What:** `memory_pressure_percent` has been rising monotonically for 10+ min at a rate that projects to critical within the session.
+
+**Why it matters:** The existing #7 (Memory Pressure Forecasting) requires DuckDB history and is gated to Team+. Pattern F delivers the ETA calculation using localStorage history — available to all Community users without a cloud backend.
+
+**Design constraints:**
+- `minObservationWindowMs = 10 min`. Pressure fluctuates; need a real trend before projecting.
+- ETA = linear regression over last 20 samples. Fire only when projected time-to-critical < 30 min.
+- Suppressed if `MemoryExhaustionCard` (threshold-crossing) is already firing — no double-alerting.
+
+**Hook:** `~Xm to critical memory pressure`
+**Relationship:** Supersedes the "requires DuckDB" implementation in Phase 4A for the ETA calculation itself. The alert notification (Slack at 15m/5m) remains a Team+ paid layer.
+
+---
+
+### Pattern D — Power-GPU Decoupling 🔲 (Sprint 3, Community)
+
+**What:** Board power > 2× session baseline AND GPU utilization < 20% for a sustained window. Something is consuming power that isn't inference work.
+
+**Relationship to #11:** #11 (Power Anomaly) fires on immediate threshold crossing. Pattern D requires sustained evidence (5 min) and quantifies the magnitude of the decoupling — not just "anomaly detected" but "X watts unexplained."
+
+---
+
+### Pattern E — Fleet Load Imbalance 🔲 (Sprint 3, Team+)
+
+**What:** One or more nodes saturated (GPU% > 85% or mem pressure > 80%) while other fleet nodes are idle. Load distribution is suboptimal.
+
+**Why Team+:** Requires fleet-wide view. Cockpit (single-node) can't evaluate imbalance.
+**Hook:** Throughput left on the table (estimated tok/s from idle nodes)
+**Action:** `GET /api/v1/route/best`
+
+---
+
+## Gaps in Original INSIGHTS.md
+
+Three shipped capabilities have no entry in the original 15:
+
+| Capability | Status | Notes |
+|---|---|---|
+| **Thermal Cost %** | ✅ Shipped (Phase 3B) | TC% = `(penalized WES - raw WES) / raw WES`. Named badge in Fleet Status table; alert card in Triage. Not a standalone insight in the original list — deserves its own entry. |
+| **WES History Chart** | ✅ Shipped (Phase 3B) | Per-node penalized WES trend with raw WES ceiling reference. Time-range gated. Primary benchmark visualization tool. Original INSIGHTS.md doesn't address historical WES at all. |
+| **Benchmark Report Export** | ✅ Shipped (Phase 3B) | Reproducible, citable snapshot: model, quant, tok/s, watts, raw/penalized WES, TC%, thermal source, WES version. Markdown + JSON download. Not in original 15. |
+
+These should be added as **#16, #17, #18** in a future INSIGHTS.md revision or treated as subsections of existing insights.
 
 ---
 
