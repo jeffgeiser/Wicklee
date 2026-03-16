@@ -674,8 +674,11 @@ const AlertsSection: React.FC<{
   subscriptionTier: string;
   getToken?: () => Promise<string | null>;
   nodes: NodeAgent[];
-}> = ({ pairingInfo, subscriptionTier, getToken, nodes }) => {
-  const isCloudMode  = pairingInfo?.status === 'connected';
+}> = ({ pairingInfo: _pairingInfo, subscriptionTier, getToken, nodes }) => {
+  // Cloud mode = any build that isn't the embedded agent binary (localhost:7700).
+  // pairingInfo.status tracks whether a local node is paired — irrelevant here.
+  // On wicklee.dev the user is already in the fleet regardless of local pairing state.
+  const isCloudMode  = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
   const isTeam       = subscriptionTier === 'team' || subscriptionTier === 'enterprise';
   const { channels, rules, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule } =
     useAlerts(getToken, isCloudMode && isTeam);
