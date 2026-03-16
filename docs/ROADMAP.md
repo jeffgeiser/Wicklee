@@ -88,7 +88,7 @@
 - [x] **Cost & Energy section:** kWh rate, currency, PUE multiplier with live cost preview
 - [x] **Node Configuration table:** per-node overrides for kWh, currency, PUE, location label
 - [x] **Display & Units:** temperature units, power display, WES precision, theme
-- [x] **Alerts & Notifications:** locked preview (Phase 4A)
+- [x] **Alerts & Notifications:** full Team+ UI — channel management (Slack/email), rule builder, test button. Community: upgrade prompt. Local mode: locked. (Phase 4A shipped)
 - [x] **Account & Data:** agent version, pairing, export, danger zone
 - [x] **Reset button polish:** column reset label shortened to "Reset"; right-aligned under kWh Rate and PUE to match column text alignment
 
@@ -213,8 +213,9 @@
 - [ ] **Fleet Degradation Trend:** Fleet-wide tok/s trend over 7/30 days.
 
 ### Notifications
-- [ ] **Slack / PagerDuty Webhook System:** Per-node, per-event-type configuration. Urgency levels: immediate, 5-min debounce, 15-min debounce, daily digest.
-- [ ] **Alert Threshold Configuration:** Per-node thresholds for thermal, power, tok/s, memory pressure.
+- [x] **Slack / Resend (Email) Webhook System:** Per-node, per-event-type configuration. Urgency levels: immediate, 5-min debounce, 15-min debounce. Slack Block Kit formatting + HTML email with plain-text fallback. 5-min flap suppression via `quiet_until_ms`. Resolution notifications sent when condition clears. Team+ only (`subscription_tier` column on `users` table; `402` for community).
+- [x] **Alert Threshold Configuration:** Per-node thresholds for thermal_serious, thermal_critical, memory_pressure_high, wes_drop. Fleet-wide or scoped to a specific node. CRUD API: 7 handlers for channels and rules. Settings UI with full channel management (test button) and rule builder.
+- [x] **node_offline detection:** Independent 60s Tokio interval task — stateful via `alert_events`, fires once per outage, resolves when node reconnects.
 - [ ] **Idle Cost Weekly Digest:** "Fleet idle cost this week: $X" — emailed or Slacked Monday 9am.
 
 ---
