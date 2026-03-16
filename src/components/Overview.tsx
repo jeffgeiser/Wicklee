@@ -379,8 +379,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // falls back to 75% of total RAM for older agents that don't emit the field.
   // available_memory_mb (free + inactive pages) is how much the OS can still wire
   // for a model load; capped at wired_limit_mb to avoid overstating headroom.
-  const wiredLimitMb = m?.gpu_wired_limit_mb
-    ?? (isAppleSilicon && m != null ? Math.round(m.total_memory_mb * 0.75) : null);
+  // Treat gpu_wired_limit_mb === 0 the same as null — agent sends 0 when the
+  // sysctl probe fails on some macOS versions; fall back to the 75% estimate.
+  const wiredLimitMb = (m?.gpu_wired_limit_mb != null && m.gpu_wired_limit_mb > 0)
+    ? m.gpu_wired_limit_mb
+    : (isAppleSilicon && m != null ? Math.round(m.total_memory_mb * 0.75) : null);
   const gpuAvailMb  = (wiredLimitMb != null && m != null)
     ? Math.max(0, Math.min(wiredLimitMb, m.available_memory_mb))
     : null;
@@ -1207,9 +1210,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Apple Silicon wired-budget for NODE VRAM tile (isLocalMode only).
   // Mirrors FleetStatusRow: wired_limit_mb (exact from sysctl) or 75% of total RAM fallback.
   // available_memory_mb (free + inactive pages) is capped at wired_limit to avoid overstating.
+  // gpu_wired_limit_mb === 0 means the sysctl probe failed — treat as null and use the estimate.
   const localIsAppleSilicon = sentinel?.memory_pressure_percent != null;
-  const localWiredLimitMb = sentinel?.gpu_wired_limit_mb
-    ?? (localIsAppleSilicon && sentinel != null ? Math.round(sentinel.total_memory_mb * 0.75) : null);
+  const localWiredLimitMb = (sentinel?.gpu_wired_limit_mb != null && sentinel.gpu_wired_limit_mb > 0)
+    ? sentinel.gpu_wired_limit_mb
+    : (localIsAppleSilicon && sentinel != null ? Math.round(sentinel.total_memory_mb * 0.75) : null);
   const localGpuAvailMb = (localWiredLimitMb != null && sentinel != null)
     ? Math.max(0, Math.min(localWiredLimitMb, sentinel.available_memory_mb))
     : null;
@@ -1671,7 +1676,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               Cost / 1M Tokens
             </MetricTooltip>
           }
-          value={displayCostPer1k != null ? `$${(displayCostPer1k * 1000).toFixed(2)}` : '—'}
+          value={(() => {
+              if (displayCostPer1k == null) return '—';
+              const per1M = displayCostPer1k * 1000;
+              if (per1M < 0.001) return '< $0.001';
+              return `$${per1M.toFixed(3)}`;
+            })()}
           valueCls={displayCostPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={`at $${fleetKwhRate}/kWh`}
           icon={DollarSign}
