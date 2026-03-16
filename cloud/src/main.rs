@@ -882,6 +882,8 @@ async fn handle_delete_node(
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let db = state.db.clone();
+    // Keep a copy of node_id for the in-memory eviction step below.
+    let node_id_evict = node_id.clone();
 
     let result: Option<usize> = tokio::task::spawn_blocking(move || {
         let conn    = db.lock().unwrap();
@@ -909,7 +911,14 @@ async fn handle_delete_node(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
         Some(0) => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
-        Some(_) => StatusCode::NO_CONTENT.into_response(),
+        Some(_) => {
+            // Evict the node from the in-memory telemetry cache immediately.
+            // The SSE fleet stream builds its payload by iterating metrics_map,
+            // so without this the deleted node reappears in SSE snapshots for
+            // up to ~60 s (the stream's node-set refresh interval).
+            state.metrics.write().unwrap().remove(&node_id_evict);
+            StatusCode::NO_CONTENT.into_response()
+        }
     }
 }
 
