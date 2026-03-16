@@ -78,6 +78,25 @@ function nonNull<T>(arr: (T | null | undefined)[]): T[] {
   return arr.filter((v): v is T => v != null);
 }
 
+/**
+ * Ordinary least-squares slope over an array of y values.
+ * x is implicitly [0, 1, 2, …, n-1] (one unit = one sample = SAMPLE_INTERVAL_MS).
+ * Returns the slope in y-units per sample.
+ */
+function linearSlope(values: number[]): number {
+  const n = values.length;
+  if (n < 2) return 0;
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumX  += i;
+    sumY  += values[i];
+    sumXY += i * values[i];
+    sumX2 += i * i;
+  }
+  const denom = n * sumX2 - sumX * sumX;
+  return denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+}
+
 // ── Pattern A: Thermal Performance Drain ─────────────────────────────────────
 //
 // What: Node is sustaining an elevated thermal penalty, measurably reducing
@@ -255,6 +274,189 @@ function evaluatePatternB(
   };
 }
 
+// ── Pattern C: WES Velocity Drop ─────────────────────────────────────────────
+//
+// What: WES score is declining at a sustained rate over a 10-min window —
+// the "leading indicator" that fires BEFORE thermal state changes.
+//
+// Refinements applied:
+//   - minObservationWindowMs = 10 min (highest gate of all patterns — most
+//     sensitive and most prone to false positives from model-loading spikes).
+//   - Suppresses when thermal_state is already Serious/Critical: Pattern A
+//     has more diagnostic value at that point.
+//   - Requires both a negative slope AND >10% total WES drop across the
+//     window to filter out flat noise that a slope alone can't distinguish.
+//
+// Community tier.
+
+const PATTERN_C_ID            = 'wes_velocity_drop';
+const PATTERN_C_MIN_WINDOW_MS = 10 * 60 * 1000;   // 10 min — highest gate
+const PATTERN_C_MIN_SAMPLES   = Math.ceil(PATTERN_C_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 20
+
+function evaluatePatternC(
+  nodeId: string,
+  hostname: string,
+  history: MetricSample[],
+  now: number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_C_MIN_SAMPLES) return null;
+
+  const recent    = history.slice(-PATTERN_C_MIN_SAMPLES);
+  const wesValues = nonNull(recent.map(s => s.wes_score));
+
+  // Need dense WES coverage across the window
+  if (wesValues.length < Math.ceil(PATTERN_C_MIN_SAMPLES * 0.7)) return null;
+
+  // Suppress if already in serious thermal state — Pattern A covers it better
+  const latestThermal = recent[recent.length - 1]?.thermal_state;
+  if (latestThermal === 'Serious' || latestThermal === 'Critical') return null;
+
+  // Slope in WES units per sample (one sample = 30s)
+  const slopePerSample = linearSlope(wesValues);
+  const slopePerMin    = slopePerSample * 2;   // 2 samples/min
+
+  // Must be a meaningful sustained decline
+  if (slopePerMin >= -0.5) return null;
+
+  const firstWes  = wesValues[0];
+  const lastWes   = wesValues[wesValues.length - 1];
+  const dropPct   = firstWes > 0 ? ((firstWes - lastWes) / firstWes) * 100 : 0;
+
+  // Require at least 10% total drop — filters flat but noisy slopes
+  if (dropPct < 10) return null;
+
+  // Project time until WES halves from current value (rough ETA for urgency)
+  const minutesToHalf = (lastWes > 0 && slopePerMin < 0)
+    ? (lastWes / 2) / Math.abs(slopePerMin)
+    : null;
+
+  const observedMs  = wesValues.length * SAMPLE_INTERVAL_MS;
+  const ratio       = Math.min(observedMs / PATTERN_C_MIN_WINDOW_MS, 1);
+
+  return {
+    patternId:       PATTERN_C_ID,
+    nodeId,
+    hostname,
+    title:           'WES Velocity Drop',
+    hook:            `${slopePerMin.toFixed(1)} WES/min · ${dropPct.toFixed(0)}% drop`,
+    body:            `${hostname}'s efficiency score has been declining at ` +
+                     `${Math.abs(slopePerMin).toFixed(1)} WES/min for the last ` +
+                     `${Math.round(observedMs / 60000)} min ` +
+                     `(${firstWes.toFixed(0)} → ${lastWes.toFixed(0)} WES). ` +
+                     `Thermal state has not yet changed — this is an early warning. ` +
+                     `${minutesToHalf != null && minutesToHalf < 60
+                       ? `At this rate WES will halve in ~${Math.round(minutesToHalf)} min. `
+                       : ''}` +
+                     `Check ambient temperature, workload mix, or competing background processes.`,
+    requiredMs:      PATTERN_C_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'community',
+    actions: [
+      {
+        label:    'Route away now',
+        copyText: 'GET /api/v1/route/best',
+        isEndpoint: true,
+      },
+      {
+        label:    'Check WES + thermal',
+        copyText: `curl http://localhost:7700/api/health | jq '{wes:.wes_score,thermal:.thermal_state}'`,
+      },
+    ],
+    firstFiredMs: now,
+  };
+}
+
+// ── Pattern F: Memory Pressure Trajectory ────────────────────────────────────
+//
+// What: Apple Silicon unified memory pressure is rising at a sustained rate.
+// Linear regression projects an ETA to the critical threshold — fires before
+// the swap storm, not after.
+//
+// Refinements applied:
+//   - Pure localStorage history — no DuckDB required for the ETA calculation.
+//   - minObservationWindowMs = 10 min.
+//   - Suppresses when mem_pressure_pct is already ≥ 80%: MemoryExhaustionCard
+//     already fires at that point and has higher diagnostic value.
+//   - Only fires when projected ETA to critical (85%) is < 30 min.
+//
+// Community tier.
+
+const PATTERN_F_ID             = 'memory_trajectory';
+const PATTERN_F_MIN_WINDOW_MS  = 10 * 60 * 1000;   // 10 min
+const PATTERN_F_MIN_SAMPLES    = Math.ceil(PATTERN_F_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 20
+const PATTERN_F_CRITICAL_PCT   = 85;   // memory pressure % that triggers swap
+const PATTERN_F_ETA_GATE_MIN   = 30;   // only fire when ETA < 30 min
+
+function evaluatePatternF(
+  nodeId: string,
+  hostname: string,
+  history: MetricSample[],
+  now: number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_F_MIN_SAMPLES) return null;
+
+  const recent    = history.slice(-PATTERN_F_MIN_SAMPLES);
+  const memValues = nonNull(recent.map(s => s.mem_pressure_pct));
+
+  // mem_pressure_pct is Apple Silicon only — need dense coverage
+  if (memValues.length < Math.ceil(PATTERN_F_MIN_SAMPLES * 0.7)) return null;
+
+  const currentMem = memValues[memValues.length - 1];
+
+  // Suppress if already critical — MemoryExhaustionCard has higher value
+  if (currentMem >= 80) return null;
+
+  // Slope in pct per sample (one sample = 30s)
+  const slopePerSample = linearSlope(memValues);
+
+  // Only fire on a rising trend
+  if (slopePerSample <= 0) return null;
+
+  const slopePerMin = slopePerSample * 2;   // 2 samples/min
+  const headroom    = PATTERN_F_CRITICAL_PCT - currentMem;
+  const etaMinutes  = headroom / slopePerMin;
+
+  // Only fire if ETA to critical is within the gate and in the future
+  if (etaMinutes <= 0 || etaMinutes > PATTERN_F_ETA_GATE_MIN) return null;
+
+  const observedMs  = memValues.length * SAMPLE_INTERVAL_MS;
+  const ratio       = Math.min(observedMs / PATTERN_F_MIN_WINDOW_MS, 1);
+  const etaRounded  = Math.round(etaMinutes);
+
+  return {
+    patternId:       PATTERN_F_ID,
+    nodeId,
+    hostname,
+    title:           'Memory Pressure Trajectory',
+    hook:            `Critical in ~${etaRounded}m`,
+    body:            `${hostname}'s memory pressure is rising at ` +
+                     `${slopePerMin.toFixed(1)}%/min (currently ${currentMem.toFixed(0)}%). ` +
+                     `At this rate it will hit the critical threshold ` +
+                     `(${PATTERN_F_CRITICAL_PCT}%) in ~${etaRounded} min. ` +
+                     `Swap activity and inference stalls follow immediately after. ` +
+                     `Unload the largest model or stop background processes now ` +
+                     `to avoid a swap storm.`,
+    requiredMs:      PATTERN_F_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'community',
+    actions: [
+      {
+        label:    'Unload model',
+        copyText: `ollama stop $(ollama ps | awk 'NR>1 {print $1}')`,
+      },
+      {
+        label:    'Check memory pressure',
+        copyText: `curl http://localhost:7700/api/health | jq '.memory_pressure_percent'`,
+      },
+    ],
+    firstFiredMs: now,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -284,6 +486,12 @@ export function evaluatePatterns(
 
   const b = evaluatePatternB(nodeId, hostname, history, now, kwhRate);
   if (b) results.push(b);
+
+  const c = evaluatePatternC(nodeId, hostname, history, now);
+  if (c) results.push(c);
+
+  const f = evaluatePatternF(nodeId, hostname, history, now);
+  if (f) results.push(f);
 
   return results;
 }
