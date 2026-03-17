@@ -1651,23 +1651,15 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 let probe = nvml.device_by_index(0).ok();
                 let name  = probe.as_ref().and_then(|d| d.name().ok());
 
-                // System RAM total — used as the Unified pool denominator.
-                // Read from /proc/meminfo on Linux; MemTotal is in kB.
-                #[cfg(target_os = "linux")]
-                let sys_total_mb: u64 = std::fs::read_to_string("/proc/meminfo")
-                    .unwrap_or_default()
-                    .lines()
-                    .find(|l| l.starts_with("MemTotal:"))
-                    .and_then(|l| l.split_whitespace().nth(1))
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .map(|kb| kb / 1024)
-                    .unwrap_or(0);
-
-                #[cfg(target_os = "windows")]
+                // System RAM total — used as the Unified pool denominator on
+                // hardware where NVML reports no dedicated VRAM (GB10, etc.).
+                // sysinfo is already a direct dependency and handles both Linux
+                // (/proc/meminfo) and Windows (GlobalMemoryStatusEx) internally,
+                // so no platform-specific code is needed here.
                 let sys_total_mb: u64 = {
-                    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-                    let mut ms = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..unsafe { std::mem::zeroed() } };
-                    if unsafe { GlobalMemoryStatusEx(&mut ms) } != 0 { ms.ullTotalPhys / 1_048_576 } else { 0 }
+                    let mut sys = sysinfo::System::new();
+                    sys.refresh_memory();
+                    sys.total_memory() / 1_048_576
                 };
 
                 let api = match probe.as_ref().map(|d| d.memory_info()) {
