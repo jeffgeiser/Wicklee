@@ -439,7 +439,9 @@ const MgmtRow: React.FC<{
               <p className="text-xs font-telin text-indigo-400/90 truncate">{chipName}</p>
               <p className="text-[10px] text-gray-500 truncate">
                 {m?.nvidia_vram_total_mb != null
-                  ? 'NVIDIA · Discrete GPU'
+                  ? (m.total_memory_mb > 0 && m.nvidia_vram_total_mb >= m.total_memory_mb * 0.9
+                      ? 'NVIDIA · Unified Memory'
+                      : 'NVIDIA · Discrete GPU')
                   : os === 'macOS'
                   ? 'ARM · Unified Memory'
                   : m?.arch === 'aarch64'
