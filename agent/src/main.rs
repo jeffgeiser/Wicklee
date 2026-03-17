@@ -1556,19 +1556,24 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16)
 // directly through the nvml-wrapper-sys bindings.
 //
 // This function takes an already-loaded NvmlLib (no dlopen inside the poll
-// loop) and an already-resolved nvmlDevice_t handle, making it zero-overhead
-// for all discrete GPU hardware — the caller only reaches this path when v1
-// has already been confirmed unavailable at harvester startup.
+// loop) and acquires the device handle internally.  The raw nvmlDevice_t
+// pointer is created and consumed within this synchronous fn — it never
+// escapes into the async task, keeping the future Send-safe.
 //
 // Returns (total_mb, used_mb) on success, None if v2 is also unsupported.
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
-fn nvml_memory_v2(lib: &nvml_wrapper_sys::bindings::NvmlLib, dev: nvmlDevice_t) -> Option<(u64, u64)> {
+fn nvml_memory_v2(lib: &nvml_wrapper_sys::bindings::NvmlLib, device_index: u32) -> Option<(u64, u64)> {
     use std::mem;
     // NVML_STRUCT_VERSION(Memory, 2) = sizeof(nvmlMemory_v2_t) | (2 << 24)
     let version: u32 = (mem::size_of::<nvmlMemory_v2_t>() as u32) | (2_u32 << 24);
 
     unsafe {
-        let mem_fn = lib.nvmlDeviceGetMemoryInfo_v2.as_ref().ok()?;
+        let handle_fn = lib.nvmlDeviceGetHandleByIndex_v2.as_ref().ok()?;
+        let mem_fn    = lib.nvmlDeviceGetMemoryInfo_v2.as_ref().ok()?;
+
+        let mut dev: nvmlDevice_t = std::ptr::null_mut();
+        if handle_fn(device_index, &mut dev) != 0 { return None; }
+
         let mut info: nvmlMemory_v2_t = mem::zeroed();
         info.version = version;
         if mem_fn(dev, &mut info) != 0 || info.total == 0 { return None; }
@@ -1631,20 +1636,6 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 (name, api)
             };
 
-            // When the v2 path is in use we need a raw device handle to pass
-            // to nvml_memory_v2().  Obtain it via the lib rather than the
-            // nvml-wrapper Device (whose private `device` field is not exposed).
-            #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
-            let raw_dev_for_v2: Option<nvmlDevice_t> = match &mem_api {
-                MemApi::V2(lib) => unsafe {
-                    lib.nvmlDeviceGetHandleByIndex_v2.as_ref().ok().and_then(|f| {
-                        let mut dev: nvmlDevice_t = std::ptr::null_mut();
-                        if f(0, &mut dev) == 0 { Some(dev) } else { None }
-                    })
-                },
-                MemApi::V1 => None,
-            };
-
             let mut interval = tokio::time::interval(Duration::from_secs(2));
             loop {
                 interval.tick().await;
@@ -1671,11 +1662,9 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                         }
                     }
                     MemApi::V2(lib) => {
-                        if let Some(dev) = raw_dev_for_v2 {
-                            if let Some((total, used)) = nvml_memory_v2(lib, dev) {
-                                m.nvidia_vram_total_mb = Some(total);
-                                m.nvidia_vram_used_mb  = Some(used);
-                            }
+                        if let Some((total, used)) = nvml_memory_v2(lib, 0) {
+                            m.nvidia_vram_total_mb = Some(total);
+                            m.nvidia_vram_used_mb  = Some(used);
                         }
                     }
                 }
