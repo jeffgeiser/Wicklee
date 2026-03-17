@@ -4,20 +4,23 @@
 
 ---
 
-## ✅ Shipped (v0.4.5)
+## ✅ Shipped (v0.4.16)
 
 **Agent & Platform**
 - Rust agent, single binary — zero runtime dependencies, ~700KB
 - Embedded React/Tailwind dashboard at `localhost:7700`
 - Sudoless Deep Metal on Apple Silicon: CPU, GPU, Thermal State, Memory Pressure
 - NVIDIA/NVML support: board power, VRAM used/total, GPU temp — sudoless on Linux
+- **NVIDIA GB10 Grace Blackwell (DGX Spark) unified memory** — `MemApi::Unified` uses process residency for VRAM; no discrete framebuffer required. Three-way probe: V1 (discrete) → V2 (Hopper HBM) → Unified (GB10 / shared pool)
 - Linux musl binaries — runs on Ubuntu 18.04+ with no glibc dependency
 - Linux RAPL CPU power via `/sys/class/powercap` (kernel 5.10+)
 - AMD Ryzen chip name detection from `/proc/cpuinfo`
+- **ARM chip_name fallback** — `/sys/firmware/devicetree/base/model` for boards where `/proc/cpuinfo` has no `model name` (NVIDIA Grace, Ampere Altra)
 - Windows support via NVML
 - Global CLI install: `curl -fsSL https://wicklee.dev/install.sh | bash`
 - PowerShell install: `irm https://wicklee.dev/install.ps1 | iex`
-- 4-platform GitHub Actions release pipeline (macOS, Windows, Linux x64/arm64)
+- **5-platform GitHub Actions release pipeline** (macOS, Windows, Linux x64/arm64, Linux arm64-nvidia)
+- **NVIDIA auto-detection in install.sh** — all Linux arches: `nvidia-smi` / `/dev/nvidia0` → downloads `-nvidia` build automatically
 
 **Fleet & Cloud**
 - 6-digit pairing code — zero-config fleet connection
@@ -140,6 +143,7 @@
 - [ ] **Windows Thermal:** WMI thermal data for Windows nodes. Annotated as "estimated" in UI — lowest data quality platform.
 - [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.
 - [ ] **macOS CPU Power (sudoless):** Entitlement-based `powermetrics` access without requiring root.
+- [x] **Linux arm64-nvidia build** — `ubuntu-24.04-arm` native runner + CUDA aarch64 NVML headers. Enables DGX Spark and Ampere Altra + NVIDIA installs. install.sh auto-detects and downloads correct binary on all Linux arches.
 
 ### WES Platform Expansion
 - [x] **AMD CPU thermal** — k10temp hwmon detection + clock ratio derivation. `cpuinfo_max_freq` cached once at harvester startup. `scaling_cur_freq` averaged across all logical CPUs every 5s. Ratio thresholds: ≥0.95→Normal(1.00), ≥0.80→Fair(1.25), ≥0.60→Serious(1.75), <0.60→Critical(2.50). Tdie > 85°C tie-breaker bumps to at least Serious. `thermal_source: "clock_ratio"` visible in WES breakdown tooltip. **Bonus fix:** generic sysfs path was returning "Elevated" (mapped to penalty 1.0 by default) for 70–79°C; corrected to "Fair" (1.25) — affects all non-AMD Linux nodes in the warm zone. `LinuxThermalResult` struct replaces bare `Option<String>` throughout, carrying state + source + direct_penalty for clean WES sampler integration.
@@ -307,7 +311,9 @@
 
 **Platform Detection & Badges (planned)**
 - [ ] **Node platform badge** in Fleet Status NODE cell — `M3 Max` / `RTX 4090` / `H100 SXM` / `GB10`. Color-coded by tier (gray workstation · blue accelerator). Zero new columns.
-- [ ] **`vram_is_unified` detection in Rust agent** — probe NVML `nvmlSystemGetDriverVersion` + device name heuristic to set flag. GB10 reports unified; all discrete cards report false.
+- [x] **Unified memory handling in Rust agent** — `MemApi::Unified` detects when NVML returns zero VRAM (GB10/shared pool) and falls back to process residency accounting. `total_mb` = system RAM; `used_mb` = sum of `nvmlDeviceGetComputeRunningProcesses()` used bytes. Hardware-agnostic: covers GB10, future SoCs with shared pools.
+- [x] **`NVIDIA · Unified Memory` identity label in UI** — `nvidia_vram_total_mb >= total_memory_mb * 0.9` heuristic detects unified pool without requiring an explicit flag from the agent.
+- [ ] **`vram_is_unified` explicit flag in agent** — emit the typed boolean field so UI doesn't need the heuristic. Phase 5 cleanup.
 - [ ] **`cooling_type` detection** — passive if device name contains "Spark" or DGX SKU; active otherwise.
 - [ ] **NVLink peer detection** — `nvmlDeviceGetNvLinkState` on all links; resolve peer UUID to Wicklee node_id; populate `nvlink_peer_node_id` + `nvlink_bandwidth_gbps`.
 

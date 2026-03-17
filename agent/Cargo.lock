@@ -2216,11 +2216,12 @@ dependencies = [
 
 [[package]]
 name = "wicklee-agent"
-version = "0.4.9"
+version = "0.4.15"
 dependencies = [
  "axum",
  "mime_guess",
  "nvml-wrapper",
+ "nvml-wrapper-sys",
  "reqwest",
  "rust-embed",
  "self_update",

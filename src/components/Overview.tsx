@@ -311,14 +311,14 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const isActive     = isOnline && tps != null && tps > 0;
 
   // Three-state TOK/S display derived from inference_active + GPU%
-  // LIVE:     inference was detected recently (Ollama) OR vLLM is actively serving
-  // BUSY:     GPU ≥ threshold but Ollama not inferring (something else loading GPU)
-  // IDLE-SPD: GPU < threshold, probe ran clean — shows hardware capability baseline
+  // LIVE:     inference confirmed (ollama_inference_active === true) OR vLLM actively serving
+  // BUSY:     GPU ≥ threshold AND inference not confirmed (null = unknown, false = confirmed idle)
+  // IDLE-SPD: GPU below threshold, no active inference — shows hardware capability baseline
   const isInferring = isOnline && (
     inferenceActive === true ||
     (m?.vllm_running === true && (m?.vllm_tokens_per_sec ?? 0) > 0)
   );
-  const isBusy      = isOnline && inferenceActive === false && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isBusy      = isOnline && inferenceActive !== true && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed = isOnline && !isInferring && !isBusy && smoothedTps != null;
 
   // Thermal — not smoothed (state machine, not a continuous signal)
@@ -843,7 +843,7 @@ const DiagnosticRail: React.FC<{
     inferenceActive === true ||
     (s.vllm_running === true && (s.vllm_tokens_per_sec ?? 0) > 0)
   );
-  const isBusy       = !isInferring && inferenceActive === false && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isBusy       = !isInferring && inferenceActive !== true && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed  = !isInferring && !isBusy && smoothedTps != null;
   const hasTps       = s.ollama_running || s.vllm_running;
 

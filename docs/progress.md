@@ -4,6 +4,97 @@
 
 ---
 
+## March 17, 2026 — DGX Spark Full Instrumentation + ARM64 NVIDIA Build 🚀
+
+**The Goal:** Get the NVIDIA GB10 Grace Blackwell (DGX Spark) fully instrumented with live VRAM, watts, and GPU% in the fleet dashboard. Fix ARM chip name detection on Linux. Ship the linux-aarch64-nvidia CI build. Cut v0.4.16.
+
+---
+
+### The GB10 VRAM Problem
+
+`nvidia-smi --query-gpu=memory.total --format=csv,noheader` returns `[N/A]` on the GB10. The Grace Blackwell SoC uses LPDDR5x unified memory — there is no dedicated framebuffer. NVML's standard `nvmlDeviceGetMemoryInfo` and even the v2 Hopper/HBM path both report zero because there is no discrete VRAM budget to report.
+
+**Discovery process:** Confirmed by running `nvidia-smi` directly on the Spark. NUMA node 0 shows 124 GB of system RAM — that IS the GPU's memory pool.
+
+### MemApi::Unified — Process Residency Accounting ✅
+
+Three-way probe at agent startup, now hardware-agnostic across all NVIDIA:
+
+```
+V1           → standard nvmlDeviceGetMemoryInfo returns total > 0  (RTX 4090, etc.)
+V2(NvmlLib)  → nvmlDeviceGetMemoryInfo_v2 (Hopper HBM path)
+Unified      → neither returns VRAM → fall through, use system RAM + process residency
+```
+
+`MemApi::Unified { total_mb }`:
+- `total_mb` = system RAM from `sysinfo::System` (the actual unified pool size)
+- `used_mb` = sum of `used_gpu_memory` across `nvmlDeviceGetComputeRunningProcesses()` — the same accounting nvidia-smi uses when it CAN report memory
+
+This is the correct model: the GB10 reports "no VRAM" not because there is none, but because the pool is shared. Process residency is the ground truth.
+
+**Result:** DGX Spark now shows live VRAM at ~53% with a model loaded. Before: `—`.
+
+### UI Identity Labels ✅
+
+Two bugs fixed simultaneously:
+
+1. **AMD Ryzen showing "ARM · Unified Memory"** — root cause: the identity sublabel check used `cpu_power_w != null` as a proxy for Apple Silicon. RAPL (Linux x86) also sets CPU power, so AMD/Intel nodes were falling into the Apple branch. Fixed with an explicit `os === 'macOS'` gate.
+
+2. **NVIDIA unified memory label** — added detection: `nvidia_vram_total_mb >= total_memory_mb * 0.9` → show `"NVIDIA · Unified Memory"` instead of `"NVIDIA · Discrete GPU"`. This catches GB10 (VRAM total = system RAM) without requiring an explicit flag from the agent.
+
+Final label priority:
+```
+NVIDIA present → unified pool?  → "NVIDIA · Unified Memory"
+                               → "NVIDIA · Discrete GPU"
+macOS          →                  "ARM · Unified Memory"
+Linux aarch64  →                  "ARM · Linux"
+else           →                  "x86"
+```
+
+### ARM chip_name Fallback ✅
+
+On NVIDIA Grace (ARM64) and similar boards, `/proc/cpuinfo` has no `model name` line — it uses a different format. Added fallback to `/sys/firmware/devicetree/base/model` (the standard ARM device tree identifier). Grace CPU on a DGX Spark reports `"NVIDIA Grace Processor"` via this path. No more blank chip names on ARM Linux nodes.
+
+### linux-aarch64-nvidia CI Build ✅
+
+New `build-linux-arm64-nvidia` job in `release.yml` using `ubuntu-24.04-arm` native ARM64 GitHub runner + CUDA aarch64 NVML dev headers (`cuda-nvml-dev-12-8`). Multiple compile errors fixed during CI iteration:
+- `nvmlDeviceGetHandleByIndex_v2` field name (not `nvmlDeviceGetHandleByIndex`)
+- `nvmlDevice_t` is `!Send` — raw pointer can't cross `.await`. Fixed by moving handle acquisition inside `nvml_memory_v2(lib, device_index: u32)` — pointer never escapes the synchronous function
+- `nvml_wrapper::enum_wrappers::device` → correct path is `nvml_wrapper::enums::device`
+- `windows_sys` as transitive dep → replaced with `sysinfo` for cross-platform total RAM
+
+### install.sh NVIDIA Detection ✅
+
+Previously: NVIDIA suffix was only appended for `linux-x86_64`. Now: any Linux arch with `nvidia-smi` in PATH or `/dev/nvidia0` present gets `-nvidia` appended to the asset name. ARM64 NVIDIA boxes (DGX Spark) now auto-download the correct binary.
+
+Also fixed a cosmetic bug: the download echo was showing `linux-aarch64` without the NVIDIA suffix even when downloading the NVIDIA build.
+
+**Text file busy fix:** Install now uses `cp TMP INSTALL.new && mv INSTALL.new INSTALL_PATH` instead of direct `cp` — avoids Linux's "Text file busy" error when replacing a running binary. Atomic directory-entry swap via `mv`.
+
+### v0.4.16 Tagged ✅
+
+`nvml-wrapper-sys = "0.8"` added as direct Cargo.toml dependency (needed for `nvmlMemory_v2_t`, `nvmlDevice_t` bindings). Version bumped to `0.4.16`. Tag pushed; CI green.
+
+### TOK/S Label Bug Fix (IDLE-SPD stuck during inference) ✅
+
+**Symptom:** DGX Spark showed GPU at 90%, tok/s jumping to 86.0, but the TOK/S sublabel remained `IDLE-SPD` instead of transitioning to `BUSY` or `LIVE`.
+
+**Root cause:** `isBusy` required `ollama_inference_active === false` (explicit confirmed-idle). When the field is `null` (timing gap between the Ollama `/api/ps` poll and the SSE push), neither `isInferring` nor `isBusy` was true — the node fell through to `isIdleSpeed` regardless of GPU load.
+
+**Fix:** Changed `inferenceActive === false` → `inferenceActive !== true` in both `isBusy` checks (fleet row + detail rail). When inference is unconfirmed (`null`) and GPU ≥ 50%, `BUSY` is shown. `LIVE` still requires explicit Ollama confirmation — conservative, correct.
+
+---
+
+### What's Next
+
+- **Why `ollama_inference_active` is null on DGX Spark** — investigate Linux-ARM64 Ollama `/api/ps` poll path; LIVE should light up during inference, not just BUSY
+- **Platform detection badges** in Fleet Status NODE cell (M3 Max / RTX 4090 / GB10) — Phase 5 NVIDIA tier
+- **Pattern C — WES Velocity Drop** — leading indicator before thermal state changes
+- **Pattern F — Memory Pressure Trajectory** — ETA to critical from localStorage history
+- **Remote dashboard access** — multi-user relay via fleet cloud (Team feature)
+
+---
+
 ## March 16, 2026 — NVIDIA Accelerator Tier: Type Contract Stubs 🖥️
 
 **The Goal:** Lay the type-level foundation for NVIDIA Accelerator Tier support (Hopper, Blackwell DC, GB10 Grace Blackwell) without touching any runtime logic or UI. Zero cost today; stable contract for Phase 5 implementation.
