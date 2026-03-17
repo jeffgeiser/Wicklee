@@ -179,6 +179,9 @@ struct MetricsPayload {
     vllm_requests_running: Option<u32>,
     /// Compile-time OS — "macOS" | "Linux" | "Windows". Cannot be inferred incorrectly.
     os: String,
+    /// Compile-time CPU architecture — "x86_64" | "aarch64". Constant across the process lifetime.
+    /// Frontend uses this to label ARM Linux nodes correctly in the identity column.
+    arch: String,
     /// Drain-on-send event log. Normally empty; populated when background tasks
     /// (e.g. self-update) emit a notable event. Frontend renders as Live Activity entries.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -1543,54 +1546,50 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16)
 
 // ── NVIDIA Harvester ──────────────────────────────────────────────────────────
 //
-// ── NVML v2 memory info (Grace Blackwell / unified-memory fallback) ───────────
+// ── NVML memory info v2 helper ────────────────────────────────────────────────
 //
 // nvmlDeviceGetMemoryInfo (v1) returns NVML_ERROR_NOT_SUPPORTED on NVIDIA
 // Grace Blackwell (GB10/GB200 Superchip) and similar unified-memory SoC
 // designs where the GPU does not have a traditional dedicated framebuffer.
-// nvmlDeviceGetMemoryInfo_v2 adds a `reserved` field and works on these
-// architectures.  nvml-wrapper 0.10 only wraps v1, so we call v2 directly
-// through the nvml-wrapper-sys bindings.
+// nvmlDeviceGetMemoryInfo_v2 adds a `reserved` field and works correctly on
+// these architectures.  nvml-wrapper 0.10 only wraps v1, so we call v2
+// directly through the nvml-wrapper-sys bindings.
 //
-// The library is already loaded and NVML is already initialised by
-// nvml_wrapper::Nvml::init(); calling NvmlLib::new() again is safe — the OS
-// loader reference-counts the handle and returns the same DSO.
+// This function takes an already-loaded NvmlLib (no dlopen inside the poll
+// loop) and an already-resolved nvmlDevice_t handle, making it zero-overhead
+// for all discrete GPU hardware — the caller only reaches this path when v1
+// has already been confirmed unavailable at harvester startup.
 //
 // Returns (total_mb, used_mb) on success, None if v2 is also unsupported.
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
-fn nvml_memory_info_v2(device_index: u32) -> Option<(u64, u64)> {
+fn nvml_memory_v2(lib: &nvml_wrapper_sys::bindings::NvmlLib, dev: nvmlDevice_t) -> Option<(u64, u64)> {
     use std::mem;
-    use nvml_wrapper_sys::bindings::NvmlLib;
-
     // NVML_STRUCT_VERSION(Memory, 2) = sizeof(nvmlMemory_v2_t) | (2 << 24)
-    let version: u32 =
-        (mem::size_of::<nvmlMemory_v2_t>() as u32) | (2_u32 << 24);
-
-    #[cfg(target_os = "linux")]
-    let lib_names: &[&str] = &["libnvidia-ml.so.1", "libnvidia-ml.so"];
-    #[cfg(target_os = "windows")]
-    let lib_names: &[&str] = &["nvml.dll"];
-
-    let lib = lib_names.iter().find_map(|name| {
-        unsafe { NvmlLib::new(name).ok() }
-    })?;
+    let version: u32 = (mem::size_of::<nvmlMemory_v2_t>() as u32) | (2_u32 << 24);
 
     unsafe {
-        // nvmlInit_v2 is idempotent; safe to call when already initialised.
-        if let Ok(f) = lib.nvmlInit_v2.as_ref() { f(); }
-
-        let handle_fn = lib.nvmlDeviceGetHandleByIndex.as_ref().ok()?;
-        let mem_fn    = lib.nvmlDeviceGetMemoryInfo_v2.as_ref().ok()?;
-
-        let mut dev: nvmlDevice_t = std::ptr::null_mut();
-        if handle_fn(device_index, &mut dev) != 0 { return None; }
-
+        let mem_fn = lib.nvmlDeviceGetMemoryInfo_v2.as_ref().ok()?;
         let mut info: nvmlMemory_v2_t = mem::zeroed();
         info.version = version;
         if mem_fn(dev, &mut info) != 0 || info.total == 0 { return None; }
-
         Some((info.total / 1_048_576, info.used / 1_048_576))
     }
+}
+
+// Helper: load libnvidia-ml at runtime to access v2 APIs not yet exposed by
+// the nvml-wrapper safe layer.  The library is already in-process (loaded by
+// Nvml::init()); the OS loader returns the same DSO handle reference-counted,
+// so this is cheap and does not cause double-init.
+#[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
+fn load_nvml_lib() -> Option<nvml_wrapper_sys::bindings::NvmlLib> {
+    use nvml_wrapper_sys::bindings::NvmlLib;
+
+    #[cfg(target_os = "linux")]
+    let names: &[&str] = &["libnvidia-ml.so.1", "libnvidia-ml.so"];
+    #[cfg(target_os = "windows")]
+    let names: &[&str] = &["nvml.dll"];
+
+    names.iter().find_map(|n| unsafe { NvmlLib::new(n).ok() })
 }
 
 // Initialises NVML on the first call; if unavailable (no drivers, macOS, etc.)
@@ -1610,6 +1609,42 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 Err(_) => return, // diagnostic already logged in run_startup_diagnostics
             };
 
+            // ── One-time setup before the poll loop ───────────────────────────
+            //
+            // GPU name is a static hardware property — query it once here
+            // rather than on every 2-second tick.
+            //
+            // Memory API detection: nvmlDeviceGetMemoryInfo (v1) returns
+            // NOT_SUPPORTED on Grace Blackwell / unified-memory SoCs.  We
+            // probe once at startup to decide which path to use, then hold
+            // either a unit marker (V1) or an open NvmlLib (V2) for the full
+            // session — no dlopen inside the loop.
+            enum MemApi { V1, V2(nvml_wrapper_sys::bindings::NvmlLib) }
+
+            let (gpu_name_cached, mem_api): (Option<String>, MemApi) = {
+                let probe = nvml.device_by_index(0).ok();
+                let name  = probe.as_ref().and_then(|d| d.name().ok());
+                let api   = match probe.as_ref().map(|d| d.memory_info()) {
+                    Some(Ok(_)) => MemApi::V1,
+                    _ => load_nvml_lib().map(MemApi::V2).unwrap_or(MemApi::V1),
+                };
+                (name, api)
+            };
+
+            // When the v2 path is in use we need a raw device handle to pass
+            // to nvml_memory_v2().  Obtain it via the lib rather than the
+            // nvml-wrapper Device (whose private `device` field is not exposed).
+            #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
+            let raw_dev_for_v2: Option<nvmlDevice_t> = match &mem_api {
+                MemApi::V2(lib) => unsafe {
+                    lib.nvmlDeviceGetHandleByIndex.as_ref().ok().and_then(|f| {
+                        let mut dev: nvmlDevice_t = std::ptr::null_mut();
+                        if f(0, &mut dev) == 0 { Some(dev) } else { None }
+                    })
+                },
+                MemApi::V1 => None,
+            };
+
             let mut interval = tokio::time::interval(Duration::from_secs(2));
             loop {
                 interval.tick().await;
@@ -1621,17 +1656,28 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
                 let mut m = NvidiaMetrics::default();
 
+                // Static properties — use the cached value, no NVML round-trip.
+                m.nvidia_gpu_name = gpu_name_cached.clone();
+
                 m.nvidia_gpu_utilization_percent =
                     device.utilization_rates().ok().map(|u| u.gpu as f32);
 
-                if let Ok(mem) = device.memory_info() {
-                    m.nvidia_vram_used_mb  = Some(mem.used  / 1_048_576);
-                    m.nvidia_vram_total_mb = Some(mem.total / 1_048_576);
-                } else if let Some((total_mb, used_mb)) = nvml_memory_info_v2(0) {
-                    // v1 not supported (Grace Blackwell / unified-memory SoC);
-                    // v2 succeeded — use its total/used values.
-                    m.nvidia_vram_total_mb = Some(total_mb);
-                    m.nvidia_vram_used_mb  = Some(used_mb);
+                // Memory — use whichever API was confirmed to work at startup.
+                match &mem_api {
+                    MemApi::V1 => {
+                        if let Ok(mem) = device.memory_info() {
+                            m.nvidia_vram_total_mb = Some(mem.total / 1_048_576);
+                            m.nvidia_vram_used_mb  = Some(mem.used  / 1_048_576);
+                        }
+                    }
+                    MemApi::V2(lib) => {
+                        if let Some(dev) = raw_dev_for_v2 {
+                            if let Some((total, used)) = nvml_memory_v2(lib, dev) {
+                                m.nvidia_vram_total_mb = Some(total);
+                                m.nvidia_vram_used_mb  = Some(used);
+                            }
+                        }
+                    }
                 }
 
                 m.nvidia_gpu_temp_c =
@@ -1639,8 +1685,6 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
                 m.nvidia_power_draw_w =
                     device.power_usage().ok().map(|mw| mw as f32 / 1_000.0);
-
-                m.nvidia_gpu_name = device.name().ok();
 
                 // ── WES v2: NVML throttle-reason bitmask ─────────────────
                 // Maps hardware clock-throttle reasons to a thermal penalty
@@ -2526,6 +2570,7 @@ fn start_metrics_broadcaster(
                     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
                     { "Unknown".to_string() }
                 },
+                arch: std::env::consts::ARCH.to_string(),
                 live_activities: pending_events,
                 // WES v2 thermal-penalty window (None until first 2 s sampler tick)
                 penalty_avg:    wes.penalty_avg,
@@ -2750,6 +2795,7 @@ async fn handle_metrics(
                     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
                     { "Unknown".to_string() }
                 },
+                arch: std::env::consts::ARCH.to_string(),
                 // SSE handler never generates live-activity events; broadcaster owns that.
                 live_activities: Vec::new(),
                 // WES v2 thermal-penalty window

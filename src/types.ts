@@ -125,6 +125,8 @@ export interface SentinelMetrics {
   vllm_requests_running?: number | null;
   /** Compile-time OS from agent — "macOS" | "Linux" | "Windows". Absent on older agents. */
   os?: string | null;
+  /** Compile-time CPU architecture — "x86_64" | "aarch64". Absent on older agents. */
+  arch?: string | null;
   // WES v2 — agent-computed thermal telemetry (absent on older agents)
   /** Average thermal penalty applied over the sample window (e.g. 1.75 for Serious). */
   penalty_avg?:    number | null;

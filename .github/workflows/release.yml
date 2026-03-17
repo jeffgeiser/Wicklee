@@ -287,7 +287,6 @@ jobs:
             wicklee-agent-linux-aarch64
             wicklee-agent-linux-x86_64-nvidia
             wicklee-agent-linux-aarch64-nvidia
-            wicklee-agent-linux-aarch64-nvidia
 
   # ── Publish nightly release (main branch + manual dispatch) ───────────────────
   # Updates the rolling nightly pre-release. Never runs on tag pushes.

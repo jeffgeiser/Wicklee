@@ -442,6 +442,8 @@ const MgmtRow: React.FC<{
                   ? 'NVIDIA · Discrete GPU'
                   : os === 'macOS'
                   ? 'ARM · Unified Memory'
+                  : m?.arch === 'aarch64'
+                  ? 'ARM · Linux'
                   : 'x86'}
               </p>
             </>
