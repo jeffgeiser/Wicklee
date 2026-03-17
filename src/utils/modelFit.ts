@@ -73,8 +73,14 @@ export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
   const headroomGb  = headroomMb / 1024;
   const totalGb     = totalMb    / 1024;
 
-  // Does the model fit in the current free headroom?
-  const modelFitsMb = modelSizeMb < headroomMb;
+  // Does the model fit within the hardware's total capacity?
+  // We check against totalMb rather than headroomMb because ollama_model_size_gb
+  // is only present when a model is *already loaded* — the model has consumed
+  // memory, so headroomMb is the space left *after* loading. Comparing model
+  // size against remaining headroom would always fail for a model that fills the
+  // hardware and is actively running (false "doesn't fit" on large-RAM / unified
+  // memory nodes like NVIDIA Grace Blackwell or 122 GB Linux boxes).
+  const modelFitsTotal = modelSizeMb < totalMb;
 
   // Thermal classification
   const thermalLower    = thermalState?.toLowerCase() ?? null;
@@ -86,16 +92,16 @@ export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
   let score:  FitScore;
   let reason: string;
 
-  if (!modelFitsMb || headroomPct < 10 || isThermalSevere) {
+  if (!modelFitsTotal || headroomPct < 10 || isThermalSevere) {
     // Poor ─────────────────────────────────────────────────────────────────────
     score = 'poor';
     if (isThermalSevere) {
       reason = 'Serious thermal state — inference efficiency significantly degraded';
-    } else if (!modelFitsMb) {
-      reason = `Model size (${modelSizeGb.toFixed(1)}GB) exceeds available memory (${headroomGb.toFixed(1)}GB free)`;
+    } else if (!modelFitsTotal) {
+      reason = `Model size (${modelSizeGb.toFixed(1)}GB) exceeds hardware capacity (${totalGb.toFixed(1)}GB total)`;
     } else {
-      // headroomPct < 10% but model technically fits — dangerously low headroom
-      reason = `Only ${headroomPct.toFixed(0)}% memory free — insufficient headroom for stable inference`;
+      // headroomPct < 10% — model loaded but almost no room left for context / KV cache
+      reason = `Only ${headroomPct.toFixed(0)}% memory free after loading — insufficient headroom for stable inference`;
     }
 
   } else if (headroomPct <= 20 || isThermalFair) {

@@ -445,6 +445,19 @@ const MgmtRow: React.FC<{
                   : 'x86'}
               </p>
             </>
+          ) : isOnline && os !== 'Unknown' ? (
+            // Node is online and sending metrics, but chip/GPU name wasn't reported.
+            // Common on ARM Linux (e.g. NVIDIA Grace) where the linux-aarch64 build
+            // lacks NVML — re-run the install script to pick up the correct binary.
+            <>
+              <p className="text-xs font-telin text-gray-500 truncate">{os} Node</p>
+              <p
+                className="text-[10px] text-amber-500/70 truncate"
+                title="GPU data unavailable — re-run the install script to enable full metrics"
+              >
+                GPU data unavailable
+              </p>
+            </>
           ) : (
             <p className="text-xs text-gray-600">—</p>
           )}
