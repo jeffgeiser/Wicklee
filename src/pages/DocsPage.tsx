@@ -193,13 +193,13 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
           >
             <p>Install the Wicklee agent with a single command. No account required — the agent runs a full local dashboard at <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">localhost:7700</code>.</p>
 
-            {/* Step 1 */}
+            {/* Option 1 — Try it */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">1</span>
-                <p className="font-semibold text-white text-sm">Download &amp; run — no elevated permissions needed</p>
+                <p className="font-semibold text-white text-sm">Try it — no account, no sudo</p>
               </div>
-              <p>This downloads the binary and starts a live-only session. Your hardware telemetry appears immediately in the local dashboard — no service registration, no commitment.</p>
+              <p>Downloads the agent and starts a live session immediately. Telemetry appears in the local dashboard — no service registration, no commitment. Start here.</p>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
                 <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | sh</Code>
@@ -211,24 +211,39 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               <p>Open <a href="http://localhost:7700" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">localhost:7700</a> in your browser to see your local dashboard.</p>
             </div>
 
-            {/* Step 2 */}
+            {/* Option 2 — Sudo for full metrics */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">2</span>
-                <p className="font-semibold text-white text-sm">Permanent monitoring — register as a system service</p>
+                <p className="font-semibold text-white text-sm">Full hardware metrics — run with sudo <span className="text-gray-500 font-normal">(Linux only)</span></p>
               </div>
-              <p>When you're ready for always-on monitoring that survives reboots, install the background service:</p>
-              <Code lang="shell"># macOS / Linux — registers with launchd / systemd, starts on every boot
-sudo wicklee --install-service
-
-# Windows
-wicklee --install-service</Code>
-
+              <p>On Linux, CPU power draw (RAPL) and some thermal sensors require elevated access. Running with <code className="font-mono text-xs text-gray-300">sudo</code> unlocks these — you'll see WATTS and full thermal state in the dashboard instead of dashes.</p>
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Linux</p>
+                <Code lang="shell">sudo wicklee</Code>
+              </div>
               <NoteBox>
-                <span>
-                  <strong className="text-white">Why sudo?</strong>{' '}
-                  <code className="font-mono text-xs text-gray-300">sudo</code> is required specifically to register the background service (launchd / systemd) and to grant the agent direct access to hardware thermal sensors and power rails. You can run the binary <em>without</em> sudo for a live-only test — Step 1 above does exactly that.
-                </span>
+                macOS does not require <code className="font-mono text-xs text-gray-300">sudo</code> — the agent reads Apple Silicon power, GPU, and thermal data directly via IOKit without elevated permissions.
+              </NoteBox>
+            </div>
+
+            {/* Option 3 — System service */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">3</span>
+                <p className="font-semibold text-white text-sm">Always-on monitoring — register as a system service</p>
+              </div>
+              <p>Registers the agent with launchd (macOS) or systemd (Linux) so it starts automatically on every boot. This is the recommended setup for nodes in your fleet.</p>
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
+                <Code lang="shell">sudo wicklee --install-service</Code>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Windows (PowerShell — run as Administrator)</p>
+                <Code lang="powershell">wicklee --install-service</Code>
+              </div>
+              <NoteBox>
+                <code className="font-mono text-xs text-gray-300">sudo</code> is required here to write the launchd plist or systemd unit file — not to run inference. The agent process itself drops privileges after registration and runs as your user.
               </NoteBox>
             </div>
 
