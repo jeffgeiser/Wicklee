@@ -440,7 +440,7 @@ const MgmtRow: React.FC<{
               <p className="text-[10px] text-gray-500 truncate">
                 {m?.nvidia_vram_total_mb != null
                   ? 'NVIDIA · Discrete GPU'
-                  : m?.cpu_power_w != null
+                  : os === 'macOS'
                   ? 'ARM · Unified Memory'
                   : 'x86'}
               </p>

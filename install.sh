@@ -44,6 +44,16 @@ esac
 
 ASSET_NAME="wicklee-agent-${OS_TAG}-${ARCH_TAG}"
 
+# ── NVIDIA GPU detection (Linux only) ────────────────────────────────────────
+# If nvidia-smi is available the node has an NVIDIA GPU.  The glibc+NVML build
+# unlocks VRAM metrics, GPU utilisation, GPU temperature, and power draw —
+# metrics that the static musl build cannot provide.
+# Supported: linux-x86_64-nvidia, linux-aarch64-nvidia (NVIDIA Grace Blackwell).
+if [[ "$OS_TAG" == "linux" ]] && command -v nvidia-smi &>/dev/null; then
+  ASSET_NAME="${ASSET_NAME}-nvidia"
+  dim "  NVIDIA GPU detected — selecting GPU-enabled build"
+fi
+
 # ── Fetch latest release tag ──────────────────────────────────────────────────
 
 need curl

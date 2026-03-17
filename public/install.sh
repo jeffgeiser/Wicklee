@@ -50,12 +50,13 @@ case "$ARCH" in
   *)               die "Unsupported architecture: $ARCH" ;;
 esac
 
-# On Linux x86_64, prefer the glibc+NVML build when an NVIDIA GPU is present.
+# On Linux, prefer the glibc+NVML build when an NVIDIA GPU is present.
 # The nvidia variant dlopen-s libnvidia-ml.so at runtime (ships with NVIDIA
 # drivers) — no CUDA toolkit required on the target machine. Falls back to
 # the fully-static musl build if no GPU is detected.
+# Supported arches: x86_64-nvidia, aarch64-nvidia (NVIDIA Grace Blackwell / DGX Spark).
 NVIDIA_SUFFIX=""
-if [[ "$OS_TAG" == "linux" && "$ARCH_TAG" == "x86_64" ]]; then
+if [[ "$OS_TAG" == "linux" ]]; then
   if command -v nvidia-smi >/dev/null 2>&1 || [[ -c /dev/nvidia0 ]]; then
     NVIDIA_SUFFIX="-nvidia"
     echo "  NVIDIA GPU detected — downloading GPU-enabled build…"

@@ -479,33 +479,54 @@ async fn read_apple_chip_name() -> Option<String> { None }
 /// CPU model name from `/proc/cpuinfo` on Linux.
 /// Reads the "model name" field and strips noisy suffixes so the UI gets a
 /// clean string like "AMD EPYC 7302P" or "Intel Xeon Gold 6154".
+///
+/// ARM processors (e.g. NVIDIA Grace, Ampere Altra) often omit "model name"
+/// from /proc/cpuinfo entirely.  When the field is absent we fall back to
+/// /sys/firmware/devicetree/base/model which carries the platform board name
+/// (e.g. "NVIDIA GH200 480GB" on a Grace Hopper Superchip, or "NVIDIA DGX
+/// Spark" on the Grace Blackwell desktop system).  This is readable without
+/// elevated privileges on most ARM Linux distributions.
 #[cfg(target_os = "linux")]
 fn read_linux_chip_name() -> Option<String> {
-    let content = std::fs::read_to_string("/proc/cpuinfo").ok()?;
-    let raw = content.lines()
-        .find(|l| l.starts_with("model name"))?
-        .splitn(2, ':')
-        .nth(1)?
-        .trim()
-        .to_string();
+    // ── Primary: /proc/cpuinfo "model name" (x86, some ARM) ──────────────────
+    let from_cpuinfo = (|| -> Option<String> {
+        let content = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+        let raw = content.lines()
+            .find(|l| l.starts_with("model name"))?
+            .splitn(2, ':')
+            .nth(1)?
+            .trim()
+            .to_string();
 
-    // Strip " @ X.XXGHz" clock speed annotation
-    let raw = if let Some(pos) = raw.find(" @") { raw[..pos].to_string() } else { raw };
+        // Strip " @ X.XXGHz" clock speed annotation
+        let raw = if let Some(pos) = raw.find(" @") { raw[..pos].to_string() } else { raw };
 
-    // Drop trailing words that are pure noise: "CPU", "Processor", or "N-Core"
-    let words: Vec<&str> = raw.split_whitespace().collect();
-    let end = words.iter().position(|w| {
-        *w == "CPU" || *w == "Processor" || w.ends_with("-Core")
-    }).unwrap_or(words.len());
-    let trimmed = words[..end].join(" ");
+        // Drop trailing words that are pure noise: "CPU", "Processor", or "N-Core"
+        let words: Vec<&str> = raw.split_whitespace().collect();
+        let end = words.iter().position(|w| {
+            *w == "CPU" || *w == "Processor" || w.ends_with("-Core")
+        }).unwrap_or(words.len());
+        let trimmed = words[..end].join(" ");
 
-    // Strip trademark noise: (R) (TM) ® ™
-    let clean = trimmed
-        .replace("(R)", "").replace("(TM)", "")
-        .replace('\u{00ae}', "").replace('\u{2122}', "");
+        // Strip trademark noise: (R) (TM) ® ™
+        let clean = trimmed
+            .replace("(R)", "").replace("(TM)", "")
+            .replace('\u{00ae}', "").replace('\u{2122}', "");
 
-    let result = clean.split_whitespace().collect::<Vec<_>>().join(" ");
-    if result.is_empty() { None } else { Some(result) }
+        let result = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+        if result.is_empty() { None } else { Some(result) }
+    })();
+
+    if from_cpuinfo.is_some() { return from_cpuinfo; }
+
+    // ── Fallback: device-tree model (ARM Linux — NVIDIA Grace, Ampere, etc.) ─
+    // The board model string is null-terminated; strip the trailing NUL.
+    if let Ok(raw) = std::fs::read_to_string("/sys/firmware/devicetree/base/model") {
+        let s = raw.trim_end_matches('\0').trim().to_string();
+        if !s.is_empty() { return Some(s); }
+    }
+
+    None
 }
 
 #[cfg(not(target_os = "linux"))]
