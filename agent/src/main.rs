@@ -1718,7 +1718,7 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                         // Sum GPU-resident allocations across all active compute
                         // processes.  This is the same accounting nvidia-smi uses
                         // to surface per-process memory on unified-memory SoCs.
-                        use nvml_wrapper::enum_wrappers::device::UsedGpuMemory;
+                        use nvml_wrapper::enums::device::UsedGpuMemory;
                         let used_mb: u64 = device
                             .running_compute_processes()
                             .unwrap_or_default()
