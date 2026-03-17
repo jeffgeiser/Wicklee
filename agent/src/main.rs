@@ -1607,6 +1607,21 @@ fn load_nvml_lib() -> Option<nvml_wrapper_sys::bindings::NvmlLib> {
 // returns immediately with an all-None cache — no crash, no retry spam.
 // Polls device 0 every 2 s for: GPU util, VRAM, temperature, board power draw.
 // No sudo required on Linux — NVML reads through the kernel driver interface.
+//
+// Memory API selection — probed once at startup, held for the session lifetime:
+//
+//   V1       Standard discrete GPU (GeForce, RTX, A-series, H100, B100, B200…)
+//            nvmlDeviceGetMemoryInfo works; reports dedicated GDDR/HBM directly.
+//
+//   V2(lib)  Hopper/Blackwell HBM systems where v1 returns NOT_SUPPORTED.
+//            Uses nvmlDeviceGetMemoryInfo_v2 via the sys crate.
+//
+//   Unified  GB10 / DGX Spark — LPDDR5x unified memory, no dedicated VRAM
+//            budget; nvidia-smi reports [N/A] for memory.total.  We instead:
+//              • total  = system RAM (the full unified pool the GPU accesses)
+//              • used   = sum of used_gpu_memory across running compute processes
+//            This matches exactly what nvidia-smi shows per-process and gives
+//            the fleet UI a meaningful VRAM utilisation signal.
 
 fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
     let shared = Arc::new(Mutex::new(NvidiaMetrics::default()));
@@ -1621,23 +1636,49 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
             };
 
             // ── One-time setup before the poll loop ───────────────────────────
-            //
-            // GPU name is a static hardware property — query it once here
-            // rather than on every 2-second tick.
-            //
-            // Memory API detection: nvmlDeviceGetMemoryInfo (v1) returns
-            // NOT_SUPPORTED on Grace Blackwell / unified-memory SoCs.  We
-            // probe once at startup to decide which path to use, then hold
-            // either a unit marker (V1) or an open NvmlLib (V2) for the full
-            // session — no dlopen inside the loop.
-            enum MemApi { V1, V2(nvml_wrapper_sys::bindings::NvmlLib) }
+
+            enum MemApi {
+                V1,
+                V2(nvml_wrapper_sys::bindings::NvmlLib),
+                /// Unified-memory SoC: no discrete VRAM pool in NVML.
+                /// `total_mb` is the system RAM total read once from /proc/meminfo
+                /// (Linux) or GlobalMemoryStatusEx (Windows) — the full pool
+                /// the GPU can access via NVLink-C2C or similar interconnects.
+                Unified { total_mb: u64 },
+            }
 
             let (gpu_name_cached, mem_api): (Option<String>, MemApi) = {
                 let probe = nvml.device_by_index(0).ok();
                 let name  = probe.as_ref().and_then(|d| d.name().ok());
-                let api   = match probe.as_ref().map(|d| d.memory_info()) {
-                    Some(Ok(_)) => MemApi::V1,
-                    _ => load_nvml_lib().map(MemApi::V2).unwrap_or(MemApi::V1),
+
+                // System RAM total — used as the Unified pool denominator.
+                // Read from /proc/meminfo on Linux; MemTotal is in kB.
+                #[cfg(target_os = "linux")]
+                let sys_total_mb: u64 = std::fs::read_to_string("/proc/meminfo")
+                    .unwrap_or_default()
+                    .lines()
+                    .find(|l| l.starts_with("MemTotal:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(|kb| kb / 1024)
+                    .unwrap_or(0);
+
+                #[cfg(target_os = "windows")]
+                let sys_total_mb: u64 = {
+                    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+                    let mut ms = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..unsafe { std::mem::zeroed() } };
+                    if unsafe { GlobalMemoryStatusEx(&mut ms) } != 0 { ms.ullTotalPhys / 1_048_576 } else { 0 }
+                };
+
+                let api = match probe.as_ref().map(|d| d.memory_info()) {
+                    // v1 works and reports a non-zero total → use it directly.
+                    Some(Ok(mem)) if mem.total > 0 => MemApi::V1,
+                    // v1 returned N/A or zero: try the v2 struct (Hopper / HBM Blackwell).
+                    // If v2 also yields no data the device is a unified-memory SoC → Unified.
+                    _ => match load_nvml_lib() {
+                        Some(lib) if nvml_memory_v2(&lib, 0).is_some() => MemApi::V2(lib),
+                        _ => MemApi::Unified { total_mb: sys_total_mb },
+                    },
                 };
                 (name, api)
             };
@@ -1672,6 +1713,23 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                             m.nvidia_vram_total_mb = Some(total);
                             m.nvidia_vram_used_mb  = Some(used);
                         }
+                    }
+                    MemApi::Unified { total_mb } => {
+                        // Sum GPU-resident allocations across all active compute
+                        // processes.  This is the same accounting nvidia-smi uses
+                        // to surface per-process memory on unified-memory SoCs.
+                        use nvml_wrapper::enum_wrappers::device::UsedGpuMemory;
+                        let used_mb: u64 = device
+                            .running_compute_processes()
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|p| match p.used_gpu_memory {
+                                UsedGpuMemory::Used(bytes) => Some(bytes / 1_048_576),
+                                UsedGpuMemory::Unavailable => None,
+                            })
+                            .sum();
+                        m.nvidia_vram_total_mb = Some(*total_mb);
+                        m.nvidia_vram_used_mb  = Some(used_mb);
                     }
                 }
 
