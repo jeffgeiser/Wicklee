@@ -1637,7 +1637,7 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
             #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
             let raw_dev_for_v2: Option<nvmlDevice_t> = match &mem_api {
                 MemApi::V2(lib) => unsafe {
-                    lib.nvmlDeviceGetHandleByIndex.as_ref().ok().and_then(|f| {
+                    lib.nvmlDeviceGetHandleByIndex_v2.as_ref().ok().and_then(|f| {
                         let mut dev: nvmlDevice_t = std::ptr::null_mut();
                         if f(0, &mut dev) == 0 { Some(dev) } else { None }
                     })
