@@ -22,6 +22,11 @@ use sysinfo::System;
 use tokio::sync::broadcast;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::TemperatureSensor, Nvml};
+// nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
+// NVML_ERROR_NOT_SUPPORTED on Grace Blackwell / unified-memory architectures.
+// We access nvmlDeviceGetMemoryInfo_v2 directly through the sys crate.
+#[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
+use nvml_wrapper_sys::bindings::{nvmlMemory_v2_t, nvmlDevice_t};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -1538,6 +1543,56 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16)
 
 // ── NVIDIA Harvester ──────────────────────────────────────────────────────────
 //
+// ── NVML v2 memory info (Grace Blackwell / unified-memory fallback) ───────────
+//
+// nvmlDeviceGetMemoryInfo (v1) returns NVML_ERROR_NOT_SUPPORTED on NVIDIA
+// Grace Blackwell (GB10/GB200 Superchip) and similar unified-memory SoC
+// designs where the GPU does not have a traditional dedicated framebuffer.
+// nvmlDeviceGetMemoryInfo_v2 adds a `reserved` field and works on these
+// architectures.  nvml-wrapper 0.10 only wraps v1, so we call v2 directly
+// through the nvml-wrapper-sys bindings.
+//
+// The library is already loaded and NVML is already initialised by
+// nvml_wrapper::Nvml::init(); calling NvmlLib::new() again is safe — the OS
+// loader reference-counts the handle and returns the same DSO.
+//
+// Returns (total_mb, used_mb) on success, None if v2 is also unsupported.
+#[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
+fn nvml_memory_info_v2(device_index: u32) -> Option<(u64, u64)> {
+    use std::mem;
+    use nvml_wrapper_sys::bindings::NvmlLib;
+
+    // NVML_STRUCT_VERSION(Memory, 2) = sizeof(nvmlMemory_v2_t) | (2 << 24)
+    let version: u32 =
+        (mem::size_of::<nvmlMemory_v2_t>() as u32) | (2_u32 << 24);
+
+    #[cfg(target_os = "linux")]
+    let lib_names: &[&str] = &["libnvidia-ml.so.1", "libnvidia-ml.so"];
+    #[cfg(target_os = "windows")]
+    let lib_names: &[&str] = &["nvml.dll"];
+
+    let lib = lib_names.iter().find_map(|name| {
+        unsafe { NvmlLib::new(name).ok() }
+    })?;
+
+    unsafe {
+        // nvmlInit_v2 is idempotent; safe to call when already initialised.
+        if let Ok(f) = lib.nvmlInit_v2.as_ref() { f(); }
+
+        let handle_fn = lib.nvmlDeviceGetHandleByIndex.as_ref().ok()?;
+        let mem_fn    = lib.nvmlDeviceGetMemoryInfo_v2.as_ref().ok()?;
+
+        let mut dev: nvmlDevice_t = std::ptr::null_mut();
+        if handle_fn(device_index, &mut dev) != 0 { return None; }
+
+        let mut info: nvmlMemory_v2_t = mem::zeroed();
+        info.version = version;
+        if mem_fn(dev, &mut info) != 0 || info.total == 0 { return None; }
+
+        Some((info.total / 1_048_576, info.used / 1_048_576))
+    }
+}
+
 // Initialises NVML on the first call; if unavailable (no drivers, macOS, etc.)
 // returns immediately with an all-None cache — no crash, no retry spam.
 // Polls device 0 every 2 s for: GPU util, VRAM, temperature, board power draw.
@@ -1572,6 +1627,11 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 if let Ok(mem) = device.memory_info() {
                     m.nvidia_vram_used_mb  = Some(mem.used  / 1_048_576);
                     m.nvidia_vram_total_mb = Some(mem.total / 1_048_576);
+                } else if let Some((total_mb, used_mb)) = nvml_memory_info_v2(0) {
+                    // v1 not supported (Grace Blackwell / unified-memory SoC);
+                    // v2 succeeded — use its total/used values.
+                    m.nvidia_vram_total_mb = Some(total_mb);
+                    m.nvidia_vram_used_mb  = Some(used_mb);
                 }
 
                 m.nvidia_gpu_temp_c =

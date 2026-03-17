@@ -33,7 +33,11 @@ sysctl        = "0.5"
 # musl targets can't link or dlopen glibc-based NVIDIA libraries, so we
 # exclude nvml-wrapper for musl. GPU metrics fall back gracefully at runtime.
 [target.'cfg(all(any(target_os = "linux", target_os = "windows"), not(target_env = "musl")))'.dependencies]
-nvml-wrapper  = "0.10"
+nvml-wrapper     = "0.10"
+# nvml-wrapper-sys is the underlying sys crate; we use it directly to access
+# nvmlDeviceGetMemoryInfo_v2 (Hopper/Blackwell unified-memory architectures)
+# which nvml-wrapper 0.10 doesn't yet expose at the safe-wrapper level.
+nvml-wrapper-sys = "0.8"
 
 # ── Release profile: optimise for binary size ─────────────────────────────────
 # Goal: stay as close to the "Zero-Tax" spirit as possible with a UI included.
