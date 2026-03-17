@@ -1243,8 +1243,14 @@ WantedBy=multi-user.target\n"
         let _ = tokio::process::Command::new("systemctl")
             .args(["daemon-reload"])
             .status().await;
+        // Enable for boot persistence, then restart so a freshly-installed
+        // binary is picked up immediately — even if the service was already
+        // running with an older version on the same inode.
+        let _ = tokio::process::Command::new("systemctl")
+            .args(["enable", "wicklee"])
+            .status().await;
         let status = tokio::process::Command::new("systemctl")
-            .args(["enable", "--now", "wicklee"])
+            .args(["restart", "wicklee"])
             .status().await;
         match status {
             Ok(s) if s.success() => {
@@ -1253,7 +1259,7 @@ WantedBy=multi-user.target\n"
                 println!("  Unit: {unit_path}");
                 println!("  To remove: sudo wicklee --uninstall-service");
             }
-            Ok(s) => eprintln!("error: systemctl enable --now exited with status {s}"),
+            Ok(s) => eprintln!("error: systemctl restart exited with status {s}"),
             Err(e) => eprintln!("error: systemctl: {e}"),
         }
     }
