@@ -72,7 +72,7 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSE
 need curl
 
 echo ""
-echo "  Downloading Wicklee (${RELEASE_TAG} · ${OS_TAG}-${ARCH_TAG})…"
+echo "  Downloading Wicklee (${RELEASE_TAG} · ${OS_TAG}-${ARCH_TAG}${NVIDIA_SUFFIX})…"
 
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
@@ -83,14 +83,18 @@ curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" \
 chmod +x "$TMP"
 
 # ── Install ───────────────────────────────────────────────────────────────────
+# Use cp+mv rather than cp-in-place so an existing running wicklee service
+# (Text file busy) doesn't block the update.  mv replaces the directory entry
+# atomically; the old inode/process keeps running until systemd restarts it.
 
 INSTALL_PATH="${INSTALL_DIR}/${BIN_NAME}"
+INSTALL_TMP="${INSTALL_PATH}.new"
 
 if [[ -w "$INSTALL_DIR" ]]; then
-  cp "$TMP" "$INSTALL_PATH"
+  cp "$TMP" "$INSTALL_TMP" && mv "$INSTALL_TMP" "$INSTALL_PATH"
 else
   echo "  Installing to ${INSTALL_PATH} (sudo required)…"
-  sudo cp "$TMP" "$INSTALL_PATH"
+  sudo cp "$TMP" "$INSTALL_TMP" && sudo mv "$INSTALL_TMP" "$INSTALL_PATH"
 fi
 
 # ── Success ───────────────────────────────────────────────────────────────────
