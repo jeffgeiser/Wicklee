@@ -927,8 +927,32 @@ fn now_ms() -> u64 {
 }
 
 fn config_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    // Prefer $HOME if set. Fall back to the effective user's home directory
+    // so the config never lands in the filesystem root when systemd starts
+    // the service without an explicit HOME= environment variable.
+    let home = std::env::var("HOME").unwrap_or_else(|_| {
+        // Derive from /etc/passwd for the effective uid — works on any POSIX system.
+        #[cfg(unix)]
+        {
+            let uid = unsafe { libc::getuid() };
+            let pw  = unsafe { libc::getpwuid(uid) };
+            if !pw.is_null() {
+                let dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) };
+                if let Ok(s) = dir.to_str() {
+                    return s.to_string();
+                }
+            }
+            if uid == 0 { "/root".to_string() } else { format!("/home/{}", whoami_fallback()) }
+        }
+        #[cfg(not(unix))]
+        { ".".to_string() }
+    });
     Path::new(&home).join(".wicklee").join("config.toml")
+}
+
+#[cfg(unix)]
+fn whoami_fallback() -> String {
+    std::env::var("USER").unwrap_or_else(|_| "root".to_string())
 }
 
 fn generate_node_id() -> String {
