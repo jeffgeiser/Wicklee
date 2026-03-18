@@ -2126,6 +2126,45 @@ async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> O
     None
 }
 
+/// Fires a non-streaming 20-token completions probe against the vLLM
+/// OpenAI-compatible API and returns tok/s derived from wall-clock timing.
+///
+/// Mirrors `probe_ollama_tps` semantics: the result represents the node's
+/// **idle sustained throughput** — the baseline speed when the scheduler is
+/// free, used to populate the IDLE-SPD label in the dashboard.
+async fn probe_vllm_tps(client: &reqwest::Client, port: u16, model: &str) -> Option<f32> {
+    let url = format!("http://127.0.0.1:{port}/v1/completions");
+    let t0 = std::time::Instant::now();
+    let resp = match client
+        .post(&url)
+        .json(&serde_json::json!({
+            "model":       model,
+            "prompt":      " ",
+            "max_tokens":  20,
+            "temperature": 0,
+            "stream":      false,
+        }))
+        .send()
+        .await
+    {
+        Ok(r)  => { eprintln!("[vllm] probe {url} → HTTP {}", r.status()); r }
+        Err(e) => { eprintln!("[vllm] probe {url} → error: {e}"); return None; }
+    };
+    if !resp.status().is_success() { return None; }
+    let elapsed = t0.elapsed().as_secs_f64();
+    if elapsed <= 0.0 { return None; }
+    let text = resp.text().await.ok()?;
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(n) = json["usage"]["completion_tokens"].as_u64() {
+            if n > 0 {
+                let tps = n as f64 / elapsed;
+                if tps > 0.0 { return Some(tps as f32); }
+            }
+        }
+    }
+    None
+}
+
 /// GPU utilisation above this threshold (%) causes the probe to be skipped.
 /// The dashboard estimation formula (peak × gpu_util%) covers the busy case,
 /// so firing tokens into an already-loaded scheduler would only add noise.
@@ -2357,14 +2396,11 @@ async fn harvest_vllm(port: u16) -> (bool, Option<String>, Option<f32>, Option<f
 
         match metric_name.trim() {
             // vllm:avg_generation_throughput_toks_per_s is a direct tok/s gauge emitted
-            // by vLLM. Preferred over a latency-inverse formula (1/inter_token_latency)
-            // because: (a) vLLM exposes latency only as a histogram (no scalar field),
-            // and (b) aggregate generation throughput is the right signal for fleet
-            // monitoring — not per-request delivery speed seen by a single consumer.
-            // On endpoint failure the caller returns (false, None, …) so tokens_per_sec
-            // stays None, clearing any stale value in shared state.
+            // by vLLM during active generation. Zero when idle — we filter that out so
+            // the probe-measured IDLE-SPD baseline isn't overwritten by a 0.0 from an
+            // idle Prometheus scrape.
             "vllm:avg_generation_throughput_toks_per_s" => {
-                tokens_per_sec = value;
+                tokens_per_sec = value.filter(|&v| v > 0.1);
             }
             "vllm:gpu_cache_usage_perc" => {
                 // vLLM reports 0.0–1.0; multiply by 100 for percentage.
@@ -2384,50 +2420,110 @@ async fn harvest_vllm(port: u16) -> (bool, Option<String>, Option<f32>, Option<f
 
 /// Spawns a 2 s polling loop that watches for vLLM via the discovery channel,
 /// then polls the Prometheus /metrics endpoint on the discovered port.
-fn start_vllm_harvester(mut port_rx: process_discovery::PortRx) -> Arc<Mutex<VllmMetrics>> {
-    let shared       = Arc::new(Mutex::new(VllmMetrics::default()));
-    let shared_clone = Arc::clone(&shared);
+///
+/// Also spawns a 30 s idle-probe task that fires `probe_vllm_tps` when the
+/// scheduler is idle (`num_requests_running == 0`) and the GPU is below the
+/// load threshold — the result populates `vllm_tokens_per_sec` as the IDLE-SPD
+/// baseline, exactly mirroring the Ollama probe behaviour.
+fn start_vllm_harvester(
+    mut port_rx: process_discovery::PortRx,
+    apple:       Arc<Mutex<AppleSiliconMetrics>>,
+    nvidia:      Arc<Mutex<NvidiaMetrics>>,
+) -> Arc<Mutex<VllmMetrics>> {
+    let shared = Arc::new(Mutex::new(VllmMetrics::default()));
 
+    // ── Main task: 2 s Prometheus /metrics poll ──────────────────────────────
+    let shared_main  = Arc::clone(&shared);
+    let mut port_rx_main = port_rx.clone();
     tokio::spawn(async move {
         loop {
-            // ── Wait until the discovery loop reports vLLM is running ────────
+            // Wait until discovery reports vLLM is running.
             loop {
-                if port_rx.borrow().is_some() { break; }
-                if port_rx.changed().await.is_err() { return; }
+                if port_rx_main.borrow().is_some() { break; }
+                if port_rx_main.changed().await.is_err() { return; }
             }
-            let port = port_rx.borrow().unwrap();
+            let port = port_rx_main.borrow().unwrap();
             eprintln!("[vllm] connected on :{port}");
 
             let mut interval = tokio::time::interval(Duration::from_secs(2));
 
-            // ── Inner poll loop — runs while vLLM is present ─────────────────
             loop {
                 interval.tick().await;
 
-                // React to port changes from the discovery loop.
-                if port_rx.has_changed().unwrap_or(false) {
-                    match *port_rx.borrow_and_update() {
+                if port_rx_main.has_changed().unwrap_or(false) {
+                    match *port_rx_main.borrow_and_update() {
                         None => {
                             eprintln!("[vllm] process gone — clearing metrics");
-                            if let Ok(mut g) = shared_clone.lock() { *g = VllmMetrics::default(); }
-                            break; // back to outer wait loop
+                            if let Ok(mut g) = shared_main.lock() { *g = VllmMetrics::default(); }
+                            break;
                         }
-                        Some(new_port) if new_port != port => {
-                            break; // port changed — outer loop re-enters with new port
-                        }
+                        Some(new_port) if new_port != port => { break; }
                         _ => {}
                     }
                 }
 
                 let (running, model, tps, cache, reqs) = harvest_vllm(port).await;
-                if let Ok(mut g) = shared_clone.lock() {
-                    *g = VllmMetrics {
-                        vllm_running:          running,
-                        vllm_model_name:       model,
-                        vllm_tokens_per_sec:   tps,
-                        vllm_cache_usage_perc: cache,
-                        vllm_requests_running: reqs,
-                    };
+                if let Ok(mut g) = shared_main.lock() {
+                    if !running {
+                        *g = VllmMetrics::default();
+                    } else {
+                        g.vllm_running          = true;
+                        if let Some(m) = model  { g.vllm_model_name = Some(m); }
+                        // Only overwrite tok/s with live Prometheus value when the
+                        // scheduler is actively generating (filter_out_zero applied
+                        // upstream). When idle (None), preserve the probe baseline.
+                        if tps.is_some()        { g.vllm_tokens_per_sec = tps; }
+                        g.vllm_cache_usage_perc = cache;
+                        g.vllm_requests_running = reqs;
+                    }
+                }
+            }
+        }
+    });
+
+    // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ─────────
+    let shared_probe = Arc::clone(&shared);
+    tokio::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        // Offset first tick so it doesn't coincide with startup diagnostics.
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+
+            // Read port and model while idle — bail if not ready.
+            let (port, model) = {
+                let g = match shared_probe.lock() { Ok(g) => g, Err(_) => continue };
+                if !g.vllm_running { continue; }
+                if g.vllm_requests_running.map_or(false, |r| r > 0) { continue; }
+                let port  = match *port_rx.borrow() { Some(p) => p, None => continue };
+                let model = match g.vllm_model_name.clone() { Some(m) => m, None => continue };
+                (port, model)
+            };
+
+            // Skip when GPU is already under load — same gate as Ollama probe.
+            let gpu_util: Option<f32> = nvidia.lock().ok()
+                .and_then(|g| g.nvidia_gpu_utilization_percent)
+                .or_else(|| apple.lock().ok().and_then(|g| g.gpu_utilization_percent));
+            if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+                eprintln!(
+                    "[vllm] probe skipped — GPU at {:.0}% (≥{:.0}%), using estimation",
+                    gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
+                );
+                if let Ok(mut g) = shared_probe.lock() { g.vllm_tokens_per_sec = None; }
+                continue;
+            }
+
+            eprintln!("[vllm] probing idle tok/s on :{port} model={model}");
+            if let Some(tps) = probe_vllm_tps(&client, port, &model).await {
+                eprintln!("[vllm] idle probe → {tps:.1} tok/s");
+                if let Ok(mut g) = shared_probe.lock() {
+                    g.vllm_tokens_per_sec = Some(tps);
                 }
             }
         }
@@ -3392,7 +3488,7 @@ async fn main() {
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
-    let vllm_metrics          = start_vllm_harvester(vllm_port_rx);
+    let vllm_metrics          = start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
 
     // WES v2 — 2 s thermal-penalty sampler (30-sample rolling window).
     // Must start after the platform harvesters above so it has data to read.
