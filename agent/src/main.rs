@@ -247,7 +247,7 @@ fn default_proxy_ollama_port() -> u16 { 11435 }
 /// vllm   = 18010
 /// ollama = 11434
 /// ```
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 struct RuntimePortsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama: Option<u16>,
@@ -3234,8 +3234,8 @@ async fn main() {
                     node_id: state.node_id.clone(),
                     fleet_url: Some(fleet_url),
                     session_token: Some(token),
-                    ollama_proxy: None,
-                    runtime_ports: None,
+                    ollama_proxy: config.ollama_proxy.clone(),
+                    runtime_ports: config.runtime_ports.clone(),
                 });
             }
             None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
@@ -3383,9 +3383,23 @@ async fn main() {
         .layer(axum::extract::Extension(broadcast_tx))
         .layer(cors);
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await
-        .expect(&format!("Failed to bind port {port}"));
+    let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            if pair_on_start {
+                // Agent is running as a service; pairing was registered above.
+                // Restart the service to pick up the new session token.
+                println!();
+                println!("  Agent is running on :{port} — pairing code registered.");
+                println!("  Restart the service to activate:  sudo systemctl restart wicklee");
+            } else {
+                eprintln!("Failed to bind port {port}: address already in use.");
+                eprintln!("Another wicklee agent is running. Stop it first or use a different PORT.");
+            }
+            return;
+        }
+        Err(e) => panic!("Failed to bind port {port}: {e}"),
+    };
 
     // ── Self-update check ─────────────────────────────────────────────────────
     // Runs once after the server is bound. Spawned so axum::serve is not delayed.
