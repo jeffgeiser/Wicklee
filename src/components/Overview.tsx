@@ -3,7 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock } from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
@@ -1209,13 +1209,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? Math.round((totalVramMb / totalVramCapacityMb) * 100) : null;
   const vramUsedGB     = (totalVramMb / 1024).toFixed(1);
   const vramCapacityGB = (totalVramCapacityMb / 1024).toFixed(1);
-  // Subtitle hint: distinguish mixed fleets (Apple + NVIDIA) from single-type fleets
-  const hasAppleVram  = effectiveMetrics.some(m => m.memory_pressure_percent != null);
-  const hasNvidiaVram = effectiveMetrics.some(m => (m.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB);
-  const vramSubHint   = hasAppleVram && hasNvidiaVram ? 'Apple + NVIDIA'
-                      : hasAppleVram                  ? 'wired budget'
-                      : hasNvidiaVram                 ? 'NVIDIA VRAM'
-                      : null;
+  // Subtitle hint — shared helper keeps Insight Engine + Node Registry in sync.
+  const vramSubHint = fleetVramSubtitle(effectiveMetrics);
 
   // Apple Silicon wired-budget for NODE VRAM tile (isLocalMode only).
   // Mirrors FleetStatusRow: wired_limit_mb (exact from sysctl) or 75% of total RAM fallback.
