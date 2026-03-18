@@ -125,10 +125,10 @@ const fmtAgo = (ms: number): string => {
 };
 
 // ── Fleet Status grid ────────────────────────────────────────────────────────
-// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/S · TOK/W · WATTS · GPU% · THERMAL · SPACER
+// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/S · W/1K · WATTS · GPU% · THERMAL · SPACER
 // Responsive priority — always visible: NODE, MODEL, WES, TOK/S
 //   sm+  adds: THERMAL
-//   md+  adds: MEMORY, VRAM, TOK/W, WATTS, GPU%
+//   md+  adds: MEMORY, VRAM, W/1K, WATTS, GPU%
 // SPACER (1fr) absorbs excess space on wide screens.
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
@@ -174,12 +174,12 @@ const FleetStatusHeader: React.FC = () => (
       <p className={FS_HDR}>TOK/S</p>
     </MetricTooltip>
     <MetricTooltip
-      metricId="tok-w"
-      name="TOK/W — Tokens Per Watt"
-      oneLiner="Energy efficiency without thermal penalty. Higher = better."
+      metricId="w-1k"
+      name="W/1K — Watts Per 1K Tokens"
+      oneLiner="Power draw per 1,000 tokens — lower is more efficient. Matches the fleet summary tile above."
       wrapperClassName="hidden md:block"
     >
-      <p className={FS_HDR}>TOK/W</p>
+      <p className={FS_HDR}>W/1K</p>
     </MetricTooltip>
     <MetricTooltip
       metricId="watts"
@@ -428,9 +428,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : vramPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // TOK/W — tokens per watt: tps ÷ totalPowerW. Both inputs are already smoothed.
-  const nodeTokPerWatt = (isActive && hasPower && totalPowerW > 0)
-    ? tps! / totalPowerW
+  // W/1K — watts per 1,000 tokens: (watts ÷ tps) × 1000. Lower = more efficient.
+  // Matches the Insight Engine "W/1K TKN" tile formula so row values are directly
+  // comparable to the fleet aggregate shown in the header.
+  const nodeWattsPerKTok = (isActive && hasPower && totalPowerW > 0)
+    ? (totalPowerW / tps!) * 1000
     : null;
   // GPU% — Apple Silicon via IOKit/AGX, NVIDIA via NVML
   const gpuPct = isOnline
@@ -620,11 +622,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       )}
 
-      {/* 6. TOK/W — tokens per watt: tps ÷ watts. Higher is better. Null when watts or tok/s unavailable. */}
-      <div className="hidden md:block min-w-0 overflow-hidden" title="Tokens per watt — inference efficiency per unit of power. Higher is better.">
-        {nodeTokPerWatt != null ? (
+      {/* 6. W/1K — watts per 1,000 tokens. Lower is better. Null when watts or tok/s unavailable. */}
+      <div className="hidden md:block min-w-0 overflow-hidden" title="Watts per 1,000 tokens — power cost per unit of throughput. Lower is more efficient.">
+        {nodeWattsPerKTok != null ? (
           <span className={`${V} text-gray-700 dark:text-gray-300`}>
-            {nodeTokPerWatt.toFixed(1)}
+            {nodeWattsPerKTok.toFixed(1)}
           </span>
         ) : (
           <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
