@@ -90,7 +90,7 @@
 - [x] **Thermal Cost % UI** — `computeRawWES()` + `thermalCostPct()` in `wes.ts`. `-N% thermal` amber badge in Fleet Status table when TC% > 0. Hidden on normal-thermal nodes.
 - [x] **Fleet Leaderboard TC%** — `rawWes`, `tcPct`, `thermalSource` on every `WESEntry`. Ranks by penalized WES (operational reality); raw WES available for gap analysis. Best Route Now card shows `-N% thermal` below efficiency WES.
 - [x] **"Why is my WES low?" tooltip v2** — `wesBreakdownTitle()` shows tok/s · Watts · Thermal · Thermal Cost % · Thermal source on all WES values. Diagnostic recommendation inline.
-- [ ] **`wes_config.json`** — configurable penalty thresholds per platform. Sane defaults ship tuned for standard deployments. Operators can override for unusual hardware or environments.
+- [ ] ~~**`wes_config.json`**~~ → **moved to Phase 4B** as agent auto-calibration (see below).
 
 ### Local Intelligence Tab — Free Tier Insight Cards ✅
 - [x] **Model-to-Hardware Fit Score:** Ollama model size + VRAM/unified memory + thermal state → "Poor/Fair/Good fit" with recommendation. Always shown when a model is loaded. Community-free.
@@ -273,7 +273,15 @@
 
 ---
 
-## Phase 4B — Commercial Layer *(3–5 months)*
+## Phase 4B — Commercial Layer + Auto-Calibration *(3–5 months)*
+
+### WES Auto-Calibration *(replaces static `wes_config.json`)*
+> The agent learns its own thermal penalty thresholds from observed hardware reality,
+> then gives the operator a single slider to tune the tradeoff — not a JSON file.
+
+- [ ] **Observation phase (24h):** Agent watches the hardware using its local DuckDB history (v0.4.28). Records Peak TPS at cold-state (Normal thermal) and Sustained TPS under sustained load (Serious/Critical). Derives the actual penalty multipliers from measured tok/s ratio — not a guess.
+- [ ] **`wes_config.json` auto-write:** After sufficient observation, the agent writes its own calibrated thresholds to `~/.wicklee/wes_config.json`. Versioned + timestamped. Human-readable but never needs manual editing.
+- [ ] **"Efficiency vs. Performance" slider in Settings:** Replaces any direct JSON editing. Slide toward Efficiency: agent penalizes heat more aggressively (saves power, lower sustained throughput). Slide toward Performance: agent tolerates heat until hardware literally throttles. Slider position stored in `wes_config.json`; agent re-computes penalty curve on save.
 
 - [x] **Clerk Auth:** ✅ Shipped. Clerk-managed signup/login with JWT. Stream tokens (UUID, 60s TTL) authenticate SSE connections.
 - [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
