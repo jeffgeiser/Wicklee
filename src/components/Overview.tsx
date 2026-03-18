@@ -316,8 +316,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // IDLE-SPD: GPU below threshold, no active inference — shows hardware capability baseline
   const isInferring = isOnline && (
     inferenceActive === true ||
-    (m?.vllm_running === true && (m?.vllm_tokens_per_sec ?? 0) > 0)
+    (m?.vllm_running === true && (m?.vllm_requests_running ?? 0) > 0)
   );
+  // ~ prefix only when tok/s is a pure GPU%-based estimate (no real measurement available)
+  const isEstimated = smoothedTps == null && tps != null;
   const isBusy      = isOnline && inferenceActive !== true && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed = isOnline && !isInferring && !isBusy && smoothedTps != null;
 
@@ -591,8 +593,8 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
           {isInferring ? (
             <>
               <span className={`${V} text-green-400`}
-                title="Live estimate — inference in progress. ~ indicates estimated throughput.">
-                ~{tps!.toFixed(1)}
+                title={isEstimated ? "Live estimate — inference in progress. ~ indicates GPU%-estimated throughput." : "Live — inference in progress."}>
+                {isEstimated ? `~${tps!.toFixed(1)}` : tps!.toFixed(1)}
               </span>
               <p className="text-[9px] uppercase tracking-widest text-green-500 mt-0.5 font-semibold leading-none">live</p>
             </>
@@ -848,8 +850,9 @@ const DiagnosticRail: React.FC<{
 
   const isInferring  = tps != null && (
     inferenceActive === true ||
-    (s.vllm_running === true && (s.vllm_tokens_per_sec ?? 0) > 0)
+    (s.vllm_running === true && (s.vllm_requests_running ?? 0) > 0)
   );
+  const isEstimated  = smoothedTps == null && tps != null;
   const isBusy       = !isInferring && inferenceActive !== true && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed  = !isInferring && !isBusy && smoothedTps != null;
   const hasTps       = s.ollama_running || s.vllm_running;
@@ -880,7 +883,7 @@ const DiagnosticRail: React.FC<{
         isInferring ? (
           <RailRow
             label="Tok/s"
-            value={`~${tps!.toFixed(1)}`}
+            value={isEstimated ? `~${tps!.toFixed(1)}` : tps!.toFixed(1)}
             textCls="text-green-400"
             barCls="bg-green-400"
             badge="live"
