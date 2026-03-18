@@ -4,9 +4,23 @@
 
 ---
 
-## ✅ Shipped (v0.4.20)
+## ✅ Shipped (v0.4.28)
 
-**Agent & Platform**
+**Agent Hardening Sprint (v0.4.21–v0.4.28)**
+- **`HOME` resolution via `getpwuid` (v0.4.25)** — `config_path()` falls back to `/etc/passwd` when `$HOME` is absent. Fixes `/.wicklee/config.toml` (root-owned) appearing when systemd starts the service with no `HOME=` env var.
+- **systemd unit `User=` + `Environment=HOME=` (v0.4.23)** — `--install-service` now emits correct user and HOME directives so future installs never experience the bad-HOME condition.
+- **Multi-PID socket scan + config-locked runtimes (v0.4.26)** — `scan_runtimes()` collects all matching PIDs per runtime and prefers the non-default port (main vLLM server vs worker subprocess). TOML `[runtime_ports]` overrides excluded from the 30s rediscovery loop — the override can never be clobbered by dynamic detection.
+- **Self-update EPERM hardening (v0.4.26)** — `install_service` chowns the binary to the service user so future `wicklee --update` calls succeed without `sudo`. `install.sh` re-runs `--install-service` automatically when a service is already registered. Clear actionable error message on `EPERM`.
+- **vLLM IDLE-SPD idle probe (v0.4.27)** — `probe_vllm_tps()` POSTs a 20-token `/v1/completions` request when `vllm_requests_running == 0`; wall-clock timing gives a real hardware throughput baseline for the IDLE-SPD display state. Prometheus `avg_generation_throughput_toks_per_s` filtered at `> 0.1` so idle zeros don't overwrite the probe value.
+- **Agent-local DuckDB history store (v0.4.28)** — `~/.wicklee/metrics.db`; three-tier schema written entirely in `agent/src/store.rs`. Tier 0: 1-Hz raw samples / 24h. Tier 1: 1-min aggregates / 30d. Tier 2: 1-hr aggregates with `PERCENTILE_CONT(0.95)` p95 / 90d. Idempotent hourly `run_aggregation()`. `GET /api/history?node_id=&from=&to=&resolution=auto` — distinct from the cloud-side DuckDB (Railway). Musl targets compile the module out entirely.
+
+**UI Accuracy Fixes**
+- **Apple Silicon detector** — replaced `cpu_power_w != null` with `memory_pressure_percent != null` throughout fleet UI. Linux RAPL populates `cpu_power_w` on AMD/Intel; `memory_pressure_percent` is strictly IOKit/macOS-exclusive. Fixes AMD node being mis-labelled "unified memory".
+- **Fleet VRAM aggregator unified** — single `calculateTotalVramMb` / `calculateTotalVramCapacityMb` in `efficiency.ts` used by both Management and Intelligence tabs. Fixed `appleGpuBudgetMb` zero-guard (`??` → `!= null && > 0`) — when the macOS sysctl probe emits `gpu_wired_limit_mb = 0`, the Apple node now contributes the correct 75%-of-RAM estimate instead of zero to fleet VRAM totals.
+- **Three-state TOK/S display** — LIVE (`vllm_requests_running > 0` or `ollama_inference_active`), BUSY (GPU% ≥ threshold), IDLE-SPD (probe/smoothed baseline). Tilde `~` prefix only on pure GPU%-estimated values; never on measured Prometheus or probe readings.
+- **W/1K column** — Fleet Status table column shows watts-per-1k-tokens (matching "WATTAGE / 1K TKN" summary tile). Lower = more efficient. Units consistent across table and summary cards.
+
+**Agent & Platform (v0.4.20 and earlier)**
 - Rust agent, single binary — zero runtime dependencies, ~700KB
 - Embedded React/Tailwind dashboard at `localhost:7700`
 - Sudoless Deep Metal on Apple Silicon: CPU, GPU, Thermal State, Memory Pressure
@@ -194,7 +208,8 @@
 > DuckDB write path shipped. 90-day history accumulating. Unlocks trend-based insights and AI-powered briefings.
 
 ### Infrastructure
-- [x] **DuckDB Write Path (Phase 4A shipped `e8c6b47`):**
+- [x] **Agent-local DuckDB history store (v0.4.28)** — `agent/src/store.rs`. Three-tier schema at `~/.wicklee/metrics.db` (agent node, not cloud). `GET /api/history` endpoint on the agent's port 7700. Distinct from the cloud-side store below — enables offline local history with no cloud dependency. See agent hardening notes in Shipped section above.
+- [x] **DuckDB Write Path — cloud backend (Phase 4A shipped `e8c6b47`):**
   - `metrics_raw` table: 24-hour rolling window at native 1 Hz. `metrics_5min` table: 90-day aggregate retention (5-minute buckets with pre-computed tok_s P50/P95).
   - ZSTD compression (level 3). Tiered retention via hourly rollup with EXISTS guard (no data loss on partial failure). Nightly CHECKPOINT + ANALYZE at 3 AM UTC.
   - `mpsc` channel (8 192-slot) + dedicated writer task → DuckDB Appender API (10-20× insert throughput). 30-second flush interval, 512-row safety valve.
