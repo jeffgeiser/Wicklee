@@ -8,7 +8,7 @@
 
 ## March 18, 2026 — Agent-Local DuckDB History Store (v0.4.28) 🗄️
 
-**The Goal:** Implement Phase 1.1 of the observability roadmap — a local three-tier DuckDB time-series store on each agent node. Distinct from the cloud-side DuckDB (Railway backend, `e8c6b47`). Enables per-node historical queries with no cloud dependency.
+**The Goal:** Implement the agent-local DuckDB store item from **Phase 4A** of `docs/ROADMAP.md` — a local three-tier time-series store on each agent node. Distinct from the cloud-side DuckDB (Railway backend, `e8c6b47`). Enables per-node historical queries with no cloud dependency.
 
 ---
 
@@ -73,11 +73,12 @@ GET /api/history?node_id=WK-99E9&from=1742000000000&to=1742003600000&resolution=
 
 ---
 
-### What's Next
+### What's Next (Phase 4A — `docs/ROADMAP.md`)
 
-- **Phase 1.2 — Idle-Only Ollama Probing**: fire the 20-token benchmark only when `/api/ps` confirms the model is unloaded (clean idle signal, not throughput-below-threshold). Eliminates the root cause that `MIN_COST_TPS` patches around.
-- **Historical Charts UI**: time-range selector on the Intelligence tab GPU chart, wired to `/api/history`. Live mode = SSE stream; History mode = DuckDB query. Auto-resolution handled server-side.
-- **Hardware-derived node ID**: `/etc/machine-id` (Linux) / `IOPlatformUUID` (macOS) — deterministic, survives reinstalls and re-pairings.
+- **Pattern Sprint 2** — Pattern C (WES Velocity Drop, 10-min window, early-warning before thermal state changes) + Pattern F (Memory Pressure Trajectory ETA). Observation dismissal (per-patternId localStorage, resurfaces after 1h).
+- **Insights AI** — `Settings → Insights & AI` provider selector (Wicklee Cloud / BYOK Anthropic / BYOK OpenAI / local Ollama). Morning Briefing card. Anomaly Explanation in natural language. `GET /api/v1/insights/latest`.
+- **Hardware-derived node ID** — `/etc/machine-id` (Linux) / `IOPlatformUUID` (macOS) — deterministic, survives reinstalls and re-pairings.
+- **`wes_config.json`** — configurable penalty thresholds per platform (still open from Phase 3A).
 
 ---
 
@@ -159,12 +160,12 @@ The `wicklee --update` command was failing with `EPERM` on the Spark: the binary
 
 ---
 
-### What's Next
+### What's Next (Phase 4A — `docs/ROADMAP.md`)
 
-- ✅ **Phase 1.1 — DuckDB Write Path** — shipped in v0.4.28 (see entry above)
-- **Phase 1.2 — Idle-Only Ollama Probing**: fire benchmark only when `/api/ps` confirms idle; eliminate `MIN_COST_TPS` workaround
-- **Historical Charts UI**: time-range selector wired to `/api/history`
-- **Hardware-derived node ID**: `/etc/machine-id` (Linux) / `IOPlatformUUID` (macOS) — survives reinstalls
+- ✅ **Agent-local DuckDB store** — shipped in v0.4.28 (see entry above)
+- **Pattern Sprint 2** — Pattern C (WES Velocity Drop) + Pattern F (Memory Pressure Trajectory ETA) + observation dismissal
+- **Insights AI** — Morning Briefing + `GET /api/v1/insights/latest`
+- **Hardware-derived node ID** — `/etc/machine-id` (Linux) / `IOPlatformUUID` (macOS) — survives reinstalls
 
 ---
 
