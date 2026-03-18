@@ -95,18 +95,45 @@ else
   sudo cp "$TMP" "$INSTALL_TMP" && sudo mv "$INSTALL_TMP" "$INSTALL_PATH"
 fi
 
+# ── Service update ────────────────────────────────────────────────────────────
+# If a service is already registered, re-run --install-service so the unit
+# file stays current and binary ownership transfers to the service user
+# (enabling future self-updates without sudo). Restart is handled internally.
+
+SERVICE_UPDATED=false
+
+if [[ "$OS_TAG" == "linux" ]] && command -v systemctl &>/dev/null; then
+  if systemctl list-unit-files wicklee.service &>/dev/null 2>&1; then
+    echo "  Updating systemd service…"
+    sudo "${INSTALL_PATH}" --install-service
+    SERVICE_UPDATED=true
+  fi
+elif [[ "$OS_TAG" == "darwin" ]]; then
+  if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
+    echo "  Updating launchd service…"
+    sudo "${INSTALL_PATH}" --install-service
+    SERVICE_UPDATED=true
+  fi
+fi
+
 # ── Success ───────────────────────────────────────────────────────────────────
 
 echo ""
 green "  ✓ Wicklee agent installed successfully (${LATEST_TAG})"
 echo ""
-echo "  Start monitoring your node:"
-echo ""
-bold "  Recommended — runs on every boot:"
-bold "    sudo wicklee --install-service"
-echo ""
-echo "  Or run manually:"
-bold "    sudo wicklee"
+
+if [[ "$SERVICE_UPDATED" == "true" ]]; then
+  dim "     Service updated and restarted automatically."
+else
+  echo "  Start monitoring your node:"
+  echo ""
+  bold "  Recommended — runs on every boot:"
+  bold "    sudo wicklee --install-service"
+  echo ""
+  echo "  Or run manually:"
+  bold "    sudo wicklee"
+fi
+
 echo ""
 echo "  Your dashboard:     http://localhost:7700"
 echo "  Pair with your fleet: https://wicklee.dev"
