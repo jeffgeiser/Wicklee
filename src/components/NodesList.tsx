@@ -65,10 +65,18 @@ const derivePermissions = (m: SentinelMetrics | null): PermLevel => {
 
 const deriveMemCapacity = (m: SentinelMetrics | null): string => {
   if (!m) return '—';
+  // NVIDIA Grace Blackwell / GB10 — VRAM ≈ total RAM, same unified architecture as Apple Silicon.
+  // Detect by VRAM being ≥ 90 % of reported system RAM (discrete GPUs are always much smaller).
+  if (m.nvidia_vram_total_mb != null && m.total_memory_mb > 0 &&
+      m.nvidia_vram_total_mb >= m.total_memory_mb * 0.9)
+    return `${Math.round(m.nvidia_vram_total_mb / 1024)} GB unified`;
+  // NVIDIA discrete GPU — VRAM is separate from system RAM.
   if (m.nvidia_vram_total_mb != null)
     return `${Math.round(m.nvidia_vram_total_mb / 1024)} GB VRAM`;
+  // Apple Silicon — cpu_power_w is a powermetrics-only field, reliable macOS detector.
   if (m.cpu_power_w != null && m.total_memory_mb > 0)
     return `${Math.round(m.total_memory_mb / 1024)} GB unified`;
+  // x86 / standard system RAM (AMD, Intel, generic Linux ARM).
   if (m.total_memory_mb > 0)
     return `${Math.round(m.total_memory_mb / 1024)} GB RAM`;
   return '—';
