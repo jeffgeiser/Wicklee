@@ -4,7 +4,7 @@
 
 ---
 
-## ✅ Shipped (v0.4.16)
+## ✅ Shipped (v0.4.20)
 
 **Agent & Platform**
 - Rust agent, single binary — zero runtime dependencies, ~700KB
@@ -36,6 +36,11 @@
 - 30-second sampled tok/s probe via `/api/generate` (num_predict=3)
 - Wattage/1K TKN: live calculation from board power ÷ tok/s
 - Cost/1K TKN: wattage × configurable kWh rate (default $0.13)
+- **Process-first runtime discovery** — `process_discovery.rs` module. Declarative `RuntimeSpec` table; adding a new runtime = one entry, no other code changes. Watch channels (`PortRx`/`PortTx`) for reactive harvesters. 30s background scan loop.
+- **Three-tier Priority of Truth port resolution:**
+  - Tier 1: TOML override `[runtime_ports]` in `~/.wicklee/config.toml` (v0.4.19)
+  - Tier 2: Cmdline arg scan — `--port N` / `--port=N` in argv; explicit-port process wins over worker subprocesses; joined cmdline matching for multi-token markers like "vllm serve" (v0.4.17/18)
+  - Tier 3: Socket inode scan — `/proc/{pid}/fd/` ↔ `/proc/net/tcp6` — world-readable, no elevated permissions; resolves actual listening port for cross-user processes where cmdline is hidden (v0.4.20)
 
 **UI**
 - Fleet Overview: 6 real-time summary cards (all live data, no mock values)
@@ -138,7 +143,7 @@
 > Goal: close hardware gaps, launch publicly, ship Agent API v1.
 
 ### Platform
-- [x] **vLLM Integration:** ✅ Prometheus `/metrics` endpoint at `localhost:8000`. Real tok/s without 30s probe. 2s polling loop, 5 metrics harvested (`vllm_running`, `vllm_model_name`, `tok/s`, `cache_usage_perc`, `requests_running`).
+- [x] **vLLM Integration:** ✅ Prometheus `/metrics` endpoint. Real tok/s without 30s probe. 2s polling loop, 5 metrics harvested (`vllm_running`, `vllm_model_name`, `tok/s`, `cache_usage_perc`, `requests_running`). Port resolved via three-tier discovery (TOML override → cmdline scan → socket inode scan) — works on any port, including cross-user deployments.
 - [x] **Linux Thermal:** ✅ `/sys/class/thermal` — reads all `thermal_zone*/temp` entries, maps max to Normal/Fair/Serious/Critical. Closes the thermal state gap on GeiserBMC and similar bare metal nodes.
 - [ ] **Windows Thermal:** WMI thermal data for Windows nodes. Annotated as "estimated" in UI — lowest data quality platform.
 - [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.

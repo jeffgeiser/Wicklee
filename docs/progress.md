@@ -4,6 +4,109 @@
 
 ---
 
+## March 18, 2026 — Process-First Runtime Discovery + Tier-3 Socket Scan (v0.4.17–v0.4.20) 🔎
+
+**The Goal:** Replace hardcoded port probing for Ollama and vLLM with world-class, hardware-agnostic process-first discovery. The immediate trigger: DGX Spark running vLLM on a non-standard port (18010) owned by a different OS user — the agent was stuck probing :8000 and finding nothing.
+
+---
+
+### The Problem with Port-Probing
+
+The original approach: probe `localhost:8000`, get a response → vLLM is running. Simple, but brittle. Breaks the moment a user runs vLLM on any non-default port. Completely blind to cross-user processes where the port isn't even knowable without reading the process's cmdline.
+
+---
+
+### process_discovery.rs — New Module ✅
+
+`agent/src/process_discovery.rs` — a standalone, fully generic runtime discovery engine.
+
+**`RuntimeSpec` struct:** Declarative description of a single inference runtime. All discovery logic is derived from this table — no per-runtime code lives anywhere else. Fields:
+- `exact_binary` — process names that unambiguously identify the runtime (`["ollama"]`)
+- `cmdline_markers` — substrings across all argv (catches `python -m vllm.entrypoints.openai.api_server`)
+- `port_arg` — CLI flag carrying the port (`--port`)
+- `default_port` — fallback when the flag is absent
+
+**`RUNTIME_SPECS` registry:** Two entries today (`ollama`, `vllm`). Adding a new runtime = one entry in the table. No other code changes required.
+
+**Watch channel types:** `PortRx = watch::Receiver<Option<u16>>`, `PortTx = watch::Sender<Option<u16>>`. `Some(port)` = runtime detected, `None` = stopped. Harvesters react without restarting.
+
+**`scan_runtimes()`:** Iterates all running processes via `sysinfo` (cross-platform, no `/proc` parsing, no subprocesses, no elevated permissions). Tracks `(has_explicit_port, port, pid)` per runtime. When multiple processes match the same runtime (e.g. main server + worker subprocesses), the one with an explicit `--port` flag wins.
+
+**`start_discovery_loop()`:** 30-second Tokio ticker. Sends only when the value changes — harvesters are never woken spuriously between scan cycles. `MissedTickBehavior::Skip` prevents burst scans if a scan takes unexpectedly long.
+
+---
+
+### v0.4.17 — Architecture ✅
+
+First cut of `process_discovery.rs` + integration into `main.rs`:
+- Watch channels initialized and wired to `start_ollama_harvester` and `start_vllm_harvester`
+- Both harvesters rewritten to outer wait loop (parks until `port_rx = Some`) + inner poll loop. React to mid-flight port changes — if vLLM restarts on a different port the harvester catches it at the next discovery cycle without an agent restart
+- `run_startup_diagnostics` updated: uses `scan_runtimes()` output instead of hardcoded port probes; shows `(config)` tag when port comes from TOML
+- Old hardcoded port constants removed
+
+---
+
+### v0.4.18 — Joined Cmdline + Explicit-Port Preference ✅
+
+**Bug 1 — joined cmdline:** `vllm serve` appears as two separate argv tokens (`["vllm", "serve", "--port", "18010"]`). The original marker check iterated individual args; "vllm serve" as a single substring would never match. Fix: `cmd.join(" ")` before the substring search so multi-token markers spanning arg boundaries are found correctly.
+
+**Bug 2 — worker subprocess promotion:** vLLM spawns multiple worker processes. Workers inherit the default port but lack an explicit `--port` flag. If a worker was seen first and the main server was seen later, the candidate wasn't upgraded. Fix: when a candidate with no explicit port is already recorded and a new process for the same runtime has an explicit port, upgrade the candidate. The `(bool, u16, pid)` tuple in `candidates` tracks this state.
+
+---
+
+### v0.4.19 — TOML Config Override ✅
+
+**Root cause discovered:** DGX Spark's vLLM process was owned by user `zenlayer`; the agent ran as `jgeiser`. Linux restricts reading `/proc/{pid}/cmdline` for other-user processes in some configurations. `sysinfo` returns an empty `cmd()` — no explicit `--port` flag is ever visible, so the scanner falls through to `default_port` (8000), not 18010.
+
+**Fix:** `[runtime_ports]` section in `~/.wicklee/config.toml`:
+```toml
+[runtime_ports]
+vllm = 18010
+```
+Caller applies the config override (Tier 1) before the process scan result. Takes precedence over everything. Zero-code fix for any non-standard port deployment.
+
+---
+
+### v0.4.20 — Tier-3 Socket Inode Scan ✅
+
+**The long-term zero-config solution.** Even when `cmd()` is empty (cross-user), the PID and binary name are always visible. Knowing the PID, we can ask the kernel directly which ports it's listening on — without needing to read cmdline.
+
+**Two new Linux-only helpers:**
+
+`socket_inodes_for_pid(pid)` — reads `/proc/{pid}/fd/` symlinks, collects all `socket:[inode]` values. Socket fds resolve to `"socket:[12345678]"`. Returns empty set if the fd directory is unreadable (cross-user without `cap_sys_ptrace`).
+
+`listening_inode_to_port(path)` — parses `/proc/net/tcp` or `/proc/net/tcp6` for entries with state `0A` (TCP_LISTEN). Both files are **world-readable** — no elevated permissions needed. Returns a map of `inode → port`.
+
+`socket_port_for_pid(pid)` — composes the two above. Prefers `tcp6` (dual-stack servers bind `:::N` which appears there even for IPv4-mapped connections), falls through to `tcp` for IPv4-only servers. Stub on non-Linux targets (`fn socket_port_for_pid(_: u32) -> Option<u16> { None }`).
+
+**Integration in `scan_runtimes()`:** After the main process scan loop, any runtime candidate without an explicit `--port` gets a socket scan attempt. If `socket_port_for_pid` resolves a different port than the default, it wins and logs `[discovery] vllm → :18010 (socket scan, pid 12345)`.
+
+**Priority of Truth — now complete:**
+
+| Tier | Method | Implemented |
+|---|---|---|
+| 1 | TOML override `[runtime_ports]` | v0.4.19 |
+| 2 | Cmdline arg scan (`--port N` in argv) | v0.4.17/18 |
+| 3 | Socket inode scan (`/proc/{pid}/fd/` ↔ `/proc/net/tcp6`) | v0.4.20 |
+
+**Startup banner hint:** When vLLM is not detected on Linux, the banner now prints:
+```
+  vLLM    not detected  →  set runtime_ports.vllm in config
+          hint: sudo setcap cap_sys_ptrace+ep $(which wicklee)  # zero-config cross-user detection
+```
+With `cap_sys_ptrace`, sysinfo can read the foreign process's cmdline (Tier 2). Without it, Tier 3 (socket scan) still resolves the port as long as the fd directory is readable.
+
+---
+
+### What's Next
+
+- **Why `ollama_inference_active` is null on DGX Spark** — investigate Linux-ARM64 Ollama `/api/ps` poll path; LIVE should light up during inference, not just BUSY
+- **Docs improvements** — Quick Start clarity, CLI reference section, confirm docs are publicly accessible without login
+- **Developer Portal (APIKeysView.tsx)** — real API calls, create/delete, Quick Reference panel
+- **Pattern C — WES Velocity Drop** — leading indicator before thermal state changes
+
+---
+
 ## March 17, 2026 — DGX Spark Full Instrumentation + ARM64 NVIDIA Build 🚀
 
 **The Goal:** Get the NVIDIA GB10 Grace Blackwell (DGX Spark) fully instrumented with live VRAM, watts, and GPU% in the fleet dashboard. Fix ARM chip name detection on Linux. Ship the linux-aarch64-nvidia CI build. Cut v0.4.16.
