@@ -1,6 +1,6 @@
 # Wicklee — Engineering Roadmap
 
-_Last updated: 2026-03-13. Priorities set after reviewing live metric accuracy issues and fleet observability gaps._
+_Last updated: 2026-03-18. Updated after DGX Spark hardening sprint (v0.4.21–v0.4.27) and fleet metric accuracy fixes._
 
 ---
 
@@ -17,16 +17,25 @@ _Last updated: 2026-03-13. Priorities set after reviewing live metric accuracy i
 
 ## Recently Shipped
 
-- ✅ **Peak TPS tracking + throughput estimation** — per-node session high-water mark; `estimateTps()` fills in GPU-utilisation-based estimate when probe fails or returns depressed reading during inference lockup (`peakTpsMap` in FleetStreamContext).
+- ✅ **vLLM IDLE-SPD idle probe (v0.4.27)** — `probe_vllm_tps()` POSTs 20-token completions request when `vllm_requests_running == 0`; wall-clock timing gives real hardware throughput baseline. Prometheus `avg_generation_throughput_toks_per_s` filtered at `> 0.1` so idle zeros don't clobber the probe value.
+- ✅ **Three-state TOK/S display** — LIVE (`vllm_requests_running > 0` or `ollama_inference_active`), BUSY (GPU% ≥ threshold), IDLE-SPD (probe/smoothed baseline). Tilde `~` prefix only on pure GPU%-estimated values, never on measured Prometheus or probe readings.
+- ✅ **Self-update service hardening (v0.4.26)** — `install_service` chowns binary to service user; `install.sh` re-runs `--install-service` on update; `EPERM` prints actionable hint.
+- ✅ **Multi-PID socket scan + config-locked runtimes (v0.4.26)** — discovery collects all matching PIDs, prefers non-default port (main server vs worker subprocess). TOML `[runtime_ports]` overrides are fully excluded from the 30s discovery loop — dynamic discovery can never overwrite a config value.
+- ✅ **`HOME` resolution via getpwuid (v0.4.25)** — `resolve_config_path()` falls back to `getpwuid(getuid())` when `$HOME` is absent from the environment. Fixes `/.wicklee/config.toml` appearing under systemd with no `HOME=` directive.
+- ✅ **systemd unit `User=` + `HOME=` (v0.4.23)** — `install_service` emits correct `User=` and `Environment=HOME=` entries. Services no longer run as root with an absent HOME.
+- ✅ **Apple Silicon detector fix** — replaced `cpu_power_w != null` with `memory_pressure_percent != null` throughout UI. Linux RAPL populates `cpu_power_w` on AMD/Intel; `memory_pressure_percent` is strictly IOKit/macOS-exclusive.
+- ✅ **Fleet VRAM aggregator unified (NodesList + Overview)** — single `calculateTotalVramMb`/`calculateTotalVramCapacityMb` in `efficiency.ts` covers NVIDIA VRAM + Apple GPU wired budget. Both tiles (Management tab and Intelligence tab) use the same functions. Fixed `appleGpuBudgetMb` zero-guard (`??` → `!= null && > 0`) so nodes where the sysctl probe emits `gpu_wired_limit_mb=0` contribute the correct 75%-of-RAM estimate instead of zero.
+- ✅ **W/1K column** — Fleet Status table column renamed and recalculated to watts-per-1k-tokens (matching "WATTAGE / 1K TKN" summary tile). Lower = more efficient; units consistent end-to-end.
+- ✅ **Peak TPS tracking + throughput estimation** — per-node session high-water mark; `estimateTps()` fills in GPU-utilisation-based estimate when probe fails or returns depressed reading during inference lockup.
 - ✅ **`None`-on-probe-failure handling** — Ollama probe writes `null` instead of crashing on connection error.
-- ✅ **MIN_COST_TPS rolling-buffer guard** — `MIN_COST_TPS = 0.1 tok/s` prevents Ollama startup-ramp spikes (near-zero tps + full power draw) from contaminating the 12-sample cost rolling buffer for minutes.
-- ✅ **Cost formula unit fix** — `costPer1k` header tile was using `÷1000` where `÷3,600,000` is required (J/k·tok → $/k·tok conversion). Was off by ×3600 (showing `$77/1M` instead of `$0.021/1M`). Fixed. Energy tile relabelled from "W" to "J" (Joules per 1k tokens is the correct unit).
+- ✅ **MIN_COST_TPS rolling-buffer guard** — `MIN_COST_TPS = 0.1 tok/s` prevents Ollama startup-ramp spikes from contaminating the 12-sample cost rolling buffer.
+- ✅ **Cost formula unit fix** — `costPer1k` was using `÷1000` where `÷3,600,000` is required (J/k·tok → $/k·tok). Off by ×3600. Fixed.
 
 ---
 
 ## Phase 1 — Observability Foundation  _(Do first — everything else depends on it)_
 
-### 1.1 DuckDB Write Path + Schema  🗓️
+### 1.1 DuckDB Write Path + Schema  🔨
 
 Three-tier columnar schema. Design it right before writing a single row — migrations are painful.
 
@@ -168,8 +177,8 @@ Once local DuckDB is solid, add an optional background sync job:
 
 | Item | Notes |
 |------|-------|
+| Hardware-derived node ID | Use `/etc/machine-id` (Linux), `IOPlatformUUID` (macOS), `MachineGuid` (Windows) — deterministic, survives reinstalls. Eliminates re-pairing after agent updates. |
 | Keep-warm audit logs | Log every probe ping outcome; UI surfaceable in Observability tab |
-| vLLM adapter | Wire `avg_generation_throughput_toks_per_s` fully into fleet totals |
 | mTLS fabric UI | Visual representation of node-to-node trust graph |
 | WASM binary upload flow | Scaffolding view work item |
 | DuckDB-rs trace visualization | Enhanced query builder for trace records |
@@ -183,3 +192,4 @@ Once local DuckDB is solid, add an optional background sync job:
 | Per-node cost shows `$0.00` for low-wattage Apple Silicon nodes | Expected — Mac at 1.5W / 44 tok/s is genuinely sub-cent per million tokens. Display needs `< $0.01` guard instead of `$0.00`. |
 | `peakTpsMap` resets on page reload | Session-scoped by design; Phase 1.1 DuckDB baseline will persist this. |
 | Probe interference on weak nodes | Addressed by MIN_COST_TPS; fully fixed by Phase 1.2 idle-only probing. |
+| vLLM IDLE-SPD on DGX Spark shows IDLE-SPD even with no active requests | Correct — the probe runs every 30s when `vllm_requests_running == 0`. The displayed tok/s is real hardware throughput at idle. LIVE only lights when requests are actively running. |
