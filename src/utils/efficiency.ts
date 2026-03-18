@@ -103,6 +103,43 @@ export function calculateTotalVramCapacityMb(metrics: SentinelMetrics[]): number
 }
 
 /**
+ * Human-readable VRAM pool summary for fleet-level tiles.
+ *
+ * showCounts = false  → "Apple + NVIDIA" | "wired budget" | "NVIDIA VRAM"
+ *   — terse, used by the Insight Engine header (Overview.tsx).
+ *
+ * showCounts = true   → "2 NVIDIA · 1 Apple Silicon · combined"
+ *   — detailed, used by the management Node Registry header (NodesList.tsx).
+ *
+ * Returns null when no GPU nodes are present.
+ * Both branches use the same INFERENCE_VRAM_THRESHOLD_MB filter so counts
+ * and totals are always consistent.
+ */
+export function fleetVramSubtitle(
+  metrics: SentinelMetrics[],
+  opts: { showCounts?: boolean } = {},
+): string | null {
+  const { showCounts = false } = opts;
+  const nvidiaCount = metrics.filter(
+    m => (m.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB,
+  ).length;
+  const appleCount = metrics.filter(m => m.memory_pressure_percent != null).length;
+
+  if (nvidiaCount === 0 && appleCount === 0) return null;
+
+  if (showCounts) {
+    const parts: string[] = [];
+    if (nvidiaCount > 0) parts.push(`${nvidiaCount} NVIDIA`);
+    if (appleCount  > 0) parts.push(`${appleCount} Apple Silicon`);
+    return parts.join(' · ') + (parts.length > 1 ? ' · combined' : '');
+  }
+
+  if (nvidiaCount > 0 && appleCount > 0) return 'Apple + NVIDIA';
+  if (appleCount  > 0) return 'wired budget';
+  return 'NVIDIA VRAM';
+}
+
+/**
  * Daily fleet power cost in USD.
  * Covers all nodes that report power data (nvidia_power_draw_w or cpu_power_w).
  * We intentionally do NOT filter by inference activity: ollama_tokens_per_second is a

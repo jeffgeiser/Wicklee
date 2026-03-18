@@ -9,6 +9,7 @@ import {
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
+import { calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle } from '../utils/efficiency';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 
@@ -1012,43 +1013,17 @@ const NodesList: React.FC<NodesListProps> = ({
 
   // ── Header tile computations ────────────────────────────────────────────────
 
-  // Fleet VRAM — combines NVIDIA dedicated VRAM + Apple Silicon GPU wired budget.
-  // memory_pressure_percent is IOKit/macOS-exclusive — the only reliable Apple detector.
-  // cpu_power_w is NOT used: Linux RAPL populates it on AMD/Intel nodes too.
-  const nvidiaNodes = allLive.filter(m => m.nvidia_vram_total_mb != null);
-  const appleNodes  = allLive.filter(m => m.memory_pressure_percent != null);
-
-  const nvUsedMb  = nvidiaNodes.reduce((s, m) => s + (m.nvidia_vram_used_mb  ?? 0), 0);
-  const nvTotalMb = nvidiaNodes.reduce((s, m) => s + (m.nvidia_vram_total_mb ?? 0), 0);
-
-  // Apple GPU budget: iogpu.wired_limit_mb when available, else 75% of total RAM.
-  // Used = budget − available memory (clamped to budget).
-  const appleCapMb  = appleNodes.reduce((s, m) => {
-    const cap = (m.gpu_wired_limit_mb && m.gpu_wired_limit_mb > 0)
-      ? m.gpu_wired_limit_mb : Math.round(m.total_memory_mb * 0.75);
-    return s + cap;
-  }, 0);
-  const appleUsedMb = appleNodes.reduce((s, m) => {
-    const cap   = (m.gpu_wired_limit_mb && m.gpu_wired_limit_mb > 0)
-      ? m.gpu_wired_limit_mb : Math.round(m.total_memory_mb * 0.75);
-    const avail = Math.min(cap, m.available_memory_mb ?? 0);
-    return s + Math.max(0, cap - avail);
-  }, 0);
-
-  const totalUsedMb = nvUsedMb  + appleUsedMb;
-  const totalCapMb  = nvTotalMb + appleCapMb;
-  const hasGpu      = nvidiaNodes.length > 0 || appleNodes.length > 0;
+  // Fleet VRAM — single source of truth via efficiency.ts canonical aggregators.
+  // Combines NVIDIA VRAM + Apple Silicon GPU wired budget; excludes BMC/onboard
+  // graphics (< INFERENCE_VRAM_THRESHOLD_MB) and CPU-only nodes.
+  const totalUsedMb = calculateTotalVramMb(allLive);
+  const totalCapMb  = calculateTotalVramCapacityMb(allLive);
+  const hasGpu      = totalCapMb > 0;
 
   const vramPrimary = hasGpu
     ? `${(totalUsedMb / 1024).toFixed(1)} / ${(totalCapMb / 1024).toFixed(1)} GB`
     : '—';
-
-  const vramParts: string[] = [];
-  if (nvidiaNodes.length > 0) vramParts.push(`${nvidiaNodes.length} NVIDIA`);
-  if (appleNodes.length  > 0) vramParts.push(`${appleNodes.length} Apple Silicon`);
-  const vramSub = hasGpu
-    ? vramParts.join(' · ') + (vramParts.length > 1 ? ' · combined' : '')
-    : 'no GPU nodes detected';
+  const vramSub = fleetVramSubtitle(allLive, { showCounts: true }) ?? 'no GPU nodes detected';
 
   // Hardware Mix
   const osCounts: Record<string, number> = {};
