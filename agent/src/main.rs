@@ -1574,6 +1574,11 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16,
             println!("{}", row("vLLM", &format!(":{port}{vllm_source} · {}", if up { "healthy" } else { "starting up" })));
         } else {
             println!("{}", row("vLLM", "not detected  →  set runtime_ports.vllm in config"));
+            // On Linux, a cross-user vLLM process (e.g. owned by a service account)
+            // can be auto-discovered without any config by granting cap_sys_ptrace.
+            // Print the hint so operators know how to enable zero-config detection.
+            #[cfg(target_os = "linux")]
+            println!("       hint: sudo setcap cap_sys_ptrace+ep $(which wicklee)  # zero-config cross-user detection");
         }
     }
 
