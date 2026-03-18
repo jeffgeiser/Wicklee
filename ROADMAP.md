@@ -17,6 +17,7 @@ _Last updated: 2026-03-18. Updated after DGX Spark hardening sprint (v0.4.21–v
 
 ## Recently Shipped
 
+- ✅ **DuckDB three-tier metrics store (v0.4.28)** — `~/.wicklee/metrics.db`; raw 1Hz/24h → 1min/30d → 1hr/90d with `PERCENTILE_CONT(0.95)` p95; `GET /api/history` auto-resolution endpoint; idempotent hourly aggregation; musl builds compile the module out entirely.
 - ✅ **vLLM IDLE-SPD idle probe (v0.4.27)** — `probe_vllm_tps()` POSTs 20-token completions request when `vllm_requests_running == 0`; wall-clock timing gives real hardware throughput baseline. Prometheus `avg_generation_throughput_toks_per_s` filtered at `> 0.1` so idle zeros don't clobber the probe value.
 - ✅ **Three-state TOK/S display** — LIVE (`vllm_requests_running > 0` or `ollama_inference_active`), BUSY (GPU% ≥ threshold), IDLE-SPD (probe/smoothed baseline). Tilde `~` prefix only on pure GPU%-estimated values, never on measured Prometheus or probe readings.
 - ✅ **Self-update service hardening (v0.4.26)** — `install_service` chowns binary to service user; `install.sh` re-runs `--install-service` on update; `EPERM` prints actionable hint.
@@ -35,68 +36,30 @@ _Last updated: 2026-03-18. Updated after DGX Spark hardening sprint (v0.4.21–v
 
 ## Phase 1 — Observability Foundation  _(Do first — everything else depends on it)_
 
-### 1.1 DuckDB Write Path + Schema  🔨
+### 1.1 DuckDB Write Path + Schema  ✅  _(v0.4.28)_
 
-Three-tier columnar schema. Design it right before writing a single row — migrations are painful.
+**Shipped.** Three-tier columnar schema at `~/.wicklee/metrics.db`:
 
-**Tables:**
-```sql
--- Tier 0: raw 1Hz samples, 24h retention
-CREATE TABLE metrics_raw (
-  ts           TIMESTAMPTZ NOT NULL,
-  node_id      TEXT        NOT NULL,
-  model        TEXT,
-  tps          DOUBLE,
-  cpu_temp_c   DOUBLE,
-  cpu_power_w  DOUBLE,
-  gpu_power_w  DOUBLE,
-  gpu_util_pct DOUBLE,
-  vram_used_mb BIGINT,
-  wes          DOUBLE,
-  cost_per_1m  DOUBLE,
-  PRIMARY KEY (ts, node_id)
-);
+| Table | Granularity | Retention | Key metrics |
+|-------|-------------|-----------|-------------|
+| `metrics_raw` | 1 Hz | 24 h | tps, gpu_util_pct, gpu_power_w, vram_used_mb, cpu_usage_pct, mem_used_mb, thermal_state |
+| `metrics_1min` | 1 min | 30 d | tps_avg/max/min, gpu_util_avg, gpu_power_avg, vram_used_avg, sample_count |
+| `metrics_1hr` | 1 hr | 90 d | tps_avg/max/p95 (PERCENTILE_CONT 0.95), gpu_util_avg, gpu_power_avg, vram_used_avg |
 
--- Tier 1: 1-minute aggregates, 30d retention
-CREATE TABLE metrics_1min (
-  ts           TIMESTAMPTZ NOT NULL,
-  node_id      TEXT        NOT NULL,
-  tps_avg      DOUBLE, tps_max DOUBLE, tps_min DOUBLE,
-  cpu_temp_avg DOUBLE, cpu_temp_max DOUBLE,
-  power_avg_w  DOUBLE,
-  wes_avg      DOUBLE,
-  cost_avg_1m  DOUBLE,
-  PRIMARY KEY (ts, node_id)
-);
+**Implementation (`agent/src/store.rs`):**
+- `Store(Arc<Mutex<Connection>>)` — clone-cheap, Send+Sync, single DuckDB file
+- `Sample::from_broadcast_json()` — zero-copy decode from existing 1-Hz broadcast JSON
+- `write_sample()` — `ON CONFLICT DO NOTHING`; safe on clock adjustments / restarts
+- `run_aggregation(now_ms)` — idempotent UPSERT; raw→1min, 1min→1hr; prunes all tiers
+- `query_history()` — auto-selects tier by window width; typed `HistoryResponse` JSON
+- Musl targets: entire module conditionally compiled out (`#[cfg(not(target_env = "musl"))]`)
 
--- Tier 2: 1-hour heartbeat snapshots, 90d retention
-CREATE TABLE metrics_1hr (
-  ts           TIMESTAMPTZ NOT NULL,
-  node_id      TEXT        NOT NULL,
-  tps_avg      DOUBLE, tps_p95 DOUBLE,
-  cpu_temp_avg DOUBLE, cpu_temp_max DOUBLE,
-  power_avg_w  DOUBLE,
-  wes_avg      DOUBLE,
-  cost_avg_1m  DOUBLE,
-  PRIMARY KEY (ts, node_id)
-);
-```
+**API:** `GET /api/history?node_id=&from=&to=&resolution=(auto|raw|1min|1hr)`
+- `resolution=auto`: < 2h → raw, < 7d → 1min, else 1hr
+- Graceful degradation: store open failure logs an error, real-time metrics unaffected
+- `duckdb = { version = "1.1", features = ["bundled"] }` — first build ~24 min; cached thereafter
 
-**Rust agent tasks:**
-- Write to `metrics_raw` on every SSE frame
-- Hourly background Tokio task: aggregate raw → 1min, raw → 1hr, then delete raw rows older than 24h and 1min rows older than 30d
-- Target: under 100 MB for a 10-node fleet over a full quarter
-
-**API endpoint:**
-```
-GET /api/history?node_id=&from=&to=&resolution=auto
-```
-Agent auto-selects tier based on window size:
-- < 2h → raw
-- 2h–7d → 1-minute
-- > 7d → 1-hour
-
-Never send raw rows to the browser. Always pre-aggregate server-side.
+**Next step:** Phase 3.2 historical charts UI wired to this endpoint.
 
 ---
 
