@@ -333,8 +333,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
     return <MetricsPage onNavigate={navigate} />;
   }
 
-  // Documentation route — public, no auth required
-  if (currentPath === '/docs') {
+  // Documentation route — public, no auth required (trailing slash tolerant)
+  if (currentPath === '/docs' || currentPath === '/docs/') {
     return <DocsPage onNavigate={navigate} />;
   }
 

@@ -101,6 +101,7 @@ const Td: React.FC<{ children: React.ReactNode; mono?: boolean; className?: stri
 
 const NAV = [
   { id: 'quickstart',  label: 'Quick Start' },
+  { id: 'cli',         label: 'CLI Reference' },
   { id: 'wes',         label: 'WES Score' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'api',         label: 'Agent API v1' },
@@ -252,6 +253,91 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               <p className="font-semibold text-white mb-2">Connect to your fleet dashboard</p>
               <p>To add a node to your hosted fleet at wicklee.dev, generate a 6-digit pairing code from the agent UI and enter it at <span className="text-gray-300">wicklee.dev → Pair a node</span>. No SSH, no firewall changes — the agent initiates the outbound connection.</p>
             </div>
+          </Section>
+
+          {/* ── CLI Reference ── */}
+          <Section
+            id="cli"
+            icon={<Terminal className="w-5 h-5" />}
+            accent="border-gray-500/20"
+            title="CLI Reference"
+          >
+            <p>All flags are parsed at startup. The agent exits immediately for one-shot commands (<code className="font-mono text-xs text-gray-300">--version</code>, <code className="font-mono text-xs text-gray-300">--install-service</code>, etc.) and runs the full server for everything else.</p>
+
+            {/* Command table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-800">
+                    <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-64">Command</th>
+                    <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">What it does</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/60">
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee</td>
+                    <td className="py-3 text-gray-400 align-top">Start the agent. Dashboard at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. Runs in the foreground — press <kbd className="text-xs bg-gray-800 text-gray-300 px-1.5 py-0.5 rounded">Ctrl+C</kbd> to stop.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --pair</td>
+                    <td className="py-3 text-gray-400 align-top">Generate a 6-digit pairing code and print it to the terminal — useful when you can't open <code className="font-mono text-xs text-gray-300">localhost:7700</code> (headless server, SSH session). Enter the code at <span className="text-gray-300">wicklee.dev → Pair a node</span>.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --version</td>
+                    <td className="py-3 text-gray-400 align-top">Print the agent version and exit. Use this to confirm which build is running after an update.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">sudo wicklee --install-service</td>
+                    <td className="py-3 text-gray-400 align-top">Register the agent as a background service that starts on every boot. Uses <strong className="text-gray-300">launchd</strong> on macOS, <strong className="text-gray-300">systemd</strong> on Linux. Windows: run as Administrator (no sudo). After registration the service starts immediately — no reboot required.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">sudo wicklee --uninstall-service</td>
+                    <td className="py-3 text-gray-400 align-top">Stop and remove the background service. The binary is not deleted — you can re-register with <code className="font-mono text-xs text-gray-300">--install-service</code> at any time.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">sudo wicklee</td>
+                    <td className="py-3 text-gray-400 align-top"><strong className="text-gray-300">Linux only.</strong> Run the agent with elevated access for full hardware metrics: CPU power draw (RAPL) and deeper thermal sensor access. Not required on macOS — hardware data is read via IOKit without root.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Environment variables */}
+            <div className="space-y-2 mt-2">
+              <p className="font-semibold text-white">Environment variables</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-800">
+                      <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-48">Variable</th>
+                      <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-24">Default</th>
+                      <th className="text-left py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Effect</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800/60">
+                    <tr>
+                      <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">PORT</td>
+                      <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">7700</td>
+                      <td className="py-3 text-gray-400 align-top">Port the agent listens on. Change if 7700 conflicts with another service: <code className="font-mono text-xs text-gray-300">PORT=7701 wicklee</code>.</td>
+                    </tr>
+                    <tr>
+                      <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">WICKLEE_FLEET_URL</td>
+                      <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">wicklee.dev</td>
+                      <td className="py-3 text-gray-400 align-top">Override the fleet cloud endpoint. Used for self-hosted or dev fleet deployments.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Pairing without localhost */}
+            <NoteBox>
+              <span>
+                <strong className="text-white">Headless pairing</strong> — on a remote server where you can't open a browser, run{' '}
+                <code className="font-mono text-xs text-gray-300">wicklee --pair</code>{' '}
+                and the 6-digit code prints directly to your terminal. You have 5 minutes to enter it at wicklee.dev.
+              </span>
+            </NoteBox>
           </Section>
 
           {/* ── WES Score ── */}
