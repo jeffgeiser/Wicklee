@@ -966,7 +966,109 @@ fn whoami_fallback() -> String {
     std::env::var("USER").unwrap_or_else(|_| "root".to_string())
 }
 
+/// Read the platform hardware identity string — stable across reboots and reinstalls.
+///
+/// Sources by platform:
+///   Linux  — `/etc/machine-id` (systemd) or `/var/lib/dbus/machine-id` (DBus fallback)
+///   macOS  — `IOPlatformUUID` via `ioreg -rd1 -c IOPlatformExpertDevice`
+///   Windows — `MachineGuid` from `HKLM\SOFTWARE\Microsoft\Cryptography`
+///
+/// Returns `None` when the platform ID is unavailable (some containers, live ISOs, etc.).
+fn hardware_machine_id() -> Option<String> {
+    // ── Linux ────────────────────────────────────────────────────────────────
+    #[cfg(target_os = "linux")]
+    {
+        for path in &["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+            if let Ok(id) = std::fs::read_to_string(path) {
+                let id = id.trim().to_string();
+                if id.len() >= 8 {
+                    return Some(id);
+                }
+            }
+        }
+    }
+
+    // ── macOS ────────────────────────────────────────────────────────────────
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout);
+            for line in s.lines() {
+                if line.contains("IOPlatformUUID") {
+                    // Line: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+                    if let Some(end) = line.rfind('"') {
+                        let before = &line[..end];
+                        if let Some(start) = before.rfind('"') {
+                            let uuid = before[start + 1..].to_string();
+                            if uuid.len() >= 8 {
+                                return Some(uuid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Windows ──────────────────────────────────────────────────────────────
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(out) = std::process::Command::new("reg")
+            .args(["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"])
+            .output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout);
+            for line in s.lines() {
+                if line.contains("MachineGuid") {
+                    if let Some(guid) = line.split_whitespace().last() {
+                        if guid.len() >= 8 {
+                            return Some(guid.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Fold an arbitrary hardware ID string into a stable 16-bit suffix for WK-XXXX.
+///
+/// XOR-accumulation over byte pairs — deterministic, no external crates, no random
+/// seed (unlike `std::hash::DefaultHasher` which was randomized in Rust 1.x).
+/// Same string always produces the same 4-hex-digit output.
+fn fold_to_wk_suffix(s: &str) -> u16 {
+    let bytes = s.as_bytes();
+    let mut acc: u16 = 0x5A5A; // non-zero seed so empty strings don't collide with each other
+    for (i, &b) in bytes.iter().enumerate() {
+        if i % 2 == 0 {
+            acc ^= (b as u16) << 8;
+        } else {
+            acc ^= b as u16;
+        }
+    }
+    acc
+}
+
+/// Generate a WK-XXXX node identity.
+///
+/// Priority:
+///   1. Hardware platform ID (machine-id / IOPlatformUUID / MachineGuid) — deterministic,
+///      survives reinstalls, upgrades, and re-pairings.
+///   2. Timestamp fallback — used only when the platform ID is unavailable (containers,
+///      live ISOs, some CI environments). Matches the original behaviour.
+///
+/// `load_or_create_config()` only calls this on first run (no existing config.toml),
+/// so all currently-paired nodes keep their existing WK-XXXX unchanged.
 fn generate_node_id() -> String {
+    if let Some(hw_id) = hardware_machine_id() {
+        return format!("WK-{:04X}", fold_to_wk_suffix(&hw_id));
+    }
+    // Fallback: timestamp-based (original behaviour)
     format!("WK-{:04X}", now_ms() & 0xFFFF)
 }
 
