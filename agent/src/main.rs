@@ -22,6 +22,8 @@ use sysinfo::System;
 use tokio::sync::{broadcast, watch};
 
 mod process_discovery;
+#[cfg(not(target_env = "musl"))]
+mod store;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::TemperatureSensor, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -948,6 +950,15 @@ fn config_path() -> PathBuf {
         { ".".to_string() }
     });
     Path::new(&home).join(".wicklee").join("config.toml")
+}
+
+/// Parent directory of config_path() — always `~/.wicklee/`.
+/// Used for the metrics DB and any future agent-local state files.
+fn wicklee_dir() -> PathBuf {
+    config_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
 }
 
 #[cfg(unix)]
@@ -2943,6 +2954,70 @@ async fn handle_pair_disconnect(
 
 // ── API Handlers ──────────────────────────────────────────────────────────────
 
+// ── /api/history ─────────────────────────────────────────────────────────────
+// Returns historical metric samples from the local DuckDB store.
+//
+// Query parameters:
+//   node_id    — required; the node to query
+//   from       — Unix ms; default = now - 1h
+//   to         — Unix ms; default = now
+//   resolution — "raw" | "1min" | "1hr" | "auto" (default)
+//
+// Resolution "auto" picks the best tier for the window width:
+//   < 2h  → raw (1-Hz samples)
+//   < 7d  → 1-minute aggregates
+//   else  → 1-hour aggregates
+//
+// Not available on musl targets (DuckDB bundled C++ unsupported there).
+
+#[cfg(not(target_env = "musl"))]
+#[derive(serde::Deserialize)]
+struct HistoryQuery {
+    node_id:    Option<String>,
+    from:       Option<i64>,
+    to:         Option<i64>,
+    resolution: Option<String>,
+}
+
+#[cfg(not(target_env = "musl"))]
+async fn handle_history(
+    axum::extract::Query(q): axum::extract::Query<HistoryQuery>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let node_id = match q.node_id {
+        Some(n) if !n.is_empty() => n,
+        _ => return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "node_id query parameter is required" })),
+        ).into_response(),
+    };
+
+    let now    = now_ms() as i64;
+    let from   = q.from.unwrap_or(now - 3_600_000);  // default: last hour
+    let to     = q.to.unwrap_or(now);
+
+    // Parse resolution; "auto" and unknown strings both fall back to auto.
+    let res = q.resolution
+        .as_deref()
+        .filter(|s| *s != "auto")
+        .and_then(|s| s.parse::<store::Resolution>().ok())
+        .unwrap_or_else(|| store::Resolution::auto(from, to));
+
+    match tokio::task::spawn_blocking(move || store.query_history(&node_id, from, to, res)).await {
+        Ok(Ok(resp))  => Json(resp).into_response(),
+        Ok(Err(e))    => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    }
+}
+
 async fn handle_tags() -> Json<TagsResponse> {
     Json(TagsResponse {
         models: vec![
@@ -3515,30 +3590,123 @@ async fn main() {
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
     start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone());
 
+    // ── Local metrics store (DuckDB) ──────────────────────────────────────────
+    // Opens ~/.wicklee/metrics.db and subscribes to the broadcast channel.
+    // Not available on musl targets — store module and handler compile out.
+    #[cfg(not(target_env = "musl"))]
+    let metrics_store: Option<store::Store> = {
+        let db_path = wicklee_dir().join("metrics.db");
+        if let Some(dir) = db_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match store::Store::open(&db_path) {
+            Ok(s) => {
+                println!("[store] metrics db: {}", db_path.display());
+
+                // Writer task — subscribes to broadcast, writes 1 sample/s to metrics_raw.
+                // Holding the Mutex < 1 ms per write; lagged frames are silently skipped.
+                {
+                    let s2  = s.clone();
+                    let mut rx = broadcast_tx.subscribe();
+                    tokio::spawn(async move {
+                        loop {
+                            match rx.recv().await {
+                                Ok(json) => {
+                                    match store::Sample::from_broadcast_json(&json) {
+                                        Ok(sample) => {
+                                            if let Err(e) = s2.write_sample(sample) {
+                                                eprintln!("[store] write error: {e}");
+                                            }
+                                        }
+                                        Err(e) => eprintln!("[store] parse error: {e}"),
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(tokio::sync::broadcast::error::RecvError::Closed)    => break,
+                            }
+                        }
+                    });
+                }
+
+                // Aggregation loop — runs at startup (after 10 s) and every hour thereafter.
+                // Dispatched via spawn_blocking so a slow aggregation never stalls the executor.
+                {
+                    let s2 = s.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        let sc = s2.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Err(e) = sc.run_aggregation(now_ms() as i64) {
+                                eprintln!("[store] initial aggregation error: {e}");
+                            }
+                        }).await;
+
+                        let mut tick = tokio::time::interval(Duration::from_secs(3_600));
+                        loop {
+                            tick.tick().await;
+                            let sc = s2.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Err(e) = sc.run_aggregation(now_ms() as i64) {
+                                    eprintln!("[store] aggregation error: {e}");
+                                }
+                            }).await;
+                        }
+                    });
+                }
+
+                Some(s)
+            }
+            Err(e) => {
+                eprintln!("[store] failed to open metrics db at {}: {e}", db_path.display());
+                eprintln!("[store] history API will return 503 until the db is accessible");
+                None
+            }
+        }
+    };
+    // On musl targets the store is simply absent.
+    #[cfg(target_env = "musl")]
+    let metrics_store: Option<()> = None;
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
-        .route("/api/tags",           get(handle_tags))
-        .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
-        .route("/ws",                 get(handle_ws))             // WebSocket primary (10 Hz)
-        .route("/api/pair/status",    get(handle_pair_status))
-        .route("/api/pair/generate",  post(handle_pair_generate))
-        .route("/api/pair/claim",     post(handle_pair_claim))
-        .route("/api/pair/disconnect",post(handle_pair_disconnect))
-        .fallback(static_handler)
-        .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
-        .layer(axum::extract::Extension(apple_metrics))
-        .layer(axum::extract::Extension(nvidia_metrics))
-        .layer(axum::extract::Extension(ollama_metrics))
-        .layer(axum::extract::Extension(rapl_metrics))
-        .layer(axum::extract::Extension(linux_thermal_metrics))
-        .layer(axum::extract::Extension(vllm_metrics))
-        .layer(axum::extract::Extension(wes_metrics))
-        .layer(axum::extract::Extension(broadcast_tx))
-        .layer(cors);
+    // Build the router.  The /api/history route and its Extension are only
+    // compiled in on non-musl targets where DuckDB is available.
+    let app = {
+        let r = Router::new()
+            .route("/api/tags",           get(handle_tags))
+            .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
+            .route("/ws",                 get(handle_ws))             // WebSocket primary (10 Hz)
+            .route("/api/pair/status",    get(handle_pair_status))
+            .route("/api/pair/generate",  post(handle_pair_generate))
+            .route("/api/pair/claim",     post(handle_pair_claim))
+            .route("/api/pair/disconnect",post(handle_pair_disconnect));
+
+        // Wire /api/history only when the store opened successfully.
+        #[cfg(not(target_env = "musl"))]
+        let r = if let Some(ref st) = metrics_store {
+            r.route("/api/history", get(handle_history))
+             .layer(axum::extract::Extension(st.clone()))
+        } else {
+            r
+        };
+
+        r.fallback(static_handler)
+         .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
+         .layer(axum::extract::Extension(apple_metrics))
+         .layer(axum::extract::Extension(nvidia_metrics))
+         .layer(axum::extract::Extension(ollama_metrics))
+         .layer(axum::extract::Extension(rapl_metrics))
+         .layer(axum::extract::Extension(linux_thermal_metrics))
+         .layer(axum::extract::Extension(vllm_metrics))
+         .layer(axum::extract::Extension(wes_metrics))
+         .layer(axum::extract::Extension(broadcast_tx))
+         .layer(cors)
+    };
+    // Suppress unused-variable warning on musl where metrics_store = None:()
+    let _ = &metrics_store;
 
     let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
         Ok(l) => l,
