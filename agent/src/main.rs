@@ -3366,19 +3366,21 @@ async fn main() {
     // the agent cannot read its process cmdline (cross-user /proc restriction).
     let initial = process_discovery::scan_runtimes();
     let rp = config.runtime_ports.as_ref();
-    let ollama_port = rp.and_then(|r| r.ollama).or_else(|| initial.get("ollama").copied());
-    let vllm_port   = rp.and_then(|r| r.vllm  ).or_else(|| initial.get("vllm").copied());
+    let ollama_cfg = rp.and_then(|r| r.ollama);
+    let vllm_cfg   = rp.and_then(|r| r.vllm);
+    let ollama_port = ollama_cfg.or_else(|| initial.get("ollama").copied());
+    let vllm_port   = vllm_cfg  .or_else(|| initial.get("vllm").copied());
     if let Some(p) = ollama_port { let _ = ollama_port_tx.send(Some(p)); }
     if let Some(p) = vllm_port   { let _ = vllm_port_tx.send(Some(p)); }
 
     // Start the background discovery loop (30 s interval).
-    process_discovery::start_discovery_loop(
-        [
-            ("ollama", ollama_port_tx),
-            ("vllm",   vllm_port_tx),
-        ].into_iter().collect(),
-        30,
-    );
+    // Runtimes with a TOML config override are excluded from the loop —
+    // the override is authoritative and must never be overwritten by
+    // auto-discovery (Priority of Truth: TOML > cmdline > socket scan).
+    let mut discovery_txs: std::collections::HashMap<&str, _> = Default::default();
+    if ollama_cfg.is_none() { discovery_txs.insert("ollama", ollama_port_tx); }
+    if vllm_cfg.is_none()   { discovery_txs.insert("vllm",   vllm_port_tx);   }
+    process_discovery::start_discovery_loop(discovery_txs, 30);
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
