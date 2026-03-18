@@ -73,8 +73,9 @@ const deriveMemCapacity = (m: SentinelMetrics | null): string => {
   // NVIDIA discrete GPU — VRAM is separate from system RAM.
   if (m.nvidia_vram_total_mb != null)
     return `${Math.round(m.nvidia_vram_total_mb / 1024)} GB VRAM`;
-  // Apple Silicon — cpu_power_w is a powermetrics-only field, reliable macOS detector.
-  if (m.cpu_power_w != null && m.total_memory_mb > 0)
+  // Apple Silicon — memory_pressure_percent is IOKit/macOS-exclusive.
+  // Do NOT use cpu_power_w here: Linux RAPL also populates that field on AMD/Intel nodes.
+  if (m.memory_pressure_percent != null && m.total_memory_mb > 0)
     return `${Math.round(m.total_memory_mb / 1024)} GB unified`;
   // x86 / standard system RAM (AMD, Intel, generic Linux ARM).
   if (m.total_memory_mb > 0)
@@ -1011,23 +1012,43 @@ const NodesList: React.FC<NodesListProps> = ({
 
   // ── Header tile computations ────────────────────────────────────────────────
 
-  // Fleet VRAM
-  const nvidiaNodes    = allLive.filter(m => m.nvidia_vram_total_mb != null);
-  const appleNodes     = allLive.filter(m => m.cpu_power_w != null);
-  const nvTotalGb      = (nvidiaNodes.reduce((s, m) => s + (m.nvidia_vram_total_mb ?? 0), 0) / 1024).toFixed(1);
-  const nvUsedGb       = (nvidiaNodes.reduce((s, m) => s + (m.nvidia_vram_used_mb ?? 0), 0) / 1024).toFixed(1);
-  const unifiedTotalGb = (appleNodes.reduce((s, m) => s + m.total_memory_mb, 0) / 1024).toFixed(1);
+  // Fleet VRAM — combines NVIDIA dedicated VRAM + Apple Silicon GPU wired budget.
+  // memory_pressure_percent is IOKit/macOS-exclusive — the only reliable Apple detector.
+  // cpu_power_w is NOT used: Linux RAPL populates it on AMD/Intel nodes too.
+  const nvidiaNodes = allLive.filter(m => m.nvidia_vram_total_mb != null);
+  const appleNodes  = allLive.filter(m => m.memory_pressure_percent != null);
 
-  const vramPrimary =
-    nvidiaNodes.length > 0 ? `${nvUsedGb} / ${nvTotalGb} GB`
-    : appleNodes.length > 0 ? `${unifiedTotalGb} GB`
+  const nvUsedMb  = nvidiaNodes.reduce((s, m) => s + (m.nvidia_vram_used_mb  ?? 0), 0);
+  const nvTotalMb = nvidiaNodes.reduce((s, m) => s + (m.nvidia_vram_total_mb ?? 0), 0);
+
+  // Apple GPU budget: iogpu.wired_limit_mb when available, else 75% of total RAM.
+  // Used = budget − available memory (clamped to budget).
+  const appleCapMb  = appleNodes.reduce((s, m) => {
+    const cap = (m.gpu_wired_limit_mb && m.gpu_wired_limit_mb > 0)
+      ? m.gpu_wired_limit_mb : Math.round(m.total_memory_mb * 0.75);
+    return s + cap;
+  }, 0);
+  const appleUsedMb = appleNodes.reduce((s, m) => {
+    const cap   = (m.gpu_wired_limit_mb && m.gpu_wired_limit_mb > 0)
+      ? m.gpu_wired_limit_mb : Math.round(m.total_memory_mb * 0.75);
+    const avail = Math.min(cap, m.available_memory_mb ?? 0);
+    return s + Math.max(0, cap - avail);
+  }, 0);
+
+  const totalUsedMb = nvUsedMb  + appleUsedMb;
+  const totalCapMb  = nvTotalMb + appleCapMb;
+  const hasGpu      = nvidiaNodes.length > 0 || appleNodes.length > 0;
+
+  const vramPrimary = hasGpu
+    ? `${(totalUsedMb / 1024).toFixed(1)} / ${(totalCapMb / 1024).toFixed(1)} GB`
     : '—';
-  const vramSub =
-    nvidiaNodes.length > 0
-      ? `across ${nvidiaNodes.length} NVIDIA node${nvidiaNodes.length !== 1 ? 's' : ''}`
-      : appleNodes.length > 0
-      ? `${appleNodes.length} Apple Silicon node${appleNodes.length !== 1 ? 's' : ''} unified`
-      : 'no GPU nodes detected';
+
+  const vramParts: string[] = [];
+  if (nvidiaNodes.length > 0) vramParts.push(`${nvidiaNodes.length} NVIDIA`);
+  if (appleNodes.length  > 0) vramParts.push(`${appleNodes.length} Apple Silicon`);
+  const vramSub = hasGpu
+    ? vramParts.join(' · ') + (vramParts.length > 1 ? ' · combined' : '')
+    : 'no GPU nodes detected';
 
   // Hardware Mix
   const osCounts: Record<string, number> = {};
@@ -1036,7 +1057,7 @@ const NodesList: React.FC<NodesListProps> = ({
     const os = deriveOS(m);
     if (os !== 'Unknown') osCounts[os] = (osCounts[os] ?? 0) + 1;
     if (m?.nvidia_vram_total_mb != null) chipFamilies.add('NVIDIA');
-    else if (m?.cpu_power_w != null) chipFamilies.add('Apple Silicon');
+    else if (m?.memory_pressure_percent != null) chipFamilies.add('Apple Silicon');
     else if (m) chipFamilies.add('Generic');
   });
   const osPills       = Object.entries(osCounts).sort((a, b) => b[1] - a[1]);
