@@ -1246,6 +1246,21 @@ async fn install_service() {
 
     #[cfg(target_os = "linux")]
     {
+        // Detect the actual invoking user even when called with sudo.
+        // SUDO_USER is set by sudo to the original login name; fall back to
+        // the process owner if not present (direct root login).
+        let svc_user = std::env::var("SUDO_USER")
+            .unwrap_or_else(|_| {
+                std::env::var("USER").unwrap_or_else(|_| "root".to_string())
+            });
+        // Derive the home directory for that user so the agent reads the
+        // correct config (~/.wicklee/config.toml) rather than /root/.wicklee/.
+        let svc_home = if svc_user == "root" {
+            "/root".to_string()
+        } else {
+            format!("/home/{svc_user}")
+        };
+
         let unit = format!(
 "[Unit]\n\
 Description=Wicklee Sentinel Agent\n\
@@ -1253,6 +1268,8 @@ After=network.target\n\
 \n\
 [Service]\n\
 Type=simple\n\
+User={svc_user}\n\
+Environment=HOME={svc_home}\n\
 ExecStart={exe_str}\n\
 Restart=always\n\
 RestartSec=5\n\
