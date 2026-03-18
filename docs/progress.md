@@ -2,6 +2,83 @@
 
 *A running log of what shipped, what was learned, and what's next. Most recent entry first.*
 
+> **Canonical references:** `docs/ROADMAP.md` (product roadmap, phases, tier structure) · `docs/progress.md` (this file — engineering journal, most-recent-first)
+
+---
+
+## March 18, 2026 — Agent-Local DuckDB History Store (v0.4.28) 🗄️
+
+**The Goal:** Implement Phase 1.1 of the observability roadmap — a local three-tier DuckDB time-series store on each agent node. Distinct from the cloud-side DuckDB (Railway backend, `e8c6b47`). Enables per-node historical queries with no cloud dependency.
+
+---
+
+### `agent/src/store.rs` — New Module ✅
+
+A self-contained DuckDB store module, 280 lines, with zero coupling to `main.rs` internals.
+
+**Schema at `~/.wicklee/metrics.db`:**
+
+| Tier | Table | Granularity | Retention | Aggregates |
+|------|-------|-------------|-----------|------------|
+| 0 | `metrics_raw` | 1 Hz | 24 h | Raw samples — tps, gpu_util_pct, gpu_power_w, vram_used_mb, cpu_usage_pct, mem_used_mb, thermal_state |
+| 1 | `metrics_1min` | 1 min | 30 d | tps avg/max/min, gpu_util_avg, gpu_power_avg, vram_used_avg, sample_count |
+| 2 | `metrics_1hr` | 1 hr | 90 d | tps avg/max/p95 (`PERCENTILE_CONT(0.95)`), gpu_util_avg, gpu_power_avg, vram_used_avg |
+
+**`Store(Arc<Mutex<Connection>>)`** — clone-cheap shared handle, Send+Sync. Single DuckDB file per agent.
+
+**`Sample::from_broadcast_json(json)`** — decodes directly from the existing 1-Hz broadcast JSON strings. Uses a minimal `BroadcastFrame` deserialization struct with `#[serde(default)]` on all optional fields — zero coupling to `MetricsPayload`.
+
+**`write_sample(sample)`** — `INSERT … ON CONFLICT DO NOTHING`. Safe on clock adjustments and agent restarts within the same second.
+
+**`run_aggregation(now_ms)`** — idempotent UPSERT; aggregates the last 2 hours of raw data into complete 1-minute buckets, then last 2 hours of 1-minute rows into complete 1-hour buckets. Only *complete* buckets are ever written (current open bucket excluded). Prunes all tiers to their retention limits in the same transaction batch. Can be re-run safely after a crash or restart.
+
+**`query_history(node_id, from_ms, to_ms, resolution)`** — typed `HistoryResponse` JSON. `Resolution::auto()` picks the best tier by window width: < 2h → raw, < 7d → 1min, else 1hr.
+
+**Musl gate:** entire module conditionally compiled out with `#[cfg(not(target_env = "musl"))]`. Musl static builds (the current distribution format for Alpine/distroless) work exactly as before.
+
+---
+
+### Integration in `main.rs` ✅
+
+Three additions:
+
+1. **`wicklee_dir()` helper** — `config_path().parent()` — single canonical source for `~/.wicklee/` across config, DB, and any future agent-local state files.
+
+2. **Broadcast subscriber task** — subscribes to the existing `broadcast::Sender<String>` (1-Hz JSON frames). Parses each frame into `Sample`, writes to `metrics_raw`. Runs async; holds Mutex < 1 ms per write; lagged frames skipped via `RecvError::Lagged`.
+
+3. **Hourly aggregation task** — `tokio::task::spawn_blocking` dispatch. Runs once at +10s startup (catches any data accumulated before first full hour) then every 3600s. Slow aggregation never stalls the async executor.
+
+---
+
+### `/api/history` Endpoint ✅
+
+```
+GET /api/history?node_id=WK-99E9&from=1742000000000&to=1742003600000&resolution=auto
+```
+
+- `resolution=auto` (default): window-based tier selection
+- `resolution=raw|1min|1hr`: explicit override
+- Graceful degradation: if the DB fails to open at startup, the route is simply not registered — all real-time metrics continue unaffected, no crash
+- Only compiled in on non-musl targets; store Extension is only wired to Router when the DB opened successfully
+
+---
+
+### What We Learned
+
+**DuckDB bundled first-build cost is real.** `duckdb = { version = "1.1", features = ["bundled"] }` compiles ~750K lines of C++ — 24 minutes on the dev Mac. Cargo's incremental compilation means this only happens once; subsequent builds touching only Rust code are fast. The tradeoff is worth it for `PERCENTILE_CONT`, analytical aggregation, and future trace visualization.
+
+**Two DuckDB instances, two jobs:**
+- Cloud (Railway, `e8c6b47`): receives aggregated telemetry from all paired nodes; backs `GET /api/fleet/metrics-history`; ZSTD compressed; multi-user
+- Agent-local (v0.4.28): captures 1-Hz raw samples on the node itself; backs `GET /api/history` at `localhost:7700`; sovereign — data never leaves the node
+
+---
+
+### What's Next
+
+- **Phase 1.2 — Idle-Only Ollama Probing**: fire the 20-token benchmark only when `/api/ps` confirms the model is unloaded (clean idle signal, not throughput-below-threshold). Eliminates the root cause that `MIN_COST_TPS` patches around.
+- **Historical Charts UI**: time-range selector on the Intelligence tab GPU chart, wired to `/api/history`. Live mode = SSE stream; History mode = DuckDB query. Auto-resolution handled server-side.
+- **Hardware-derived node ID**: `/etc/machine-id` (Linux) / `IOPlatformUUID` (macOS) — deterministic, survives reinstalls and re-pairings.
+
 ---
 
 ## March 18, 2026 — vLLM Idle Probe, Service Hardening, Fleet VRAM Accuracy (v0.4.21–v0.4.27 + UI fixes) 🛠️
@@ -84,9 +161,10 @@ The `wicklee --update` command was failing with `EPERM` on the Spark: the binary
 
 ### What's Next
 
-- **Phase 1.1 — DuckDB Write Path**: three-tier columnar schema, Rust background aggregation, `/api/history` endpoint
-- **Phase 1.2 — Idle-Only Probing**: fire Ollama benchmark only when `/api/ps` confirms idle; eliminate `MIN_COST_TPS` workaround
-- **Hardware-derived node ID**: use `/etc/machine-id` (Linux), `IOPlatformUUID` (macOS) for deterministic node identity that survives reinstalls
+- ✅ **Phase 1.1 — DuckDB Write Path** — shipped in v0.4.28 (see entry above)
+- **Phase 1.2 — Idle-Only Ollama Probing**: fire benchmark only when `/api/ps` confirms idle; eliminate `MIN_COST_TPS` workaround
+- **Historical Charts UI**: time-range selector wired to `/api/history`
+- **Hardware-derived node ID**: `/etc/machine-id` (Linux) / `IOPlatformUUID` (macOS) — survives reinstalls
 
 ---
 
