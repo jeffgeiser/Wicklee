@@ -19,7 +19,9 @@ use std::{
     time::Duration,
 };
 use sysinfo::System;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
+
+mod process_discovery;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::TemperatureSensor, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -1511,40 +1513,40 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16)
     // ── Runtime (all platforms) ───────────────────────────────────────────────
     println!("{sep}");
 
-    // Ollama
+    // ── Inference runtime detection (process-first, port-agnostic) ──────────
     {
+        let discovered = process_discovery::scan_runtimes();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
             .build()
             .unwrap_or_default();
-        let running = client.get("http://127.0.0.1:11434/api/version")
-            .send().await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
-        if running {
+
+        // Ollama
+        if let Some(&port) = discovered.get("ollama") {
             let model_hint = async {
-                let resp = client.get("http://127.0.0.1:11434/api/ps").send().await.ok()?;
+                let resp = client
+                    .get(format!("http://127.0.0.1:{port}/api/ps"))
+                    .send().await.ok()?;
                 let json: serde_json::Value = resp.json().await.ok()?;
                 let name = json["models"].as_array()?.first()?["name"].as_str()?.to_string();
                 Some(format!("{} loaded", name))
-            }.await.unwrap_or_else(|| "running  (no model loaded)".to_string());
-            println!("{}", row("Ollama", &model_hint));
+            }.await.unwrap_or_else(|| "running (no model loaded)".to_string());
+            println!("{}", row("Ollama", &format!(":{port} · {model_hint}")));
         } else {
-            println!("{}", row("Ollama", "not running on :11434"));
+            println!("{}", row("Ollama", "not running"));
         }
-    }
 
-    // vLLM
-    {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .unwrap_or_default();
-        let running = client.get("http://127.0.0.1:8000/metrics")
-            .send().await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
-        println!("{}", row("vLLM", if running { "running on :8000" } else { "not running on :8000" }));
+        // vLLM
+        if let Some(&port) = discovered.get("vllm") {
+            let up = client
+                .get(format!("http://127.0.0.1:{port}/health"))
+                .send().await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            println!("{}", row("vLLM", &format!(":{port} · {}", if up { "healthy" } else { "process found, endpoint not ready" })));
+        } else {
+            println!("{}", row("vLLM", "not running"));
+        }
     }
 
     println!("{bot}");
@@ -1999,11 +2001,11 @@ async fn proxy_passthrough(
 /// Fires a non-streaming 20-token generate probe and returns tok/s derived from
 /// eval_count / eval_duration returned by Ollama. Non-streaming responses do not
 /// include eval_rate, so tok/s is calculated from the raw timing fields.
-async fn probe_ollama_tps(client: &reqwest::Client, model: &str) -> Option<f32> {
+async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> Option<f32> {
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
-    let url = "http://127.0.0.1:11434/api/generate";
+    let url = format!("http://127.0.0.1:{port}/api/generate");
     let resp = match client
-        .post(url)
+        .post(&url)
         .json(&serde_json::json!({
             "model":   model,
             "prompt":  " ",
@@ -2046,113 +2048,105 @@ fn start_ollama_harvester(
     apple:     Arc<Mutex<AppleSiliconMetrics>>,
     nvidia:    Arc<Mutex<NvidiaMetrics>>,
     proxy_arc: Option<Arc<ProxyState>>,
+    port_rx: process_discovery::PortRx,
 ) -> Arc<Mutex<OllamaMetrics>> {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
 
-    // ── Main task: detect + poll /api/ps every 5s ───────────────────────────
-    let shared_main  = Arc::clone(&shared);
-    let proxy_main   = proxy_arc.clone();
+    // ── Main task: watch for port, poll /api/ps every 5s ────────────────────
+    let shared_main = Arc::clone(&shared);
+    let proxy_main  = proxy_arc.clone();
+    let mut port_rx_main = port_rx.clone();
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
             .unwrap_or_default();
 
-        // Detection loop: retry every 10s until Ollama is up.
-        // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
         loop {
-            let detect = client.get("http://127.0.0.1:11434/api/version").send().await;
-            let up = match &detect {
-                Ok(r)  => { eprintln!("[ollama] detect 127.0.0.1:11434 → HTTP {}", r.status()); r.status().is_success() }
-                Err(e) => { eprintln!("[ollama] detect 127.0.0.1:11434 → error: {}", e); false }
-            };
-            if up { break; }
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        }
+            // ── Wait until the discovery loop reports Ollama is running ──────
+            loop {
+                if port_rx_main.borrow().is_some() { break; }
+                // Park until discovery sends an update (Some or None).
+                if port_rx_main.changed().await.is_err() { return; }
+            }
+            let port = port_rx_main.borrow().unwrap();
+            let base = format!("http://127.0.0.1:{port}");
+            eprintln!("[ollama] connected on :{port}");
 
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        // Tracks the last observed expires_at string from /api/ps.
-        // When it changes, Ollama reset the keep-alive timer (request completed).
-        let mut prev_expires_at:   Option<String>              = None;
-        let mut last_inference_ts: Option<std::time::Instant>  = None;
-        loop {
-            interval.tick().await;
+            let mut interval      = tokio::time::interval(Duration::from_secs(5));
+            let mut prev_expires:  Option<String>             = None;
+            let mut last_infer_ts: Option<std::time::Instant> = None;
 
-            // Read tok/s from shared state — probe task updates it independently.
-            let prev_tps = shared_main.lock().ok()
-                .and_then(|g| g.ollama_tokens_per_second);
+            // ── Inner poll loop — runs while Ollama is present ───────────────
+            loop {
+                interval.tick().await;
 
-            let mut m = OllamaMetrics { ollama_running: true, ollama_tokens_per_second: prev_tps, ..Default::default() };
+                // React to port changes delivered by the discovery loop.
+                // None  → runtime stopped: clear metrics and re-enter wait loop.
+                // Some(new) → port changed (e.g. restart on different port): update URL.
+                if port_rx_main.has_changed().unwrap_or(false) {
+                    match *port_rx_main.borrow_and_update() {
+                        None => {
+                            eprintln!("[ollama] process gone — clearing metrics");
+                            if let Ok(mut g) = shared_main.lock() { *g = OllamaMetrics::default(); }
+                            break; // back to outer wait loop
+                        }
+                        Some(new_port) if new_port != port => {
+                            // Port changed — restart the inner loop with the new URL.
+                            // We break here; the outer loop will re-enter with the new port.
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
 
-            if let Ok(resp) = client.get("http://127.0.0.1:11434/api/ps").send().await {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(first) = json["models"].as_array().and_then(|a| a.first()) {
-                        m.ollama_active_model = first["name"].as_str().map(|s| s.to_string());
-                        m.ollama_model_size_gb = first["size"].as_u64()
-                            .map(|b| b as f32 / 1_073_741_824.0);
-                        m.ollama_quantization = first["details"]["quantization_level"]
-                            .as_str().map(|s| s.to_string());
-                        // Detect inference activity via expires_at resets.
-                        // Ollama resets expires_at = now + keep_alive after each request
-                        // completes. If the string changes between polls, a request finished.
-                        if let Some(exp_str) = first["expires_at"].as_str() {
-                            let exp_owned = exp_str.to_string();
-                            if let Some(ref prev) = prev_expires_at {
-                                if *prev != exp_owned {
-                                    last_inference_ts = Some(std::time::Instant::now());
+                // Carry forward previous tok/s — the probe task updates it independently.
+                let prev_tps = shared_main.lock().ok()
+                    .and_then(|g| g.ollama_tokens_per_second);
+                let mut m = OllamaMetrics {
+                    ollama_running: true,
+                    ollama_tokens_per_second: prev_tps,
+                    ..Default::default()
+                };
+
+                // Poll /api/ps for the loaded model and inference state.
+                if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(first) = json["models"].as_array().and_then(|a| a.first()) {
+                            m.ollama_active_model = first["name"].as_str().map(|s| s.to_string());
+                            m.ollama_model_size_gb = first["size"].as_u64()
+                                .map(|b| b as f32 / 1_073_741_824.0);
+                            m.ollama_quantization = first["details"]["quantization_level"]
+                                .as_str().map(|s| s.to_string());
+                            // Detect inference activity via expires_at resets.
+                            // Ollama resets expires_at = now + keep_alive after each request
+                            // completes. When the string changes between polls, a request just
+                            // finished — mark inference active for the next 35 s.
+                            if let Some(exp_str) = first["expires_at"].as_str() {
+                                let exp_owned = exp_str.to_string();
+                                if prev_expires.as_deref() != Some(&exp_owned) {
+                                    last_infer_ts = Some(std::time::Instant::now());
                                 }
+                                prev_expires = Some(exp_owned);
                             }
-                            prev_expires_at = Some(exp_owned);
                         }
                     }
                 }
-            }
 
-            // Set inference_active from last observed request completion.
-            // True for 35s after the last reset — one full probe interval.
-            // When the proxy is active, its signals take priority over /api/ps detection.
-            if let Some(ref ps) = proxy_main {
-                // Proxy inference_active: atomic flag set on request arrival.
-                // Stays true for 35s after the last done packet.
-                let proxy_active = ps.inference_active.load(std::sync::atomic::Ordering::Relaxed);
-                let since_done   = ps.last_done_ts.lock().unwrap()
-                    .map_or(false, |t| t.elapsed().as_secs() < 35);
-                m.ollama_inference_active = Some(proxy_active || since_done);
-                // Exact tok/s from the done packet — overrides the probe value.
-                m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
-                m.ollama_proxy_active = true;
-            } else {
-                m.ollama_inference_active = Some(
-                    last_inference_ts.map_or(false, |t| t.elapsed().as_secs() < 35)
-                );
-            }
-
-            // Validation log: confirm model name + tok/s are reaching shared state.
-            // Appears in agent stderr every 5 s while Ollama is running — remove once confirmed.
-            eprintln!(
-                "[ollama] cycle → model={} tps={}",
-                m.ollama_active_model.as_deref().unwrap_or("none"),
-                m.ollama_tokens_per_second.map_or("pending".to_string(), |t| format!("{:.1}", t)),
-            );
-
-            if let Ok(mut guard) = shared_main.lock() { *guard = m; }
-
-            // If Ollama stopped, reset and re-detect.
-            let still_up = client.get("http://127.0.0.1:11434/api/version")
-                .send().await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-            if !still_up {
-                if let Ok(mut guard) = shared_main.lock() { *guard = OllamaMetrics::default(); }
-                loop {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                    let up = client.get("http://127.0.0.1:11434/api/version")
-                        .send().await
-                        .map(|r| r.status().is_success())
-                        .unwrap_or(false);
-                    if up { break; }
+                // Inference-active signal: proxy takes priority; fall back to /api/ps timer.
+                if let Some(ref ps) = proxy_main {
+                    let proxy_active = ps.inference_active.load(std::sync::atomic::Ordering::Relaxed);
+                    let since_done   = ps.last_done_ts.lock().unwrap()
+                        .map_or(false, |t| t.elapsed().as_secs() < 35);
+                    m.ollama_inference_active = Some(proxy_active || since_done);
+                    m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
+                    m.ollama_proxy_active = true;
+                } else {
+                    m.ollama_inference_active =
+                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 35));
                 }
-                interval = tokio::time::interval(Duration::from_secs(5));
+
+                if let Ok(mut g) = shared_main.lock() { *g = m; }
             }
         }
     });
@@ -2166,69 +2160,63 @@ fn start_ollama_harvester(
     // (peak_tps × gpu_util%). Firing tokens into a loaded scheduler would
     // queue behind the active job and produce a noisy / depressed reading.
     if proxy_arc.is_none() {
-    let shared_probe  = Arc::clone(&shared);
-    let apple_probe   = Arc::clone(&apple);
-    let nvidia_probe  = Arc::clone(&nvidia);
-    tokio::spawn(async move {
-        // Generous timeout: CPU-only inference of 20 tokens can take several seconds.
-        let probe_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .unwrap_or_default();
+        let shared_probe = Arc::clone(&shared);
+        let apple_probe  = Arc::clone(&apple);
+        let nvidia_probe = Arc::clone(&nvidia);
+        tokio::spawn(async move {
+            // Generous timeout: CPU-only inference of 20 tokens can take several seconds.
+            let probe_client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()
+                .unwrap_or_default();
 
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            interval.tick().await;
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                interval.tick().await;
 
-            // Only probe when Ollama is running with a model loaded.
-            let model = shared_probe.lock().ok()
-                .and_then(|g| if g.ollama_running { g.ollama_active_model.clone() } else { None });
+                // Read the current port — skip if Ollama isn't running.
+                let Some(port) = *port_rx.borrow() else { continue; };
 
-            let Some(model) = model else { continue; };
+                // Only probe when a model is loaded.
+                let model = shared_probe.lock().ok()
+                    .and_then(|g| if g.ollama_running { g.ollama_active_model.clone() } else { None });
+                let Some(model) = model else { continue; };
 
-            // Read current GPU utilisation — NVIDIA takes priority, fall back to
-            // Apple Silicon. None means no GPU sensor available (CPU-only node).
-            let gpu_util: Option<f32> = nvidia_probe.lock().ok()
-                .and_then(|g| g.nvidia_gpu_utilization_percent)
-                .or_else(|| apple_probe.lock().ok().and_then(|g| g.gpu_utilization_percent));
+                // Read current GPU utilisation — NVIDIA takes priority, fall back to
+                // Apple Silicon. None means no GPU sensor available (CPU-only node).
+                let gpu_util: Option<f32> = nvidia_probe.lock().ok()
+                    .and_then(|g| g.nvidia_gpu_utilization_percent)
+                    .or_else(|| apple_probe.lock().ok().and_then(|g| g.gpu_utilization_percent));
 
-            // Skip probe when GPU is clearly under load — the estimation formula
-            // uses peak × gpu_util% to fill the gap. Write None explicitly so any
-            // previously recorded tps is cleared rather than carried stale.
-            if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
-                eprintln!(
-                    "[ollama] probe skipped — GPU at {:.0}% (threshold {:.0}%), using estimation",
-                    gpu_util.unwrap_or(0.0),
-                    GPU_LOAD_THRESHOLD_PCT,
-                );
-                if let Ok(mut guard) = shared_probe.lock() {
-                    guard.ollama_tokens_per_second = None;
+                // Skip when GPU is clearly under load — estimation formula covers this.
+                if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+                    eprintln!(
+                        "[ollama] probe skipped — GPU at {:.0}% (≥{:.0}%), using estimation",
+                        gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT,
+                    );
+                    if let Ok(mut g) = shared_probe.lock() { g.ollama_tokens_per_second = None; }
+                    continue;
                 }
-                continue;
-            }
 
-            // GPU is idle enough — fire the full 20-token benchmark.
-            // Always write the result: None on failure clears any stale value.
-            let new_tps = probe_ollama_tps(&probe_client, &model).await;
-            if let Ok(mut guard) = shared_probe.lock() {
-                guard.ollama_tokens_per_second = new_tps;
+                // GPU is idle enough — fire the full 20-token benchmark.
+                let new_tps = probe_ollama_tps(&probe_client, port, &model).await;
+                if let Ok(mut g) = shared_probe.lock() { g.ollama_tokens_per_second = new_tps; }
             }
-        }
-    });
-    } // end if proxy_arc.is_none()
+        });
+    }
 
     shared
 }
 
 // ── vLLM Harvester ──────────────────────────────────────────────────────────────────────────────
 //
-// Auto-detects vLLM on localhost:8000 via its Prometheus /metrics endpoint.
-// Called on a 2 s tick. Each call is a single GET with a 500 ms timeout.
+// Polls the vLLM Prometheus /metrics endpoint on the port discovered by the
+// process scanner. Called on a 2 s tick with a 500 ms timeout per call.
 // No full Prometheus parser: lines are matched by metric-name prefix.
 
-/// Probe vLLM once; returns (running, model_name, tok/s, cache_pct, req_count).
+/// Probe vLLM once on `port`; returns (running, model_name, tok/s, cache_pct, req_count).
 /// Never panics on malformed input; returns (false, …) on any connection failure.
-async fn harvest_vllm() -> (bool, Option<String>, Option<f32>, Option<f32>, Option<u32>) {
+async fn harvest_vllm(port: u16) -> (bool, Option<String>, Option<f32>, Option<f32>, Option<u32>) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_millis(500))
         .build()
@@ -2237,7 +2225,8 @@ async fn harvest_vllm() -> (bool, Option<String>, Option<f32>, Option<f32>, Opti
         Err(_) => return (false, None, None, None, None),
     };
 
-    let resp = match client.get("http://localhost:8000/metrics").send().await {
+    // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
+    let resp = match client.get(format!("http://127.0.0.1:{port}/metrics")).send().await {
         Ok(r) if r.status().is_success() => r,
         _ => return (false, None, None, None, None),
     };
@@ -2306,25 +2295,53 @@ async fn harvest_vllm() -> (bool, Option<String>, Option<f32>, Option<f32>, Opti
     (true, model_name, tokens_per_sec, cache_usage_perc, requests_running)
 }
 
-/// Spawns a 2 s polling loop that calls harvest_vllm() and updates shared state.
-/// Follows the same Arc<Mutex<T>> pattern as start_ollama_harvester().
-fn start_vllm_harvester() -> Arc<Mutex<VllmMetrics>> {
-    let shared = Arc::new(Mutex::new(VllmMetrics::default()));
+/// Spawns a 2 s polling loop that watches for vLLM via the discovery channel,
+/// then polls the Prometheus /metrics endpoint on the discovered port.
+fn start_vllm_harvester(mut port_rx: process_discovery::PortRx) -> Arc<Mutex<VllmMetrics>> {
+    let shared       = Arc::new(Mutex::new(VllmMetrics::default()));
     let shared_clone = Arc::clone(&shared);
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
-            interval.tick().await;
-            let (running, model, tps, cache, reqs) = harvest_vllm().await;
-            if let Ok(mut guard) = shared_clone.lock() {
-                *guard = VllmMetrics {
-                    vllm_running:          running,
-                    vllm_model_name:       model,
-                    vllm_tokens_per_sec:   tps,
-                    vllm_cache_usage_perc: cache,
-                    vllm_requests_running: reqs,
-                };
+            // ── Wait until the discovery loop reports vLLM is running ────────
+            loop {
+                if port_rx.borrow().is_some() { break; }
+                if port_rx.changed().await.is_err() { return; }
+            }
+            let port = port_rx.borrow().unwrap();
+            eprintln!("[vllm] connected on :{port}");
+
+            let mut interval = tokio::time::interval(Duration::from_secs(2));
+
+            // ── Inner poll loop — runs while vLLM is present ─────────────────
+            loop {
+                interval.tick().await;
+
+                // React to port changes from the discovery loop.
+                if port_rx.has_changed().unwrap_or(false) {
+                    match *port_rx.borrow_and_update() {
+                        None => {
+                            eprintln!("[vllm] process gone — clearing metrics");
+                            if let Ok(mut g) = shared_clone.lock() { *g = VllmMetrics::default(); }
+                            break; // back to outer wait loop
+                        }
+                        Some(new_port) if new_port != port => {
+                            break; // port changed — outer loop re-enters with new port
+                        }
+                        _ => {}
+                    }
+                }
+
+                let (running, model, tps, cache, reqs) = harvest_vllm(port).await;
+                if let Ok(mut g) = shared_clone.lock() {
+                    *g = VllmMetrics {
+                        vllm_running:          running,
+                        vllm_model_name:       model,
+                        vllm_tokens_per_sec:   tps,
+                        vllm_cache_usage_perc: cache,
+                        vllm_requests_running: reqs,
+                    };
+                }
             }
         }
     });
@@ -3179,16 +3196,39 @@ async fn main() {
         None
     };
 
+    // ── Runtime discovery — process-first, port-agnostic ─────────────────────
+    // Create one watch channel per known runtime. The discovery loop scans
+    // processes every 30 s and sends Some(port) / None into each channel.
+    // Harvesters receive their channel and react to changes automatically —
+    // no hardcoded ports, no restart required when a runtime changes port.
+    let (ollama_port_tx, ollama_port_rx) = watch::channel(None::<u16>);
+    let (vllm_port_tx,   vllm_port_rx)   = watch::channel(None::<u16>);
+
+    // Seed channels with whatever is already running before the first 30 s tick.
+    let initial = process_discovery::scan_runtimes();
+    if let Some(&p) = initial.get("ollama") { let _ = ollama_port_tx.send(Some(p)); }
+    if let Some(&p) = initial.get("vllm")   { let _ = vllm_port_tx.send(Some(p)); }
+
+    // Start the background discovery loop (30 s interval).
+    process_discovery::start_discovery_loop(
+        [
+            ("ollama", ollama_port_tx),
+            ("vllm",   vllm_port_tx),
+        ].into_iter().collect(),
+        30,
+    );
+
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
     let ollama_metrics        = start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         proxy_arc,
+        ollama_port_rx,
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
-    let vllm_metrics          = start_vllm_harvester();
+    let vllm_metrics          = start_vllm_harvester(vllm_port_rx);
 
     // WES v2 — 2 s thermal-penalty sampler (30-sample rolling window).
     // Must start after the platform harvesters above so it has data to read.
