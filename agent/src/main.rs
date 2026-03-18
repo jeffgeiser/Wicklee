@@ -971,6 +971,7 @@ async fn register_pair_code(node_id: &str, code: &str) -> Option<String> {
     let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
     let fleet  = std::env::var("WICKLEE_FLEET_URL").unwrap_or_else(|_| "http://localhost:7700".to_string());
     let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .unwrap_or_default();
@@ -998,6 +999,7 @@ fn start_cloud_push(
     tokio::spawn(async move {
         let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
         let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_default();
@@ -3028,6 +3030,7 @@ async fn check_and_apply_update(
     eprintln!("[update] checking for update  current=v{current}  platform={platform}");
 
     let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(10))
         .user_agent(format!("wicklee-agent/{current}"))
         .build()
