@@ -234,6 +234,27 @@ struct OllamaProxyConfig {
 
 fn default_proxy_ollama_port() -> u16 { 11435 }
 
+/// Explicit port overrides for inference runtimes.
+///
+/// When set, these values take precedence over process-based auto-detection.
+/// Use when the runtime runs as a different OS user and the agent cannot read
+/// its process cmdline (common on shared machines or managed deployments).
+///
+/// Example in ~/.wicklee/config.toml:
+///
+/// ```toml
+/// [runtime_ports]
+/// vllm   = 18010
+/// ollama = 11434
+/// ```
+#[derive(Serialize, Deserialize, Default)]
+struct RuntimePortsConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm: Option<u16>,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct WickleeConfig {
     node_id: String,
@@ -245,6 +266,9 @@ struct WickleeConfig {
     /// Optional transparent Ollama proxy configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ollama_proxy: Option<OllamaProxyConfig>,
+    /// Explicit port overrides — bypasses process-based auto-detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_ports: Option<RuntimePortsConfig>,
 }
 
 #[derive(Clone)]
@@ -920,7 +944,7 @@ fn load_or_create_config() -> WickleeConfig {
             }
         }
     }
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None };
     save_config(&cfg);
     cfg
 }
@@ -1364,7 +1388,7 @@ async fn uninstall_service() {
 // Runs once at boot. Prints a clean bordered summary to stdout showing only
 // what is relevant on this platform. Silent absence means N/A — no SKIP lines.
 
-async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16) {
+async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16, cfg_ref: &WickleeConfig) {
     // Format one 48-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
     let row = |key: &str, val: &str| -> String {
         let inner = format!("   {:<7}{}", key, val);
@@ -1536,16 +1560,20 @@ async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16)
             println!("{}", row("Ollama", "not running"));
         }
 
-        // vLLM
-        if let Some(&port) = discovered.get("vllm") {
+        // vLLM — check config override first, then process scan
+        let vllm_cfg_port  = cfg_ref.runtime_ports.as_ref().and_then(|r| r.vllm);
+        let vllm_auto_port = discovered.get("vllm").copied();
+        let vllm_port      = vllm_cfg_port.or(vllm_auto_port);
+        let vllm_source    = if vllm_cfg_port.is_some() { " (config)" } else { "" };
+        if let Some(port) = vllm_port {
             let up = client
                 .get(format!("http://127.0.0.1:{port}/health"))
                 .send().await
                 .map(|r| r.status().is_success())
                 .unwrap_or(false);
-            println!("{}", row("vLLM", &format!(":{port} · {}", if up { "healthy" } else { "process found, endpoint not ready" })));
+            println!("{}", row("vLLM", &format!(":{port}{vllm_source} · {}", if up { "healthy" } else { "starting up" })));
         } else {
-            println!("{}", row("vLLM", "not running"));
+            println!("{}", row("vLLM", "not detected  →  set runtime_ports.vllm in config"));
         }
     }
 
@@ -2713,6 +2741,7 @@ async fn handle_pair_generate(
                 fleet_url: Some(fleet_url),
                 session_token: Some(token),
                 ollama_proxy: None,
+                runtime_ports: None,
             });
         }
     });
@@ -2740,6 +2769,7 @@ async fn handle_pair_claim(
             fleet_url: Some(fleet_url.clone()),
             session_token: state.cloud_session_token.clone(),
             ollama_proxy: None,
+            runtime_ports: None,
         });
         state.status = PairingStatus::Connected { fleet_url };
     }
@@ -2752,7 +2782,7 @@ async fn handle_pair_disconnect(
     let mut state = pairing_state.lock().unwrap();
     state.status              = PairingStatus::Unpaired;
     state.cloud_session_token = None;
-    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None, ollama_proxy: None });
+    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None });
     Json(pairing_response(&state))
 }
 
@@ -3138,6 +3168,7 @@ async fn main() {
                     fleet_url: Some(fleet_url),
                     session_token: Some(token),
                     ollama_proxy: None,
+                    runtime_ports: None,
                 });
             }
             None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
@@ -3146,7 +3177,7 @@ async fn main() {
     }
 
     // Run diagnostics first so the output appears before the banner
-    run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port).await;
+    run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port, &config).await;
 
     // ── Optional Ollama transparent proxy ─────────────────────────────────────
     // When enabled in config, try to bind :11434 and forward to Ollama on
@@ -3204,10 +3235,15 @@ async fn main() {
     let (ollama_port_tx, ollama_port_rx) = watch::channel(None::<u16>);
     let (vllm_port_tx,   vllm_port_rx)   = watch::channel(None::<u16>);
 
-    // Seed channels with whatever is already running before the first 30 s tick.
+    // Seed channels: config overrides take precedence over process auto-detection.
+    // Config overrides are used when the runtime runs as a different OS user and
+    // the agent cannot read its process cmdline (cross-user /proc restriction).
     let initial = process_discovery::scan_runtimes();
-    if let Some(&p) = initial.get("ollama") { let _ = ollama_port_tx.send(Some(p)); }
-    if let Some(&p) = initial.get("vllm")   { let _ = vllm_port_tx.send(Some(p)); }
+    let rp = config.runtime_ports.as_ref();
+    let ollama_port = rp.and_then(|r| r.ollama).or_else(|| initial.get("ollama").copied());
+    let vllm_port   = rp.and_then(|r| r.vllm  ).or_else(|| initial.get("vllm").copied());
+    if let Some(p) = ollama_port { let _ = ollama_port_tx.send(Some(p)); }
+    if let Some(p) = vllm_port   { let _ = vllm_port_tx.send(Some(p)); }
 
     // Start the background discovery loop (30 s interval).
     process_discovery::start_discovery_loop(
