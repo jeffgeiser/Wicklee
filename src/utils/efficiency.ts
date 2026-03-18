@@ -61,7 +61,12 @@ export const INFERENCE_VRAM_THRESHOLD_MB = 1024;
 function appleGpuBudgetMb(m: SentinelMetrics): number | null {
   // memory_pressure_percent is strictly Apple Silicon (IOKit) — reliable platform detector
   if (m.memory_pressure_percent == null) return null;
-  return m.gpu_wired_limit_mb ?? Math.round(m.total_memory_mb * 0.75);
+  // gpu_wired_limit_mb === 0 means the agent's sysctl probe failed on this macOS version —
+  // treat 0 the same as null and use the 75% estimate (matches FleetStatusRow line logic).
+  // ?? would silently return 0 here since 0 is not null/undefined.
+  return (m.gpu_wired_limit_mb != null && m.gpu_wired_limit_mb > 0)
+    ? m.gpu_wired_limit_mb
+    : Math.round(m.total_memory_mb * 0.75);
 }
 
 /**
