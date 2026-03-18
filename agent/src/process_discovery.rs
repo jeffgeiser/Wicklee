@@ -52,6 +52,11 @@ pub struct RuntimeSpec {
 
 impl RuntimeSpec {
     /// Returns `true` if the described process matches this runtime.
+    ///
+    /// Markers are matched against the **full joined command line**, not against
+    /// individual argv entries. This handles invocations like
+    /// `python3 /path/to/bin/vllm serve --port 18010` where the runtime name
+    /// and subcommand appear in adjacent-but-separate argv slots.
     pub fn matches(&self, binary_name: &str, cmd: &[String]) -> bool {
         // Exact binary name is the cheapest check — do it first.
         if self
@@ -61,11 +66,24 @@ impl RuntimeSpec {
         {
             return true;
         }
-        // Fall back to full-cmdline substring scan for interpreter-wrapped runtimes.
-        !self.cmdline_markers.is_empty()
-            && cmd
-                .iter()
-                .any(|arg| self.cmdline_markers.iter().any(|&m| arg.contains(m)))
+        // Join all argv entries into one string so markers that span arg
+        // boundaries (e.g. "vllm serve" as two separate tokens) still match.
+        if !self.cmdline_markers.is_empty() {
+            let full_cmd = cmd.join(" ");
+            return self.cmdline_markers.iter().any(|&m| full_cmd.contains(m));
+        }
+        false
+    }
+
+    /// Returns `true` if this process has an explicit `--port <N>` or
+    /// `--port=<N>` argument. Used by the scanner to prefer the main server
+    /// process over worker sub-processes that inherit the default port.
+    pub fn has_explicit_port(&self, cmd: &[String]) -> bool {
+        let eq_prefix = format!("{}=", self.port_arg);
+        cmd.iter().enumerate().any(|(i, arg)| {
+            (arg == self.port_arg && cmd.get(i + 1).and_then(|v| v.parse::<u16>().ok()).is_some())
+                || arg.strip_prefix(&eq_prefix).and_then(|s| s.parse::<u16>().ok()).is_some()
+        })
     }
 
     /// Extracts the listening port from cmdline args.
@@ -135,15 +153,23 @@ pub type PortTx = watch::Sender<Option<u16>>;
 ///
 /// Uses [`sysinfo`] for cross-platform process enumeration — no `/proc`
 /// parsing, no subprocesses, no elevated permissions required.
+///
+/// When multiple processes match the same runtime (e.g. a main server and
+/// its worker sub-processes), the one with an **explicit `--port` flag** wins.
+/// This ensures non-standard ports are always discovered correctly.
 pub fn scan_runtimes() -> HashMap<&'static str, u16> {
     let mut sys = sysinfo::System::new();
     sys.refresh_processes();
 
-    let mut found: HashMap<&'static str, u16> = HashMap::new();
+    // Track (has_explicit_port, port) per runtime so we can upgrade a
+    // default-port candidate to an explicit-port one if found later.
+    let mut candidates: HashMap<&'static str, (bool, u16)> = HashMap::new();
 
     for process in sys.processes().values() {
-        // Short-circuit once every known runtime has been found.
-        if found.len() == RUNTIME_SPECS.len() {
+        // Short-circuit only once every runtime has an explicit-port match.
+        let all_confirmed = candidates.len() == RUNTIME_SPECS.len()
+            && candidates.values().all(|&(explicit, _)| explicit);
+        if all_confirmed {
             break;
         }
 
@@ -151,17 +177,26 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
         let cmd: Vec<String> = process.cmd().to_vec();
 
         for spec in RUNTIME_SPECS {
-            if found.contains_key(spec.name) {
-                continue; // already found one instance — skip duplicates
+            // Already have a confirmed explicit-port match — nothing to improve.
+            if candidates.get(spec.name).map_or(false, |&(explicit, _)| explicit) {
+                continue;
             }
-            if spec.matches(&name, &cmd) {
-                found.insert(spec.name, spec.extract_port(&cmd));
-                break; // a process can only match one runtime
+            if !spec.matches(&name, &cmd) {
+                continue;
             }
+            let explicit = spec.has_explicit_port(&cmd);
+            let port     = spec.extract_port(&cmd);
+            // Record this candidate if:
+            //   • No candidate yet for this runtime, OR
+            //   • This process has an explicit port (upgrades a default-port hit).
+            if !candidates.contains_key(spec.name) || explicit {
+                candidates.insert(spec.name, (explicit, port));
+            }
+            break; // a process matches at most one runtime
         }
     }
 
-    found
+    candidates.into_iter().map(|(name, (_, port))| (name, port)).collect()
 }
 
 // ── Discovery loop ────────────────────────────────────────────────────────────
