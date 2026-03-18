@@ -294,60 +294,87 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
     let mut sys = sysinfo::System::new();
     sys.refresh_processes();
 
-    // Track (has_explicit_port, port, pid) per runtime so we can:
-    //   - Upgrade a default-port candidate to an explicit-port one found later.
-    //   - Pass the PID to Tier 3 when no explicit port was found.
-    let mut candidates: HashMap<&'static str, (bool, u16, u32)> = HashMap::new();
+    // Per-runtime candidate state:
+    //   explicit  — true when at least one matching process had an explicit --port flag.
+    //   port      — the resolved port (explicit wins; default used as placeholder).
+    //   pids      — ALL matching PIDs accumulated for Tier-3 socket scanning.
+    //               Multiple processes match the same runtime when a main server
+    //               spawns worker subprocesses (e.g. vLLM + its Torch workers).
+    //               We need all of them so Tier 3 can scan each and find the one
+    //               actually listening on the user-configured non-default port.
+    struct Candidate {
+        explicit: bool,
+        port:     u16,
+        pids:     Vec<u32>,
+    }
+    let mut candidates: HashMap<&'static str, Candidate> = HashMap::new();
 
     for process in sys.processes().values() {
         // Short-circuit only once every runtime has an explicit-port match.
         let all_confirmed = candidates.len() == RUNTIME_SPECS.len()
-            && candidates.values().all(|&(explicit, _, _)| explicit);
-        if all_confirmed {
-            break;
-        }
+            && candidates.values().all(|c| c.explicit);
+        if all_confirmed { break; }
 
         let name = process.name().to_string();
         let cmd: Vec<String> = process.cmd().to_vec();
         let pid = process.pid().as_u32();
 
         for spec in RUNTIME_SPECS {
-            // Already have a confirmed explicit-port match — nothing to improve.
-            if candidates.get(spec.name).map_or(false, |&(explicit, _, _)| explicit) {
-                continue;
+            if candidates.get(spec.name).map_or(false, |c| c.explicit) {
+                continue; // already locked in with an explicit port
             }
-            if !spec.matches(&name, &cmd) {
-                continue;
-            }
+            if !spec.matches(&name, &cmd) { continue; }
+
             let explicit = spec.has_explicit_port(&cmd);
             let port     = spec.extract_port(&cmd);
-            // Record this candidate if:
-            //   • No candidate yet for this runtime, OR
-            //   • This process has an explicit port (upgrades a default-port hit).
-            if !candidates.contains_key(spec.name) || explicit {
-                candidates.insert(spec.name, (explicit, port, pid));
+
+            match candidates.get_mut(spec.name) {
+                Some(c) if explicit => {
+                    // Hard upgrade: switch to the process that has --port <N>.
+                    c.explicit = true;
+                    c.port     = port;
+                    c.pids     = vec![pid];
+                }
+                Some(c) => {
+                    // Another non-explicit match (likely a worker subprocess).
+                    // Accumulate its PID so Tier 3 can scan it too.
+                    c.pids.push(pid);
+                }
+                None => {
+                    candidates.insert(spec.name, Candidate { explicit, port, pids: vec![pid] });
+                }
             }
             break; // a process matches at most one runtime
         }
     }
 
-    // Tier 3: for any candidate without an explicit --port flag, attempt a
-    // socket-inode scan to find the actual listening port. This resolves
-    // cross-user deployments (e.g. vLLM owned by a different OS user) where
-    // sysinfo returns an empty cmd() and the default_port was used as a
-    // placeholder. On non-Linux targets socket_port_for_pid() is a no-op.
+    // Tier 3: for any runtime whose port is still unconfirmed (no explicit --port
+    // flag found in any process's argv), attempt a socket-inode scan on EVERY
+    // matching PID.  Worker sub-processes typically bind internal sockets on the
+    // runtime's default port; the main server binds on the configured port.
+    // Strategy: prefer the first PID whose listening socket port differs from the
+    // runtime's default_port — that is the user-configured main server.
     candidates
         .into_iter()
-        .map(|(name, (explicit, port, pid))| {
-            if !explicit {
-                if let Some(socket_port) = socket_port_for_pid(pid) {
-                    if socket_port != port {
-                        eprintln!("[discovery] {name} → :{socket_port} (socket scan, pid {pid})");
+        .map(|(name, c)| {
+            if c.explicit {
+                return (name, c.port);
+            }
+            let spec = RUNTIME_SPECS.iter().find(|s| s.name == name).unwrap();
+            let mut result = c.port; // start with default as fallback
+            for pid in &c.pids {
+                if let Some(sp) = socket_port_for_pid(*pid) {
+                    if sp != spec.default_port {
+                        // Non-default → this is the main server, not a worker.
+                        eprintln!("[discovery] {name} → :{sp} (socket scan, pid {pid})");
+                        result = sp;
+                        break;
                     }
-                    return (name, socket_port);
+                    // Confirms the runtime is running; keep scanning for non-default.
+                    result = sp;
                 }
             }
-            (name, port)
+            (name, result)
         })
         .collect()
 }

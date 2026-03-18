@@ -1318,6 +1318,17 @@ WantedBy=multi-user.target\n"
         let _ = tokio::process::Command::new("systemctl")
             .args(["enable", "wicklee"])
             .status().await;
+        // Transfer binary ownership to the service user so the agent can
+        // self-update without requiring root on every update cycle.
+        // This is safe: the binary is in /usr/local/bin (root-writable by
+        // install.sh) and the service user only gains write access to this
+        // one file, not to the directory itself.
+        if svc_user != "root" {
+            let owner_arg = format!("{}:{}", svc_user, svc_user);
+            let _ = tokio::process::Command::new("chown")
+                .args([&owner_arg, &exe_str])
+                .status().await;
+        }
         let status = tokio::process::Command::new("systemctl")
             .args(["restart", "wicklee"])
             .status().await;
@@ -3106,6 +3117,10 @@ async fn check_and_apply_update(
 
     if let Err(e) = std::fs::write(&tmp_path, &bytes) {
         eprintln!("[update] failed to write temp binary: {e}");
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            eprintln!("[update] binary is root-owned — re-run install to fix:");
+            eprintln!("[update]   sudo curl -fsSL https://wicklee.dev/install.sh | bash");
+        }
         return;
     }
 
