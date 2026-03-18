@@ -1,11 +1,30 @@
 //! Runtime process discovery — cross-platform, port-free detection.
 //!
 //! Instead of probing hardcoded ports, the agent scans running processes on a
-//! regular interval. For each known inference runtime it reads the listening
-//! port directly from the process's command-line arguments (falling back to the
-//! well-known default only if `--port` is absent), then delivers the result
-//! through a `watch` channel so harvesters can react to changes without
-//! requiring a restart.
+//! regular interval. For each known inference runtime it resolves the listening
+//! port through a three-tier **Priority of Truth** chain:
+//!
+//! 1. **TOML override** — `[runtime_ports]` in `~/.wicklee/config.toml`
+//!    (handled by the caller, not this module).
+//! 2. **Cmdline arg scan** — reads `--port <N>` / `--port=<N>` from the
+//!    process's argv via [`sysinfo`]. Works for processes owned by the same OS
+//!    user. Prefers the process with an explicit `--port` flag over worker
+//!    sub-processes that inherit the default.
+//! 3. **Socket inode scan** (Linux only) — when cmdline is empty (cross-user
+//!    process) or contains no explicit port, resolves the listening port by
+//!    reading `/proc/{pid}/fd/` for socket inodes and cross-referencing with
+//!    `/proc/net/tcp` and `/proc/net/tcp6` (both world-readable, no elevated
+//!    permissions needed).
+//!
+//! For zero-config cross-user deployments (e.g. vLLM running as a different OS
+//! user), grant `cap_sys_ptrace` so sysinfo can read the foreign process's
+//! cmdline:
+//! ```text
+//! sudo setcap cap_sys_ptrace+ep $(which wicklee)
+//! ```
+//! Without `cap_sys_ptrace` the socket scan still resolves the port as long as
+//! the process has at least one open listening socket (which is always true for
+//! a running inference server).
 //!
 //! # Extensibility
 //! To add a new inference runtime, append one entry to [`RUNTIME_SPECS`].
@@ -15,7 +34,9 @@
 //! # Platform support
 //! Uses [`sysinfo`] for process enumeration, which is cross-platform: Linux
 //! (`/proc`), macOS (`sysctl`), and Windows (`CreateToolhelp32Snapshot`).
-//! No elevated permissions are required.
+//! The Tier-3 socket scan is Linux-only; on macOS/Windows the scan gracefully
+//! skips Tier 3 and falls back to the default port.
+//! No elevated permissions are required for Tier 2 or Tier 3.
 
 use std::collections::HashMap;
 use tokio::sync::watch;
@@ -146,39 +167,153 @@ pub type PortRx = watch::Receiver<Option<u16>>;
 /// Sends runtime state updates into a harvester's watch channel.
 pub type PortTx = watch::Sender<Option<u16>>;
 
+// ── Tier-3: Linux socket-inode scan ──────────────────────────────────────────
+
+/// Collects all socket inodes held open by `pid` by reading `/proc/{pid}/fd/`.
+///
+/// Each fd that is a socket symlink looks like `socket:[12345678]`.
+/// Returns an empty set when the directory is unreadable (cross-user, missing
+/// `cap_sys_ptrace`).
+#[cfg(target_os = "linux")]
+fn socket_inodes_for_pid(pid: u32) -> std::collections::HashSet<u64> {
+    let fd_dir = format!("/proc/{}/fd", pid);
+    let mut inodes = std::collections::HashSet::new();
+    let Ok(entries) = std::fs::read_dir(&fd_dir) else {
+        return inodes;
+    };
+    for entry in entries.flatten() {
+        if let Ok(target) = std::fs::read_link(entry.path()) {
+            let s = target.to_string_lossy();
+            // socket fds resolve to "socket:[inode]"
+            if let Some(inner) = s.strip_prefix("socket:[").and_then(|s| s.strip_suffix(']')) {
+                if let Ok(inode) = inner.parse::<u64>() {
+                    inodes.insert(inode);
+                }
+            }
+        }
+    }
+    inodes
+}
+
+/// Parses a `/proc/net/tcp` or `/proc/net/tcp6` file and returns a map of
+/// `inode → local_port` for sockets in LISTEN state (hex state field `0A`).
+///
+/// Both files are world-readable — no elevated permissions required.
+#[cfg(target_os = "linux")]
+fn listening_inode_to_port(path: &str) -> HashMap<u64, u16> {
+    let mut map = HashMap::new();
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return map;
+    };
+    for line in content.lines().skip(1) {
+        // Columns: sl  local_address  rem_address  state  tx_q:rx_q  ...  inode
+        // Example: "  0: 00000000:1F92 00000000:0000 0A  00000000:00000000 00:00000000 00000000  1000  0  12345678 ..."
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 10 {
+            continue;
+        }
+        // state is field [3]; "0A" = TCP_LISTEN
+        if cols[3] != "0A" {
+            continue;
+        }
+        // local_address is field [1]: "<hex_ip>:<hex_port>"
+        let local_addr = cols[1];
+        let Some(colon_pos) = local_addr.rfind(':') else { continue };
+        let port_hex = &local_addr[colon_pos + 1..];
+        let Ok(port) = u16::from_str_radix(port_hex, 16) else { continue };
+        // inode is field [9]
+        let Ok(inode) = cols[9].parse::<u64>() else { continue };
+        map.insert(inode, port);
+    }
+    map
+}
+
+/// **Tier-3 discovery**: resolves the port a process is listening on via
+/// socket inodes — no cmdline access required.
+///
+/// Algorithm:
+/// 1. Read `/proc/{pid}/fd/` symlinks to collect this process's socket inodes.
+/// 2. Cross-reference with `/proc/net/tcp6` then `/proc/net/tcp` (both
+///    world-readable) for entries in LISTEN state.
+/// 3. Return the first matching local port.
+///
+/// Returns `Some(port)` on success, `None` when:
+/// - Not running on Linux (compile-time excluded on other platforms).
+/// - `/proc/{pid}/fd/` is unreadable (cross-user without `cap_sys_ptrace`).
+/// - No matching LISTEN socket is found for this PID.
+///
+/// Note: `/proc/net/tcp` and `/proc/net/tcp6` are **world-readable** regardless
+/// of the process owner — only reading `/proc/{pid}/fd/` requires same-user or
+/// `cap_sys_ptrace`. This means even when cmdline is empty (other-user process),
+/// the socket scan succeeds as long as the agent can read the fd directory.
+#[cfg(target_os = "linux")]
+pub fn socket_port_for_pid(pid: u32) -> Option<u16> {
+    let inodes = socket_inodes_for_pid(pid);
+    if inodes.is_empty() {
+        return None;
+    }
+    // Prefer tcp6 — dual-stack servers bind on ":::" which appears there even
+    // for IPv4-mapped connections. Fall through to tcp for IPv4-only servers.
+    for table in &["/proc/net/tcp6", "/proc/net/tcp"] {
+        let listen_map = listening_inode_to_port(table);
+        for inode in &inodes {
+            if let Some(&port) = listen_map.get(inode) {
+                return Some(port);
+            }
+        }
+    }
+    None
+}
+
+/// Stub for non-Linux targets — Tier 3 is a no-op; always returns `None`.
+#[cfg(not(target_os = "linux"))]
+pub fn socket_port_for_pid(_pid: u32) -> Option<u16> {
+    None
+}
+
 // ── Process scanner ───────────────────────────────────────────────────────────
 
 /// Scans all running processes and returns a map of `runtime_name → port`
 /// for every runtime that is currently active.
 ///
-/// Uses [`sysinfo`] for cross-platform process enumeration — no `/proc`
-/// parsing, no subprocesses, no elevated permissions required.
+/// Port resolution follows the **Priority of Truth** chain (Tiers 2–3):
 ///
-/// When multiple processes match the same runtime (e.g. a main server and
-/// its worker sub-processes), the one with an **explicit `--port` flag** wins.
-/// This ensures non-standard ports are always discovered correctly.
+/// 1. If a process has an explicit `--port <N>` flag in its argv → use that.
+/// 2. If cmdline is unavailable (cross-user) or has no `--port` flag, attempt
+///    a Linux socket-inode scan ([`socket_port_for_pid`]) to read the actual
+///    listening port from the kernel's TCP table.
+/// 3. Fall back to the runtime's `default_port` if neither tier resolves.
+///
+/// Tier-1 (TOML override) is applied by the caller before the scan result is
+/// used — this function returns only auto-discovered ports.
+///
+/// When multiple processes match the same runtime (e.g. main server + worker
+/// sub-processes), the one with an **explicit `--port` flag** wins over a
+/// default-port candidate, and an explicit-port candidate suppresses Tier 3.
 pub fn scan_runtimes() -> HashMap<&'static str, u16> {
     let mut sys = sysinfo::System::new();
     sys.refresh_processes();
 
-    // Track (has_explicit_port, port) per runtime so we can upgrade a
-    // default-port candidate to an explicit-port one if found later.
-    let mut candidates: HashMap<&'static str, (bool, u16)> = HashMap::new();
+    // Track (has_explicit_port, port, pid) per runtime so we can:
+    //   - Upgrade a default-port candidate to an explicit-port one found later.
+    //   - Pass the PID to Tier 3 when no explicit port was found.
+    let mut candidates: HashMap<&'static str, (bool, u16, u32)> = HashMap::new();
 
     for process in sys.processes().values() {
         // Short-circuit only once every runtime has an explicit-port match.
         let all_confirmed = candidates.len() == RUNTIME_SPECS.len()
-            && candidates.values().all(|&(explicit, _)| explicit);
+            && candidates.values().all(|&(explicit, _, _)| explicit);
         if all_confirmed {
             break;
         }
 
         let name = process.name().to_string();
         let cmd: Vec<String> = process.cmd().to_vec();
+        let pid = process.pid().as_u32();
 
         for spec in RUNTIME_SPECS {
             // Already have a confirmed explicit-port match — nothing to improve.
-            if candidates.get(spec.name).map_or(false, |&(explicit, _)| explicit) {
+            if candidates.get(spec.name).map_or(false, |&(explicit, _, _)| explicit) {
                 continue;
             }
             if !spec.matches(&name, &cmd) {
@@ -190,13 +325,31 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
             //   • No candidate yet for this runtime, OR
             //   • This process has an explicit port (upgrades a default-port hit).
             if !candidates.contains_key(spec.name) || explicit {
-                candidates.insert(spec.name, (explicit, port));
+                candidates.insert(spec.name, (explicit, port, pid));
             }
             break; // a process matches at most one runtime
         }
     }
 
-    candidates.into_iter().map(|(name, (_, port))| (name, port)).collect()
+    // Tier 3: for any candidate without an explicit --port flag, attempt a
+    // socket-inode scan to find the actual listening port. This resolves
+    // cross-user deployments (e.g. vLLM owned by a different OS user) where
+    // sysinfo returns an empty cmd() and the default_port was used as a
+    // placeholder. On non-Linux targets socket_port_for_pid() is a no-op.
+    candidates
+        .into_iter()
+        .map(|(name, (explicit, port, pid))| {
+            if !explicit {
+                if let Some(socket_port) = socket_port_for_pid(pid) {
+                    if socket_port != port {
+                        eprintln!("[discovery] {name} → :{socket_port} (socket scan, pid {pid})");
+                    }
+                    return (name, socket_port);
+                }
+            }
+            (name, port)
+        })
+        .collect()
 }
 
 // ── Discovery loop ────────────────────────────────────────────────────────────
