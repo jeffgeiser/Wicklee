@@ -3152,6 +3152,68 @@ async fn main() {
         return;
     }
 
+    // ── --status: query the running agent rather than trying to bind 7700 ──────
+    if std::env::args().any(|a| a == "--status") {
+        let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7700);
+        let url = format!("http://127.0.0.1:{port}/api/pair/status");
+        let sep       = "╠══════════════════════════════════════════════╣";
+        let top       = "╔══════════════════════════════════════════════╗";
+        let bot       = "╚══════════════════════════════════════════════╝";
+        let blank_row = "║                                              ║";
+        let row = |key: &str, val: &str| -> String {
+            let inner = format!("   {:<7}{}", key, val);
+            let capped = if inner.chars().count() <= 46 { format!("{:<46}", inner) }
+                         else { inner.chars().take(43).collect::<String>() + "..." };
+            format!("║{}║", capped)
+        };
+        match reqwest::get(&url).await {
+            Ok(resp) if resp.status().is_success() => {
+                #[derive(serde::Deserialize)]
+                struct StatusResp { status: String, node_id: String }
+                if let Ok(s) = resp.json::<StatusResp>().await {
+                    println!("{top}");
+                    println!("{blank_row}");
+                    println!("{}", row("", &format!("Wicklee Sentinel  ·  v{}", env!("CARGO_PKG_VERSION"))));
+                    println!("{}", row("", &format!("http://localhost:{port}")));
+                    println!("{blank_row}");
+                    println!("{sep}");
+                    println!("{}", row("Node", &s.node_id));
+                    println!("{}", row("Pairing", &s.status));
+                    println!("{sep}");
+                    // Show runtime ports from process discovery + config override
+                    let cfg_ref = &config;
+                    let discovered = process_discovery::scan_runtimes();
+                    let rp = cfg_ref.runtime_ports.as_ref();
+                    // Ollama
+                    let ollama_cfg = rp.and_then(|r| r.ollama);
+                    let ollama_port = ollama_cfg.or_else(|| discovered.get("ollama").copied());
+                    if let Some(p) = ollama_port {
+                        let tag = if ollama_cfg.is_some() { " (config)" } else { "" };
+                        println!("{}", row("Ollama", &format!(":{p}{tag} · detected")));
+                    } else {
+                        println!("{}", row("Ollama", "not running"));
+                    }
+                    // vLLM
+                    let vllm_cfg = rp.and_then(|r| r.vllm);
+                    let vllm_port = vllm_cfg.or_else(|| discovered.get("vllm").copied());
+                    if let Some(p) = vllm_port {
+                        let tag = if vllm_cfg.is_some() { " (config)" } else { "" };
+                        println!("{}", row("vLLM", &format!(":{p}{tag} · detected")));
+                    } else {
+                        println!("{}", row("vLLM", "not running"));
+                    }
+                    println!("{bot}");
+                }
+            }
+            _ => {
+                eprintln!("wicklee agent is not running on port {port}.");
+                eprintln!("Start it with: wicklee  (or: sudo systemctl start wicklee)");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
