@@ -367,13 +367,16 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // Only computed when Ollama is running and metrics are present.
   const fitResult = (hasOllama && m) ? computeModelFitScore(m) : null;
 
-  // VRAM % — NVIDIA only; Apple Silicon unified memory is architecturally distinct
-  // memory_pressure_percent is strictly Apple Silicon (IOKit/powermetrics) — reliable platform detector
+  // VRAM — NVIDIA only; Apple Silicon unified memory is architecturally distinct.
+  // memory_pressure_percent is strictly Apple Silicon (IOKit/powermetrics) — reliable platform detector.
   const isAppleSilicon = m?.memory_pressure_percent != null;
   const vramPctRaw = hasNvidia
     ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
     : null;
-  const vramPct = vramPctRaw != null ? Math.round(vramPctRaw * 10) / 10 : null;
+  const vramPct     = vramPctRaw != null ? Math.round(vramPctRaw * 10) / 10 : null;
+  // GB values for X.X/Y display — consistent with Apple Silicon used/limit format.
+  const vramUsedGb  = m?.nvidia_vram_used_mb  != null ? (m.nvidia_vram_used_mb  / 1024).toFixed(1) : null;
+  const vramTotalGb = m?.nvidia_vram_total_mb != null ? Math.round(m.nvidia_vram_total_mb / 1024)  : null;
 
   // Apple Silicon GPU budget — iogpu.wired_limit_mb (exact, from agent sysctl)
   // falls back to 75% of total RAM for older agents that don't emit the field.
@@ -499,9 +502,13 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         title={vramTooltip}
       >
         {vramPct != null ? (
-          // NVIDIA: dedicated VRAM percentage + mini bar
+          // NVIDIA: used/total GB + mini bar — same format as Apple Silicon for consistency.
           <div className="flex items-center gap-1.5">
-            <span className={`text-xs font-telin tabular-nums ${vramColorCls}`}>{vramPct}%</span>
+            <span className={`text-xs font-telin tabular-nums ${vramColorCls}`}>
+              {vramUsedGb != null && vramTotalGb != null
+                ? <>{vramUsedGb}<span className="text-gray-500 text-[10px]">/{vramTotalGb}</span></>
+                : `${vramPct}%`}
+            </span>
             <div className="w-10 h-1 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden shrink-0">
               <div className={`h-full ${vramBarCls} rounded-full`} style={{ width: `${Math.min(vramPct, 100)}%` }} />
             </div>
