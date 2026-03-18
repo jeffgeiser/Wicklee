@@ -4,6 +4,92 @@
 
 ---
 
+## March 18, 2026 — vLLM Idle Probe, Service Hardening, Fleet VRAM Accuracy (v0.4.21–v0.4.27 + UI fixes) 🛠️
+
+**The Goal:** Get the DGX Spark (WK-99E9 / `spark-c559`) fully visible at wicklee.dev after a series of cascading issues: stale node IDs from a bad config path, vLLM port misdetection, self-update permission errors, and missing GPU/VRAM data in the fleet dashboard.
+
+---
+
+### Root Cause Chain — `/.wicklee/config.toml` (v0.4.23–v0.4.25) ✅
+
+The systemd unit on the Spark had no `User=` or `HOME=` directive. When `HOME` is unset, Rust's `dirs::home_dir()` falls back to `.` — the daemon's working directory, which is `/`. The agent was reading and writing `/.wicklee/config.toml` (root-owned) instead of `~/.wicklee/config.toml`, causing it to register as stale node WK-E093 rather than the intended WK-99E9.
+
+**Fixes shipped:**
+- **v0.4.23** — `install_service` now emits `User=<installing_user>` and `Environment=HOME=/home/<user>` in the systemd unit file. Prevents the bad-HOME condition for all future installs.
+- **v0.4.25** — `resolve_config_path()` added: falls back to `getpwuid(getuid())` when `$HOME` is not set in the environment. Belt-and-suspenders fix; correct for any service manager that strips env.
+
+**Key lesson:** Never trust `$HOME` in a systemd service. Always resolve via getpwuid as the canonical source of truth.
+
+---
+
+### vLLM Port Misdetection — Cross-User + Worker Subprocess (v0.4.26) ✅
+
+Even after the config path was fixed, vLLM kept reporting on port `:8000` instead of the configured `:18010`. Two compounding bugs:
+
+**Bug 1 — Worker subprocess promotion.** `scan_runtimes()` was finding the vLLM worker subprocess first (no explicit `--port`, bound to `:8000` via default), then ignoring the main server process when it appeared later (candidate already set).
+
+**Fix:** Changed `process_discovery.rs` to collect **all** matching PIDs per runtime into `Vec<u32>`, then iterate all of them during Tier 3 socket inode scan — preferring the PID whose bound port is NOT the default port. The non-default port is always the main server.
+
+**Bug 2 — Discovery loop overwriting config override.** The 30-second rediscovery loop was firing after startup and sending `:8000` to the watch channel, overwriting the TOML `:18010` override that had just been applied.
+
+**Fix:** Config-overridden runtimes are now excluded from `discovery_txs` — the loop skips them entirely. TOML `[runtime_ports]` is the unassailable Priority of Truth; dynamic discovery never overrides it.
+
+---
+
+### Self-Update Permission Error + `install.sh` Service Update (v0.4.26) ✅
+
+The `wicklee --update` command was failing with `EPERM` on the Spark: the binary at `/usr/local/bin/wicklee` was root-owned, but the service ran as `jgeiser`.
+
+**Fixes:**
+- `install_service` now `chown`s the binary to the service user immediately after writing the unit file. Future self-updates (run as the service user) can replace the file without `sudo`.
+- `install.sh` now calls `wicklee --install-service` automatically when it detects that a service is already registered. Previously, running the install script on an update didn't refresh the unit file — the old user and HOME entries persisted.
+- Self-update on `EPERM` now prints a clear actionable message: `sudo wicklee --install-service` followed by a service restart.
+
+---
+
+### vLLM IDLE-SPD Idle Probe (v0.4.27) ✅
+
+**Problem:** vLLM doesn't expose a simple "is anything running" signal as clean as Ollama's `/api/ps`. Throughput-based inference detection was noisy — idle probe results (real measurements) were being treated as activity.
+
+**Implementation in `agent/src/main.rs`:**
+- `probe_vllm_tps(client, port, model)` — POSTs a `/v1/completions` request (20 tokens, `stream=false`, `max_tokens=20`) and computes `completion_tokens / wall_clock_elapsed`. Returns `Option<f32>`.
+- Called every 30s from a dedicated Tokio task inside `start_vllm_harvester` when `vllm_requests_running == 0`.
+- Result is written to `vllm_tokens_per_sec` only when `Some`; prior probe value persists across gaps so the UI always shows the last known IDLE-SPD baseline.
+- Prometheus `avg_generation_throughput_toks_per_s` filtered at `> 0.1` (not `> 0`) so idle-reporting zeros don't clobber the probe baseline.
+
+**Three-state TOK/S display (UI):**
+| State | Condition | Label | Color |
+|-------|-----------|-------|-------|
+| LIVE | `vllm_requests_running > 0` OR `ollama_inference_active == true` | `LIVE` | Green |
+| BUSY | GPU% ≥ threshold, inference not confirmed | `BUSY` | Amber |
+| IDLE-SPD | No inference, no GPU pressure, `smoothedTps != null` | `IDLE-SPD` | Gray |
+
+---
+
+### UI Accuracy Fixes ✅
+
+**`isInferring` bug for vLLM** (`Overview.tsx`): The old condition `vllm_tokens_per_sec > 0` was triggering LIVE state during idle — the probe itself sets `vllm_tokens_per_sec`. Fixed to `vllm_requests_running > 0` in both FleetStatusRow and the node detail rail.
+
+**Tilde `~` prefix** (`Overview.tsx`): The `~` prefix (meaning "estimated, not measured") was hardcoded on all LIVE tok/s values. Fixed: `isEstimated = smoothedTps == null && tps != null`. Tilde only renders when the value is a pure GPU%-based estimate with no real measurement. vLLM Prometheus and probe values never get `~`.
+
+**Apple Silicon detector** (`NodesList.tsx`, `Overview.tsx`): `cpu_power_w != null` was used as the Apple Silicon proxy — incorrect, because Linux RAPL populates `cpu_power_w` on AMD and Intel CPUs too. Fixed to `memory_pressure_percent != null`, which is strictly IOKit/macOS-exclusive.
+
+**Fleet VRAM total** (`NodesList.tsx`): The Management tab's TOTAL FLEET VRAM tile was NVIDIA-only. Fixed: combines `nvidia_vram_used_mb` (NVIDIA nodes) + `wiredLimit - available` (Apple Silicon nodes). Used and capacity both use the same per-architecture formula. Subtitle shows "N NVIDIA · M Apple Silicon · combined".
+
+**`appleGpuBudgetMb` zero-guard** (`efficiency.ts`): The fleet aggregator used `??` to fall back from `gpu_wired_limit_mb` — `??` only catches `null`/`undefined`, not `0`. When the macOS sysctl probe fails the agent emits `gpu_wired_limit_mb = 0`, causing Apple nodes to contribute zero to fleet totals. Fixed to use `!= null && > 0` guard, matching the existing logic in FleetStatusRow.
+
+**W/1K column** (`Overview.tsx`): Renamed the Fleet Status table column from the previous `tok/W` orientation to `W/1K` (watts per 1,000 tokens), matching the fleet summary tile "WATTAGE / 1K TKN". Lower = more efficient; consistent label everywhere.
+
+---
+
+### What's Next
+
+- **Phase 1.1 — DuckDB Write Path**: three-tier columnar schema, Rust background aggregation, `/api/history` endpoint
+- **Phase 1.2 — Idle-Only Probing**: fire Ollama benchmark only when `/api/ps` confirms idle; eliminate `MIN_COST_TPS` workaround
+- **Hardware-derived node ID**: use `/etc/machine-id` (Linux), `IOPlatformUUID` (macOS) for deterministic node identity that survives reinstalls
+
+---
+
 ## March 18, 2026 — Process-First Runtime Discovery + Tier-3 Socket Scan (v0.4.17–v0.4.20) 🔎
 
 **The Goal:** Replace hardcoded port probing for Ollama and vLLM with world-class, hardware-agnostic process-first discovery. The immediate trigger: DGX Spark running vLLM on a non-standard port (18010) owned by a different OS user — the agent was stuck probing :8000 and finding nothing.
