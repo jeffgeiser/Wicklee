@@ -46,7 +46,8 @@ export type ActionId =
   | 'check_thermal_zone'   // physical intervention — airflow / ambient
   | 'investigate_phantom'  // diagnose idle-but-loaded model
   | 'schedule_offpeak'     // defer workload to off-peak window
-  | 'switch_quantization'; // reduce model precision to lower memory bandwidth demand
+  | 'switch_quantization'  // reduce model precision to lower memory bandwidth demand
+  | 'check_power_limits';  // lift BIOS/driver/OS power cap constraining clock speed
 
 // ── FleetNodeSummary — peer context for cross-node recommendations ─────────────
 //
@@ -1452,6 +1453,125 @@ function evaluatePatternJ(
   };
 }
 
+// ── Pattern K: Clock Drift ────────────────────────────────────────────────────
+//
+// What: CPU/GPU clock is throttled below rated speed despite Normal thermal state.
+// This is "silent" throttling caused by power limits, BIOS frequency caps, or
+// driver-imposed clock floors — not heat. Pattern A fires when the machine is
+// hot; Pattern K fires when thermals look fine but the silicon is still running
+// below spec.
+//
+// Why it matters: inference throughput is almost linear with clock speed at
+// the compute-bound phase. A 20% clock reduction → ~20% fewer tok/s with no
+// other visible warning in the dashboard. Operators typically blame the model
+// or network when the real cause is a misconfigured TDP cap or a BIOS
+// power-saving policy left on a workstation-class build.
+//
+// Trigger (all conditions sustained for 5 min):
+//   - clock_throttle_pct > 15%   — running below 85% of rated max clock
+//   - tok_s > 0                   — inference is active during the throttle
+//   - thermal_state === 'Normal'  — not explained by heat (avoids double-fire with A)
+//
+// Source: AMD: scaling_cur_freq / cpuinfo_max_freq.
+//         NVIDIA: nvmlDeviceGetClockInfo(Graphics) / nvmlDeviceGetMaxClockInfo(Graphics).
+// Inverse: 0% = full speed, 100% = fully throttled (higher = worse).
+//
+// Tier: community — clock_throttle_pct is collected on all platforms v0.4.30+.
+
+const PATTERN_K_ID            = 'clock_drift';
+const PATTERN_K_MIN_WINDOW_MS = 5 * 60 * 1000;
+const PATTERN_K_MIN_SAMPLES   = Math.ceil(PATTERN_K_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 10
+const PATTERN_K_THROTTLE_SOFT = 15;   // % — warning threshold
+const PATTERN_K_THROTTLE_HARD = 35;   // % — severe escalation
+
+function evaluatePatternK(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_K_MIN_SAMPLES) return null;
+
+  const recent = history.slice(-PATTERN_K_MIN_SAMPLES);
+
+  // clock_throttle_pct only present on agents >= v0.4.30
+  const clockSamples = nonNull(recent.map(s => s.clock_throttle_pct));
+  if (clockSamples.length < Math.ceil(PATTERN_K_MIN_SAMPLES * 0.7)) return null;
+
+  const avgThrottle = mean(clockSamples);
+  if (avgThrottle < PATTERN_K_THROTTLE_SOFT) return null;
+
+  // Inference must be running — idle throttling is expected and harmless
+  const tokSSamples = nonNull(recent.map(s => s.tok_s));
+  const avgTokS     = tokSSamples.length > 0 ? mean(tokSSamples) : 0;
+  if (avgTokS < 0.5) return null;
+
+  // Thermal state must be Normal — Pattern A covers the hot-and-throttled case
+  const hotSamples = recent.filter(
+    s => s.thermal_state != null && s.thermal_state !== 'Normal',
+  );
+  if (hotSamples.length > Math.ceil(PATTERN_K_MIN_SAMPLES * 0.3)) return null;
+
+  const isSevere     = avgThrottle >= PATTERN_K_THROTTLE_HARD;
+  const throttlePct  = avgThrottle.toFixed(0);
+  const speedPct     = (100 - avgThrottle).toFixed(0);
+  const observedMs   = recent.length * SAMPLE_INTERVAL_MS;
+  const ratio        = Math.min(observedMs / PATTERN_K_MIN_WINDOW_MS, 1);
+
+  // Estimate tok/s headroom: if running at X% speed, full-speed would yield tok/s / (X/100)
+  const impliedFullTokS = avgThrottle > 0
+    ? (avgTokS / ((100 - avgThrottle) / 100)).toFixed(1)
+    : null;
+
+  return {
+    patternId:       PATTERN_K_ID,
+    nodeId,
+    hostname,
+    title:           isSevere ? 'Severe Clock Throttle During Inference' : 'Clock Drift During Inference',
+    hook:            `${throttlePct}% throttled · running at ${speedPct}% of rated clock · ${avgTokS.toFixed(1)} tok/s`,
+    body:            `${hostname} is sustaining ${throttlePct}% clock throttling while inference is active, ` +
+                     `despite Normal thermal state. The CPU/GPU is running at ${speedPct}% of its rated ` +
+                     `maximum frequency — not because of heat, but due to a power limit, BIOS frequency cap, ` +
+                     `or OS power-saving governor. ` +
+                     `${impliedFullTokS != null
+                       ? `At full clock speed, throughput would be approximately ${impliedFullTokS} tok/s (current: ${avgTokS.toFixed(1)} tok/s).`
+                       : `Inference throughput is directly proportional to clock speed — restoring full frequency will recover the lost throughput immediately.`} ` +
+                     `${isSevere
+                       ? `At ${throttlePct}% throttle this is severe — the hardware is significantly underperforming its specification.`
+                       : `Even moderate clock reduction compounds across long inference runs and multi-turn conversations.`}`,
+    recommendation:  `Check and lift the power limit or clock cap constraining this node. ` +
+                     `On Linux, set the CPU governor to \`performance\` and verify GPU TDP limits in nvidia-smi or rocm-smi. ` +
+                     `On Apple Silicon, ensure the system is on AC power with Performance mode enabled in Energy settings.`,
+    resolution_steps: [
+      `Verify current clock throttle: \`curl http://localhost:7700/api/health | jq .clock_throttle_pct\` — confirm it's consistently above 15%`,
+      `Linux CPU governor: \`cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor\` — if it shows \`powersave\`, switch with \`sudo cpupower frequency-set -g performance\``,
+      `NVIDIA power limit: \`nvidia-smi -q -d CLOCK | grep -A4 "Clocks Throttle"\` — identify the throttle reason; lift TDP with \`sudo nvidia-smi --power-limit=<tdp_watts>\``,
+      `AMD GPU (ROCm): \`rocm-smi --showclkfrq\` — verify GPU clock matches boost clock; check \`--showpowerprofile\` for power-save mode`,
+      `Apple Silicon: open System Settings → Battery → Options → set "Limit CPU speed" to Off; ensure plugged into AC power`,
+      `BIOS/firmware: check for "Power Limit" or "PROCHOT" settings — on workstation builds these often default to conservative values for quiet cooling`,
+    ],
+    action_id:       'check_power_limits',
+    requiredMs:      PATTERN_K_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'community',
+    actions: [
+      {
+        label:    'Check throttle reason (NVIDIA)',
+        copyText: `nvidia-smi -q -d CLOCK | grep -A8 "Clocks Throttle Reasons"`,
+      },
+      {
+        label:    'Set performance governor (Linux)',
+        copyText: `sudo cpupower frequency-set -g performance && cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,   // Pattern K: local fix — no routing target
+    best_node_hostname: null,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -1517,6 +1637,9 @@ export function evaluatePatterns(
 
   const j = evaluatePatternJ(nodeId, hostname, history, now);
   if (j) results.push(j);
+
+  const k = evaluatePatternK(nodeId, hostname, history, now);
+  if (k) results.push(k);
 
   return results;
 }
