@@ -2762,10 +2762,12 @@ fn start_vllm_harvester(
             .build()
             .unwrap_or_default();
 
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        // Offset first tick so it doesn't coincide with startup diagnostics.
-        interval.tick().await;
+        // Brief startup delay — gives the main task (2 s Prometheus poll) time to
+        // populate vllm_model_name before the first probe fires.  Mirrors the
+        // Ollama probe delay; 7 s is generous for the 2 s main-task cycle.
+        tokio::time::sleep(Duration::from_secs(7)).await;
 
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
 
