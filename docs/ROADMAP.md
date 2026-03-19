@@ -395,7 +395,7 @@
 - [x] **`GET localhost:7700/api/insights/dismissed`** ✅ — returns all non-expired dismissals `{ dismissals: Dismissal[] }`. Used by frontend on mount to sync agent records into localStorage (longer-lived agent record wins).
 - [x] **`useInsightDismiss` dual-write** ✅ — localStorage write is immediate (zero-latency, works offline); agent endpoint is fire-and-forget. Sync-from-agent runs once on page load. Dismiss decisions survive browser cache clears.
 - [x] **Permanent accept option** ✅ — `dismiss(Infinity)` in the hook maps to a 10-year expiry. For legitimate operational states (intentionally idle node, intentional phantom load).
-- [ ] **Dismissal Log section in Observability tab** — persistent audit surface showing all `accepted_states` rows: `pattern_id`, `node_id`, `accepted_at`, `expires_at`, operator note. Completes the Observability tab's four sections (Traces, Raw Metric History, Sovereignty Audit, Agent Health + Dismissal Log). The dismissal record belongs in the verification layer — not the intelligence layer.
+- [x] **Dismissal Log section in Observability tab** ✅ — `DismissalLogPanel` in `TracesView.tsx`. Fetches `GET /api/insights/dismissed` every 30s. Table: Pattern (human label + raw id), Scope (Fleet-wide badge / node_id), Dismissed At, Expires (relative timer or Permanent), Note. Cockpit-only (isLocalHost). Completes the Observability tab's five sections. `PATTERN_LABELS` map covers all 10 patterns A–J.
 - [ ] **Alert wiring** — map pattern IDs to `alert_rules` event_types in Slack/email delivery layer (Team+).
 
 ---

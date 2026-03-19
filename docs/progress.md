@@ -6,6 +6,36 @@
 
 ---
 
+## March 19, 2026 — Sprint 6: Dismissal Log Panel + Probe Startup Alignment
+
+### Dismissal Log — Observability Tab ✅
+
+Sprint 6 is now complete on the frontend. The Observability tab has a fifth section: **Dismissal Log** (`DismissalLogPanel` in `TracesView.tsx`).
+
+**What it shows:**
+- All active (non-expired) `accepted_states` rows from the agent DuckDB, fetched via `GET /api/insights/dismissed`
+- Columns: **Pattern** (human-readable label + raw ID), **Scope** (Fleet-wide badge or `node_id`), **Dismissed**, **Expires** (relative — "in 2d 4h", "Permanent", or "Expired"), **Note**
+- Polls every 30s; relative-time labels tick independently every 30s without a re-fetch
+- `PATTERN_LABELS` map covers all 10 patterns A–J
+
+**Design details:**
+- Amber section icon (`ClipboardList`) — distinct from the other blue/green/indigo panels
+- Fleet-wide dismissals (empty-string `node_id`) rendered as an indigo `Fleet-wide` badge
+- Permanent dismissals (>5-year expiry) show `XCircle` icon + "Permanent" in gray — intentional, not alarming
+- Cockpit-only (`isLocalHost`) — same gate as Agent Health and Metric History
+- Empty state explains the dismiss lifecycle; footer names `accepted_states` table and `metrics.db` for operator reference
+
+### Ollama + vLLM Probe Startup Alignment
+
+Diagnosed a real field issue: after a Mac agent restart, metrics wouldn't appear until a manual Ollama prompt was sent. Root cause: the probe task raced the agent startup and attempted to fire before Ollama's HTTP server was ready.
+
+**Fix:**
+- Both `start_ollama_harvester` and `start_vllm_harvester` now sleep 7s before entering their probe loops (previously: 0s for Ollama, 30s tick-burn for vLLM)
+- Ollama also gains an `/api/tags` fallback: if no model is loaded on startup, the probe queries the model list and uses the first available — ensuring the first 30s probe always has a target
+- The asymmetry is intentional: vLLM requires `--model` at launch (never modelless); Ollama can have keep_alive expire with no loaded model
+
+---
+
 ## March 19, 2026 — Sprint 6: Dismiss API + Pattern I + Prescriptive Resolution Steps 🎯
 
 ### Sprint 6 — `POST localhost:7700/api/insights/dismiss` ✅
