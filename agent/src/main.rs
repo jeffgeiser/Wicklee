@@ -3120,6 +3120,93 @@ async fn handle_history(
     }
 }
 
+// ── Insight dismiss endpoints ─────────────────────────────────────────────────
+//
+// POST /api/insights/dismiss  — persist a dismiss decision for a pattern.
+// GET  /api/insights/dismissed — return all active (non-expired) dismissals.
+//
+// Both are gated on `#[cfg(not(target_env = "musl"))]` because they require
+// the DuckDB store.  musl builds (e.g., ARM Linux static) use localStorage-
+// only dismissals and never call these endpoints.
+
+#[cfg(not(target_env = "musl"))]
+#[derive(serde::Deserialize)]
+struct DismissRequest {
+    /// Pattern identifier, e.g. "bandwidth_saturation".
+    pattern_id:    String,
+    /// Node-scoped dismissal. Pass null/omit for fleet-wide suppression.
+    node_id:       Option<String>,
+    /// Epoch ms at which this dismissal expires.  Default: now + 24 h.
+    expires_at_ms: Option<i64>,
+    /// Optional operator note ("resolved by restarting ollama", etc.)
+    note:          Option<String>,
+}
+
+#[cfg(not(target_env = "musl"))]
+async fn handle_dismiss(
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Json(body): axum::extract::Json<DismissRequest>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    if body.pattern_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "pattern_id is required" })),
+        ).into_response();
+    }
+
+    let now_ms       = now_ms() as i64;
+    let expires_at   = body.expires_at_ms.unwrap_or(now_ms + 24 * 60 * 60 * 1_000);
+    let node_id      = body.node_id.unwrap_or_default();
+    let pattern_id   = body.pattern_id;
+    let note         = body.note;
+
+    match tokio::task::spawn_blocking(move || {
+        store.record_dismiss(
+            &pattern_id,
+            &node_id,
+            now_ms,
+            expires_at,
+            note.as_deref(),
+        )
+    }).await {
+        Ok(Ok(())) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "ok": true, "expires_at_ms": expires_at })),
+        ).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    }
+}
+
+#[cfg(not(target_env = "musl"))]
+async fn handle_dismissed_list(
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let now_ms = now_ms() as i64;
+
+    match tokio::task::spawn_blocking(move || store.query_active_dismissals(now_ms)).await {
+        Ok(Ok(dismissals)) => Json(serde_json::json!({ "dismissals": dismissals })).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    }
+}
+
 async fn handle_tags() -> Json<TagsResponse> {
     Json(TagsResponse {
         models: vec![
@@ -3786,10 +3873,13 @@ async fn main() {
             .route("/api/pair/claim",     post(handle_pair_claim))
             .route("/api/pair/disconnect",post(handle_pair_disconnect));
 
-        // Wire /api/history only when the store opened successfully.
+        // Wire store-backed routes only when DuckDB opened successfully.
+        // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET).
         #[cfg(not(target_env = "musl"))]
         let r = if let Some(ref st) = metrics_store {
-            r.route("/api/history", get(handle_history))
+            r.route("/api/history",             get(handle_history))
+             .route("/api/insights/dismiss",    post(handle_dismiss))
+             .route("/api/insights/dismissed",  get(handle_dismissed_list))
              .layer(axum::extract::Extension(st.clone()))
         } else {
             r

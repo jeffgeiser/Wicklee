@@ -194,6 +194,18 @@ pub struct HistoryResponse {
     pub samples:    Vec<HistorySample>,
 }
 
+/// A single persisted dismiss record returned by `query_active_dismissals`.
+#[derive(Debug, Serialize)]
+pub struct Dismissal {
+    pub pattern_id:      String,
+    /// Empty string means fleet-wide (no specific node).
+    pub node_id:         String,
+    pub dismissed_at_ms: i64,
+    pub expires_at_ms:   i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note:            Option<String>,
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 /// Shared DuckDB metrics store.  Clone-cheap (Arc inside).
@@ -267,6 +279,21 @@ impl Store {
                 vram_used_avg BIGINT,
                 sample_count  INTEGER  NOT NULL,
                 PRIMARY KEY (ts_ms, node_id)
+            );
+
+            -- Insight dismissals: persists operator suppress decisions across
+            -- page refreshes and agent restarts.
+            -- node_id uses '' (empty string) as sentinel for fleet-wide dismissals
+            -- (avoids NULL primary-key semantics).
+            -- expires_at_ms: epoch ms — frontend and agent both respect this.
+            -- Re-dismissing the same pattern+node upserts and resets the expiry.
+            CREATE TABLE IF NOT EXISTS accepted_states (
+                pattern_id      TEXT    NOT NULL,
+                node_id         TEXT    NOT NULL DEFAULT '',
+                dismissed_at_ms BIGINT  NOT NULL,
+                expires_at_ms   BIGINT  NOT NULL,
+                note            TEXT,
+                PRIMARY KEY (pattern_id, node_id)
             );
         ")
     }
@@ -512,5 +539,66 @@ impl Store {
             to_ms,
             samples,
         })
+    }
+
+    // ── Insight dismissals ────────────────────────────────────────────────────
+
+    /// Persist a dismiss decision.  Upserts: re-dismissing the same
+    /// (pattern_id, node_id) pair resets the expiry and note.
+    ///
+    /// `node_id` should be "" for fleet-wide dismissals (not tied to one node).
+    pub fn record_dismiss(
+        &self,
+        pattern_id:      &str,
+        node_id:         &str,
+        dismissed_at_ms: i64,
+        expires_at_ms:   i64,
+        note:            Option<&str>,
+    ) -> Result<(), duckdb::Error> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO accepted_states
+             (pattern_id, node_id, dismissed_at_ms, expires_at_ms, note)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (pattern_id, node_id) DO UPDATE SET
+               dismissed_at_ms = excluded.dismissed_at_ms,
+               expires_at_ms   = excluded.expires_at_ms,
+               note            = excluded.note",
+            params![pattern_id, node_id, dismissed_at_ms, expires_at_ms, note],
+        )?;
+        Ok(())
+    }
+
+    /// Return all non-expired dismissals (expires_at_ms > now_ms).
+    /// Callers can pass `now_ms` explicitly for testability.
+    pub fn query_active_dismissals(&self, now_ms: i64) -> Result<Vec<Dismissal>, duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT pattern_id, node_id, dismissed_at_ms, expires_at_ms, note
+             FROM accepted_states
+             WHERE expires_at_ms > ?
+             ORDER BY dismissed_at_ms DESC",
+        )?;
+        let rows = stmt.query_map(params![now_ms], |row| {
+            Ok(Dismissal {
+                pattern_id:      row.get(0)?,
+                node_id:         row.get(1)?,
+                dismissed_at_ms: row.get(2)?,
+                expires_at_ms:   row.get(3)?,
+                note:            row.get(4)?,
+            })
+        })?.collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
+    /// Prune expired dismissal rows older than 7 days beyond their expiry.
+    /// Call periodically (e.g., alongside the hourly aggregation).
+    #[allow(dead_code)]
+    pub fn prune_expired_dismissals(&self, now_ms: i64) -> Result<(), duckdb::Error> {
+        let cutoff = now_ms - 7 * 24 * 60 * 60 * 1000; // 7 days past expiry
+        self.0.lock().unwrap().execute(
+            "DELETE FROM accepted_states WHERE expires_at_ms < ?",
+            params![cutoff],
+        )?;
+        Ok(())
     }
 }
