@@ -6,6 +6,33 @@
 
 ---
 
+## March 19, 2026 — Pattern H (Power Jitter) 🌊
+
+**The Goal:** Implement Pattern H — Power Jitter — the leading indicator of PSU/VRM stress and thundering-herd load balancer issues.
+
+---
+
+### `src/lib/patternEngine.ts` — Pattern H: Power Jitter ✅
+
+New `stddev()` helper added alongside `mean()`. New `evaluatePatternH()` wired into `evaluatePatterns()`.
+
+**Detection (5-min gate, community tier):**
+- `mean(watts) > 30W` — not idle drift
+- `tok_s > 0.5` — inference active
+- `stddev(watts) / mean(watts) > 0.20` — coefficient of variation > 20%
+
+**Thundering herd upgrade:** if `tok_s` CoV is also > 25%, hook appends `· thundering herd` and recommendation targets bursty dispatch. This separates "load balancer is inconsistent" from "PSU is stressed".
+
+**Why 30s samples are sufficient:** PSU/VRM stress accumulates from repeated swing events. A node cycling 200W → 40W in 30-second windows is still wearing its VRMs. True 1Hz data would catch finer spikes but the inter-window variance is already a reliable signal for the batch-level load inconsistency case.
+
+**New icon:** `Waves` (orange) — electrical ripple/oscillation, distinct from all existing patterns.
+
+### `src/components/insights/ObservationCard.tsx` + `InsightsBriefingCard.tsx` ✅
+
+- `power_jitter` → `Waves` icon, `text-orange-400` in both icon maps
+
+---
+
 ## March 19, 2026 — Pattern G (Bandwidth Saturation) + Deep Metal Roadmap 🔬
 
 **The Goal:** Implement Pattern G — the "Model Suitability" / Bandwidth Saturation insight — and document the Deep Metal metrics expansion roadmap.
