@@ -27,6 +27,7 @@ import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
   TrendingDown, Database, Scale, Cpu, Globe, Shield,
   Activity, Layers, CheckCircle, ChevronDown, History, Clock,
+  Copy, Check, Server, Radio,
 } from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier } from '../types';
@@ -100,6 +101,41 @@ function fmtVram(m: SentinelMetrics): string | null {
   if (used == null || total <= 0) return null;
   return `${((used / total) * 100).toFixed(0)}%`;
 }
+
+// ── InlineCopyButton — used by Top Finding curl snippet ───────────────────────
+
+const InlineCopyButton: React.FC<{ text: string }> = ({ text }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {});
+    } else {
+      try {
+        const el = document.createElement('textarea');
+        el.value = text;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch {}
+    }
+  }, [text]);
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-[10px] font-medium text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+    >
+      {copied
+        ? <><Check className="w-3 h-3 text-green-400" />Copied</>
+        : <><Copy  className="w-3 h-3" />Copy</>}
+    </button>
+  );
+};
 
 // ── Alert statefulness — types & constants ────────────────────────────────────
 
@@ -1172,6 +1208,104 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   Empty state collapses to a single compact dormant row.           */}
               <InsightsBriefingCard />
 
+              {/* ── Fleet Pulse — live snapshot ───────────────────────────────
+                  Four stat cells: nodes online, fleet tok/s, top WES node,
+                  and fleet power draw. Pure useFleetStream()/SSE data —
+                  no DuckDB required.                                           */}
+              {effectiveNodes.length > 0 && (() => {
+                // Top WES node — highest WES across the live fleet
+                let topWesNode: SentinelMetrics | null = null;
+                let topWesVal: number | null = null;
+                for (const n of effectiveNodes) {
+                  const w = computeNodeWes(n);
+                  if (w != null && (topWesVal == null || w > topWesVal)) {
+                    topWesVal = w;
+                    topWesNode = n;
+                  }
+                }
+                // Fleet wattage — sum of all reported draw values
+                const fleetWatts = effectiveNodes.reduce<number | null>((sum, n) => {
+                  const w = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+                  return w != null ? (sum ?? 0) + w : sum;
+                }, null);
+                // Total node count: prefer fleet registry length; fall back to live count
+                const nodesTotal = Math.max(nodes.length, effectiveNodes.length);
+                return (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Radio className="w-3 h-3 text-indigo-400/60 shrink-0" />
+                      <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
+                        Fleet Pulse
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+
+                      {/* Nodes online */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
+                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Online</p>
+                        <div className="flex items-baseline gap-1.5">
+                          <span className={`font-mono text-xl font-bold ${
+                            effectiveNodes.length > 0 ? 'text-white' : 'text-gray-600'
+                          }`}>{effectiveNodes.length}</span>
+                          {nodesTotal > 0 && (
+                            <span className="text-xs text-gray-600">/ {nodesTotal}</span>
+                          )}
+                        </div>
+                        <p className="text-[9px] text-gray-600">node{effectiveNodes.length !== 1 ? 's' : ''}</p>
+                      </div>
+
+                      {/* Fleet throughput */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
+                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Throughput</p>
+                        <span className={`font-mono text-xl font-bold ${
+                          fleetTokS != null && fleetTokS > 0 ? 'text-green-400' : 'text-gray-600'
+                        }`}>
+                          {fleetTokS != null ? fleetTokS.toFixed(1) : '—'}
+                        </span>
+                        <p className="text-[9px] text-gray-600">tok / sec</p>
+                      </div>
+
+                      {/* Top WES node */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
+                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Top WES</p>
+                        {topWesVal != null && topWesNode ? (
+                          <>
+                            <span className={`font-mono text-xl font-bold ${
+                              topWesVal >= 3 ? 'text-green-400' : topWesVal >= 1.5 ? 'text-amber-400' : 'text-red-400'
+                            }`}>
+                              {topWesVal.toFixed(1)}
+                            </span>
+                            <p className="text-[9px] text-gray-600 truncate">
+                              {topWesNode.hostname ?? topWesNode.node_id}
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <span className="font-mono text-xl font-bold text-gray-700">—</span>
+                            <p className="text-[9px] text-gray-600">no active inference</p>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Fleet power draw */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
+                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Power Draw</p>
+                        <span className={`font-mono text-xl font-bold ${
+                          fleetWatts == null     ? 'text-gray-700'
+                          : fleetWatts > 200     ? 'text-amber-400'
+                          : fleetWatts > 50      ? 'text-gray-300'
+                          :                        'text-green-400'
+                        }`}>
+                          {fleetWatts != null ? `${fleetWatts.toFixed(0)}W` : '—'}
+                        </span>
+                        <p className="text-[9px] text-gray-600">fleet total</p>
+                      </div>
+
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Alert Quartet — surfaced only after 15 s sustained onset gate.
                   Resolved cards stay visible for 5 min with a green "✓ Resolved" overlay. */}
               <div className="space-y-3">
@@ -1377,6 +1511,73 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     )
                 }
               </div>
+
+              {/* ── Top Finding — highest-confidence active observation ──────
+                  Surfaces the single most important currently active pattern as
+                  a summary card, with its action_id mapped to a curl command
+                  targeting /api/v1/insights/latest.
+                  Intentionally shown before the full Observations list so that
+                  a returning operator knows the top priority before diving in.
+                  Hidden when all observations are resolved (none active).       */}
+              {(() => {
+                const topObs = obsEntries.find(e => e.resolvedMs === null);
+                if (!topObs) return null;
+                const ins = topObs.insight;
+                const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)
+                  ?? 'https://api.wicklee.dev';
+                const curlText = `curl -s -H "X-API-Key: <key>" ${apiBase}/api/v1/insights/latest`;
+                return (
+                  <div className="bg-indigo-600/8 border border-indigo-600/20 rounded-2xl p-4 space-y-3">
+
+                    {/* Header row */}
+                    <div className="flex items-center gap-2">
+                      <Server className="w-3 h-3 text-indigo-400/60 shrink-0" />
+                      <p className="text-[9px] font-semibold uppercase tracking-widest text-indigo-400/70 flex-1">
+                        Top Finding
+                      </p>
+                      <span className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border ${
+                        ins.confidence === 'high'
+                          ? 'text-red-400/90 border-red-500/30 bg-red-500/10'
+                          : ins.confidence === 'moderate'
+                          ? 'text-amber-400/90 border-amber-500/30 bg-amber-500/10'
+                          : 'text-gray-400 border-gray-700 bg-gray-800/80'
+                      }`}>
+                        {ins.confidence ?? 'low'}
+                      </span>
+                    </div>
+
+                    {/* Finding body */}
+                    <div>
+                      <p className="text-sm font-semibold text-gray-200">{ins.title}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5 truncate">
+                        {ins.hostname} · {ins.hook}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-2 leading-relaxed">
+                        {ins.recommendation}
+                      </p>
+                    </div>
+
+                    {/* action_id → curl snippet */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
+                          API action_id
+                        </p>
+                        <span className="font-mono text-[9px] text-indigo-400/70 border border-indigo-600/20 bg-indigo-600/5 px-1.5 py-0.5 rounded">
+                          {ins.action_id}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <pre className="flex-1 font-mono text-[10px] text-gray-400 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 overflow-x-auto whitespace-pre min-w-0">
+                          {curlText}
+                        </pre>
+                        <InlineCopyButton text={curlText} />
+                      </div>
+                    </div>
+
+                  </div>
+                );
+              })()}
 
               {/* ── Observations — pattern engine briefing feed ─────────────
                   Active observations are shown first; resolved (hold-period) entries
