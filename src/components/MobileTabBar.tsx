@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, Server, ShieldCheck, Settings } from 'lucide-react';
+import { LayoutGrid, Cpu, Server, Activity } from 'lucide-react';
 import { DashboardTab } from '../types';
 
 interface MobileTabBarProps {
@@ -8,10 +8,10 @@ interface MobileTabBarProps {
 }
 
 const tabs = [
-  { id: DashboardTab.OVERVIEW,     icon: LayoutGrid,  label: 'Fleet'    },
-  { id: DashboardTab.NODES,        icon: Server,       label: 'Nodes'    },
-  { id: DashboardTab.SECURITY,     icon: ShieldCheck,  label: 'Security' },
-  { id: DashboardTab.PREFERENCES,  icon: Settings,     label: 'Settings' },
+  { id: DashboardTab.OVERVIEW,    icon: LayoutGrid, label: 'Intelligence'  },
+  { id: DashboardTab.AI_INSIGHTS, icon: Cpu,        label: 'Insights'      },
+  { id: DashboardTab.NODES,       icon: Server,     label: 'Management'    },
+  { id: DashboardTab.TRACES,      icon: Activity,   label: 'Observability' },
 ];
 
 const MobileTabBar: React.FC<MobileTabBarProps> = ({ activeTab, setActiveTab }) => (

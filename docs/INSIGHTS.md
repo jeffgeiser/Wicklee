@@ -86,10 +86,10 @@ WES is the primary input to three of the 15 insights:
 | B | Phantom Load *(Pattern Engine)* | ✅ Shipped (Sprint 1) | Time-windowed, localStorage | Community |
 | C | WES Velocity Drop *(Pattern Engine)* | ✅ Sprint 2 | Rate-of-change, localStorage | Community |
 | F | Memory Pressure Trajectory *(Pattern Engine)* | ✅ Sprint 2 | Rate-of-change, localStorage | Community |
-| D | Power-GPU Decoupling *(Pattern Engine)* | 🔲 Sprint 3 | Cross-correlated, localStorage | Community |
-| E | Fleet Load Imbalance *(Pattern Engine)* | 🔲 Sprint 3 | Fleet-wide, localStorage | Team+ |
+| D | Power-GPU Decoupling *(Pattern Engine)* | ✅ Sprint 3 | Cross-correlated, localStorage | Pro |
+| E | Fleet Load Imbalance *(Pattern Engine)* | ✅ Sprint 3 | Fleet-wide, localStorage | Pro |
 
-**11 of 15 original insights shipped. 4 pattern engine observations live.** Open items: #7 (Memory Forecasting Slack alert layer), #15 (Efficiency Regression), #6 (Sentinel Proxy), #9 historical comparison. Pattern D and E in Sprint 3.
+**11 of 15 original insights shipped. 6 pattern engine observations live.** Open items: #7 (Memory Forecasting Slack alert layer), #15 (Efficiency Regression), #6 (Sentinel Proxy), #9 historical comparison. All 6 patterns (A, B, C, D, E, F) carry `recommendation` string + `action_id` badge as of Sprint 3.
 
 ---
 
@@ -355,13 +355,15 @@ useMetricHistory (hook)          patternEngine.ts (evaluator)
 │ 1 sample / 30s / node    │────▶│   → DetectedInsight[]           │
 │ 2,880 samples = 24h      │     │                                 │
 │ metricsToSample() applies│     │ Each insight:                   │
-│ 1024 MB VRAM filter      │     │   hook     — quantified "$-or-  │
-└──────────────────────────┘     │             metric" number      │
-                                 │   body     — causal explanation │
-         AIInsights.tsx          │   confidence — building/mod/high│
-         pushes samples on       │   actions  — copy-to-clipboard  │
-         every SSE frame         │             shell or endpoint   │
-         evaluates every 30s     └────────────────────────────────┘
+│ 1024 MB VRAM filter      │     │   hook           — quantified   │
+└──────────────────────────┘     │                  "$-or-metric"  │
+                                 │   body           — causal expln │
+         AIInsights.tsx          │   recommendation — 1–2 sentence │
+         pushes samples on       │                  directed action │
+         every SSE frame         │   action_id      — machine key  │
+         evaluates every 30s     │   confidence     — bld/mod/high │
+         builds FleetNodeSummary │   actions        — copy buttons │
+         for fleet-aware advice  └────────────────────────────────┘
 ```
 
 ### Pattern A — Thermal Performance Drain ✅ (Sprint 1, Community)
@@ -426,20 +428,25 @@ useMetricHistory (hook)          patternEngine.ts (evaluator)
 
 ---
 
-### Pattern D — Power-GPU Decoupling 🔲 (Sprint 3, Community)
+### Pattern D — Power-GPU Decoupling ✅ (Sprint 3, Pro)
 
-**What:** Board power > 2× session baseline AND GPU utilization < 20% for a sustained window. Something is consuming power that isn't inference work.
+**What:** Inference is active (tok/s > 0) but GPU utilization is anomalously low (<20%) while drawing >50W. Suggests CPU-bound or memory-bound workload — large context window filling KV cache, CPU-offloaded model layers (e.g. Q2_K with too many CPU layers), or a batch size too small to saturate the GPU's SIMD lanes.
 
-**Relationship to #11:** #11 (Power Anomaly) fires on immediate threshold crossing. Pattern D requires sustained evidence (5 min) and quantifies the magnitude of the decoupling — not just "anomaly detected" but "X watts unexplained."
+**Gate:** 5-min window. Requires `gpu_util_pct` data — skips CPU-only nodes. 70% sample density required.
+**Hook:** `GPU% · Watts` (e.g. "12% GPU · 85W")
+**Recommendation:** Quantization change + batch size tuning. `action_id: reduce_batch_size`.
+**Relationship to #11:** #11 (Power Anomaly) fires on immediate threshold crossing (high power at low GPU%, no inference context). Pattern D requires sustained evidence AND filters to cases where inference IS actively running — the decoupling between power and GPU utilization points to CPU/memory bottleneck, not a background process. Pattern B covers the no-inference case.
 
 ---
 
-### Pattern E — Fleet Load Imbalance 🔲 (Sprint 3, Team+)
+### Pattern E — Fleet Load Imbalance ✅ (Sprint 3, Pro)
 
-**What:** One or more nodes saturated (GPU% > 85% or mem pressure > 80%) while other fleet nodes are idle. Load distribution is suboptimal.
+**What:** This node is thermally stressed OR WES is >20% below the fleet's best peer, while that peer is online in Normal thermal state with available capacity.
 
-**Why Team+:** Requires fleet-wide view. Cockpit (single-node) can't evaluate imbalance.
-**Hook:** Throughput left on the table (estimated tok/s from idle nodes)
+**Why Pro:** Requires fleet-wide view (`FleetNodeSummary[]` context). Single-node (Cockpit) deployments cannot evaluate imbalance — pattern degrades gracefully by not firing when no peer context is present.
+**Gate:** 5-min window. Node-availability gate: candidate must be online + Normal thermal state. WES gap > 20% required when no thermal stress is present.
+**Hook:** WES gap vs. named peer node (e.g. "34% WES gap vs spark-c559")
+**Recommendation:** Names the specific target node with current WES and thermal state. `action_id: rebalance_workload`.
 **Action:** `GET /api/v1/route/best`
 
 ---

@@ -192,8 +192,24 @@
 - [x] **Rate limiting** — 60 req/min (Community) / 600 req/min (Team) as an operational throttle, not a feature gate. API access is available on all tiers; node count is the tier differentiator.
 - [x] **Public documentation page at `/docs`** ✅ — un-gated, human and agent readable. Five sections: Quick Start (two-step sudo framing), WES Score (v2 penalty table, multiplicative framing), Agent API v1 (endpoints, route response, rate limits), Configuration (env vars, data retention tiers, Ollama proxy), Platform Support (agent OS matrix + metric-by-runtime matrix with KV Cache scoped to vLLM only). Wired from nav, footer, sidebar, and all public pages.
 
-### Sovereignty (Observability tab section)
-- [x] **Sovereignty section in Observability tab:** Telemetry destination card (fleet URL or "local only"), outbound connection manifest (Ollama probe / fleet telemetry / Clerk auth — with active/inactive status and data-type label per row), connection event log from FleetStreamContext (node_online/offline events, live pulse). Two sub-lists: what IS transmitted (CPU/GPU metrics, WES, model name) vs what NEVER leaves (inference content, prompts, responses). Replaces the old HostedPlaceholder on cloud dashboard — now the trust case is made explicitly at wicklee.dev, not just on localhost. Trace table remains localhost-only below.
+### Observability Tab — Phase 3B Foundations
+
+> **Tab role:** The Observability tab is the verification layer — not the intelligence layer.
+> It surfaces raw evidence: inference traces, metric history, sovereignty audit, and agent health.
+> Patterns, WES scoring, and recommendations belong in Intelligence/Insights.
+> The full scope is specified in `docs/SPEC.md → Observability Tab Specification`.
+>
+> **Build order across phases:**
+> - Phase 3B → Inference Traces (TracesView) + Sovereignty Audit *(this section)*
+> - Phase 4A → Raw Metric History ("View source →" panel) + Agent Health panel
+> - Phase 4A Sprint 6 → Dismissal Log
+>
+> **Phase 5 Prometheus/Grafana/OTel are export mechanisms** configured in
+> Settings → Integrations — not Observability tab content. The tab is sovereign and
+> requires no external sink.
+
+- [x] **Inference Traces (TracesView):** DuckDB-backed trace table, scoped to agent-local `metrics.db`. Always localhost-only — traces never transit the cloud backend (sovereignty boundary). Primary evidence surface for "why did this recommendation fire?".
+- [x] **Sovereignty Audit section:** Telemetry destination card (fleet URL or "local only"), outbound connection manifest (Ollama probe / fleet telemetry / Clerk auth — with active/inactive status and data-type label per row), connection event log from FleetStreamContext (node_online/offline events, live pulse). Two sub-lists: what IS transmitted (CPU/GPU metrics, WES, model name) vs what NEVER leaves (inference content, prompts, responses). Replaces the old HostedPlaceholder on cloud dashboard — the trust case is explicit at wicklee.dev.
 - [ ] **Audit Log Export (Free):** Exportable pairing and telemetry history.
 
 ### Launch Content
@@ -251,28 +267,30 @@
 
 ---
 
-### Sprint 3 — Prescriptive Recommendations *(next)*
+### Sprint 3 — Prescriptive Recommendations ✅
 
 > Give every finding a voice. A graph showing "WES Velocity Drop" is a warning;
 > a directive saying "Move the 70B model to WK-1EFC — online, Normal thermal,
 > within 8% throughput parity" is a solution.
 
-- [ ] **`recommendation: string` on `DetectedInsight`** — human-readable directed action per pattern. DuckDB-anchored: derived from the node's own measured history, not platform averages.
-- [ ] **`action_id: ActionId` on `DetectedInsight`** — typed machine-readable directive for agent consumers. Enum: `rebalance_workload` | `evict_idle_models` | `reduce_batch_size` | `check_thermal_zone` | `investigate_phantom` | `schedule_offpeak`.
-- [ ] **`FleetNodeSummary[]` context in `PatternInput`** — cross-node awareness for recommendations. Pattern evaluator receives live fleet state (online status, thermal state, WES, VRAM headroom) alongside per-node history.
-- [ ] **Node-availability gate on routing recommendations** — candidate nodes must be online + Normal thermal + >20% VRAM headroom before being named. Fallback: `schedule_offpeak` when no candidate qualifies. Safety check on `phantom_load`: never recommend `ollama stop` when the node is the only online inference node.
-- [ ] **Hardware-tier-aware recommendation text** — recommendations are contextually calibrated to the node's platform tier (`wes_tier`: `workstation` | `server` | `accelerator`). A Blackwell node at thermal stress gets "Adjust MoE gating parameters or reduce batch concurrency" while an EPYC CPU node gets "Offload to GPU node — this workload is not suited for CPU inference." The `wes_tier` field in `SentinelMetrics` is the discriminator; recommendations never suggest GPU-specific tuning to a CPU-only node.
-- [ ] **DuckDB-anchored recommendation logic:**
+- [x] **`recommendation: string` on `DetectedInsight`** — prescriptive 1–2 sentence operator action, fleet-availability-aware and hardware-tier-aware. Derived from the node's own localStorage history, not platform averages.
+- [x] **`action_id: ActionId` on `DetectedInsight`** — typed machine-readable directive for agent consumers. Enum: `rebalance_workload` | `evict_idle_models` | `reduce_batch_size` | `check_thermal_zone` | `investigate_phantom` | `schedule_offpeak`.
+- [x] **`FleetNodeSummary[]` context in `PatternInput`** — cross-node awareness for recommendations. Pattern evaluator receives live fleet state (online status, thermal state, WES, VRAM headroom, wesTier) alongside per-node history. Built in AIInsights.tsx from allNodeMetrics on every eval cycle.
+- [x] **Node-availability gate on routing recommendations** — `bestAlternativeNode()` helper: candidates must be `isOnline === true` + Normal thermal state; sorted by WES descending, VRAM headroom as tiebreaker. When no candidate qualifies the recommendation falls back to local mitigation (airflow / workload reduction).
+- [x] **Hardware-tier-aware recommendation text** — `wes_tier === 'accelerator'` nodes (H100/B200/GB10) receive preservation-first directives ("route lower-priority requests to preserve accelerator capacity"); workstation/server nodes receive standard rerouting copy. The `wes_tier` field in `SentinelMetrics` is the discriminator.
+- [x] **`ObservationCard` Sprint 3 UI** — "Recommended Action" panel (indigo-tinted, lightbulb icon) renders `recommendation` text + `ActionIdBadge` colored pill between body and copy buttons. Hidden when insight is resolved.
 
-  | Pattern | DuckDB Signal | Recommendation (hardware-aware) |
+  | Pattern | Recommendation source | ActionId |
   |---|---|---|
-  | Thermal Drain | `metrics_1min` -15% WES over 10m | Accelerator: "Adjust batch size / MoE gating." Workstation: "Offload to {best_online_node} — Normal thermal, {tok_s} tok/s." |
-  | Phantom Load | `metrics_1hr` high watts + 0 tok/s >60m | "Node burning ${cost}/day idle. Run `ollama stop` to cut power." |
-  | WES Velocity Drop | `metrics_raw` negative WES slope | "WES declining — check thermal zone before state change triggers." |
-  | Memory Trajectory | `metrics_raw` rate-of-change | "OOM in ~{eta_min}m. Evict idle models now to protect active session." |
+  | Thermal Drain | Fleet peer lookup → named node or local mitigation | `rebalance_workload` / `check_thermal_zone` |
+  | Phantom Load | Exact `ollama ps` + `ollama stop` workflow | `evict_idle_models` |
+  | WES Velocity Drop | Fleet peer + ETA-aware urgency | `rebalance_workload` / `check_thermal_zone` |
+  | Memory Trajectory | Specific unload workflow with process check | `evict_idle_models` |
+  | Power-GPU Decoupling | Quantization + batch tuning directives | `reduce_batch_size` |
+  | Fleet Load Imbalance | Named target node + thermal recovery advice | `rebalance_workload` |
 
-- [ ] **Pattern D — Power-GPU Decoupling (Community):** High watts + low GPU% = runaway background process. 5-min gate. `action_id: investigate_phantom`.
-- [ ] **Pattern E — Fleet Load Imbalance (Team+):** One node saturated, others idle for >10 min. Cross-node pattern — requires `FleetNodeSummary[]` context. `action_id: rebalance_workload` with named target node.
+- [x] **Pattern D — Power-GPU Decoupling (Pro tier):** Inference is active (tok/s > 0) but GPU utilization is anomalously low (<20%) while drawing >50W — suggests CPU-bound or memory-bound workload (large context KV cache, CPU-offloaded layers, or under-saturated batch size). 5-min gate. `action_id: reduce_batch_size`. Distinct from Pattern B (phantom load): Pattern B fires when there is NO inference; Pattern D fires when inference IS running but the GPU isn't being fully utilized.
+- [x] **Pattern E — Fleet Load Imbalance (Pro tier):** This node is thermally stressed OR WES is >20% below the fleet's best peer, while that peer is online in Normal thermal state. Cross-node pattern — requires `FleetNodeSummary[]` context. Names the target node in the recommendation. `action_id: rebalance_workload`.
 
 ---
 
@@ -281,12 +299,13 @@
 > Always rendered. Zero external calls. The Pattern Engine's findings, surfaced as a
 > pinned daily summary at the top of the Triage tab.
 
-- [ ] **`InsightsBriefingCard`** — Pinned card at top of Triage. Three sections:
-  - **Fleet Pulse (live):** Nodes online/total · total fleet tok/s · top WES node + score · fleet idle cost if applicable.
-  - **Last 24h Summary (localStorage history):** Total inference sessions · most efficient node by WES average · any nodes that never came online · peak thermal event.
-  - **Head-to-head comparison** (when ≥ 2 nodes with stable hardware IDs): "WK-99E9 is 12× more efficient than WK-C133 for this model class." Anchored to matching model size class from history — apples to apples. Only shown when both nodes have run the same model class within the window.
+- [x] **`InsightsBriefingCard` — core shell:** Pinned at top of Triage tab. 24h localStorage event buffer — onset / resolved / dismissed rows sourced from `insightLifecycle.ts`. Three-tier logging: Live Activity Feed (FleetEvent) → localStorage 24h buffer (InsightRecentEvent) → metrics.db Sprint 6 audit trail. Dedup per `patternId × nodeId` pair with `×N in 24h` count badge. 60s refresh interval. Collapsible with ChevronDown toggle. Empty state: compact dormant row.
+- [x] **Node-availability gating:** `useFleetStream()` resolves live `isOnline` status at render time — stale routing recommendations show amber `StaleNodeWarning` banner (WifiOff icon) or `DegradedNodeWarning` (AlertTriangle icon). `resolveNodeStatus()` returns `'online' | 'offline' | 'degraded' | 'unknown'`. `ONLINE_GATE_MS = 90s` mirrors the AIInsights constant. Routing action suppressed when node is offline; operator directed to `/api/v1/route/best` for current target.
+- [x] **Onset suppression + resolution logging:** `patternOnsetMapRef` tracks last emit time per `${patternId}:${nodeId}`. `ONSET_SUPPRESSION_MS = 15m` (> `OBS_HOLD_MS = 10m`) creates a 5-minute quiet window after resolution. `wes_at_onset` captured at exact onset moment for "WES 181.5 → 142.0" diffs. `durationMs = lastSeenFiringMs − onsetMs` (excludes hold wait — reflects actual stress time).
+- [ ] **Fleet Pulse (live) section:** Nodes online/total · total fleet tok/s · top WES node + score · fleet idle cost if applicable.
+- [ ] **Head-to-head comparison** (when ≥ 2 nodes with stable hardware IDs): "WK-99E9 is 12× more efficient than WK-C133 for this model class." Anchored to matching model size class from history — apples to apples. Only shown when both nodes have run the same model class within the window.
 - [ ] **Top Finding + Recommendation** — Highest-confidence active pattern displayed with its `recommendation` string and `action_id` as a copy-able curl command.
-- [ ] **"Source Data" toggle** — each finding in the Briefing Card has a "View source →" link that navigates directly to the exact DuckDB graph (WES Trend, Metrics History, or Memory chart) that produced the finding, pre-scoped to the triggering time window. Reinforces the "Silicon Truth" principle: every recommendation is one click from its evidence. Operators can verify the data; agents can trust the `action_id`.
+- [ ] **"View source →" links** — each finding navigates directly to the exact DuckDB graph (WES Trend, Metrics History, or Memory chart) that produced the finding, pre-scoped to the triggering time window. Reinforces the "Silicon Truth" principle: every recommendation is one click from its evidence. Requires Phase 4A Raw Metric History panel (see Observability Tab additions below).
 
 ---
 
@@ -334,6 +353,17 @@
 
 ---
 
+### Observability Tab — Phase 4A Additions
+
+> The Observability tab gains its evidence panels in Phase 4A, completing the
+> "one click from recommendation to raw data" chain started by the Morning Briefing Card.
+> See `docs/SPEC.md → Observability Tab Specification` for section definitions.
+
+- [ ] **Raw Metric History panel** — DuckDB time series charts in the Observability tab. WES Trend, tok/s, thermal state, and power draw — per node, with 1H/24H/7D/30D/90D time-range selectors (range gated by tier). Pre-scopable by time window from Briefing Card "View source →" links. Evidence layer only — no pattern scoring, no recommendations.
+- [ ] **Agent Health panel** — Harvester status, SSE connection health, DuckDB write path status, last successful write timestamp. Visible in Observability tab. Answers "is the data pipeline working?" without leaving the tab. Complements the Sovereignty Audit section already present.
+
+---
+
 ### Sprint 6 — Pattern Dismissal Audit Trail
 
 > Move dismissals from ephemeral localStorage to `metrics.db` — persistent, cross-session,
@@ -350,6 +380,7 @@
   );
   ```
 - [ ] **Permanent accept option** — for legitimate operational states (intentionally idle node, intentional phantom load). Resurface suppressed.
+- [ ] **Dismissal Log section in Observability tab** — persistent audit surface showing all `accepted_states` rows: `pattern_id`, `node_id`, `accepted_at`, `expires_at`, operator note. Completes the Observability tab's four sections (Traces, Raw Metric History, Sovereignty Audit, Agent Health + Dismissal Log). The dismissal record belongs in the verification layer — not the intelligence layer.
 - [ ] **Alert wiring** — map pattern IDs to `alert_rules` event_types in Slack/email delivery layer (Team+).
 
 ---
@@ -434,7 +465,14 @@
 - [ ] **MCP server at `wss://wicklee.dev/mcp`**
 - [ ] **Listed in MCP registries** — Anthropic, open-source registries
 
-### Observability Integrations
+### Observability Integrations *(export mechanisms — not Observability tab content)*
+
+> Prometheus, Grafana, and OTel are bridges to operator-owned observability stacks —
+> not sections within the Observability tab. They are configured in Settings → Integrations.
+> The Observability tab is sovereign and complete without any external sink. These
+> integrations let operators place Wicklee metrics alongside other services in their
+> existing Grafana/Datadog/Jaeger instances.
+
 - [ ] **Prometheus Exporter:** `/metrics` endpoint in Prometheus exposition format. WES, thermal state, tok/s, power draw, VRAM, and cost/token as labeled time series. Scraped by the operator's existing Prometheus instance — no Wicklee-specific sink required.
 - [ ] **Pre-built Grafana dashboard:** Fleet WES trend panel, thermal cost heatmap, node efficiency ranking. Importable JSON — drop into any Grafana instance.
 - [ ] **OpenTelemetry span export *(planned)*:** Inference request traces with TTFT and TPOT labels. Feeds directly into Jaeger, Honeycomb, Datadog.
@@ -535,15 +573,33 @@ The Agent API and MCP server are the agent interface — the same fleet intellig
 
 An agent running a multi-step inference pipeline calls `wicklee_best_route("efficiency")` before every dispatch. No human in the loop. No dashboard required. Wicklee becomes the routing brain for sovereign AI fleets — whether the decision-maker is a human or their agent counterpart.
 
-**The progression:**
+The full architectural specification is in `docs/SPEC.md → Agent-First Architecture — Built for Humans and Their Agents`.
+
+**Four-layer agent progression:**
 ```
-Phase 3A  →  /llms.txt + Markdown blog          agents can discover and read Wicklee       ✅
-Phase 3B  →  Agent API v1                        agents can query live fleet data            ✅
-Phase 4A  →  /api/v1/insights/latest             agents consume deterministic fleet briefing
-             (pattern findings + action_ids —    machine-readable directives, no LLM)
-Phase 5   →  MCP server + Chat with your Data    agents call Wicklee tools natively;
-                                                  power users query history via LLM
+Layer 1 — Discovery        /llms.txt + Markdown blog + /docs     agents discover and read Wicklee
+Layer 2 — Query            Agent API v1 (REST, JSON, rate-limited) agents query live fleet data
+Layer 3 — Intelligence     /api/v1/insights/latest               agents consume deterministic briefing
+                           (action_id + best_online_node)        machine-readable directives, no LLM
+Layer 4 — Native Tools     MCP server tools                      agents call Wicklee natively;
+                           + Chat with Fleet Data (optional)     power users query history via LLM
 ```
+
+**Roadmap phase mapping:**
+```
+Phase 3A  →  Layer 1: /llms.txt + Markdown blog          ✅
+Phase 3B  →  Layer 2: Agent API v1                        ✅
+Phase 4A  →  Layer 3: /api/v1/insights/latest
+             (pattern findings + action_ids — no LLM)
+Phase 5   →  Layer 4: MCP server + Chat with your Data
+```
+
+**Design rules for every new feature (from SPEC.md):**
+1. If it's in the dashboard, it must also be in the API — no dashboard-only primitives.
+2. `action_id` is an external API contract — never rename or change values.
+3. `best_online_node` must be verified at response time — agents cannot tolerate stale routing targets.
+4. Every finding must be grounded in deterministic data — no LLM inference in the intelligence loop.
+5. Do not think dashboard-first — design the data contract first, then render it.
 
 ---
 

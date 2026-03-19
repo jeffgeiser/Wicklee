@@ -63,9 +63,11 @@ import type { HexHiveRow } from './shared/HexHive';
 import WESHistoryChart from './WESHistoryChart';
 import MetricsHistoryChart from './MetricsHistoryChart';
 import ObservationCard from './insights/ObservationCard';
+import InsightsBriefingCard from './insights/InsightsBriefingCard';
 import { useMetricHistory, metricsToSample } from '../hooks/useMetricHistory';
 import { evaluatePatterns } from '../lib/patternEngine';
-import type { DetectedInsight } from '../lib/patternEngine';
+import type { DetectedInsight, FleetNodeSummary } from '../lib/patternEngine';
+import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -450,6 +452,16 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
 
+  /**
+   * Onset suppression map — tracks the last timestamp a pattern_onset event was
+   * emitted for each `${patternId}:${nodeId}` key.
+   *
+   * A new onset is suppressed if: Date.now() - lastEmittedMs < ONSET_SUPPRESSION_MS (15m).
+   * This is intentionally longer than OBS_HOLD_MS (10m) to create a 5-minute quiet
+   * gap after resolution — see insightLifecycle.ts for the full rationale.
+   */
+  const patternOnsetMapRef = useRef(new Map<string, number>());
+
   // Thermal Cost % rolling history — 30-frame window per node for rate-of-change detection.
   // At typical SSE cadence (~1 frame/s), 30 frames ≈ 30 seconds; adjust window as needed.
   const tcPctHistoryRef = useRef<Record<string, number[]>>({});
@@ -588,16 +600,52 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     // Prune stale history once per eval cycle
     metricHistory.prune();
 
+    // Build fleet peer context for cross-node recommendations.
+    // Each entry is a lightweight snapshot of a live fleet node.
+    // The 90s online gate matches the SSE "last_seen" stale threshold.
+    const ONLINE_GATE_MS = 90_000;
+    const nowForGate     = Date.now();
+    const fleetSummaries: FleetNodeSummary[] = metricsToProcess.map(m => {
+      const wesScore  = computeNodeWes(m);
+      const isNvGpu   = (m.nvidia_vram_total_mb ?? 0) >= 1024;
+      const vramTotal = isNvGpu ? (m.nvidia_vram_total_mb ?? 0) : 0;
+      const vramUsed  = isNvGpu ? (m.nvidia_vram_used_mb  ?? 0) : 0;
+      const vramHeadroomPct = vramTotal > 0
+        ? ((vramTotal - vramUsed) / vramTotal) * 100
+        : null;
+
+      // last_seen_ms is not in SentinelMetrics — use timestamp_ms as proxy;
+      // if the frame is fresh (< 90s old) the node is considered online.
+      const lastSeen    = m.timestamp_ms ?? 0;
+      const isOnline    = nowForGate - lastSeen < ONLINE_GATE_MS;
+
+      return {
+        nodeId:              m.node_id,
+        hostname:            m.hostname ?? m.node_id,
+        isOnline,
+        currentThermalState: m.thermal_state ?? null,
+        currentWes:          wesScore,
+        currentTokS:         m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null,
+        vramHeadroomPct,
+        wesTier:             m.wes_tier ?? null,
+      } satisfies FleetNodeSummary;
+    });
+
     const allObservations: DetectedInsight[] = [];
     // Only evaluate patterns for non-restricted nodes
     for (const m of metricsToProcess.filter(m => !restrictedIdSet.has(m.node_id))) {
       const ns      = getNodeSettings(m.node_id);
       const history = metricHistory.getHistory(m.node_id);
+      // Fleet context excludes this node — cross-node patterns filter it internally,
+      // but excluding here keeps the list clean for single-node Cockpit mode.
+      const peerContext = fleetSummaries.filter(s => s.nodeId !== m.node_id);
       const results = evaluatePatterns({
-        nodeId:   m.node_id,
-        hostname: m.hostname ?? m.node_id,
+        nodeId:       m.node_id,
+        hostname:     m.hostname ?? m.node_id,
         history,
-        kwhRate:  ns.kwhRate,
+        fleetContext: peerContext,
+        kwhRate:      ns.kwhRate,
+        wesTier:      m.wes_tier ?? null,
       });
       allObservations.push(...results);
     }
@@ -610,11 +658,58 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     for (const result of allObservations) {
       const key      = `${result.patternId}:${result.nodeId}`;
       const existing = cache.get(key);
+      const isNew    = !existing;
+
       cache.set(key, {
         insight:      result,
         firstFiredMs: existing?.firstFiredMs ?? nowMs2,
         resolvedMs:   null,   // still firing — clear any prior resolved timestamp
       });
+
+      // ── Onset event (Live Activity Feed + localStorage buffer) ────────────
+      // Only fires when:
+      //   1. This is a genuinely new pattern (not a re-eval of an already-active one).
+      //   2. Confidence is moderate or high — 'building' patterns are silent.
+      //   3. The onset suppression window (15m) has elapsed since the last onset
+      //      for this patternId+nodeId pair (prevents churn on borderline conditions).
+      if (isNew && result.confidence !== 'building') {
+        const lastOnsetMs = patternOnsetMapRef.current.get(key) ?? 0;
+        if (nowMs2 - lastOnsetMs >= ONSET_SUPPRESSION_MS) {
+          const nodeWes = fleetSummaries.find(s => s.nodeId === result.nodeId)?.currentWes ?? null;
+
+          emitFleetEvent({
+            id:          crypto.randomUUID(),
+            ts:          nowMs2,
+            type:        'pattern_onset',
+            nodeId:      result.nodeId,
+            hostname:    result.hostname,
+            patternId:   result.patternId,
+            action_id:   result.action_id,
+            hook:        result.hook,
+            wes_at_onset: nodeWes,
+            detail:      `${result.title} · ${result.hook} on ${result.hostname}`,
+          });
+
+          appendRecentEvent({
+            id:                 crypto.randomUUID(),
+            ts:                 nowMs2,
+            eventType:          'onset',
+            nodeId:             result.nodeId,
+            hostname:           result.hostname,
+            patternId:          result.patternId,
+            title:              result.title,
+            action_id:          result.action_id,
+            hook:               result.hook,
+            recommendation:     result.recommendation,
+            confidence:         result.confidence,
+            wes_at_onset:       nodeWes,
+            best_node_id:       result.best_node_id,
+            best_node_hostname: result.best_node_hostname,
+          });
+
+          patternOnsetMapRef.current.set(key, nowMs2);
+        }
+      }
     }
 
     // Mark entries that are no longer firing as resolved; evict after OBS_HOLD_MS
@@ -623,8 +718,14 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       const stillActive = allObservations.some(r => `${r.patternId}:${r.nodeId}` === key);
       if (!stillActive) {
         if (entry.resolvedMs === null) {
+          // First eval cycle where pattern is absent — start the hold countdown.
           cache.set(key, { ...entry, resolvedMs: nowMs2 });
         } else if (nowMs2 - entry.resolvedMs > OBS_HOLD_MS) {
+          // OBS_HOLD_MS has elapsed — pattern is confirmed resolved.
+          // durationMs = time the hardware was actually stressed, excluding the hold wait.
+          // entry.resolvedMs is the timestamp the pattern FIRST stopped firing (lastSeenFiringMs).
+          const durationMs = entry.resolvedMs - entry.firstFiredMs;
+
           pendingLog.push({
             id:        key,
             title:     entry.insight.title,
@@ -633,6 +734,35 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             firedAt:   entry.firstFiredMs,
             resolvedAt: entry.resolvedMs,
           });
+
+          // ── Resolved event (Live Activity Feed + localStorage buffer) ─────
+          emitFleetEvent({
+            id:        crypto.randomUUID(),
+            ts:        nowMs2,
+            type:      'pattern_resolved',
+            nodeId:    entry.insight.nodeId,
+            hostname:  entry.insight.hostname,
+            patternId: entry.insight.patternId,
+            action_id: entry.insight.action_id,
+            hook:      entry.insight.hook,
+            detail:    `${entry.insight.title} resolved on ${entry.insight.hostname}` +
+                       (durationMs > 0 ? ` (${Math.round(durationMs / 60_000)}m active)` : ''),
+          });
+
+          appendRecentEvent({
+            id:             crypto.randomUUID(),
+            ts:             nowMs2,
+            eventType:      'resolved',
+            nodeId:         entry.insight.nodeId,
+            hostname:       entry.insight.hostname,
+            patternId:      entry.insight.patternId,
+            title:          entry.insight.title,
+            action_id:      entry.insight.action_id,
+            hook:           entry.insight.hook,
+            recommendation: entry.insight.recommendation,
+            durationMs,
+          });
+
           cache.delete(key);
         }
       }
@@ -1036,6 +1166,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'triage' && (
             <>
+              {/* ── 24h Morning Briefing ────────────────────────────────────────
+                  Reads the localStorage recent-events buffer. Shows "what fired,
+                  what resolved, what was dismissed" since the operator last looked.
+                  Empty state collapses to a single compact dormant row.           */}
+              <InsightsBriefingCard />
+
               {/* Alert Quartet — surfaced only after 15 s sustained onset gate.
                   Resolved cards stay visible for 5 min with a green "✓ Resolved" overlay. */}
               <div className="space-y-3">
@@ -1273,6 +1409,17 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       insight={{ ...entry.insight, firstFiredMs: entry.firstFiredMs }}
                       showNodeHeader={effectiveNodes.length > 1}
                       resolvedMs={entry.resolvedMs}
+                      onDismiss={() => emitFleetEvent({
+                        id:        crypto.randomUUID(),
+                        ts:        Date.now(),
+                        type:      'pattern_dismissed',
+                        nodeId:    entry.insight.nodeId,
+                        hostname:  entry.insight.hostname,
+                        patternId: entry.insight.patternId,
+                        action_id: entry.insight.action_id,
+                        hook:      entry.insight.hook,
+                        detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
+                      })}
                     />
                   ))}
                 </div>
