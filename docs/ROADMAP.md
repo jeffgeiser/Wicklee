@@ -292,6 +292,9 @@
 - [x] **Pattern D — Power-GPU Decoupling (Pro tier):** Inference is active (tok/s > 0) but GPU utilization is anomalously low (<20%) while drawing >50W — suggests CPU-bound or memory-bound workload (large context KV cache, CPU-offloaded layers, or under-saturated batch size). 5-min gate. `action_id: reduce_batch_size`. Distinct from Pattern B (phantom load): Pattern B fires when there is NO inference; Pattern D fires when inference IS running but the GPU isn't being fully utilized.
 - [x] **Pattern E — Fleet Load Imbalance (Pro tier):** This node is thermally stressed OR WES is >20% below the fleet's best peer, while that peer is online in Normal thermal state. Cross-node pattern — requires `FleetNodeSummary[]` context. Names the target node in the recommendation. `action_id: rebalance_workload`.
 - [x] **Pattern G — Bandwidth Saturation (Pro tier) ✅ shipped:** GPU compute utilization is low (<45%) despite active inference (tok/s > 0) and high memory occupancy (VRAM >80% or Apple Silicon mem pressure >70%), with Normal thermals and WES dropped >35% from session peak. The GPU cores are idle waiting for model weight data — the memory bus is the bottleneck, not compute or temperature. "Model Suitability" insight: identifies when software weight exceeds the hardware's physical bandwidth ceiling. `action_id: switch_quantization` (solo) or `rebalance_workload` (fleet). New ActionId `switch_quantization` added. Icon: `Gauge` (emerald). Platform: NVIDIA (VRAM fields) + Apple Silicon (mem_pressure proxy).
+- [x] **Pattern H — Power Jitter (Community tier) ✅ shipped:** Power draw coefficient of variation (`stddev(watts)/mean(watts)`) exceeds 20% for 5 min with active inference (tok/s > 0) and mean watts > 30W. Two root causes: thundering herd (tok/s CoV also elevated → load balancer fix) vs PSU/VRM stress (watts-only variance → hardware check). Differentiator: standard tools track average power; Wicklee tracks power *cleanliness*. `action_id: reduce_batch_size`. Icon: `Waves` (orange). `stddev()` helper added to patternEngine.
+- [x] **Pattern I — Efficiency Penalty Drag (Pro tier) ✅ shipped:** `penalty_avg > 30%` sustained 5 min with Normal thermals, active GPU (>30% util), and no memory/VRAM saturation. First pattern to directly exploit the `penalty_avg` WES v2 field — catches the "invisible tax" class of losses: oversized context windows, under-saturated batches, KV cache fragmentation, MoE routing overhead. `action_id: reduce_batch_size`. Icon: `TrendingDown` (yellow) in ObservationCard / `Wind` in Briefing.
+- [x] **`resolution_steps: string[]` on all patterns A–I ✅:** Five numbered prescriptive steps per pattern (commands + config changes + physical actions), ordered by execution sequence. Each step is a complete standalone instruction. Rendered as a numbered list in ObservationCard below the recommendation block. Exposed in `/api/v1/insights/latest` for automation consumers. Steps are fleet-context-aware where applicable (e.g., Pattern A names the alt node in step 2 if one exists).
 
 ---
 
@@ -378,17 +381,20 @@
 > Move dismissals from ephemeral localStorage to `metrics.db` — persistent, cross-session,
 > operator-annotatable. Prevents Morning Briefing from becoming notification spam.
 
-- [ ] **`POST localhost:7700/api/insights/dismiss`** — writes to `accepted_states` table in agent-local `metrics.db`.
+- [x] **`POST localhost:7700/api/insights/dismiss`** ✅ — writes to `accepted_states` table in agent-local `metrics.db`. Request body: `{ pattern_id, node_id?, expires_at_ms?, note? }`. 202 Accepted. Store-gated: only wired when DuckDB opens successfully (non-musl builds).
   ```sql
   CREATE TABLE accepted_states (
-    pattern_id   TEXT,
-    node_id      TEXT,
-    accepted_at  BIGINT,   -- ms epoch
-    expires_at   BIGINT,   -- NULL = permanent accept
-    note         TEXT      -- optional operator annotation
+    pattern_id      TEXT    NOT NULL,
+    node_id         TEXT    NOT NULL DEFAULT '',  -- '' = fleet-wide
+    dismissed_at_ms BIGINT  NOT NULL,
+    expires_at_ms   BIGINT  NOT NULL,
+    note            TEXT,
+    PRIMARY KEY (pattern_id, node_id)
   );
   ```
-- [ ] **Permanent accept option** — for legitimate operational states (intentionally idle node, intentional phantom load). Resurface suppressed.
+- [x] **`GET localhost:7700/api/insights/dismissed`** ✅ — returns all non-expired dismissals `{ dismissals: Dismissal[] }`. Used by frontend on mount to sync agent records into localStorage (longer-lived agent record wins).
+- [x] **`useInsightDismiss` dual-write** ✅ — localStorage write is immediate (zero-latency, works offline); agent endpoint is fire-and-forget. Sync-from-agent runs once on page load. Dismiss decisions survive browser cache clears.
+- [x] **Permanent accept option** ✅ — `dismiss(Infinity)` in the hook maps to a 10-year expiry. For legitimate operational states (intentionally idle node, intentional phantom load).
 - [ ] **Dismissal Log section in Observability tab** — persistent audit surface showing all `accepted_states` rows: `pattern_id`, `node_id`, `accepted_at`, `expires_at`, operator note. Completes the Observability tab's four sections (Traces, Raw Metric History, Sovereignty Audit, Agent Health + Dismissal Log). The dismissal record belongs in the verification layer — not the intelligence layer.
 - [ ] **Alert wiring** — map pattern IDs to `alert_rules` event_types in Slack/email delivery layer (Team+).
 
@@ -420,20 +426,24 @@
 
 | Metric | Source | Privilege | Platform | Phase | Pattern trigger |
 |---|---|---|---|---|---|
-| **Power jitter** (stddev of watts, 10s window) | 1Hz power_draw (existing) | None | All | ✅ shipped | Pattern H: PSU/VRM stress, thundering-herd load |
-| **SSD Swap I/O** (swap write MB/s during inference) | `/proc/diskstats` · `vm_stat` · WMI | None | All | 4B | Pairs with Pattern F (Memory Pressure); explains "stuttering" |
-| **PCIe lane width** (current vs max, e.g. x4 vs x16) | NVML | None | NVIDIA | 4B | New Pattern: "slow GPU" from physical seating/bus fault |
-| **Clock frequency drift** (current vs rated, graphics + memory) | NVML | None | NVIDIA | 4B | Clock penalty in WES; catches voltage/power throttle not covered by thermal state |
-| **XID error logs** (pre-crash kernel events, e.g. XID 61) | `dmesg` / `nvidia-smi` | Optional | NVIDIA/Linux | 4B | Stability penalty slashes WES before a crash occurs |
-| **VRAM temperature** (HBM/GDDR6X vs core temp) | NVML | None | A100/H100 | 4B | ThermalPenalty driven by `max(vram_temp, core_temp)` |
+| **Power jitter** (stddev of watts, 30s window) | 1Hz power_draw (existing) | None | All | ✅ Pattern H shipped | PSU/VRM stress, thundering-herd load — CoV > 20% over 5 min |
+| **Efficiency Penalty Drag** (penalty_avg > 30%) | WES v2 penalty_avg (existing) | None | All | ✅ Pattern I shipped | Context length, batch fragmentation, MoE routing overhead |
+| **SSD Swap I/O** (swap write MB/s during inference) | `/proc/diskstats` · `vm_stat` · WMI | None | All | 4B | New agent field `swap_write_mb_s` needed; pairs with Pattern F; explains inference "stuttering" |
+| **PCIe lane width** (current vs max, e.g. x4 vs x16) | NVML `nvmlDeviceGetCurrPcieLinkWidth()` | None | NVIDIA | 4B | New Pattern: "slow GPU" from physical seating/bus fault |
+| **Clock frequency drift** (current vs rated, graphics + memory) | NVML `nvmlDeviceGetClock()` | None | NVIDIA | 4B | New field `clock_throttle_pct`; clock penalty in WES; catches voltage/power throttle not covered by thermal state |
+| **XID error logs** (pre-crash kernel events, e.g. XID 61) | `dmesg` / `nvidia-smi` scraping | Optional | NVIDIA/Linux | 4B | Stability penalty slashes WES before a crash occurs |
+| **VRAM temperature** (HBM/GDDR6X vs core temp) | NVML `nvmlDeviceGetTemperature(NVML_TEMPERATURE_MEMORY)` | None | A100/H100 | 4B | `ThermalPenalty` driven by `max(vram_temp, core_temp)` |
 | **Fan efficacy** (fan% RPM vs rate of cooling) | NVML / IOKit SMC | None/Root | NVIDIA/macOS | 4B | Predictive: "airflow blocked before throttle onset" |
-| **ECC / page retirement** | NVML | None | A100/H100 | 4B enterprise | Pre-failure VRAM degradation; combined with XID → near-zero WES |
+| **ECC / page retirement** | NVML `nvmlDeviceGetMemoryErrorCounter()` | None | A100/H100 | 4B enterprise | Pre-failure VRAM degradation; combined with XID → near-zero WES |
+
+> **Current status:** Patterns H + I are the frontier of what's achievable on current `MetricSample` data (no new agent fields required). All remaining 4B patterns require new fields on `SentinelMetrics` and new Rust agent probes.
 
 **Priority within 4B:**
-1. Power jitter + SSD Swap I/O — zero-privilege, platform-wide, directly explains observable inference degradation
-2. Clock frequency drift — NVIDIA, zero-privilege, supplements thermal penalty
-3. PCIe lane width + XID errors — NVIDIA Linux, hardware fault detection
-4. Fan efficacy, VRAM temp, ECC — datacenter/enterprise tier
+1. ~~Power jitter~~ ✅ shipped (Pattern H) · ~~Efficiency Penalty Drag~~ ✅ shipped (Pattern I)
+2. **SSD Swap I/O** — zero-privilege, platform-wide, directly explains observable inference stuttering. Agent needs: `swap_write_mb_s` field, sourced from `/proc/diskstats` (Linux), `vm_stat` (macOS), WMI (Windows).
+3. **Clock frequency drift** — NVIDIA, zero-privilege, supplements thermal penalty. Agent needs: `clock_throttle_pct` via `nvmlDeviceGetClock()`.
+4. **PCIe lane width + XID errors** — NVIDIA Linux, hardware fault detection. Agent needs: `pcie_link_width` + `xid_error_count`.
+5. Fan efficacy, VRAM temp, ECC — datacenter/enterprise tier.
 
 ---
 
