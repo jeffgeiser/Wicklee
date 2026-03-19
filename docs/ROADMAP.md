@@ -203,11 +203,13 @@
 
 ---
 
-## Phase 4A — Intelligence Depth + Insights AI *(in progress)*
+## Phase 4A — Automated Insight Briefing *(in progress)*
 
-> DuckDB write path shipped. 90-day history accumulating. Unlocks trend-based insights and AI-powered briefings.
+> Architecture principle: **deterministic over generative**. Every finding is reproducible,
+> citable, and sovereign. DuckDB history is the source of truth. No LLM dependency in the
+> core intelligence loop — AI is an optional Phase 5 enhancement.
 
-### Infrastructure
+### Infrastructure ✅
 - [x] **Agent-local DuckDB history store (v0.4.28)** — `agent/src/store.rs`. Three-tier schema at `~/.wicklee/metrics.db` (agent node, not cloud). `GET /api/history` endpoint on the agent's port 7700. Distinct from the cloud-side store below — enables offline local history with no cloud dependency. See agent hardening notes in Shipped section above.
 - [x] **DuckDB Write Path — cloud backend (Phase 4A shipped `e8c6b47`):**
   - `metrics_raw` table: 24-hour rolling window at native 1 Hz. `metrics_5min` table: 90-day aggregate retention (5-minute buckets with pre-computed tok_s P50/P95).
@@ -218,52 +220,131 @@
   - `thermal_cost_pct` and `agent_version` columns reserved; populated when WES v2 ships (Phase 4B).
 - [x] **Historical Performance Graphs:** `MetricsHistoryChart` — 4-metric selector (Tok/s / Power / GPU% / Mem%), per-metric gradient area chart (indigo/amber/violet/cyan). Backend: `GET /api/fleet/metrics-history` — 1h from `metrics_raw` (60s buckets), 24h–90d from `metrics_5min` aggregates. Dashed P95 reference line for tok/s on 24h+ ranges. Live SSE value as horizontal reference line. Time-range gating mirrors WES chart (1H/24H Community, 7D Pro, 30D/90D Team). Placed in Insights → Performance tab below WES Trend.
 - [x] **Percentile Baselines (tok/s):** P95 dashed reference line for tok/s on `MetricsHistoryChart` when source is `metrics_5min` (24h+ ranges). P50/P95 cross-metric expansion (power, memory) remains open for a future pass.
+- [x] **Hardware-derived node ID (v0.4.29)** — `generate_node_id()` reads `/etc/machine-id` (Linux), `IOPlatformUUID` via `ioreg` (macOS), or `MachineGuid` registry key (Windows). XOR-folds to stable WK-XXXX suffix. Timestamp fallback for containers/live ISOs. Existing paired nodes unaffected — `load_or_create_config()` only calls this on first run.
 - [ ] **Per-model WES normalization** — WES at 3B vs 70B is not directly comparable. Normalize against per-model historical baseline in DuckDB. Requires history to establish baseline before normalization is meaningful.
 
-### Insights AI *(new)*
-> Wicklee Insights tab becomes AI-powered. Natural language summaries, anomaly
-> explanations, and routing recommendations — not hardcoded rules.
+---
 
-- [ ] **Settings → Insights & AI section:** Choose provider — Wicklee Cloud AI (Team Edition) / BYOK Anthropic / BYOK OpenAI / local Ollama endpoint.
-- [ ] **Morning Briefing:** Daily fleet summary in plain English. "WK-1EFC ran 847 inferences yesterday at avg WES 134. WK-C133 thermal throttled 3 times — consider workload rebalancing."
-- [ ] **Anomaly Explanation:** Natural language explanation of WES drops, thermal spikes, tok/s regression. Causal chain with recommended action — not just a state label.
-- [ ] **`GET /api/v1/insights/latest`** — same briefing as JSON. Orchestration agents consume Wicklee intelligence, not just raw metrics.
+### Pattern Engine — Deterministic Intelligence ✅
 
-### Pattern Engine — Deterministic Intelligence Briefing Feed *(Sprint 1 shipped)*
-
-> Time-windowed rules engine. Patterns require sustained evidence (`minObservationWindowMs` gate)
-> before firing — no false positives from model-loading spikes. Each insight carries a quantified
-> hook ($/day or tok/s delta) and one-click copy actions. Complementary to the Alert Quartet
-> (which fires on threshold crossings); patterns live in a new "Observations" section in Triage.
+> Pure math on time-series data. Same inputs → same outputs — always. No API key, no cloud
+> call, no hallucination surface. Patterns require sustained evidence before firing;
+> each finding carries a quantified hook and a directed recommendation.
 
 **Infrastructure (Sprint 1 ✅)**
-- [x] **`useMetricHistory` hook:** 30s downsampled localStorage rolling buffer. 2,880 samples/node (24h). Stable push/getHistory/getRecent/getWindow/prune API. `metricsToSample()` applies 1024 MB VRAM filter at write time. No re-renders on push.
-- [x] **`patternEngine.ts`:** Pure deterministic evaluator `evaluatePatterns()`. Same inputs → same outputs. Returns `DetectedInsight[]` with `hook`, `body`, `confidence` (building/moderate/high), `confidenceRatio`, tier gate, and copy-button actions.
-- [x] **`ObservationCard`:** Intelligence briefing layout — quantified hook top-right (amber/violet/indigo by type), copy-to-clipboard action buttons (shell command or API endpoint), thin confidence progress bar while building.
-- [x] **Triage tab wiring:** Observations section renders above Local AI Analysis when patterns fire; hidden when no observations active. Pattern evaluator throttled to 30s cycles; samples pushed on every telemetry frame.
+- [x] **`useMetricHistory` hook** — 30s downsampled localStorage rolling buffer. 2,880 samples/node (24h). Stable push/getHistory/getRecent/getWindow/prune API. `metricsToSample()` applies 1024 MB VRAM filter at write time. No re-renders on push.
+- [x] **`patternEngine.ts`** — Pure deterministic evaluator `evaluatePatterns(input)`. Returns `DetectedInsight[]` with `hook`, `body`, `confidence`, `confidenceRatio`, tier gate, copy-button actions.
+- [x] **`ObservationCard`** — Intelligence briefing card: quantified hook (top-right), copy actions, confidence progress bar, dismiss with 1h resurface.
+- [x] **Triage tab wiring** — Observations section above Alert Quartet. Evaluator throttled to 30s cycles.
 
-**Pattern A — Thermal Performance Drain** (Community ✅)
-- [x] 5-min observation window. Baseline tok/s drawn **only from Normal-thermal samples** so the delta is against the node's own clean-state performance, not a hot vs. slightly-less-hot comparison. Fires when sustained degradation >8%. Hook: `-X tok/s (Y% below Normal baseline)`. Actions: `/api/v1/route/best` endpoint + `curl` health check.
+**Pattern A — Thermal Performance Drain (Community ✅)**
+- [x] 5-min window. Baseline tok/s from Normal-thermal samples only — delta against clean-state, not hot vs. slightly-less-hot. Fires at >8% degradation. Hook: `-X tok/s (Y% below baseline)`.
 
-**Pattern B — Phantom Load** (Community ✅)
-- [x] 5-min observation window. Fires when VRAM allocated + watts above idle AND zero inference activity. 1024 MB VRAM filter applied at `metricsToSample()` layer — BMC chips never trigger. Hook: `-$X.XX/day` at configured kWh rate. Actions: `ollama stop` + `ollama ps`.
+**Pattern B — Phantom Load (Community ✅)**
+- [x] 5-min window. VRAM allocated + watts above idle + zero inference = wasted $/day. 1024 MB VRAM filter — BMC chips never trigger. Hook: `-$X.XX/day`.
 
-**Sprint 2 — Planned**
-- [ ] **Pattern C — WES Velocity Drop:** Rate-of-change on WES score over a 10-min window. "Early warning" pattern — fires before thermal state changes. `minObservationWindowMs` = 10 min (highest sensitivity → highest gate). Not in original INSIGHTS.md; new capability from localStorage history.
-- [ ] **Pattern F — Memory Pressure Trajectory:** Rate-of-change on `memory_pressure_percent` → ETA to critical. Pure frontend, no DuckDB required — uses localStorage 24h history. Supersedes the DuckDB-required implementation in Phase 4A for the ETA calculation.
-- [ ] **Observation dismissal:** Per-patternId dismiss (localStorage), resurfaces if condition persists >1h after dismiss.
-- [ ] **Alert wiring:** Map pattern IDs to `alert_rules` event_types in the Slack/email delivery layer (Team+).
+**Pattern C — WES Velocity Drop (Community ✅)**
+- [x] 10-min window. OLS slope on WES over rolling window. Fires when slope is negative AND total drop >10%. Early warning — fires before thermal state transitions. Highest gate (`minObservationWindowMs` = 10 min) because earliest signal.
 
-**Planned Patterns (future sprints)**
-- [ ] **Pattern D — Power-GPU Decoupling:** High watts + low GPU% = runaway background process. 5-min gate. Cross-correlates board power and GPU utilization.
-- [ ] **Pattern E — Fleet Load Imbalance (Team+):** One node saturated while others idle. Fires after 10 min imbalance. Routes recommendation via `/api/v1/route/best`.
+**Pattern F — Memory Pressure Trajectory (Community ✅)**
+- [x] 10-min window. Linear regression on `memory_pressure_percent` → ETA to 85% critical threshold. Fires when projected ETA < 30 min. Pure localStorage history — no DuckDB required.
 
-### Paid Intelligence Insights
-- [ ] **Memory Pressure Forecasting:** Rate-of-change on memory pressure → ETA to critical. "At current rate, this node hits critical in ~7 minutes." Slack alert at 15min and 5min thresholds. *(Pattern F covers frontend ETA; this item is the Slack alert layer.)*
+---
+
+### Sprint 3 — Prescriptive Recommendations *(next)*
+
+> Give every finding a voice. A graph showing "WES Velocity Drop" is a warning;
+> a directive saying "Move the 70B model to WK-1EFC — online, Normal thermal,
+> within 8% throughput parity" is a solution.
+
+- [ ] **`recommendation: string` on `DetectedInsight`** — human-readable directed action per pattern. DuckDB-anchored: derived from the node's own measured history, not platform averages.
+- [ ] **`action_id: ActionId` on `DetectedInsight`** — typed machine-readable directive for agent consumers. Enum: `rebalance_workload` | `evict_idle_models` | `reduce_batch_size` | `check_thermal_zone` | `investigate_phantom` | `schedule_offpeak`.
+- [ ] **`FleetNodeSummary[]` context in `PatternInput`** — cross-node awareness for recommendations. Pattern evaluator receives live fleet state (online status, thermal state, WES, VRAM headroom) alongside per-node history.
+- [ ] **Node-availability gate on routing recommendations** — candidate nodes must be online + Normal thermal + >20% VRAM headroom before being named. Fallback: `schedule_offpeak` when no candidate qualifies. Safety check on `phantom_load`: never recommend `ollama stop` when the node is the only online inference node.
+- [ ] **DuckDB-anchored recommendation logic:**
+
+  | Pattern | DuckDB Signal | Recommendation |
+  |---|---|---|
+  | Thermal Drain | `metrics_1min` -15% WES over 10m | "Thermal throttle imminent. Offload to {best_online_node} — Normal thermal, {tok_s} tok/s" |
+  | Phantom Load | `metrics_1hr` high watts + 0 tok/s >60m | "Node burning ${cost}/day idle. Run `ollama stop` to cut power." |
+  | WES Velocity Drop | `metrics_raw` negative WES slope | "WES declining — check thermal zone before state change triggers." |
+  | Memory Trajectory | `metrics_raw` rate-of-change | "OOM in ~{eta_min}m. Evict idle models now to protect active session." |
+
+- [ ] **Pattern D — Power-GPU Decoupling (Community):** High watts + low GPU% = runaway background process. 5-min gate. `action_id: investigate_phantom`.
+- [ ] **Pattern E — Fleet Load Imbalance (Team+):** One node saturated, others idle for >10 min. Cross-node pattern — requires `FleetNodeSummary[]` context. `action_id: rebalance_workload` with named target node.
+
+---
+
+### Sprint 4 — Morning Briefing Card
+
+> Always rendered. Zero external calls. The Pattern Engine's findings, surfaced as a
+> pinned daily summary at the top of the Triage tab.
+
+- [ ] **`InsightsBriefingCard`** — Pinned card at top of Triage. Three sections:
+  - **Fleet Pulse (live):** Nodes online/total · total fleet tok/s · top WES node + score · fleet idle cost if applicable.
+  - **Last 24h Summary (localStorage history):** Total inference sessions · most efficient node by WES average · any nodes that never came online · peak thermal event.
+  - **Head-to-head comparison** (when ≥ 2 nodes with stable hardware IDs): "WK-99E9 is 12× more efficient than WK-C133 for this model class." Anchored to matching model size class from history — apples to apples. Only shown when both nodes have run the same model class within the window.
+- [ ] **Top Finding + Recommendation** — Highest-confidence active pattern displayed with its `recommendation` string and `action_id` as a copy-able curl command.
+
+---
+
+### Sprint 5 — `GET /api/v1/insights/latest` (All tiers)
+
+> Deterministic JSON. Always returns something meaningful. No LLM. Agents get
+> a machine-readable directive; humans get the same data rendered in the Briefing Card.
+
+- [ ] **Endpoint on cloud backend** — returns structured fleet briefing:
+  ```json
+  {
+    "generated_at_ms": 1742000000000,
+    "fleet_pulse": {
+      "nodes_online": 2, "nodes_total": 3,
+      "fleet_tok_s": 84.4,
+      "top_wes_node": { "node_id": "WK-1EFC", "wes": 181.5 }
+    },
+    "findings": [
+      {
+        "pattern_id": "thermal_drain",
+        "node_id": "WK-99E9",
+        "hook": "-4.2 tok/s",
+        "recommendation": "Move batch workloads to WK-1EFC — online, Normal thermal, within 8% throughput parity",
+        "action_id": "rebalance_workload",
+        "confidence": "high"
+      }
+    ],
+    "top_recommendation": { "action_id": "rebalance_workload", "text": "..." }
+  }
+  ```
+- [ ] **Available on all tiers** — deterministic data, not a paid AI feature. Rate-limited at same tiers as other v1 endpoints.
+
+---
+
+### Sprint 6 — Pattern Dismissal Audit Trail
+
+> Move dismissals from ephemeral localStorage to `metrics.db` — persistent, cross-session,
+> operator-annotatable. Prevents Morning Briefing from becoming notification spam.
+
+- [ ] **`POST localhost:7700/api/insights/dismiss`** — writes to `accepted_states` table in agent-local `metrics.db`.
+  ```sql
+  CREATE TABLE accepted_states (
+    pattern_id   TEXT,
+    node_id      TEXT,
+    accepted_at  BIGINT,   -- ms epoch
+    expires_at   BIGINT,   -- NULL = permanent accept
+    note         TEXT      -- optional operator annotation
+  );
+  ```
+- [ ] **Permanent accept option** — for legitimate operational states (intentionally idle node, intentional phantom load). Resurface suppressed.
+- [ ] **Alert wiring** — map pattern IDs to `alert_rules` event_types in Slack/email delivery layer (Team+).
+
+---
+
+### Paid Intelligence (DuckDB history required)
 - [ ] **Tok/s Regression Detection:** Current probe vs 7-day P50 baseline per node. Alert when >20% degradation.
-- [ ] **Quantization ROI Measurement:** Per-model, per-quant tok/s and W/1K TKN stored in DuckDB. "Q4 vs Q8 on YOUR hardware at YOUR thermal state" — live hardware-specific answer.
-- [ ] **Efficiency Regression per Model:** "WK-C133 used to run llama3.1:8b at 17 tok/s. It now runs it at 11 tok/s." Baseline history required. Slack alert when >20% regression.
+- [ ] **Quantization ROI Measurement:** Per-model, per-quant tok/s and W/1K TKN in DuckDB. "Q4 vs Q8 on YOUR hardware at YOUR thermal state."
+- [ ] **Efficiency Regression per Model:** "WK-C133 used to run llama3.1:8b at 17 tok/s. Now 11 tok/s." Slack alert at >20% regression.
 - [ ] **Fleet Degradation Trend:** Fleet-wide tok/s trend over 7/30 days.
+- [ ] **Memory Pressure Slack Alert:** Pattern F covers frontend ETA; this is the Slack delivery layer at 15min and 5min thresholds.
 
 ### Notifications
 - [x] **Slack / Resend (Email) Webhook System:** Per-node, per-event-type configuration. Urgency levels: immediate, 5-min debounce, 15-min debounce. Slack Block Kit formatting + HTML email with plain-text fallback. 5-min flap suppression via `quiet_until_ms`. Resolution notifications sent when condition clears. Team+ only (`subscription_tier` column on `users` table; `402` for community).
@@ -294,10 +375,31 @@
 
 ---
 
-## Phase 5 — Enterprise & Orchestration *(6+ months)*
+## Phase 5 — Enterprise, Orchestration & Optional AI *(6+ months)*
 
 > Goal: close the enterprise loop. Sovereign deployment, programmable orchestration,
-> Prometheus-native observability, and MCP-native agent integration.
+> Prometheus-native observability, MCP-native agent integration, and — for power users
+> who want it — optional natural language queries over their own fleet history.
+
+### Chat with your Fleet Data *(optional, power user)*
+
+> The only LLM feature in Wicklee. Optional. Never required. Zero data egress when
+> using local Ollama. The deterministic Pattern Engine is the brain; this is the voice.
+
+- [ ] **Provider config in Settings → Intelligence:** Local Ollama (sovereign, proxied through agent at `localhost:7700`) · BYOK Anthropic · BYOK OpenAI. All calls are client-side — no fleet data transits Wicklee servers in BYOK mode.
+- [ ] **Grounded query architecture:** Every question is answered by running a deterministic DuckDB query first, injecting the real results as context, then asking the LLM to interpret. The LLM is a translator, not a sensor — it cannot invent fleet metrics it hasn't been given.
+  ```
+  User: "Why was my fleet slow last Tuesday?"
+      ↓
+  Query planner (deterministic) → SELECT from metrics.db / cloud DuckDB
+      ↓
+  Real data injected as structured context
+      ↓
+  LLM: interprets, explains, formats — never invents
+  ```
+- [ ] **Example queries:** "Which quantization performs best on the Spark?" · "How much has idle cost changed this month?" · "When was WK-C133 last at Normal thermal?" · "Compare my two nodes head-to-head over the last 7 days."
+- [ ] **Chat panel in Intelligence tab** — clearly labeled "Chat with your data (requires AI provider configured)". Raw query results always shown alongside narrative — operators can verify any number.
+- [ ] **`wicklee_insights_latest()` MCP tool** — exposes the deterministic briefing JSON to MCP-capable agents. The same data the Briefing Card shows, in tool-call format. No LLM required for the data; LLM optional for interpretation.
 
 ### Sentinel Proxy
 - [ ] **Inference Interceptor:** OpenAI-compatible proxy endpoint. Clients point at Wicklee; Wicklee forwards to healthiest node.
@@ -313,7 +415,7 @@
 - [ ] **`wicklee_best_route(goal)`** — "latency" or "efficiency" → node recommendation
 - [ ] **`wicklee_node_metrics(id)`** — single node deep metrics
 - [ ] **`wicklee_wes_scores()`** — WES leaderboard, all nodes
-- [ ] **`wicklee_insights_latest()`** — latest AI briefing as structured data
+- [ ] **`wicklee_insights_latest()`** — deterministic briefing as structured data (pattern findings + recommendations + fleet pulse)
 - [ ] **MCP server at `wss://wicklee.dev/mcp`**
 - [ ] **Listed in MCP registries** — Anthropic, open-source registries
 
@@ -392,7 +494,8 @@
 | Quantization ROI (live session) | ✅ | ✅ | ✅ |
 | Local Intelligence (trend-based) | ❌ | ✅ Paid | ✅ Full |
 | Insights AI (morning briefing) | ❌ | ✅ | ✅ |
-| `/api/v1/insights/latest` | ❌ | ✅ | ✅ |
+| `/api/v1/insights/latest` (deterministic) | ✅ | ✅ | ✅ |
+| Chat with Fleet Data (LLM, BYOK/Ollama) | ❌ | ✅ | ✅ |
 | Keep Warm (1 node free · unlimited paid) | ✅ 1 node | ✅ Unlimited | ✅ Unlimited |
 | 90-day history | ❌ | ✅ | ✅ |
 | Slack / PagerDuty | ❌ | ✅ | ✅ |
@@ -419,10 +522,12 @@ An agent running a multi-step inference pipeline calls `wicklee_best_route("effi
 
 **The progression:**
 ```
-Phase 3A  →  /llms.txt + Markdown blog     agents can discover and read Wicklee       ✅
-Phase 3B  →  Agent API v1                  agents can query live fleet data            ✅
-Phase 4A  →  /api/v1/insights/latest       agents can consume Wicklee intelligence
-Phase 5   →  MCP server                    agents call Wicklee tools natively
+Phase 3A  →  /llms.txt + Markdown blog          agents can discover and read Wicklee       ✅
+Phase 3B  →  Agent API v1                        agents can query live fleet data            ✅
+Phase 4A  →  /api/v1/insights/latest             agents consume deterministic fleet briefing
+             (pattern findings + action_ids —    machine-readable directives, no LLM)
+Phase 5   →  MCP server + Chat with your Data    agents call Wicklee tools natively;
+                                                  power users query history via LLM
 ```
 
 ---
