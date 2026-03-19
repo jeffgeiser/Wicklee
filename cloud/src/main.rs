@@ -1165,6 +1165,251 @@ async fn handle_v1_route_best(
     }).into_response()
 }
 
+// ── GET /api/v1/insights/latest ───────────────────────────────────────────────
+//
+// Deterministic fleet pattern analysis — no LLM, no randomness.
+// Intended for external consumers: automation scripts, MCP servers, CI/CD
+// pipelines.  The Wicklee dashboard computes findings client-side via
+// patternEngine.ts and does NOT call this endpoint.
+//
+// Auth: X-API-Key (same as all v1 endpoints).
+// Response: InsightsResponse (see types below).
+
+#[derive(Serialize)]
+struct V1InsightsFleet {
+    online_count: usize,
+    total_count:  usize,
+    avg_wes:      Option<f32>,
+    fleet_tok_s:  Option<f32>,
+}
+
+#[derive(Serialize)]
+struct V1InsightFinding {
+    node_id:  String,
+    hostname: Option<String>,
+    severity: &'static str,   // "high" | "moderate" | "low"
+    pattern:  &'static str,   // machine-readable pattern key
+    title:    String,
+    detail:   String,
+    value:    Option<f32>,
+    unit:     Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct V1InsightsResponse {
+    generated_at_ms: u64,
+    fleet:           V1InsightsFleet,
+    findings:        Vec<V1InsightFinding>,
+}
+
+/// GET /api/v1/insights/latest
+async fn handle_v1_insights_latest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+
+    let db = state.db.clone();
+    let rl = state.api_rate_limits.clone();
+
+    let node_ids: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
+        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
+        Some(stmt.query_map(params![user_id], |r| r.get(0))
+            .ok()?.filter_map(|r| r.ok()).collect())
+    }).await.unwrap();
+
+    let node_ids = match node_ids {
+        None      => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+        Some(ids) => ids,
+    };
+
+    let metrics_map = state.metrics.read().unwrap();
+    let now = now_ms();
+    let total_count = node_ids.len();
+
+    struct NodeSnap {
+        node_id:  String,
+        hostname: Option<String>,
+        online:   bool,
+        metrics:  Option<MetricsPayload>,
+        wes:      Option<f32>,
+        tok_s:    Option<f32>,
+    }
+
+    let snaps: Vec<NodeSnap> = node_ids.into_iter().map(|node_id| {
+        let entry    = metrics_map.get(&node_id);
+        let online   = entry.map(|e| now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS).unwrap_or(false);
+        let metrics  = entry.and_then(|e| e.metrics.clone());
+        let wes      = metrics.as_ref().and_then(wes_for_payload);
+        let tok_s    = metrics.as_ref().and_then(|m| {
+            if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second }
+        });
+        let hostname = metrics.as_ref().and_then(|m| m.hostname.clone());
+        NodeSnap { node_id, hostname, online, metrics, wes, tok_s }
+    }).collect();
+
+    let online_count = snaps.iter().filter(|s| s.online).count();
+    let wes_vals: Vec<f32> = snaps.iter().filter_map(|s| if s.online { s.wes } else { None }).collect();
+    let avg_wes = if wes_vals.is_empty() { None } else {
+        Some((wes_vals.iter().sum::<f32>() / wes_vals.len() as f32 * 10.0).round() / 10.0)
+    };
+    let tok_vals: Vec<f32> = snaps.iter().filter_map(|s| if s.online { s.tok_s } else { None }).collect();
+    let fleet_tok_s = if tok_vals.is_empty() { None } else {
+        Some((tok_vals.iter().sum::<f32>() * 10.0).round() / 10.0)
+    };
+
+    // ── Pattern evaluation ────────────────────────────────────────────────────
+
+    let mut findings: Vec<V1InsightFinding> = Vec::new();
+
+    // Fleet offline — every node unreachable
+    if total_count > 0 && online_count == 0 {
+        findings.push(V1InsightFinding {
+            node_id:  "fleet".into(),
+            hostname: None,
+            severity: "high",
+            pattern:  "fleet_offline",
+            title:    "Fleet offline".into(),
+            detail:   format!("All {total_count} registered nodes are unreachable (last telemetry > 30s ago)."),
+            value:    None,
+            unit:     None,
+        });
+    }
+
+    for snap in &snaps {
+        // Node offline (partial outage)
+        if !snap.online && total_count > 1 {
+            findings.push(V1InsightFinding {
+                node_id:  snap.node_id.clone(),
+                hostname: snap.hostname.clone(),
+                severity: "moderate",
+                pattern:  "node_offline",
+                title:    format!("{} offline", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                detail:   "Node has not reported telemetry in the last 30 seconds.".into(),
+                value:    None,
+                unit:     None,
+            });
+            continue; // no metric-level findings for offline nodes
+        }
+
+        let Some(ref m) = snap.metrics else { continue };
+
+        // Thermal stress
+        match m.thermal_state.as_deref() {
+            Some("Critical") => findings.push(V1InsightFinding {
+                node_id:  snap.node_id.clone(),
+                hostname: snap.hostname.clone(),
+                severity: "high",
+                pattern:  "thermal_stress",
+                title:    format!("Critical thermal state on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                detail:   "Thermal state: Critical — WES penalised 2×. Throughput may be severely throttled.".into(),
+                value:    snap.wes,
+                unit:     Some("WES"),
+            }),
+            Some("Serious") => findings.push(V1InsightFinding {
+                node_id:  snap.node_id.clone(),
+                hostname: snap.hostname.clone(),
+                severity: "moderate",
+                pattern:  "thermal_stress",
+                title:    format!("Thermal stress on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                detail:   "Thermal state: Serious — WES penalised 1.75×. Consider redistributing load.".into(),
+                value:    snap.wes,
+                unit:     Some("WES"),
+            }),
+            _ => {}
+        }
+
+        // Memory pressure (Apple Silicon only)
+        if let Some(mem_pct) = m.memory_pressure_percent {
+            if mem_pct >= 90.0 {
+                findings.push(V1InsightFinding {
+                    node_id:  snap.node_id.clone(),
+                    hostname: snap.hostname.clone(),
+                    severity: "high",
+                    pattern:  "memory_pressure",
+                    title:    format!("High memory pressure on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                    detail:   format!("Memory pressure: {mem_pct:.0}% — swap thrashing likely. Throughput may degrade."),
+                    value:    Some(mem_pct),
+                    unit:     Some("%"),
+                });
+            } else if mem_pct >= 75.0 {
+                findings.push(V1InsightFinding {
+                    node_id:  snap.node_id.clone(),
+                    hostname: snap.hostname.clone(),
+                    severity: "moderate",
+                    pattern:  "memory_pressure",
+                    title:    format!("Elevated memory pressure on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                    detail:   format!("Memory pressure: {mem_pct:.0}% — monitor for swap activity."),
+                    value:    Some(mem_pct),
+                    unit:     Some("%"),
+                });
+            }
+        }
+
+        // Low throughput relative to fleet average (only meaningful with ≥2 online nodes)
+        if online_count >= 2 {
+            if let (Some(node_tok), Some(fleet_avg)) = (snap.tok_s, fleet_tok_s.map(|t| t / online_count as f32)) {
+                if fleet_avg > 5.0 && node_tok < fleet_avg * 0.40 {
+                    findings.push(V1InsightFinding {
+                        node_id:  snap.node_id.clone(),
+                        hostname: snap.hostname.clone(),
+                        severity: "low",
+                        pattern:  "low_throughput",
+                        title:    format!("Low throughput on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                        detail:   format!(
+                            "{:.1} tok/s vs fleet average {:.1} tok/s — node is underperforming.",
+                            node_tok, fleet_avg
+                        ),
+                        value:    Some(node_tok),
+                        unit:     Some("tok/s"),
+                    });
+                }
+            }
+        }
+
+        // WES well below fleet average (only when we have a fleet average to compare)
+        if online_count >= 2 {
+            if let (Some(node_wes), Some(fleet_avg_wes)) = (snap.wes, avg_wes) {
+                if fleet_avg_wes > 1.0 && node_wes < fleet_avg_wes * 0.40 {
+                    findings.push(V1InsightFinding {
+                        node_id:  snap.node_id.clone(),
+                        hostname: snap.hostname.clone(),
+                        severity: "low",
+                        pattern:  "wes_below_baseline",
+                        title:    format!("WES below fleet average on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                        detail:   format!(
+                            "WES {:.1} vs fleet average {:.1} — check thermal state and power headroom.",
+                            node_wes, fleet_avg_wes
+                        ),
+                        value:    Some(node_wes),
+                        unit:     Some("WES"),
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort: high → moderate → low, then alphabetically within severity
+    let sev_ord = |s: &str| match s { "high" => 0u8, "moderate" => 1, _ => 2 };
+    findings.sort_by(|a, b| {
+        sev_ord(a.severity).cmp(&sev_ord(b.severity))
+            .then_with(|| a.node_id.cmp(&b.node_id))
+    });
+
+    Json(V1InsightsResponse {
+        generated_at_ms: now,
+        fleet: V1InsightsFleet { online_count, total_count, avg_wes, fleet_tok_s },
+        findings,
+    }).into_response()
+}
+
 // ── Auth handlers ─────────────────────────────────────────────────────────────
 
 /// GET /api/auth/stream-token
@@ -3765,6 +4010,7 @@ async fn main() {
         .route("/api/v1/fleet/wes",      get(handle_v1_fleet_wes))
         .route("/api/v1/nodes/:id",      get(handle_v1_node))
         .route("/api/v1/route/best",     get(handle_v1_route_best))
+        .route("/api/v1/insights/latest", get(handle_v1_insights_latest))
         // ── Alerting (Phase 4A) ───────────────────────────────────────────────
         .route("/api/alerts/channels",          post(handle_create_channel))
         .route("/api/alerts/channels",          get(handle_list_channels))
@@ -3819,6 +4065,7 @@ async fn main() {
     println!("║  GET    /api/v1/fleet/wes                    ║");
     println!("║  GET    /api/v1/nodes/:id                    ║");
     println!("║  GET    /api/v1/route/best                   ║");
+    println!("║  GET    /api/v1/insights/latest              ║");
     println!("║  Listening on {addr:<30} ║");
     println!("╚══════════════════════════════════════════════╝");
 

@@ -6,6 +6,50 @@
 
 ---
 
+## March 19, 2026 — Sprint 5 + Sovereignty Copy Fix + isPaired cloud bug 🛰️
+
+**The Goal:** Fix the broken Sovereignty section in cloud mode, improve context-aware copy, and ship the `GET /api/v1/insights/latest` endpoint (Sprint 5).
+
+---
+
+### `src/components/TracesView.tsx` — Sovereignty section fixes ✅
+
+**Bug fix — `isPaired` derived incorrectly in cloud mode:**
+- `isPaired` was derived from `pairingInfo?.status === 'connected'`, where `pairingInfo` comes from `GET localhost:7700/api/pair/status` (the local agent's pairing handshake). In cloud mode at wicklee.dev, this fetch fails or returns unpaired, even when the user has 3 fleet nodes streaming live via SSE.
+- **Fix:** split derivation by context. Cockpit (localhost): `pairingInfo.status === 'connected'` (unchanged). Mission Control (cloud): `connectionState === 'connected' || connectionState === 'degraded'` from `useFleetStream()` — correct signal for live fleet presence.
+
+**Copy fix — three-branch Telemetry Destination card:**
+- **Cockpit (localhost):** "No outbound telemetry. All inference data stays on this machine." + "Transmitted to fleet" / "Never leaves this machine" — machine-centric, unchanged.
+- **Cloud + paired:** "Each node transmits only system metrics and WES scores. Inference content is processed on-device and never leaves the node." + "Each node transmits" / "Never leaves the node" — node-centric, viewer-agnostic.
+- **Cloud + no nodes:** "No nodes connected yet. Add a node to see its telemetry routing details here." + neutral gray `Radio` icon + "No nodes" badge. Removes the confusing "localhost:7700 / LOCAL ONLY" display for cloud users who haven't paired yet.
+
+---
+
+### `cloud/src/main.rs` — Sprint 5: `GET /api/v1/insights/latest` ✅
+
+New handler `handle_v1_insights_latest`. Six deterministic pattern rules evaluated against `AppState.metrics` (in-memory fleet state — no DuckDB, no LLM):
+
+| Pattern key | Trigger | Severity |
+|---|---|---|
+| `fleet_offline` | All nodes unreachable (>30s) | high |
+| `node_offline` | Single node missing, partial outage | moderate |
+| `thermal_stress` | `Critical` / `Serious` thermal state | high / moderate |
+| `memory_pressure` | mem pressure ≥90% / ≥75% | high / moderate |
+| `low_throughput` | Node tok/s <40% of fleet average (≥2 nodes) | low |
+| `wes_below_baseline` | Node WES <40% of fleet average (≥2 nodes) | low |
+
+Findings sorted high → moderate → low, then alphabetically by node_id within severity.
+
+Response shape: `{ generated_at_ms, fleet: { online_count, total_count, avg_wes, fleet_tok_s }, findings: [...] }`.
+
+Auth: `X-API-Key` (same as all v1 routes). Rate limits: same 60/600 req/min tiers.
+
+**Route registered:** `.route("/api/v1/insights/latest", get(handle_v1_insights_latest))` + startup banner updated.
+
+**`cargo check` passes cleanly.**
+
+---
+
 ## March 19, 2026 — Phase 4A: Observability Tab Panels + Sprint 4 "View source →" 🔬
 
 **The Goal:** Complete the Phase 4A Observability Tab additions from `docs/ROADMAP.md` —

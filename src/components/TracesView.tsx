@@ -41,7 +41,12 @@ interface TracesViewProps {
 const SovereigntySection: React.FC<{ pairingInfo: PairingInfo | null }> = ({ pairingInfo }) => {
   const { fleetEvents, connectionState } = useFleetStream();
 
-  const isPaired   = pairingInfo?.status === 'connected';
+  // In Cockpit mode (localhost), pairing state comes from the local agent's /api/pair/status.
+  // In Mission Control mode (cloud), the fleet is "connected" when the SSE stream is live —
+  // pairingInfo reflects the local agent pair handshake, which is irrelevant in this context.
+  const isPaired = isLocalHost
+    ? pairingInfo?.status === 'connected'
+    : connectionState === 'connected' || connectionState === 'degraded';
   const fleetUrl   = pairingInfo?.fleet_url ?? (isPaired ? 'wicklee.dev' : null);
   const nodeId     = pairingInfo?.node_id ?? null;
 
@@ -100,29 +105,41 @@ const SovereigntySection: React.FC<{ pairingInfo: PairingInfo | null }> = ({ pai
             <div className={`mt-0.5 w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
               isPaired
                 ? 'bg-indigo-500/10 border border-indigo-500/20'
-                : 'bg-green-500/10 border border-green-500/20'
+                : isLocalHost
+                  ? 'bg-green-500/10 border border-green-500/20'
+                  : 'bg-gray-800 border border-gray-700'
             }`}>
               {isPaired
                 ? <Globe className="w-4 h-4 text-indigo-400" />
-                : <Lock  className="w-4 h-4 text-green-400"  />}
+                : isLocalHost
+                  ? <Lock className="w-4 h-4 text-green-400" />
+                  : <Radio className="w-4 h-4 text-gray-500" />}
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-mono text-sm text-white">
-                  {isPaired ? (fleetUrl ?? 'wicklee.dev') : 'localhost:7700'}
+                  {isPaired
+                    ? (fleetUrl ?? 'wicklee.dev')
+                    : isLocalHost
+                      ? 'localhost:7700'
+                      : '—'}
                 </span>
                 <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest ${
                   isPaired
                     ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-400'
-                    : 'bg-green-500/10 border border-green-500/20 text-green-400'
+                    : isLocalHost
+                      ? 'bg-green-500/10 border border-green-500/20 text-green-400'
+                      : 'bg-gray-800 border border-gray-700 text-gray-500'
                 }`}>
-                  {isPaired ? 'Fleet connected' : 'Local only'}
+                  {isPaired ? 'Fleet connected' : isLocalHost ? 'Local only' : 'No nodes'}
                 </span>
               </div>
               <p className="text-xs text-gray-500 mt-1 leading-relaxed">
                 {isPaired
-                  ? 'System metrics and WES scores only — inference content never transmitted.'
-                  : 'No outbound telemetry. All data stays on this machine.'}
+                  ? 'Each node transmits only system metrics and WES scores. Inference content is processed on-device and never leaves the node.'
+                  : isLocalHost
+                    ? 'No outbound telemetry. All inference data stays on this machine.'
+                    : 'No nodes connected yet. Add a node to see its telemetry routing details here.'}
               </p>
               {isPaired && nodeId && (
                 <p className="font-mono text-[11px] text-gray-600 mt-1.5">{nodeId}</p>
@@ -134,7 +151,7 @@ const SovereigntySection: React.FC<{ pairingInfo: PairingInfo | null }> = ({ pai
           <div className="border-t border-gray-800 pt-4 space-y-3">
             <div>
               <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">
-                Transmitted to fleet
+                {isLocalHost ? 'Transmitted to fleet' : 'Each node transmits'}
               </p>
               <div className="space-y-1.5">
                 {[
@@ -151,7 +168,7 @@ const SovereigntySection: React.FC<{ pairingInfo: PairingInfo | null }> = ({ pai
             </div>
             <div>
               <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">
-                Never leaves this machine
+                {isLocalHost ? 'Never leaves this machine' : 'Never leaves the node'}
               </p>
               <div className="space-y-1.5">
                 {[
