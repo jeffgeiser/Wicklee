@@ -305,7 +305,7 @@
 - [ ] **Fleet Pulse (live) section:** Nodes online/total · total fleet tok/s · top WES node + score · fleet idle cost if applicable.
 - [ ] **Head-to-head comparison** (when ≥ 2 nodes with stable hardware IDs): "WK-99E9 is 12× more efficient than WK-C133 for this model class." Anchored to matching model size class from history — apples to apples. Only shown when both nodes have run the same model class within the window.
 - [ ] **Top Finding + Recommendation** — Highest-confidence active pattern displayed with its `recommendation` string and `action_id` as a copy-able curl command.
-- [ ] **"View source →" links** — each finding navigates directly to the exact DuckDB graph (WES Trend, Metrics History, or Memory chart) that produced the finding, pre-scoped to the triggering time window. Reinforces the "Silicon Truth" principle: every recommendation is one click from its evidence. Requires Phase 4A Raw Metric History panel (see Observability Tab additions below).
+- [x] **"View source →" links** — "View raw metric history →" button in the Top Finding section navigates to `DashboardTab.TRACES` via new `onNavigateToObservability` prop on `AIInsights`. Cockpit-only (isLocalHost). Requires Phase 4A Raw Metric History panel ✅ (shipped this session).
 
 ---
 
@@ -313,6 +313,14 @@
 
 > Deterministic JSON. Always returns something meaningful. No LLM. Agents get
 > a machine-readable directive; humans get the same data rendered in the Briefing Card.
+>
+> **Architecture note — who calls this endpoint:**
+> The Wicklee dashboard does **not** call this endpoint. The dashboard computes findings
+> client-side via `patternEngine.ts` (same deterministic logic, browser-local). This
+> endpoint is for **external consumers only**: automation scripts, CI/CD pipelines,
+> orchestration agents, MCP tool invocations, cron jobs, and the `/api/v1/insights/latest`
+> query in the Agent API Developer Portal. Both consumers run the same logic — the API
+> endpoint is the machine projection of what the browser already computes.
 
 - [ ] **`action_id` as Primary Key for automation** — the `action_id` field is not a UI label; it is the machine directive. An orchestration agent calling this endpoint receives everything it needs to act without a follow-up lookup: the `action_id` tells it *what* to do; `best_online_node` tells it *where* to do it. No second API call required.
 - [ ] **Endpoint on cloud backend** — returns structured fleet briefing:
@@ -359,8 +367,8 @@
 > "one click from recommendation to raw data" chain started by the Morning Briefing Card.
 > See `docs/SPEC.md → Observability Tab Specification` for section definitions.
 
-- [ ] **Raw Metric History panel** — DuckDB time series charts in the Observability tab. WES Trend, tok/s, thermal state, and power draw — per node, with 1H/24H/7D/30D/90D time-range selectors (range gated by tier). Pre-scopable by time window from Briefing Card "View source →" links. Evidence layer only — no pattern scoring, no recommendations.
-- [ ] **Agent Health panel** — Harvester status, SSE connection health, DuckDB write path status, last successful write timestamp. Visible in Observability tab. Answers "is the data pipeline working?" without leaving the tab. Complements the Sovereignty Audit section already present.
+- [x] **Raw Metric History panel** — `MetricHistoryPanel` in `TracesView.tsx`. Fetches `GET /api/history?node_id=X&from=X&to=X` from the agent DuckDB store. Four mini area charts (Recharts): tok/s (tps or tps_avg), power draw (W), GPU util %, CPU usage %. Time window selector: 1h / 6h / 24h. Auto resolution (raw → 1min → 1hr). Resolution badge + sample count displayed. Error state for musl agents. Cockpit (localhost) only.
+- [x] **Agent Health panel** — `AgentHealthPanel` in `TracesView.tsx`. Three health indicators: Collection (SSE/WS connection state dot + transport badge), DuckDB Store (lightweight /api/history probe on mount → ok/unavailable), Last Frame (relative time from `lastTelemetryMs`). Harvester manifest table: four active collection threads + cadences. Cockpit (localhost) only.
 
 ---
 

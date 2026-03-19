@@ -6,6 +6,110 @@
 
 ---
 
+## March 19, 2026 — Phase 4A: Observability Tab Panels + Sprint 4 "View source →" 🔬
+
+**The Goal:** Complete the Phase 4A Observability Tab additions from `docs/ROADMAP.md` —
+Raw Metric History panel and Agent Health panel. Wire the "View source →" link that closes
+Sprint 4's final item: one click from a pattern finding to its raw evidence.
+
+---
+
+### `src/components/TracesView.tsx` — Two new Phase 4A sections ✅
+
+**`MetricHistoryPanel` (Cockpit / localhost only):**
+- Fetches `GET /api/history?node_id=X&from=X&to=X` from the local agent DuckDB store
+- `nodeId` sourced from `pairingInfo.node_id` (always populated — present before pairing)
+- Time window selector: **1h / 6h / 24h** with manual refresh button
+- Auto resolution: agent picks raw (1 Hz) → 1-min agg → 1-hr agg based on window width
+- Four `MiniChart` area charts (Recharts `AreaChart` + gradient fill):
+  - **Tok/s** — `tps` (raw tier) or `tps_avg` (aggregate tiers), indigo
+  - **Power Draw** — `gpu_power_w` (Apple Silicon cpu_power + GPU, or NVIDIA board_power), amber
+  - **GPU Util %** — `gpu_util_pct`, cyan
+  - **CPU Usage %** — `cpu_usage_pct`, blue
+- Resolution badge + per-chart sample count
+- Error state: amber banner for musl targets where DuckDB is compiled out
+- Empty state: prompt to run inference ("history collects at 1 Hz")
+
+**`AgentHealthPanel` (Cockpit / localhost only):**
+- Three indicator tiles:
+  - **Collection** — `connectionState` dot (green pulse/amber/red) + transport badge (`sse`)
+  - **DuckDB Store** — lightweight `/api/history` probe on mount (30s window) → ok / unavailable. "musl target — DuckDB disabled" hint on failure.
+  - **Last Frame** — `lastTelemetryMs` relative age: "just now" / "Ns ago" / "Nm ago"
+- Harvester manifest: lists all 4 active collection threads + cadences (WS 100ms · SSE 1Hz · history 1Hz DuckDB)
+
+**Main component refactored:** `TracesView` is now a function component (not arrow-const
+expression) so `nodeId` can be derived from `pairingInfo.node_id` before rendering.
+Phase 4A panels are conditionally rendered: `{isLocalHost && nodeId && <Panel />}`.
+
+---
+
+### `src/components/AIInsights.tsx` — "View source →" link ✅
+
+New optional prop: `onNavigateToObservability?: () => void`.
+
+"View raw metric history →" button (Activity icon) added to the Top Finding card's
+action_id / curl snippet block. Visible only in Cockpit mode (`isLocalHost`) when
+the prop is provided. Clicking navigates to the Observability tab where the Raw Metric
+History panel now lives — completing the "Silicon Truth" chain: pattern finding →
+recommendation → raw evidence.
+
+---
+
+### `src/App.tsx` — Navigation wiring ✅
+
+```tsx
+<AIInsights
+  ...
+  onNavigateToObservability={() => setActiveTab(DashboardTab.TRACES)}
+/>
+```
+
+---
+
+### `src/types.ts` — History types added ✅
+
+```typescript
+interface HistorySample {
+  ts_ms, model?, tps?, tps_avg?, tps_max?, tps_p95?,
+  cpu_usage_pct?, gpu_util_pct?, gpu_power_w?, vram_used_mb?, thermal_state?
+}
+interface HistoryResponse {
+  node_id, resolution: 'raw' | '1min' | '1hr', from_ms, to_ms, samples[]
+}
+```
+Mirrors `store::HistorySample` and `store::HistoryResponse` in `agent/src/store.rs`.
+
+---
+
+### Architecture note — `/api/v1/insights/latest` and the dashboard
+
+The Wicklee dashboard computes pattern findings **client-side** via `patternEngine.ts`.
+It does **not** call `/api/v1/insights/latest` (Sprint 5). That endpoint is for
+**external consumers only**: automation scripts, CI/CD pipelines, MCP tools, and cron
+jobs that need a machine-readable directive without running a browser. Both the dashboard
+and the API run the same deterministic logic — the API is the external projection, not
+the source of truth for the dashboard.
+
+---
+
+### What's Next
+
+**Sprint 4 (Morning Briefing Card — remaining items):**
+- Fleet Pulse section: nodes online/total · fleet tok/s · top WES node · fleet idle cost
+- Head-to-head comparison (≥ 2 nodes, same model size class)
+- Top Finding + Recommendation (action_id as curl command in InsightsBriefingCard)
+
+**Sprint 5 — Cloud Rust backend:**
+- `GET /api/v1/insights/latest` — deterministic JSON, all tiers, no LLM
+- External consumer endpoint: CI/CD, MCP, orchestration agents
+
+**Sprint 6:**
+- `POST localhost:7700/api/insights/dismiss` → `accepted_states` table
+- Permanent accept option in ObservationCard
+- Dismissal Log section in Observability tab
+
+---
+
 ## March 18, 2026 — Pattern Engine Sprint 3: Prescriptive Recommendations + Patterns D & E 🧠
 
 **The Goal:** Give every Pattern Engine finding a directed action — not just "something looks wrong" but "here's exactly what to do, and which node to do it on." Implements Sprint 3 from **Phase 4A** of `docs/ROADMAP.md`.
