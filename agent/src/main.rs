@@ -213,6 +213,11 @@ struct MetricsPayload {
     /// WES formula version. 1 = original (Serious=2.0). 2 = refined (Serious=1.75, NVML bitmask).
     /// Increment here when the formula changes; version-stamps all benchmarks in DuckDB.
     wes_version:    u8,
+    /// Swap device write rate in MB/s.
+    /// Linux: /proc/vmstat pswpout delta. macOS: vm_stat Swapouts delta.
+    /// Absent (None) on Windows and agents that lack the swap harvester.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    swap_write_mb_s: Option<f32>,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -629,6 +634,118 @@ fn start_rapl_harvester() -> Arc<Mutex<Option<f32>>> {
     }
 
     shared
+}
+
+// ── Swap Write Rate Harvester ─────────────────────────────────────────────────
+//
+// Samples the OS swap-out page counter once every 2 s and converts the delta
+// to MB/s.  Zero-privilege — reads kernel counters directly on Linux;
+// spawns a single `vm_stat` on macOS.
+//
+// Platform sources:
+//   Linux:   /proc/vmstat → pswpout (cumulative swap-out pages, 4096 bytes each)
+//   macOS:   vm_stat      → Swapouts (cumulative, page size from header)
+//   Windows: None (WMI-based implementation deferred to Phase 6)
+//
+// Newtype wrapper prevents Axum extension collision with rapl_metrics which
+// is the same inner type (Arc<Mutex<Option<f32>>>).
+
+#[derive(Clone)]
+struct SwapMetrics(Arc<Mutex<Option<f32>>>);
+
+impl SwapMetrics {
+    fn read(&self) -> Option<f32> {
+        self.0.lock().map(|g| *g).unwrap_or(None)
+    }
+}
+
+fn start_swap_harvester() -> SwapMetrics {
+    let inner  = Arc::new(Mutex::new(None::<f32>));
+    let shared = SwapMetrics(Arc::clone(&inner));
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        tokio::spawn(async move {
+            loop {
+                let before = read_swap_pages_out().await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let after  = read_swap_pages_out().await;
+
+                if let (Some((b_pages, b_ps)), Some((a_pages, a_ps))) = (before, after) {
+                    if a_pages >= b_pages {
+                        let page_size = ((b_ps + a_ps) / 2) as f64;
+                        // (delta_pages × page_size_bytes) / 1_000_000 bytes/MB / 2 seconds
+                        let mb_s = ((a_pages - b_pages) as f64 * page_size / 1_000_000.0 / 2.0) as f32;
+                        if let Ok(mut guard) = inner.lock() {
+                            *guard = Some(mb_s);
+                        }
+                    }
+                }
+                // No additional sleep — the 2 s read gap above is the sampling interval.
+            }
+        });
+    }
+
+    shared
+}
+
+/// Returns (cumulative_swap_out_pages, page_size_bytes).
+/// Returns None when the platform counter is unavailable or the read fails.
+#[cfg(target_os = "linux")]
+async fn read_swap_pages_out() -> Option<(u64, u64)> {
+    // Linux page size is always 4096 on x86_64 and almost always on aarch64.
+    // /proc/vmstat pswpout counts pages swapped out since boot.
+    let content = std::fs::read_to_string("/proc/vmstat").ok()?;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("pswpout ") {
+            let pages: u64 = rest.trim().parse().ok()?;
+            return Some((pages, 4096));
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+async fn read_swap_pages_out() -> Option<(u64, u64)> {
+    let out = tokio::process::Command::new("vm_stat")
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() { return None; }
+    parse_vm_stat_swapouts(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse vm_stat output for the Swapouts counter and page size.
+///
+/// Example header: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+/// Example data line: "Swapouts:                               104."
+#[cfg(target_os = "macos")]
+fn parse_vm_stat_swapouts(text: &str) -> Option<(u64, u64)> {
+    let mut page_size: u64 = 4096;   // default; overridden by header
+    let mut swapouts:  Option<u64> = None;
+
+    for line in text.lines() {
+        // Parse page size from the header line.
+        if line.starts_with("Mach Virtual Memory Statistics:") {
+            if let Some(pos) = line.find("page size of ") {
+                let rest = &line[pos + "page size of ".len()..];
+                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(v) = num.parse::<u64>() { page_size = v; }
+            }
+        }
+        // Parse the Swapouts counter (trailing period stripped).
+        if let Some(rest) = line.strip_prefix("Swapouts:") {
+            let s = rest.trim().trim_end_matches('.');
+            swapouts = s.parse::<u64>().ok();
+        }
+    }
+
+    swapouts.map(|s| (s, page_size))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+async fn read_swap_pages_out() -> Option<(u64, u64)> {
+    None
 }
 
 // ── Linux thermal state ────────────────────────────────────────────────────────
@@ -2839,6 +2956,7 @@ fn start_metrics_broadcaster(
     vllm_metrics:          Arc<Mutex<VllmMetrics>>,
     live_events:           Arc<Mutex<Vec<LiveActivityEvent>>>,
     wes_metrics:           Arc<Mutex<WesMetrics>>,
+    swap_metrics:          SwapMetrics,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -2877,6 +2995,7 @@ fn start_metrics_broadcaster(
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let swap_mb_s     = swap_metrics.read();
 
             // Drain any pending live-activity events (normally empty, non-zero during update).
             let pending_events: Vec<LiveActivityEvent> = live_events
@@ -2936,6 +3055,7 @@ fn start_metrics_broadcaster(
                 thermal_source: wes.thermal_source,
                 sample_count:   if wes.sample_count > 0 { Some(wes.sample_count) } else { None },
                 wes_version:    2,
+                swap_write_mb_s: swap_mb_s,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -3225,6 +3345,7 @@ async fn handle_metrics(
     axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<LinuxThermalResult>>>>,
     axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
     axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
+    axum::extract::Extension(swap_metrics):          axum::extract::Extension<SwapMetrics>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -3261,6 +3382,7 @@ async fn handle_metrics(
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let swap_mb_s     = swap_metrics.read();
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -3315,6 +3437,7 @@ async fn handle_metrics(
                 thermal_source: wes.thermal_source,
                 sample_count:   if wes.sample_count > 0 { Some(wes.sample_count) } else { None },
                 wes_version:    2,
+                swap_write_mb_s: swap_mb_s,
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -3762,6 +3885,8 @@ async fn main() {
         Arc::clone(&linux_thermal_metrics),
     );
 
+    let swap_metrics = start_swap_harvester();
+
     // Shared event queue for drain-on-send live activity entries (update notifications etc.).
     let live_events: Arc<Mutex<Vec<LiveActivityEvent>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -3774,6 +3899,7 @@ async fn main() {
         Arc::clone(&vllm_metrics),
         Arc::clone(&live_events),
         Arc::clone(&wes_metrics),
+        swap_metrics.clone(),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -3894,6 +4020,7 @@ async fn main() {
          .layer(axum::extract::Extension(linux_thermal_metrics))
          .layer(axum::extract::Extension(vllm_metrics))
          .layer(axum::extract::Extension(wes_metrics))
+         .layer(axum::extract::Extension(swap_metrics))
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(cors)
     };

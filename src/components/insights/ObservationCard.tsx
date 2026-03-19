@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves, ListChecks } from 'lucide-react';
+import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves, ListChecks, HardDrive } from 'lucide-react';
 import type { DetectedInsight, ActionId } from '../../lib/patternEngine';
 import { appendRecentEvent } from '../../lib/insightLifecycle';
 
@@ -96,6 +96,7 @@ function patternIcon(patternId: string) {
     case 'bandwidth_saturation': return <Gauge        className="w-4 h-4 text-emerald-400" />;
     case 'power_jitter':         return <Waves        className="w-4 h-4 text-orange-400"  />;
     case 'efficiency_drag':      return <TrendingDown className="w-4 h-4 text-yellow-400"  />;
+    case 'swap_io_pressure':     return <HardDrive    className="w-4 h-4 text-rose-400"    />;
     default:                     return <Server       className="w-4 h-4 text-gray-400"    />;
   }
 }
@@ -111,6 +112,7 @@ function hookColor(patternId: string): string {
     case 'bandwidth_saturation': return 'text-emerald-400';
     case 'power_jitter':         return 'text-orange-400';
     case 'efficiency_drag':      return 'text-yellow-400';
+    case 'swap_io_pressure':     return 'text-rose-400';
     default:                     return 'text-indigo-400';
   }
 }
