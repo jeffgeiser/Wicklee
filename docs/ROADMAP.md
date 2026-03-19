@@ -420,7 +420,7 @@
 
 | Metric | Source | Privilege | Platform | Phase | Pattern trigger |
 |---|---|---|---|---|---|
-| **Power jitter** (stddev of watts, 10s window) | 1Hz power_draw (existing) | None | All | 4B | New Pattern H: PSU/VRM stress, thundering-herd load |
+| **Power jitter** (stddev of watts, 10s window) | 1Hz power_draw (existing) | None | All | ✅ shipped | Pattern H: PSU/VRM stress, thundering-herd load |
 | **SSD Swap I/O** (swap write MB/s during inference) | `/proc/diskstats` · `vm_stat` · WMI | None | All | 4B | Pairs with Pattern F (Memory Pressure); explains "stuttering" |
 | **PCIe lane width** (current vs max, e.g. x4 vs x16) | NVML | None | NVIDIA | 4B | New Pattern: "slow GPU" from physical seating/bus fault |
 | **Clock frequency drift** (current vs rated, graphics + memory) | NVML | None | NVIDIA | 4B | Clock penalty in WES; catches voltage/power throttle not covered by thermal state |

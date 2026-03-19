@@ -39,7 +39,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   History, ChevronDown, Thermometer, Zap, TrendingDown, Cpu,
   BarChart2, MemoryStick, Server, CheckCircle, X, Clock,
-  AlertTriangle, WifiOff, Copy, Check, Activity, Gauge,
+  AlertTriangle, WifiOff, Copy, Check, Activity, Gauge, Waves,
 } from 'lucide-react';
 import {
   readRecentEvents,
@@ -75,6 +75,7 @@ function patternIcon(patternId: string, cls = 'w-3.5 h-3.5') {
     case 'fleet_load_imbalance': return <BarChart2    className={`${cls} text-blue-400`}   />;
     case 'memory_trajectory':    return <MemoryStick  className={`${cls} text-cyan-400`}    />;
     case 'bandwidth_saturation': return <Gauge        className={`${cls} text-emerald-400`} />;
+    case 'power_jitter':         return <Waves        className={`${cls} text-orange-400`}  />;
     default:                     return <Server       className={`${cls} text-gray-400`}    />;
   }
 }
@@ -88,6 +89,7 @@ function patternColor(patternId: string): string {
     case 'fleet_load_imbalance': return 'text-blue-400';
     case 'memory_trajectory':    return 'text-cyan-400';
     case 'bandwidth_saturation': return 'text-emerald-400';
+    case 'power_jitter':         return 'text-orange-400';
     default:                     return 'text-indigo-400';
   }
 }

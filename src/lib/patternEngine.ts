@@ -150,6 +150,13 @@ function mean(values: number[]): number {
   return values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
 }
 
+function stddev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const avg      = mean(values);
+  const variance = values.reduce((sum, v) => sum + (v - avg) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
 function nonNull<T>(arr: (T | null | undefined)[]): T[] {
   return arr.filter((v): v is T => v != null);
 }
@@ -1022,6 +1029,122 @@ function evaluatePatternG(
   };
 }
 
+// ── Pattern H: Power Jitter ───────────────────────────────────────────────────
+//
+// What: Power draw is highly variable across inference windows — the coefficient
+// of variation (stddev / mean) of watts exceeds 20% sustained for 5 minutes.
+//
+// Two root causes surfaced by the same metric:
+//   1. Thundering Herd: the load balancer delivers requests in bursts, so the
+//      GPU cycles between full saturation and near-idle. Identified when tok/s
+//      variance is also elevated. Fix: smooth dispatch / reduce batch size.
+//   2. PSU / VRM Stress: at sustained high power, voltage ripple under dynamic
+//      load is a leading indicator of power supply degradation. PSUs and VRMs
+//      wear faster when the load swings sharply than under constant draw.
+//
+// Differentiator vs vLLM / Ollama built-in metrics:
+//   Standard tools track average power. Only Wicklee tracks "cleanliness"
+//   of power — the standard deviation over inference windows.
+//
+// Note: uses 30s MetricSample history (not raw 1 Hz). Captures inter-window
+// variance (batch-level load swings), not intra-window spikes. Still a strong
+// signal — a GPU cycling in 30-second on/off pulses is actively stressing the PSU.
+//
+// Trigger (sustained 5 min):
+//   - mean(watts) > 30W              — meaningful inference load, not idle drift
+//   - tok_s > 0                      — inference is active
+//   - stddev(watts) / mean(watts) > 0.20 — coefficient of variation
+//
+// Community tier: hardware-agnostic, zero-privilege, immediately actionable.
+
+const PATTERN_H_ID            = 'power_jitter';
+const PATTERN_H_MIN_WINDOW_MS = 5 * 60 * 1000;
+const PATTERN_H_MIN_SAMPLES   = Math.ceil(PATTERN_H_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 10
+const PATTERN_H_MIN_WATTS     = 30;    // below this = idle variance, not inference stress
+const PATTERN_H_COV_THRESHOLD = 0.20;  // coefficient of variation threshold
+
+function evaluatePatternH(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_H_MIN_SAMPLES) return null;
+
+  const recent = history.slice(-PATTERN_H_MIN_SAMPLES);
+
+  // Need dense watts coverage
+  const wattsSamples = nonNull(recent.map(s => s.watts));
+  if (wattsSamples.length < Math.ceil(PATTERN_H_MIN_SAMPLES * 0.7)) return null;
+
+  const avgWatts = mean(wattsSamples);
+  if (avgWatts < PATTERN_H_MIN_WATTS) return null;
+
+  // Inference must be producing tokens — not idle variance
+  const tokSSamples = nonNull(recent.map(s => s.tok_s));
+  const avgTokS     = tokSSamples.length > 0 ? mean(tokSSamples) : 0;
+  if (avgTokS < 0.5) return null;
+
+  // Core condition: high coefficient of variation in power
+  const sd  = stddev(wattsSamples);
+  const cov = sd / avgWatts;
+  if (cov < PATTERN_H_COV_THRESHOLD) return null;
+
+  const observedMs = recent.length * SAMPLE_INTERVAL_MS;
+  const ratio      = Math.min(observedMs / PATTERN_H_MIN_WINDOW_MS, 1);
+
+  // Thundering herd indicator: tok/s variance elevated alongside power variance
+  const tokSCov          = tokSSamples.length >= 3 ? stddev(tokSSamples) / (mean(tokSSamples) || 1) : 0;
+  const isThunderingHerd = tokSCov > 0.25;
+
+  const recommendation = isThunderingHerd
+    ? `Power variance (${(cov * 100).toFixed(0)}% CoV) is coupled with throughput variance — ` +
+      `consistent with thundering herd load. Reduce concurrent request batch size or introduce ` +
+      `a request queue with smoothed dispatch to stabilize power draw and reduce PSU/VRM stress.`
+    : `Power draw variance (${(cov * 100).toFixed(0)}% CoV at ${avgWatts.toFixed(0)}W average) ` +
+      `indicates the GPU is cycling between saturation and near-idle. Check load balancer dispatch ` +
+      `pattern for bursty traffic. At ${avgWatts.toFixed(0)}W average, sustained dynamic load ` +
+      `swing accelerates PSU/VRM wear — verify supply headroom if this persists.`;
+
+  return {
+    patternId:       PATTERN_H_ID,
+    nodeId,
+    hostname,
+    title:           'Power Jitter',
+    hook:            `±${sd.toFixed(0)}W · ${(cov * 100).toFixed(0)}% CoV${isThunderingHerd ? ' · thundering herd' : ''}`,
+    body:            `${hostname}'s power draw has a ${(cov * 100).toFixed(0)}% coefficient of ` +
+                     `variation (±${sd.toFixed(0)}W around ${avgWatts.toFixed(0)}W average) over ` +
+                     `the last ${Math.round(observedMs / 60000)} min. ` +
+                     `${isThunderingHerd
+                       ? 'Throughput variance is also elevated — the GPU is cycling between ' +
+                         'full saturation and near-idle in sync with bursty request batches. '
+                       : ''}` +
+                     `Stable inference has predictable power draw. High variance is a leading ` +
+                     `indicator of PSU/VRM stress — power supplies degrade faster under dynamic ` +
+                     `load swings than under constant draw, even at the same average wattage.`,
+    recommendation,
+    action_id:       'reduce_batch_size',
+    requiredMs:      PATTERN_H_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'community',
+    actions: [
+      {
+        label:    'Check live power draw',
+        copyText: `curl http://localhost:7700/api/health | jq '{cpu_w:.cpu_power_w,nvidia_w:.nvidia_power_draw_w}'`,
+      },
+      {
+        label:    'Check loaded models',
+        copyText: `curl http://localhost:11434/api/ps | jq '.models[] | {model:.name,size_vram:.size_vram}'`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,    // Pattern H: local action — load smoothing, no rerouting
+    best_node_hostname: null,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -1078,6 +1201,9 @@ export function evaluatePatterns(
 
   const g = evaluatePatternG(nodeId, hostname, history, fleetContext, now);
   if (g) results.push(g);
+
+  const h = evaluatePatternH(nodeId, hostname, history, now);
+  if (h) results.push(h);
 
   return results;
 }
