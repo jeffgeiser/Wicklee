@@ -65,14 +65,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   }, []);
 
   const items = [
-    { id: DashboardTab.OVERVIEW, icon: LayoutGrid, label: isLocalMode ? 'Node Intelligence' : 'Intelligence', show: true },
-    { id: DashboardTab.NODES, icon: Server, label: 'Management', show: true },
-    { id: DashboardTab.TRACES, icon: Activity, label: 'Observability', show: true },
-    { id: DashboardTab.SCAFFOLDING, icon: Terminal, label: 'Scaffolding', show: currentUser.isPro && permissions.canViewScaffolding },
-    { id: DashboardTab.AI_INSIGHTS, icon: Cpu, label: 'Insights', show: permissions.canRunAIAnalysis },
-    { id: DashboardTab.AI_PROVIDERS, icon: Key, label: 'AI Key Vault', show: currentUser.isPro && !isLocalMode },
-    { id: DashboardTab.TEAM, icon: Users, label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
-    // TODO Phase 5: Sustainability/Compliance tab — carbon footprint, sovereignty audit, power efficiency trend
+    { id: DashboardTab.OVERVIEW,     icon: LayoutGrid, label: isLocalMode ? 'Node Intelligence' : 'Intelligence', show: true },
+    { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
+    { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
+    { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },
+    { id: DashboardTab.SCAFFOLDING,  icon: Terminal,   label: 'Scaffolding',     show: currentUser.isPro && permissions.canViewScaffolding },
+    { id: DashboardTab.AI_PROVIDERS, icon: Key,        label: 'AI Key Vault',    show: currentUser.isPro && !isLocalMode },
+    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
   ];
 
   return (
@@ -156,7 +155,17 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                   Settings
                 </button>
                 <button
-                  onClick={() => { onNavigate?.('/docs'); setIsAvatarMenuOpen(false); }}
+                  onClick={() => {
+                    // In localhost (agent) mode, always open the canonical cloud docs
+                    // in a new tab — users see the latest published version, not the
+                    // docs embedded in whichever binary version they have installed.
+                    if (isLocalHost) {
+                      window.open('https://wicklee.dev/docs', '_blank', 'noopener,noreferrer');
+                    } else {
+                      onNavigate?.('/docs');
+                    }
+                    setIsAvatarMenuOpen(false);
+                  }}
                   className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                 >
                   <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />

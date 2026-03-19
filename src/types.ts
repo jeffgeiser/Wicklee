@@ -170,11 +170,34 @@ export interface FleetEvent {
     | 'model_eviction_predicted'
     | 'keep_warm_taken'
     | 'thermal_degradation_confirmed'
-    | 'fit_score_changed';
+    | 'fit_score_changed'
+    // ── Pattern engine lifecycle events (Sprint 4) ─────────────────────────
+    /** Pattern crossed moderate/high confidence — suppressed for ONSET_SUPPRESSION_MS (15m). */
+    | 'pattern_onset'
+    /** Pattern absent for OBS_HOLD_MS (10m) — hardware stress confirmed resolved. */
+    | 'pattern_resolved'
+    /** Operator dismissed the card (1h resurface). */
+    | 'pattern_dismissed'
+    // ── Sprint 6 ──────────────────────────────────────────────────────────
+    /** Operator clicked "Never show again" — writes to metrics.db audit trail. */
+    | 'pattern_dismissed_permanent';
   nodeId: string;
   hostname?: string;
   /** Human-readable transition detail, e.g. "Normal → Serious" or "phi3:mini → llama3:8b" */
   detail?: string;
+  // ── Pattern-specific payload (only present on pattern_* event types) ─────
+  /** Stable pattern identifier, e.g. 'thermal_drain'. Matches DetectedInsight.patternId. */
+  patternId?:   string;
+  /** Machine-readable action classification — same value as DetectedInsight.action_id. */
+  action_id?:   string;
+  /** The hook string at the time of the event, e.g. "-4.2 tok/s (31% below Normal)". */
+  hook?:        string;
+  /**
+   * WES score captured at the exact moment pattern_onset fires.
+   * Null when WES is unavailable. Used by InsightsBriefingCard to show
+   * "Efficiency lost: 181.5 → 142.0" without re-calculation.
+   */
+  wes_at_onset?: number | null;
 }
 
 export interface TraceRecord {

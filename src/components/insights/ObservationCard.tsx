@@ -12,8 +12,9 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle } from 'lucide-react';
-import type { DetectedInsight } from '../../lib/patternEngine';
+import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock } from 'lucide-react';
+import type { DetectedInsight, ActionId } from '../../lib/patternEngine';
+import { appendRecentEvent } from '../../lib/insightLifecycle';
 
 // ── Dismiss helpers ───────────────────────────────────────────────────────────
 
@@ -43,25 +44,66 @@ function writeDismissed(patternId: string, nodeId: string): void {
   } catch { /* storage unavailable — degrade gracefully */ }
 }
 
+// ── ActionId badge ────────────────────────────────────────────────────────────
+
+interface ActionBadgeConfig {
+  label: string;
+  icon:  React.ReactNode;
+  cls:   string;
+}
+
+function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
+  switch (actionId) {
+    case 'rebalance_workload':
+      return { label: 'Rebalance Workload', icon: <BarChart2 className="w-2.5 h-2.5" />, cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' };
+    case 'evict_idle_models':
+      return { label: 'Evict Idle Models',  icon: <Cpu       className="w-2.5 h-2.5" />, cls: 'text-amber-400  bg-amber-500/10  border-amber-500/20'  };
+    case 'reduce_batch_size':
+      return { label: 'Reduce Batch Size',  icon: <BarChart2 className="w-2.5 h-2.5" />, cls: 'text-cyan-400   bg-cyan-500/10   border-cyan-500/20'   };
+    case 'check_thermal_zone':
+      return { label: 'Check Thermal Zone', icon: <Wind      className="w-2.5 h-2.5" />, cls: 'text-red-400    bg-red-500/10    border-red-500/20'    };
+    case 'investigate_phantom':
+      return { label: 'Investigate Phantom',icon: <Search    className="w-2.5 h-2.5" />, cls: 'text-violet-400 bg-violet-500/10 border-violet-500/20' };
+    case 'schedule_offpeak':
+      return { label: 'Schedule Off-Peak',  icon: <Clock     className="w-2.5 h-2.5" />, cls: 'text-blue-400   bg-blue-500/10   border-blue-500/20'   };
+    default:
+      return { label: 'Action Required',    icon: <Server    className="w-2.5 h-2.5" />, cls: 'text-gray-400   bg-gray-500/10   border-gray-500/20'   };
+  }
+}
+
+const ActionIdBadge: React.FC<{ actionId: ActionId }> = ({ actionId }) => {
+  const cfg = actionBadgeConfig(actionId);
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[9px] font-semibold uppercase tracking-wider ${cfg.cls}`}>
+      {cfg.icon}
+      {cfg.label}
+    </span>
+  );
+};
+
 // ── Icon + colour mapping by patternId ───────────────────────────────────────
 
 function patternIcon(patternId: string) {
   switch (patternId) {
-    case 'thermal_drain':      return <Thermometer  className="w-4 h-4 text-amber-400"  />;
-    case 'phantom_load':       return <Zap          className="w-4 h-4 text-violet-400" />;
-    case 'wes_velocity_drop':  return <TrendingDown className="w-4 h-4 text-indigo-400" />;
-    case 'memory_trajectory':  return <MemoryStick  className="w-4 h-4 text-cyan-400"   />;
-    default:                   return <Server       className="w-4 h-4 text-gray-400"   />;
+    case 'thermal_drain':        return <Thermometer  className="w-4 h-4 text-amber-400"  />;
+    case 'phantom_load':         return <Zap          className="w-4 h-4 text-violet-400" />;
+    case 'wes_velocity_drop':    return <TrendingDown className="w-4 h-4 text-indigo-400" />;
+    case 'power_gpu_decoupling': return <Cpu          className="w-4 h-4 text-cyan-400"   />;
+    case 'fleet_load_imbalance': return <BarChart2    className="w-4 h-4 text-blue-400"   />;
+    case 'memory_trajectory':    return <MemoryStick  className="w-4 h-4 text-cyan-400"   />;
+    default:                     return <Server       className="w-4 h-4 text-gray-400"   />;
   }
 }
 
 function hookColor(patternId: string): string {
   switch (patternId) {
-    case 'thermal_drain':      return 'text-amber-400';
-    case 'phantom_load':       return 'text-violet-400';
-    case 'wes_velocity_drop':  return 'text-indigo-400';
-    case 'memory_trajectory':  return 'text-cyan-400';
-    default:                   return 'text-indigo-400';
+    case 'thermal_drain':        return 'text-amber-400';
+    case 'phantom_load':         return 'text-violet-400';
+    case 'wes_velocity_drop':    return 'text-indigo-400';
+    case 'power_gpu_decoupling': return 'text-cyan-400';
+    case 'fleet_load_imbalance': return 'text-blue-400';
+    case 'memory_trajectory':    return 'text-cyan-400';
+    default:                     return 'text-indigo-400';
   }
 }
 
@@ -136,6 +178,12 @@ interface ObservationCardProps {
   showNodeHeader: boolean;
   /** If set, the pattern has stopped firing; card shows a resolved badge. */
   resolvedMs?:    number | null;
+  /**
+   * Called after the card is dismissed (after localStorage write + buffer append).
+   * AIInsights uses this to emit a 'pattern_dismissed' FleetEvent so the Live
+   * Activity Feed shows the acknowledgement.
+   */
+  onDismiss?:     () => void;
 }
 
 function fmtResolvedAge(resolvedMs: number): string {
@@ -146,7 +194,7 @@ function fmtResolvedAge(resolvedMs: number): string {
   return `${Math.floor(m / 60)}h ago`;
 }
 
-const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHeader, resolvedMs }) => {
+const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHeader, resolvedMs, onDismiss }) => {
   // Initialise from localStorage so dismiss state survives hot-reloads
   const [dismissed, setDismissed] = useState(
     () => readDismissed(insight.patternId, insight.nodeId),
@@ -155,7 +203,23 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
   const handleDismiss = useCallback(() => {
     writeDismissed(insight.patternId, insight.nodeId);
     setDismissed(true);
-  }, [insight.patternId, insight.nodeId]);
+    // Write a 'dismissed' record to the 24h recent-events buffer so the
+    // Morning Briefing Card can surface operator acknowledgements.
+    appendRecentEvent({
+      id:             crypto.randomUUID(),
+      ts:             Date.now(),
+      eventType:      'dismissed',
+      nodeId:         insight.nodeId,
+      hostname:       insight.hostname,
+      patternId:      insight.patternId,
+      title:          insight.title,
+      action_id:      insight.action_id,
+      hook:           insight.hook,
+      recommendation: insight.recommendation,
+    });
+    // Notify parent so it can emit the pattern_dismissed FleetEvent.
+    onDismiss?.();
+  }, [insight, onDismiss]);
 
   if (dismissed) return null;
 
@@ -214,6 +278,20 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
 
       {/* Body */}
       <p className="text-xs text-gray-400 leading-relaxed">{insight.body}</p>
+
+      {/* Recommendation row — prescriptive 1–2 sentence operator action */}
+      {insight.recommendation && !isResolved && (
+        <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+          <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
+          <div className="min-w-0 space-y-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400/70">
+              Recommended Action
+            </p>
+            <p className="text-xs text-gray-300 leading-relaxed">{insight.recommendation}</p>
+            <ActionIdBadge actionId={insight.action_id} />
+          </div>
+        </div>
+      )}
 
       {/* Action copy buttons — hidden when resolved (condition is gone) */}
       {insight.actions.length > 0 && !isResolved && (

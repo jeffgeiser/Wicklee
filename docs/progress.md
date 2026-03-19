@@ -6,6 +6,63 @@
 
 ---
 
+## March 18, 2026 — Pattern Engine Sprint 3: Prescriptive Recommendations + Patterns D & E 🧠
+
+**The Goal:** Give every Pattern Engine finding a directed action — not just "something looks wrong" but "here's exactly what to do, and which node to do it on." Implements Sprint 3 from **Phase 4A** of `docs/ROADMAP.md`.
+
+---
+
+### `src/lib/patternEngine.ts` — Full Rewrite ✅
+
+**New types:**
+- **`ActionId`** — stable machine-readable action classification: `rebalance_workload` | `evict_idle_models` | `reduce_batch_size` | `check_thermal_zone` | `investigate_phantom` | `schedule_offpeak`. External API contract values — never rename.
+- **`FleetNodeSummary`** — lightweight peer snapshot: `nodeId`, `hostname`, `isOnline`, `currentThermalState`, `currentWes`, `currentTokS`, `vramHeadroomPct`, `wesTier`.
+- **`DetectedInsight`** gains: `recommendation: string` (prescriptive directed action) + `action_id: ActionId`.
+
+**`bestAlternativeNode()` helper — node-availability gate:**
+Only online peers in Normal thermal state are eligible routing targets. Sorted by WES descending, VRAM headroom as tiebreaker. No candidate → local mitigation recommendation (never a phantom routing suggestion to an offline node).
+
+**Hardware-tier-aware recommendations:**
+Accelerator nodes (`wes_tier === 'accelerator'`) get preservation-first directives; workstation/server nodes get standard rerouting copy. CPU-only nodes never receive GPU-specific tuning suggestions.
+
+**Pattern D — Power-GPU Decoupling (Pro tier) ✅**
+Inference IS active (tok/s > 0) but GPU util < 20% with >50W draw. Points to CPU-bound/memory-bound workload (large context KV cache, CPU-offloaded layers, undersized batch). `action_id: reduce_batch_size`. Distinct from Pattern B (no inference).
+
+**Pattern E — Fleet Load Imbalance (Pro tier) ✅**
+This node thermally stressed OR WES > 20% below best peer. Names target node in recommendation. Degrades gracefully (no-op) on single-node deployments. `action_id: rebalance_workload`.
+
+All 4 existing patterns (A, B, C, F) updated with fleet-aware `recommendation` + `action_id`.
+
+---
+
+### `src/components/insights/ObservationCard.tsx` ✅
+
+**"Recommended Action" panel** — indigo-tinted panel with lightbulb icon, `recommendation` text, and colored `ActionIdBadge` pill. Shown between body and copy buttons; hidden when resolved.
+
+Icon/color mappings extended for Pattern D (Cpu, cyan) and Pattern E (BarChart2, blue).
+
+---
+
+### `src/components/AIInsights.tsx` ✅
+
+Builds `FleetNodeSummary[]` from live `allNodeMetrics` on every eval cycle (90s online gate). Passes `fleetContext` (peer-only) and `wesTier` to `evaluatePatterns()`.
+
+---
+
+### `src/components/Sidebar.tsx` — Docs link fix ✅
+
+Documentation button in localhost (agent) mode now opens `https://wicklee.dev/docs` in a new tab — always the latest published docs, not the version embedded in the installed binary.
+
+---
+
+### What's Next (Phase 4A — Sprint 4)
+
+- **Sprint 4 — Morning Briefing Card:** `InsightsBriefingCard` pinned at top of Triage tab. Fleet Pulse (live) + Last 24h Summary + head-to-head comparison + "Source Data" toggle.
+- **Sprint 5 — `GET /api/v1/insights/latest`:** Deterministic JSON. `action_id` as Primary Key; `best_online_node` object so agents act without a follow-up lookup.
+- **Sprint 6 — Pattern Dismissal Audit Trail:** `accepted_states` table in metrics.db.
+
+---
+
 ## March 18, 2026 — Agent-Local DuckDB History Store (v0.4.28) 🗄️
 
 **The Goal:** Implement the agent-local DuckDB store item from **Phase 4A** of `docs/ROADMAP.md` — a local three-tier time-series store on each agent node. Distinct from the cloud-side DuckDB (Railway backend, `e8c6b47`). Enables per-node historical queries with no cloud dependency.
