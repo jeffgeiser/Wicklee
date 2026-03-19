@@ -2315,6 +2315,30 @@ async fn proxy_passthrough(
 //     the measurement is taken. The 30s probe interval makes the overhead negligible.
 //     NOTE: /metrics Prometheus endpoint does not exist in Ollama ≤ v0.17.7.
 
+/// Discovers the first model installed in Ollama via GET /api/tags.
+///
+/// Returns None when Ollama has no models installed or the request fails.
+/// Used as a probe fallback when /api/ps shows no loaded model — Ollama will
+/// auto-load the returned model when the subsequent /api/generate probe arrives.
+/// This is identical behaviour to a user's first request on a fresh Ollama session.
+async fn discover_first_ollama_model(client: &reqwest::Client, port: u16) -> Option<String> {
+    let resp = client
+        .get(format!("http://127.0.0.1:{port}/api/tags"))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() { return None; }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let name = json["models"]
+        .as_array()?
+        .first()?
+        .get("name")?
+        .as_str()?
+        .to_string();
+    eprintln!("[ollama] probe fallback — no model in /api/ps, discovered: {name}");
+    Some(name)
+}
+
 /// Fires a non-streaming 20-token generate probe and returns tok/s derived from
 /// eval_count / eval_duration returned by Ollama. Non-streaming responses do not
 /// include eval_rate, so tok/s is calculated from the raw timing fields.
@@ -2526,6 +2550,15 @@ fn start_ollama_harvester(
                 .build()
                 .unwrap_or_default();
 
+            // ── Startup delay ────────────────────────────────────────────────
+            // Tokio fires the first interval.tick() immediately.  The main task
+            // also starts immediately and needs one HTTP round-trip to /api/ps
+            // before ollama_active_model is populated.  Without this delay the
+            // probe fires, finds ollama_active_model = None, skips, then waits
+            // a full 30 s before trying again — causing the visible startup lag.
+            // 7 s comfortably covers the /api/ps round-trip even on slow machines.
+            tokio::time::sleep(Duration::from_secs(7)).await;
+
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
@@ -2533,9 +2566,19 @@ fn start_ollama_harvester(
                 // Read the current port — skip if Ollama isn't running.
                 let Some(port) = *port_rx.borrow() else { continue; };
 
-                // Only probe when a model is loaded.
-                let model = shared_probe.lock().ok()
+                // Model resolution order:
+                //   1. Currently loaded model from /api/ps  (preferred — already warm)
+                //   2. First installed model from /api/tags (fallback — handles the
+                //      restart case where keep_alive has already unloaded everything;
+                //      Ollama auto-loads the model when the generate request arrives)
+                //   3. None → skip this cycle (no models installed at all)
+                let current_model = shared_probe.lock().ok()
                     .and_then(|g| if g.ollama_running { g.ollama_active_model.clone() } else { None });
+                let model = if current_model.is_some() {
+                    current_model
+                } else {
+                    discover_first_ollama_model(&probe_client, port).await
+                };
                 let Some(model) = model else { continue; };
 
                 // Read current GPU utilisation — NVIDIA takes priority, fall back to
