@@ -25,7 +25,7 @@ mod process_discovery;
 #[cfg(not(target_env = "musl"))]
 mod store;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
-use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::TemperatureSensor, Nvml};
+use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{ClockType, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
 // NVML_ERROR_NOT_SUPPORTED on Grace Blackwell / unified-memory architectures.
 // We access nvmlDeviceGetMemoryInfo_v2 directly through the sys crate.
@@ -97,6 +97,12 @@ struct NvidiaMetrics {
     /// thermal_state because it is hardware-authoritative, not temperature-proxied.
     #[serde(skip)]   // internal use only; not forwarded in MetricsPayload
     nvidia_throttle_penalty:        Option<f32>,
+    /// GPU clock throttle percentage: 0.0 = running at full rated speed, 100.0 = fully throttled.
+    /// Derived from nvmlDeviceGetClockInfo(GRAPHICS) / nvmlDeviceGetMaxClockInfo(GRAPHICS).
+    /// Inverse of clock ratio so higher values always mean worse state (consistent with other %).
+    /// #[serde(skip)] — forwarded via MetricsPayload.clock_throttle_pct, not directly.
+    #[serde(skip)]
+    clock_throttle_pct:             Option<f32>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -218,6 +224,12 @@ struct MetricsPayload {
     /// Absent (None) on Windows and agents that lack the swap harvester.
     #[serde(skip_serializing_if = "Option::is_none")]
     swap_write_mb_s: Option<f32>,
+    /// GPU clock throttle percentage: 0 = full speed, 100 = fully throttled.
+    /// NVIDIA: derived from nvmlDeviceGetClockInfo(GRAPHICS) / nvmlDeviceGetMaxClockInfo.
+    /// AMD/Linux: derived from scaling_cur_freq / cpuinfo_max_freq (clock_ratio path only).
+    /// None on macOS, Windows, non-AMD Linux without cpufreq, and musl builds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clock_throttle_pct: Option<f32>,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -775,6 +787,9 @@ struct LinuxThermalResult {
     state:          String,       // "Normal" | "Fair" | "Serious" | "Critical"
     source:         &'static str, // "clock_ratio" | "sysfs"
     direct_penalty: Option<f32>,  // Some on AMD path (can exceed 2.0); None on sysfs path
+    /// Raw clock ratio (cur/max) from the AMD path.  None on the generic sysfs path.
+    /// Frontend converts to clock_throttle_pct = (1.0 - ratio) * 100.
+    clock_ratio:    Option<f64>,
 }
 
 // Helper functions — Linux only.
@@ -868,6 +883,7 @@ fn amd_clock_ratio_result(ratio: f64, tdie_c: Option<f64>) -> LinuxThermalResult
         state:          state.to_string(),
         source:         "clock_ratio",
         direct_penalty: Some(penalty),
+        clock_ratio:    Some(ratio),
     }
 }
 
@@ -910,6 +926,7 @@ fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult
         state:          state.to_string(),
         source:         "sysfs",
         direct_penalty: None,   // derived via thermal_penalty_v2(state)
+        clock_ratio:    None,
     })
 }
 
@@ -2088,6 +2105,20 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                     m.nvidia_throttle_penalty = Some(penalty);
                 }
 
+                // ── GPU clock throttle percentage ─────────────────────────────
+                // (cur_graphics_mhz / max_graphics_mhz) → inverse is throttle %.
+                // Zero-privilege; returns None on virtualised GPUs where clock
+                // info is unavailable (safe — patterns gate on Some(_) density).
+                if let (Ok(cur_mhz), Ok(max_mhz)) = (
+                    device.clock_info(ClockType::Graphics),
+                    device.max_clock_info(ClockType::Graphics),
+                ) {
+                    if max_mhz > 0 {
+                        let ratio = cur_mhz as f32 / max_mhz as f32;
+                        m.clock_throttle_pct = Some(((1.0 - ratio) * 100.0).clamp(0.0, 100.0));
+                    }
+                }
+
                 if let Ok(mut guard) = shared_clone.lock() {
                     *guard = m;
                 }
@@ -3101,6 +3132,11 @@ fn start_metrics_broadcaster(
                 sample_count:   if wes.sample_count > 0 { Some(wes.sample_count) } else { None },
                 wes_version:    2,
                 swap_write_mb_s: swap_mb_s,
+                clock_throttle_pct: nvidia.clock_throttle_pct.or_else(|| {
+                    linux_thermal.as_ref()
+                        .and_then(|lt| lt.clock_ratio)
+                        .map(|r| ((1.0 - r) * 100.0).clamp(0.0, 100.0) as f32)
+                }),
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -3483,6 +3519,11 @@ async fn handle_metrics(
                 sample_count:   if wes.sample_count > 0 { Some(wes.sample_count) } else { None },
                 wes_version:    2,
                 swap_write_mb_s: swap_mb_s,
+                clock_throttle_pct: nvidia.clock_throttle_pct.or_else(|| {
+                    linux_thermal.as_ref()
+                        .and_then(|lt| lt.clock_ratio)
+                        .map(|r| ((1.0 - r) * 100.0).clamp(0.0, 100.0) as f32)
+                }),
             };
 
             let event = match Event::default().json_data(&payload) {

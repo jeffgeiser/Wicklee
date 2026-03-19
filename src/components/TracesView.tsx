@@ -444,9 +444,9 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
       )}
 
-      {/* ── Charts — 2×2 grid ───────────────────────────────────────────────── */}
+      {/* ── Charts — 2×3 grid ───────────────────────────────────────────────── */}
       {!error && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <MiniChart
             data={samples}
             getValue={sampleTps}
@@ -478,6 +478,22 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             unit="%"
             color="text-blue-400"
             colorFill="#3b82f6"
+          />
+          <MiniChart
+            data={samples}
+            getValue={s => s.swap_write_mb_s ?? null}
+            label="Swap Write"
+            unit=" MB/s"
+            color="text-rose-400"
+            colorFill="#f43f5e"
+          />
+          <MiniChart
+            data={samples}
+            getValue={s => s.clock_throttle_pct ?? null}
+            label="Clock Throttle"
+            unit="%"
+            color="text-violet-400"
+            colorFill="#8b5cf6"
           />
         </div>
       )}

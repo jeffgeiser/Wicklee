@@ -145,6 +145,14 @@ export interface SentinelMetrics {
    * Null / absent on Windows and agents < v0.4.4.
    */
   swap_write_mb_s?: number | null;
+  /**
+   * GPU clock throttle percentage: 0 = running at full rated speed, 100 = fully throttled.
+   * NVIDIA: derived from nvmlDeviceGetClockInfo(GRAPHICS) / nvmlDeviceGetMaxClockInfo(GRAPHICS).
+   * AMD/Linux: derived from scaling_cur_freq / cpuinfo_max_freq (clock_ratio path only).
+   * Absent on macOS, Windows, non-AMD Linux without cpufreq, and musl builds.
+   * 0% is healthy; higher values mean the GPU/CPU clock is below its rated maximum.
+   */
+  clock_throttle_pct?: number | null;
 }
 
 /**
@@ -357,6 +365,10 @@ export interface HistorySample {
   gpu_power_w?:   number | null;
   vram_used_mb?:  number | null;
   thermal_state?: string | null;
+  /** Swap write rate MB/s — raw tier only. Null on aggregated tiers (1min, 1hr). */
+  swap_write_mb_s?: number | null;
+  /** GPU clock throttle % — raw tier only. 0 = full speed. Null on aggregated tiers. */
+  clock_throttle_pct?: number | null;
 }
 
 /** Response envelope from GET /api/history. */
