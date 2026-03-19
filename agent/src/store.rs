@@ -42,6 +42,8 @@ pub struct Sample {
     pub vram_total_mb:    Option<i64>,
     pub thermal_state:    Option<String>,
     pub mem_pressure_pct: Option<f64>,
+    pub swap_write_mb_s:  Option<f64>,
+    pub clock_throttle_pct: Option<f64>,
 }
 
 /// Minimal subset of MetricsPayload for JSON deserialization.
@@ -65,6 +67,8 @@ struct BroadcastFrame {
     #[serde(default)] nvidia_vram_total_mb:            Option<u64>,
     #[serde(default)] thermal_state:                   Option<String>,
     #[serde(default)] memory_pressure_percent:         Option<f32>,
+    #[serde(default)] swap_write_mb_s:                 Option<f32>,
+    #[serde(default)] clock_throttle_pct:              Option<f32>,
 }
 
 impl BroadcastFrame {
@@ -96,6 +100,8 @@ impl BroadcastFrame {
             vram_total_mb:    self.nvidia_vram_total_mb.map(|v| v as i64),
             thermal_state:    self.thermal_state,
             mem_pressure_pct: self.memory_pressure_percent.map(|v| v as f64),
+            swap_write_mb_s:  self.swap_write_mb_s.map(|v| v as f64),
+            clock_throttle_pct: self.clock_throttle_pct.map(|v| v as f64),
         }
     }
 }
@@ -183,6 +189,10 @@ pub struct HistorySample {
     pub vram_used_mb:  Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thermal_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swap_write_mb_s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clock_throttle_pct: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,6 +254,8 @@ impl Store {
                 vram_total_mb    BIGINT,
                 thermal_state    TEXT,
                 mem_pressure_pct DOUBLE,
+                swap_write_mb_s  DOUBLE,
+                clock_throttle_pct DOUBLE,
                 PRIMARY KEY (ts_ms, node_id)
             );
 
@@ -295,6 +307,11 @@ impl Store {
                 note            TEXT,
                 PRIMARY KEY (pattern_id, node_id)
             );
+
+            -- Migrations: add columns introduced after the initial schema.
+            -- DuckDB supports ADD COLUMN IF NOT EXISTS — safe to run on every startup.
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s    DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS clock_throttle_pct DOUBLE;
         ")
     }
 
@@ -309,8 +326,9 @@ impl Store {
              (ts_ms, node_id, model, tps,
               cpu_usage_pct, mem_used_mb, mem_total_mb,
               cpu_power_w, gpu_power_w, gpu_util_pct,
-              vram_used_mb, vram_total_mb, thermal_state, mem_pressure_pct)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              vram_used_mb, vram_total_mb, thermal_state, mem_pressure_pct,
+              swap_write_mb_s, clock_throttle_pct)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (ts_ms, node_id) DO NOTHING",
             params![
                 s.ts_ms,
@@ -327,6 +345,8 @@ impl Store {
                 s.vram_total_mb,
                 s.thermal_state.as_deref(),
                 s.mem_pressure_pct,
+                s.swap_write_mb_s,
+                s.clock_throttle_pct,
             ],
         )?;
         Ok(())
@@ -459,24 +479,27 @@ impl Store {
             Resolution::Raw => {
                 let mut stmt = conn.prepare(
                     "SELECT ts_ms, model, tps, cpu_usage_pct,
-                            gpu_util_pct, gpu_power_w, vram_used_mb, thermal_state
+                            gpu_util_pct, gpu_power_w, vram_used_mb, thermal_state,
+                            swap_write_mb_s, clock_throttle_pct
                      FROM metrics_raw
                      WHERE node_id = ? AND ts_ms >= ? AND ts_ms <= ?
                      ORDER BY ts_ms ASC",
                 )?;
                 stmt.query_map(params![node_id, from_ms, to_ms], |row| {
                     Ok(HistorySample {
-                        ts_ms:         row.get(0)?,
-                        model:         row.get(1)?,
-                        tps:           row.get(2)?,
-                        tps_avg:       None,
-                        tps_max:       None,
-                        tps_p95:       None,
-                        cpu_usage_pct: row.get(3)?,
-                        gpu_util_pct:  row.get(4)?,
-                        gpu_power_w:   row.get(5)?,
-                        vram_used_mb:  row.get(6)?,
-                        thermal_state: row.get(7)?,
+                        ts_ms:          row.get(0)?,
+                        model:          row.get(1)?,
+                        tps:            row.get(2)?,
+                        tps_avg:        None,
+                        tps_max:        None,
+                        tps_p95:        None,
+                        cpu_usage_pct:  row.get(3)?,
+                        gpu_util_pct:   row.get(4)?,
+                        gpu_power_w:    row.get(5)?,
+                        vram_used_mb:   row.get(6)?,
+                        thermal_state:  row.get(7)?,
+                        swap_write_mb_s: row.get(8)?,
+                        clock_throttle_pct: row.get(9)?,
                     })
                 })?.collect::<Result<_, _>>()?
             }
@@ -496,12 +519,14 @@ impl Store {
                         tps:           None,
                         tps_avg:       row.get(2)?,
                         tps_max:       row.get(3)?,
-                        tps_p95:       None,
-                        cpu_usage_pct: row.get(5)?,
-                        gpu_util_pct:  row.get(6)?,
-                        gpu_power_w:   row.get(7)?,
-                        vram_used_mb:  row.get(8)?,
-                        thermal_state: None,
+                        tps_p95:        None,
+                        cpu_usage_pct:  row.get(5)?,
+                        gpu_util_pct:   row.get(6)?,
+                        gpu_power_w:    row.get(7)?,
+                        vram_used_mb:   row.get(8)?,
+                        thermal_state:  None,
+                        swap_write_mb_s: None,
+                        clock_throttle_pct: None,
                     })
                 })?.collect::<Result<_, _>>()?
             }
@@ -521,12 +546,14 @@ impl Store {
                         tps:           None,
                         tps_avg:       row.get(2)?,
                         tps_max:       row.get(3)?,
-                        tps_p95:       row.get(4)?,
-                        cpu_usage_pct: row.get(5)?,
-                        gpu_util_pct:  row.get(6)?,
-                        gpu_power_w:   row.get(7)?,
-                        vram_used_mb:  row.get(8)?,
-                        thermal_state: None,
+                        tps_p95:        row.get(4)?,
+                        cpu_usage_pct:  row.get(5)?,
+                        gpu_util_pct:   row.get(6)?,
+                        gpu_power_w:    row.get(7)?,
+                        vram_used_mb:   row.get(8)?,
+                        thermal_state:  None,
+                        swap_write_mb_s: None,
+                        clock_throttle_pct: None,
                     })
                 })?.collect::<Result<_, _>>()?
             }
