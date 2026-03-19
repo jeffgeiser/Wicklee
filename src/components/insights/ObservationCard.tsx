@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves } from 'lucide-react';
+import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves, ListChecks } from 'lucide-react';
 import type { DetectedInsight, ActionId } from '../../lib/patternEngine';
 import { appendRecentEvent } from '../../lib/insightLifecycle';
 
@@ -95,6 +95,7 @@ function patternIcon(patternId: string) {
     case 'memory_trajectory':    return <MemoryStick  className="w-4 h-4 text-cyan-400"    />;
     case 'bandwidth_saturation': return <Gauge        className="w-4 h-4 text-emerald-400" />;
     case 'power_jitter':         return <Waves        className="w-4 h-4 text-orange-400"  />;
+    case 'efficiency_drag':      return <TrendingDown className="w-4 h-4 text-yellow-400"  />;
     default:                     return <Server       className="w-4 h-4 text-gray-400"    />;
   }
 }
@@ -109,6 +110,7 @@ function hookColor(patternId: string): string {
     case 'memory_trajectory':    return 'text-cyan-400';
     case 'bandwidth_saturation': return 'text-emerald-400';
     case 'power_jitter':         return 'text-orange-400';
+    case 'efficiency_drag':      return 'text-yellow-400';
     default:                     return 'text-indigo-400';
   }
 }
@@ -295,6 +297,26 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
             </p>
             <p className="text-xs text-gray-300 leading-relaxed">{insight.recommendation}</p>
             <ActionIdBadge actionId={insight.action_id} />
+          </div>
+        </div>
+      )}
+
+      {/* Resolution steps — numbered step-by-step playbook, collapsed if resolved */}
+      {insight.resolution_steps && insight.resolution_steps.length > 0 && !isResolved && (
+        <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+          <ListChecks className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />
+          <div className="min-w-0 space-y-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              Resolution Steps
+            </p>
+            <ol className="space-y-1 list-none">
+              {insight.resolution_steps.map((step, idx) => (
+                <li key={idx} className="flex gap-2 text-xs text-gray-400 leading-relaxed">
+                  <span className="shrink-0 font-mono text-gray-600 w-3 text-right">{idx + 1}.</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
       )}

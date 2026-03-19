@@ -6,6 +6,62 @@
 
 ---
 
+## March 19, 2026 — Sprint 6: Dismiss API + Pattern I + Prescriptive Resolution Steps 🎯
+
+### Sprint 6 — `POST localhost:7700/api/insights/dismiss` ✅
+
+Insight dismissals are now persisted to the local agent's DuckDB, not just localStorage.
+
+**Agent changes (`agent/src/store.rs`):**
+- New `accepted_states` table: `(pattern_id, node_id, dismissed_at_ms, expires_at_ms, note)` — `(pattern_id, node_id)` primary key, upsert resets expiry on re-dismiss
+- `record_dismiss()` — upsert method
+- `query_active_dismissals(now_ms)` — filters expired rows
+- `prune_expired_dismissals()` — cleanup utility
+
+**Agent routes (`agent/src/main.rs`):**
+- `POST /api/insights/dismiss` — `DismissRequest { pattern_id, node_id?, expires_at_ms?, note? }` → 202 Accepted
+- `GET /api/insights/dismissed` — returns `{ dismissals: Dismissal[] }` for all non-expired records
+- Both gated on `#[cfg(not(target_env = "musl"))]` (require DuckDB store)
+
+**Frontend (`src/hooks/useInsightDismiss.ts`):**
+- Dual-write: localStorage (zero-latency, works offline) + agent endpoint (fire-and-forget)
+- Agent sync on mount: pulls active dismissals from agent and merges into localStorage (longer-lived agent record wins)
+- New `dismiss(expiresInMs?, note?)` signature — optional params, backward-compatible
+
+### Pattern I — Efficiency Penalty Drag ✅
+
+New pattern exploiting the `penalty_avg` field from WES v2 — none of A–H used it. Catches the "invisible tax" class of software-configuration performance losses.
+
+**Detection (5-min gate, pro tier):**
+- `penalty_avg > 0.30` — > 30% of WES eaten by software overhead
+- `thermal_state === 'Normal'` — not a thermal penalty
+- `gpu_util_pct > 30%` — GPU is active (not Pattern D decoupled)
+- `mem_pressure < 75%` and `vram < 80%` — not Pattern F/G memory-bound
+- `tok_s > 0.5` — inference active
+
+**Root causes surfaced:** context windows too long, batch too small to saturate GPU pipeline, KV cache fragmentation from mixed-length requests, MoE expert routing overhead.
+
+**Icon:** `Wind` (yellow) in InsightsBriefingCard, `TrendingDown` (yellow) in ObservationCard.
+
+### `resolution_steps: string[]` added to all patterns A–I ✅
+
+New field on `DetectedInsight` — 5 numbered, prescriptive steps per pattern. Each step is a complete standalone instruction (command, config change, or physical action).
+
+Patterns and their resolution focus:
+- **A (Thermal Drain):** airflow → reroute → TDP cap commands
+- **B (Phantom Load):** `ollama stop` → `OLLAMA_KEEP_ALIVE` → per-request `keep_alive`
+- **C (WES Velocity Drop):** watch command → preemptive reroute → background process check
+- **D (Power-GPU Decoupling):** `OLLAMA_NUM_GPU=99` → quantization switch → vLLM batch tuning
+- **E (Fleet Imbalance):** `/api/v1/fleet/wes` → Nginx weight update → auto-rebalance webhook
+- **F (Memory Trajectory):** `ollama stop` → `OLLAMA_MAX_LOADED_MODELS=1` → pressure monitoring
+- **G (Bandwidth Saturation):** quantization downgrade → context reduction → hardware upgrade path
+- **H (Power Jitter):** thundering herd vs PSU branch — queue smoothing vs PSU headroom check
+- **I (Efficiency Drag):** context window reduction → batch tuning → MoE GPU offload → vLLM chunked prefill
+
+Rendered as a numbered list in ObservationCard, below the recommendation and above copy buttons. Exposed in `/api/v1/insights/latest` for automation consumers.
+
+---
+
 ## March 19, 2026 — Pattern H (Power Jitter) 🌊
 
 **The Goal:** Implement Pattern H — Power Jitter — the leading indicator of PSU/VRM stress and thundering-herd load balancer issues.

@@ -105,6 +105,15 @@ export interface DetectedInsight {
    */
   recommendation: string;
   /**
+   * Step-by-step resolution instructions, ordered by recommended execution
+   * sequence.  Each entry is a complete standalone instruction (command,
+   * config change, or physical action) that the operator can act on immediately.
+   *
+   * Rendered as a numbered list in the UI.
+   * Exposed in /api/v1/insights/latest for automation consumers.
+   */
+  resolution_steps: string[];
+  /**
    * Machine-readable action classification for automation / API consumers.
    * Stable across versions — never rename existing values.
    */
@@ -322,6 +331,15 @@ function evaluatePatternA(
                      `(${baselineTokS.toFixed(1)} tok/s → ${hotTokS.toFixed(1)} tok/s). ` +
                      `${lostThroughput > 0 ? `That's ~${lostThroughput.toFixed(0)} fewer completions/hr.` : ''}`,
     recommendation,
+    resolution_steps: [
+      `Confirm current thermal state: \`curl http://localhost:7700/api/health | jq .thermal_state\``,
+      altNode
+        ? `Immediately route new requests to ${altNode.hostname}: \`GET /api/v1/route/best\``
+        : `Reduce concurrent inference to relieve thermal load: set \`OLLAMA_NUM_PARALLEL=1\` and restart Ollama`,
+      `Improve physical airflow: ensure at least 10 cm clearance on all vents, clean dust filters, and verify fan curves are not capped`,
+      `Check ambient temperature — GPU workload performance degrades above 25°C ambient; datacenter target is 18–22°C`,
+      `If ${currentState} state persists beyond 15 min, reduce TDP limit: \`sudo powermetrics --samplers gpu_power\` (Apple) or \`sudo nvidia-smi -pl <watt_limit>\` (NVIDIA) to cap below sustain threshold`,
+    ],
     action_id,
     requiredMs:      PATTERN_A_MIN_WINDOW_MS,
     observedMs,
@@ -415,6 +433,13 @@ function evaluatePatternB(
     recommendation:  `Unload the idle model to reclaim ${vramGb} GB VRAM and reduce power draw ` +
                      `by ~${avgWatts.toFixed(0)}W. Run \`ollama ps\` to confirm which model ` +
                      `is loaded, then \`ollama stop <model>\` to release it.`,
+    resolution_steps: [
+      `List all loaded models: \`ollama ps\``,
+      `Unload the idle model: \`ollama stop $(ollama ps | awk 'NR>1 {print $1}')\``,
+      `Confirm VRAM is freed: \`curl http://localhost:7700/api/health | jq '{vram_used:.nvidia_vram_used_mb}'\``,
+      `Prevent recurrence: set \`OLLAMA_KEEP_ALIVE=5m\` in your Ollama environment — models auto-unload after 5 min idle`,
+      `For tighter control, set per-request keep-alive: add \`"keep_alive": "5m"\` to your \`/api/generate\` request body`,
+    ],
     action_id:       'evict_idle_models',
     requiredMs:      PATTERN_B_MIN_WINDOW_MS,
     observedMs,
@@ -530,6 +555,15 @@ function evaluatePatternC(
                        ? `At this rate WES will halve in ~${Math.round(minutesToHalf)} min.`
                        : ''}`,
     recommendation,
+    resolution_steps: [
+      `Monitor WES trajectory every 30 s: \`watch -n 30 "curl -s http://localhost:7700/api/health | jq .wes_score"\``,
+      altNode
+        ? `Pre-emptively route new requests to ${altNode.hostname} now — don't wait for thermal state change: \`GET /api/v1/route/best\``
+        : `Reduce active inference load immediately: lower \`OLLAMA_NUM_PARALLEL\` to 1 to slow the WES decline`,
+      `Check if any background processes (backups, updates, builds) started recently and pause them`,
+      `If WES drops below 50 within the next 5 min, treat as Pattern A (Thermal Drain) — enact physical cooling steps`,
+      `After stabilization, review Wicklee history to correlate the drop with specific request types or model loads`,
+    ],
     action_id:       altNode ? 'rebalance_workload' : 'check_thermal_zone',
     requiredMs:      PATTERN_C_MIN_WINDOW_MS,
     observedMs,
@@ -632,6 +666,13 @@ function evaluatePatternD(
                      `with fewer CPU-offloaded layers (e.g. Q4_K_M over Q2_K). ` +
                      `If using vLLM, decrease \`--max-num-batched-tokens\` to find the ` +
                      `GPU-saturating sweet spot and recover the efficiency gap.`,
+    resolution_steps: [
+      `Confirm the decoupling: \`curl http://localhost:7700/api/health | jq '{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}'\``,
+      `Check how many layers are CPU-offloaded: in Ollama, \`OLLAMA_NUM_GPU\` env var controls GPU layer count — set to max (e.g. 99) to push all layers to GPU`,
+      `If model uses Q2_K quantization, switch to Q4_K_M: \`ollama pull <model>:q4_K_M && ollama rm <model>:q2_K\` — Q4_K_M offloads fully and GPU-utilizes better`,
+      `For vLLM: increase \`--max-num-seqs\` and \`--max-num-batched-tokens\` to create larger batches that saturate GPU SIMD lanes`,
+      `Verify context window is not excessively long — KV cache fills CPU memory when context > VRAM capacity; trim max_tokens in your application`,
+    ],
     action_id:       'reduce_batch_size',
     requiredMs:      PATTERN_D_MIN_WINDOW_MS,
     observedMs,
@@ -739,6 +780,15 @@ function evaluatePatternE(
                        ? `Allow ${hostname} to cool down — consider pausing non-urgent jobs ` +
                          `until thermal state returns to Normal.`
                        : `Monitor ${hostname}'s WES trend over the next 10 min.`}`,
+    resolution_steps: [
+      `Query fleet-wide WES snapshot: \`GET /api/v1/fleet/wes\``,
+      `Update your load balancer to send new requests exclusively to ${altNode.hostname} until ${hostname} recovers`,
+      `If using Nginx upstream, temporarily set \`weight=0\` for ${hostname} and \`weight=10\` for ${altNode.hostname}`,
+      isThermallySressed
+        ? `Investigate thermal root cause on ${hostname}: check airflow, dust, and ambient temperature — allow 15 min cooldown before re-enabling`
+        : `Monitor ${hostname}'s WES over the next 10 min — if it stabilizes above 60, re-enable in the rotation`,
+      `Set up a cron or webhook to auto-rebalance when \`GET /api/v1/route/best\` returns ${hostname} as the top pick again`,
+    ],
     action_id:       'rebalance_workload',
     requiredMs:      PATTERN_E_MIN_WINDOW_MS,
     observedMs,
@@ -833,6 +883,13 @@ function evaluatePatternF(
                      `before swap activity begins. Run \`ollama ps\` to identify the ` +
                      `largest resident model and \`ollama stop <model>\` to release it. ` +
                      `Stop any background processes that may be competing for unified memory.`,
+    resolution_steps: [
+      `Immediately check which models are loaded: \`ollama ps\` — note memory footprint of each`,
+      `Unload the largest or least-recently-used model: \`ollama stop <model-name>\``,
+      `Close any memory-heavy background processes: browsers, IDEs, Docker containers sharing unified memory`,
+      `Verify pressure is decreasing: \`watch -n 5 "curl -s http://localhost:7700/api/health | jq .memory_pressure_percent"\``,
+      `Prevent recurrence: set \`OLLAMA_MAX_LOADED_MODELS=1\` to prevent multiple models loading simultaneously`,
+    ],
     action_id:       'evict_idle_models',
     requiredMs:      PATTERN_F_MIN_WINDOW_MS,
     observedMs,
@@ -1007,6 +1064,15 @@ function evaluatePatternG(
                      `This is the ${memLabel} bandwidth ceiling: model weights saturate ` +
                      `the bus faster than the GPU can consume them.`,
     recommendation,
+    resolution_steps: [
+      `Confirm the bottleneck: \`curl http://localhost:7700/api/health | jq '{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}'\` — expect low GPU util, high VRAM fill`,
+      `Switch the active model to a lower quantization to halve ${memLabel} bandwidth demand: \`ollama pull <model>:q4_K_M && ollama stop <model>:q8_0\``,
+      `If already on Q4, try Q3_K_M or Q2_K — the quality trade-off is worth the bandwidth recovery when the bus is saturated`,
+      altNode
+        ? `Route concurrent inference to ${altNode.hostname} while ${hostname} is ${memLabel}-bound — it has available bandwidth headroom`
+        : `Consider a hardware upgrade to a node with higher ${memLabel} bandwidth (H100 SXM5: 3.35 TB/s vs PCIe: 2 TB/s) for sustained bandwidth ceiling relief`,
+      `Reduce context window size in your requests — longer contexts increase KV cache weight streaming; halving context can free 20–40% bandwidth`,
+    ],
     action_id,
     requiredMs:      PATTERN_G_MIN_WINDOW_MS,
     observedMs,
@@ -1123,6 +1189,19 @@ function evaluatePatternH(
                      `indicator of PSU/VRM stress — power supplies degrade faster under dynamic ` +
                      `load swings than under constant draw, even at the same average wattage.`,
     recommendation,
+    resolution_steps: isThunderingHerd ? [
+      `Confirm bursty dispatch: check your load balancer or client request pattern — are requests arriving in synchronized waves?`,
+      `Add a request queue (Redis, BullMQ, or similar) with FIFO dispatch to smooth bursty traffic into uniform batches`,
+      `Reduce \`OLLAMA_NUM_PARALLEL\` to 1–2 to prevent the GPU from context-switching between too many concurrent requests`,
+      `Implement exponential backoff with jitter on the client side to desynchronize concurrent callers`,
+      `Monitor power CoV after the change: target < 15% CoV to confirm the fix worked`,
+    ] : [
+      `Verify current power headroom: check PSU rated wattage vs peak draw — PSU should have ≥20% headroom above peak`,
+      `Check VRM/motherboard temperatures if sensors available — sustained VRM temps >85°C under dynamic load require active cooling`,
+      `Reduce inference concurrency to lower peak-to-trough swing: set \`OLLAMA_NUM_PARALLEL=1\``,
+      `Check for bursty workload patterns in your application — add client-side request smoothing if requests arrive in synchronized batches`,
+      `If power jitter persists at steady load, consider PSU capacity upgrade or dedicated GPU power supply for high-wattage GPUs (>300W TDP)`,
+    ],
     action_id:       'reduce_batch_size',
     requiredMs:      PATTERN_H_MIN_WINDOW_MS,
     observedMs,
@@ -1141,6 +1220,140 @@ function evaluatePatternH(
     ],
     firstFiredMs:       now,
     best_node_id:       null,    // Pattern H: local action — load smoothing, no rerouting
+    best_node_hostname: null,
+  };
+}
+
+// ── Pattern I: Efficiency Penalty Drag ────────────────────────────────────────
+//
+// What: The WES penalty_avg field measures the fraction of peak efficiency being
+// lost to software-level overhead (context length, batch saturation, tokeniser
+// overhead, KV cache fragmentation, etc.) even when thermals are Normal and GPU
+// is active.  When this penalty persists at > 30% for 5+ minutes with NO thermal
+// or memory cause, the root is almost always workload configuration — not hardware.
+//
+// This pattern is unique in exploiting penalty_avg: none of A–H uses it directly.
+// It catches the "invisible tax" class of performance losses:
+//   - Context windows larger than the model's efficient attention range
+//   - Batch sizes too small to saturate the GPU's SIMD pipeline
+//   - KV cache fragmentation from mixed-length concurrent requests
+//   - MoE models with expert routing overhead on single-GPU setups
+//
+// Trigger (sustained 5 min):
+//   - penalty_avg > 0.30            — > 30% of WES being eaten by penalty
+//   - thermal_state === 'Normal'    — not a thermal issue
+//   - gpu_util_pct > 30%            — GPU is active (not idle or decoupled)
+//   - tok_s > 0                     — inference is running
+//   - mem_pressure_pct < 75% AND vram headroom > 20% — not memory-bound
+//
+// Pro tier: requires understanding of WES internals.
+
+const PATTERN_I_ID             = 'efficiency_drag';
+const PATTERN_I_MIN_WINDOW_MS  = 5 * 60 * 1000;
+const PATTERN_I_MIN_SAMPLES    = Math.ceil(PATTERN_I_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 10
+const PATTERN_I_PENALTY_THRESH = 0.30;   // 30% penalty_avg threshold
+const PATTERN_I_MIN_GPU_UTIL   = 30;     // GPU must be working (not decoupled)
+const PATTERN_I_MEM_SAFE_PCT   = 75;     // memory pressure must be below this
+const PATTERN_I_VRAM_SAFE_PCT  = 80;     // VRAM utilisation must be below this
+
+function evaluatePatternI(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_I_MIN_SAMPLES) return null;
+
+  const recent = history.slice(-PATTERN_I_MIN_SAMPLES);
+
+  // Requires dense penalty_avg coverage — metric only present in WES v2+ agents
+  const penaltySamples = nonNull(recent.map(s => s.penalty_avg));
+  if (penaltySamples.length < Math.ceil(PATTERN_I_MIN_SAMPLES * 0.7)) return null;
+
+  const avgPenalty = mean(penaltySamples);
+  if (avgPenalty < PATTERN_I_PENALTY_THRESH) return null;
+
+  // Inference must be active
+  const tokSSamples = nonNull(recent.map(s => s.tok_s));
+  const avgTokS     = tokSSamples.length > 0 ? mean(tokSSamples) : 0;
+  if (avgTokS < 0.5) return null;
+
+  // Thermals must be Normal — not a thermal penalty
+  const hotSamples = recent.filter(
+    s => s.thermal_state != null && s.thermal_state !== 'Normal',
+  );
+  if (hotSamples.length > Math.ceil(PATTERN_I_MIN_SAMPLES * 0.3)) return null;
+
+  // GPU must be working — not Pattern D (decoupled)
+  const gpuSamples = nonNull(recent.map(s => s.gpu_util_pct));
+  if (gpuSamples.length >= Math.ceil(PATTERN_I_MIN_SAMPLES * 0.5)) {
+    const avgGpu = mean(gpuSamples);
+    if (avgGpu < PATTERN_I_MIN_GPU_UTIL) return null;  // Pattern D territory
+  }
+
+  // Not memory-bound — not Pattern F or G
+  const memPressure = nonNull(recent.map(s => s.mem_pressure_pct));
+  if (memPressure.length > 0 && mean(memPressure) >= PATTERN_I_MEM_SAFE_PCT) return null;
+
+  const vramSamples = recent.filter(s => s.vram_used_mb != null && s.vram_total_mb != null && s.vram_total_mb! > 0);
+  if (vramSamples.length >= Math.ceil(PATTERN_I_MIN_SAMPLES * 0.5)) {
+    const avgVramPct = mean(vramSamples.map(s => (s.vram_used_mb! / s.vram_total_mb!) * 100));
+    if (avgVramPct >= PATTERN_I_VRAM_SAFE_PCT) return null;  // Pattern G territory
+  }
+
+  const penaltyPct   = (avgPenalty * 100).toFixed(0);
+  const observedMs   = recent.length * SAMPLE_INTERVAL_MS;
+  const ratio        = Math.min(observedMs / PATTERN_I_MIN_WINDOW_MS, 1);
+
+  // WES impact: if we had no penalty, WES would be higher
+  const recentWes     = nonNull(recent.map(s => s.wes_score));
+  const avgWes        = recentWes.length > 0 ? mean(recentWes) : null;
+  const impliedMaxWes = avgWes != null ? (avgWes / (1 - avgPenalty)).toFixed(0) : null;
+
+  return {
+    patternId:       PATTERN_I_ID,
+    nodeId,
+    hostname,
+    title:           'Efficiency Penalty Drag',
+    hook:            `${penaltyPct}% WES penalty · ${avgTokS.toFixed(1)} tok/s headroom being lost`,
+    body:            `${hostname} is sustaining a ${penaltyPct}% WES efficiency penalty over the ` +
+                     `last ${Math.round(observedMs / 60000)} min despite Normal thermals, ` +
+                     `active GPU utilization, and no memory saturation. ` +
+                     `The WES penalty_avg field captures overhead not caused by heat or bandwidth — ` +
+                     `context window size, batch fragmentation, KV cache pressure, or expert routing ` +
+                     `overhead in MoE models. ` +
+                     `${impliedMaxWes != null && avgWes != null
+                       ? `Without this penalty, WES would be ~${impliedMaxWes} (current: ${avgWes.toFixed(0)}).`
+                       : ''}`,
+    recommendation:  `This penalty is recoverable through workload configuration. ` +
+                     `Reduce maximum context window in your application to the shortest that meets quality needs, ` +
+                     `and increase batch concurrency slightly to better saturate the GPU pipeline. ` +
+                     `If using a MoE model (e.g. Mixtral), ensure all experts are VRAM-resident.`,
+    resolution_steps: [
+      `Check current penalty value: \`curl http://localhost:7700/api/health | jq .penalty_avg\` — confirm it's consistently above 0.30`,
+      `Reduce context window: in your application, lower \`max_tokens\` or \`num_ctx\` to 2048–4096; most inference use-cases don't need 8k+`,
+      `Increase batch size slightly: set \`OLLAMA_NUM_PARALLEL=2\` (or 4 if VRAM allows) — more concurrent requests help fill GPU pipeline bubbles`,
+      `If running a MoE model (Mixtral, Qwen-MoE): verify all expert weights are VRAM-resident with \`ollama ps\`; add \`--num-gpu 99\` flag`,
+      `For vLLM: enable \`--enable-chunked-prefill\` and tune \`--max-num-batched-tokens\` to reduce KV cache fragmentation from variable-length requests`,
+    ],
+    action_id:       'reduce_batch_size',
+    requiredMs:      PATTERN_I_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'pro',
+    actions: [
+      {
+        label:    'Check penalty_avg',
+        copyText: `curl http://localhost:7700/api/health | jq '{penalty:.penalty_avg,wes:.wes_score,tok_s:.ollama_tokens_per_second}'`,
+      },
+      {
+        label:    'Tune Ollama context',
+        copyText: `OLLAMA_NUM_CTX=2048 OLLAMA_NUM_PARALLEL=2 ollama serve`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,   // Pattern I: local config action only
     best_node_hostname: null,
   };
 }
@@ -1204,6 +1417,9 @@ export function evaluatePatterns(
 
   const h = evaluatePatternH(nodeId, hostname, history, now);
   if (h) results.push(h);
+
+  const i = evaluatePatternI(nodeId, hostname, history, now);
+  if (i) results.push(i);
 
   return results;
 }
