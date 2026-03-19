@@ -330,6 +330,37 @@ export interface CreateApiKeyResponse {
   created_at: number;          // unix ms
 }
 
+// ── Local metric history (agent /api/history) ─────────────────────────────────
+// Mirrors store::HistorySample and store::HistoryResponse in agent/src/store.rs.
+// null values are omitted from the JSON by the agent (serde skip_serializing_if).
+
+/** One time-series sample from the agent DuckDB store. */
+export interface HistorySample {
+  ts_ms:          number;
+  model?:         string | null;
+  /** Raw 1-Hz tok/s (raw tier only). */
+  tps?:           number | null;
+  /** 1-min / 1-hr aggregate average tok/s. */
+  tps_avg?:       number | null;
+  tps_max?:       number | null;
+  tps_p95?:       number | null;
+  cpu_usage_pct?: number | null;
+  gpu_util_pct?:  number | null;
+  /** GPU power draw in watts (Apple Silicon cpu_power_w, NVIDIA power_draw_w). */
+  gpu_power_w?:   number | null;
+  vram_used_mb?:  number | null;
+  thermal_state?: string | null;
+}
+
+/** Response envelope from GET /api/history. */
+export interface HistoryResponse {
+  node_id:    string;
+  resolution: 'raw' | '1min' | '1hr';
+  from_ms:    number;
+  to_ms:      number;
+  samples:    HistorySample[];
+}
+
 // ── Tier badge display config ─────────────────────────────────────────────────
 // Used by InsightsLockedCard, UpgradePrompt, and feature-lock overlays.
 // Single source of truth for label text and Tailwind color tokens per tier.

@@ -392,6 +392,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
             getToken={getToken}
             historyDays={permissions.historyDays}
             subscriptionTier={permissions.subscriptionTier}
+            onNavigateToObservability={() => setActiveTab(DashboardTab.TRACES)}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
