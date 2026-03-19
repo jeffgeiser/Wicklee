@@ -45,7 +45,8 @@ export type ActionId =
   | 'reduce_batch_size'    // lower concurrent request batch
   | 'check_thermal_zone'   // physical intervention — airflow / ambient
   | 'investigate_phantom'  // diagnose idle-but-loaded model
-  | 'schedule_offpeak';    // defer workload to off-peak window
+  | 'schedule_offpeak'     // defer workload to off-peak window
+  | 'switch_quantization'; // reduce model precision to lower memory bandwidth demand
 
 // ── FleetNodeSummary — peer context for cross-node recommendations ─────────────
 //
@@ -847,6 +848,180 @@ function evaluatePatternF(
   };
 }
 
+// ── Pattern G: Bandwidth Saturation ──────────────────────────────────────────
+//
+// What: GPU compute utilization is anomalously LOW despite active inference
+// and high memory occupancy. The memory bus is the bottleneck — the GPU cores
+// are idle waiting for model weight data to arrive from VRAM, not compute-bound.
+//
+// The "Model Suitability" insight (Pattern H in design docs): identifies when
+// the software weight exceeds the hardware's physical bandwidth ceiling.
+//
+// This is architecturally distinct from:
+//   - Pattern A (Thermal Drain): thermal_state is elevated
+//   - Pattern D (Power-GPU Decoupling): CPU-bound or large-context issue
+//   - Pattern C (WES Velocity Drop): early-warning declining trend
+//
+// Trigger (all conditions sustained for 5 min):
+//   - gpu_util_pct < 45%          — compute cores are waiting, not working
+//   - VRAM pressure > 80%         — NVIDIA; or mem_pressure > 70% on Apple Silicon
+//   - tok_s > 0                   — inference IS active (not phantom load)
+//   - thermal_state = Normal      — thermal is NOT the root cause
+//   - WES drop vs session peak > 35% — confirms real degradation, not baseline variance
+//
+// Platform: fires on NVIDIA (VRAM data) and Apple Silicon (mem_pressure proxy).
+// Tier: pro — requires GPU utilization history.
+
+const PATTERN_G_ID            = 'bandwidth_saturation';
+const PATTERN_G_MIN_WINDOW_MS = 5 * 60 * 1000;
+const PATTERN_G_MIN_SAMPLES   = Math.ceil(PATTERN_G_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 10
+const PATTERN_G_GPU_LOW_PCT   = 45;   // below this = memory-bound, not compute-bound
+const PATTERN_G_VRAM_HIGH_PCT = 80;   // VRAM occupancy threshold (NVIDIA)
+const PATTERN_G_MEM_HIGH_PCT  = 70;   // unified memory pressure proxy (Apple Silicon)
+const PATTERN_G_WES_DROP_PCT  = 35;   // minimum drop from session peak to fire
+
+function evaluatePatternG(
+  nodeId:       string,
+  hostname:     string,
+  history:      MetricSample[],
+  fleetContext: FleetNodeSummary[],
+  now:          number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_G_MIN_SAMPLES) return null;
+
+  const recent = history.slice(-PATTERN_G_MIN_SAMPLES);
+
+  // Must have gpu_util_pct data — meaningless without it
+  const gpuSamples = recent.filter(s => s.gpu_util_pct != null);
+  if (gpuSamples.length < Math.ceil(PATTERN_G_MIN_SAMPLES * 0.7)) return null;
+
+  const avgGpuUtil = mean(nonNull(recent.map(s => s.gpu_util_pct)));
+  const avgTokS    = mean(nonNull(recent.map(s => s.tok_s)));
+
+  // Inference must be actively producing tokens
+  if (avgTokS < 0.5) return null;
+
+  // GPU compute must be low — the cores are waiting, not working
+  if (avgGpuUtil >= PATTERN_G_GPU_LOW_PCT) return null;
+
+  // Thermals must be Normal — this is not a thermal issue
+  const hotSamples = recent.filter(
+    s => s.thermal_state != null && s.thermal_state !== 'Normal',
+  );
+  if (hotSamples.length > Math.ceil(PATTERN_G_MIN_SAMPLES * 0.3)) return null;
+
+  // Memory pressure: VRAM path (NVIDIA) or unified memory path (Apple Silicon)
+  const vramSamples = recent.filter(
+    s => s.vram_used_mb != null && s.vram_total_mb != null && s.vram_total_mb! > 0,
+  );
+  let memPressureOk = false;
+  let vramPctDisplay = 0;
+  let memLabel = 'VRAM';
+
+  if (vramSamples.length >= Math.ceil(PATTERN_G_MIN_SAMPLES * 0.5)) {
+    // NVIDIA path — use VRAM pressure
+    const avgVramPct = mean(
+      vramSamples.map(s => (s.vram_used_mb! / s.vram_total_mb!) * 100),
+    );
+    if (avgVramPct >= PATTERN_G_VRAM_HIGH_PCT) {
+      memPressureOk  = true;
+      vramPctDisplay = avgVramPct;
+      memLabel       = 'VRAM';
+    }
+  } else {
+    // Apple Silicon path — use memory pressure as proxy
+    const memPressureSamples = nonNull(recent.map(s => s.mem_pressure_pct));
+    if (memPressureSamples.length >= Math.ceil(PATTERN_G_MIN_SAMPLES * 0.5)) {
+      const avgMemPressure = mean(memPressureSamples);
+      if (avgMemPressure >= PATTERN_G_MEM_HIGH_PCT) {
+        memPressureOk  = true;
+        vramPctDisplay = avgMemPressure;
+        memLabel       = 'memory';
+      }
+    }
+  }
+
+  if (!memPressureOk) return null;
+
+  // WES drop: compare recent average vs session-peak WES
+  const allWesValues    = nonNull(history.map(s => s.wes_score));
+  const recentWesValues = nonNull(recent.map(s => s.wes_score));
+
+  if (allWesValues.length < 5) return null;
+  if (recentWesValues.length < Math.ceil(PATTERN_G_MIN_SAMPLES * 0.5)) return null;
+
+  const peakWes   = Math.max(...allWesValues);
+  const recentWes = mean(recentWesValues);
+  const wesDrop   = peakWes > 0 ? ((peakWes - recentWes) / peakWes) * 100 : 0;
+
+  // Require a minimum drop to confirm real degradation vs variance
+  if (wesDrop < PATTERN_G_WES_DROP_PCT) return null;
+
+  const observedMs = recent.length * SAMPLE_INTERVAL_MS;
+  const ratio      = Math.min(observedMs / PATTERN_G_MIN_WINDOW_MS, 1);
+
+  // Node-availability gate for rerouting recommendation
+  const altNode = bestAlternativeNode(nodeId, fleetContext);
+
+  const quantNote =
+    `Reduce quantization (e.g. Q8 → Q4) to cut ${memLabel} bandwidth demand by ~50%, ` +
+    `or switch to a lower parameter count model to recover throughput.`;
+
+  let recommendation: string;
+  let action_id: ActionId;
+
+  if (altNode) {
+    recommendation =
+      `Shift active inference to ${altNode.hostname} ` +
+      `(WES ${altNode.currentWes?.toFixed(0) ?? '?'}) while ${hostname} is ${memLabel}-bus bound. ` +
+      quantNote;
+    action_id = 'rebalance_workload';
+  } else {
+    recommendation =
+      quantNote +
+      ` On the hardware side, a higher-bandwidth node (H100 SXM5, M4 Ultra) would ` +
+      `increase ${memLabel} throughput and recover the WES gap.`;
+    action_id = 'switch_quantization';
+  }
+
+  return {
+    patternId:       PATTERN_G_ID,
+    nodeId,
+    hostname,
+    title:           'Bandwidth Saturation',
+    hook:            `${avgGpuUtil.toFixed(0)}% GPU · ${vramPctDisplay.toFixed(0)}% ${memLabel} · −${wesDrop.toFixed(0)}% WES`,
+    body:            `${hostname} is generating ${avgTokS.toFixed(1)} tok/s at only ` +
+                     `${avgGpuUtil.toFixed(0)}% GPU utilization with ${vramPctDisplay.toFixed(0)}% ${memLabel} ` +
+                     `occupied (${Math.round(observedMs / 60000)} min window). ` +
+                     `Thermals are Normal — the GPU cores are idle waiting for model weight ` +
+                     `data from ${memLabel}, not blocked by compute or temperature. ` +
+                     `WES has dropped ${wesDrop.toFixed(0)}% from its session peak ` +
+                     `(${recentWes.toFixed(0)} vs ${peakWes.toFixed(0)}). ` +
+                     `This is the ${memLabel} bandwidth ceiling: model weights saturate ` +
+                     `the bus faster than the GPU can consume them.`,
+    recommendation,
+    action_id,
+    requiredMs:      PATTERN_G_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'pro',
+    actions: [
+      {
+        label:    `Check GPU util vs ${memLabel}`,
+        copyText: `curl http://localhost:7700/api/health | jq '{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}'`,
+      },
+      {
+        label:    'Pull Q4 variant',
+        copyText: `ollama pull $(ollama list | awk 'NR>1{print $1}' | head -1 | sed 's|:.*|:q4_K_M|')`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       altNode?.nodeId       ?? null,
+    best_node_hostname: altNode?.hostname      ?? null,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -900,6 +1075,9 @@ export function evaluatePatterns(
 
   const f = evaluatePatternF(nodeId, hostname, history, now);
   if (f) results.push(f);
+
+  const g = evaluatePatternG(nodeId, hostname, history, fleetContext, now);
+  if (g) results.push(g);
 
   return results;
 }

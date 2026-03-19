@@ -39,7 +39,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   History, ChevronDown, Thermometer, Zap, TrendingDown, Cpu,
   BarChart2, MemoryStick, Server, CheckCircle, X, Clock,
-  AlertTriangle, WifiOff, Copy, Check, Activity,
+  AlertTriangle, WifiOff, Copy, Check, Activity, Gauge,
 } from 'lucide-react';
 import {
   readRecentEvents,
@@ -73,8 +73,9 @@ function patternIcon(patternId: string, cls = 'w-3.5 h-3.5') {
     case 'wes_velocity_drop':    return <TrendingDown className={`${cls} text-indigo-400`} />;
     case 'power_gpu_decoupling': return <Cpu          className={`${cls} text-cyan-400`}   />;
     case 'fleet_load_imbalance': return <BarChart2    className={`${cls} text-blue-400`}   />;
-    case 'memory_trajectory':    return <MemoryStick  className={`${cls} text-cyan-400`}   />;
-    default:                     return <Server       className={`${cls} text-gray-400`}   />;
+    case 'memory_trajectory':    return <MemoryStick  className={`${cls} text-cyan-400`}    />;
+    case 'bandwidth_saturation': return <Gauge        className={`${cls} text-emerald-400`} />;
+    default:                     return <Server       className={`${cls} text-gray-400`}    />;
   }
 }
 
@@ -86,6 +87,7 @@ function patternColor(patternId: string): string {
     case 'power_gpu_decoupling': return 'text-cyan-400';
     case 'fleet_load_imbalance': return 'text-blue-400';
     case 'memory_trajectory':    return 'text-cyan-400';
+    case 'bandwidth_saturation': return 'text-emerald-400';
     default:                     return 'text-indigo-400';
   }
 }
@@ -256,12 +258,13 @@ const HeadToHeadRow: React.FC<{ pulse: FleetPulse }> = ({ pulse }) => {
 // API contract.
 
 const ACTION_ID_COLORS: Record<string, string> = {
-  rebalance_workload:   'text-blue-400  bg-blue-500/10  border-blue-500/20',
-  evict_idle_models:    'text-violet-400 bg-violet-500/10 border-violet-500/20',
-  reduce_batch_size:    'text-cyan-400  bg-cyan-500/10  border-cyan-500/20',
-  check_thermal_zone:   'text-amber-400 bg-amber-500/10 border-amber-500/20',
-  investigate_phantom:  'text-violet-400 bg-violet-500/10 border-violet-500/20',
-  schedule_offpeak:     'text-green-400 bg-green-500/10 border-green-500/20',
+  rebalance_workload:   'text-blue-400    bg-blue-500/10    border-blue-500/20',
+  evict_idle_models:    'text-violet-400  bg-violet-500/10  border-violet-500/20',
+  reduce_batch_size:    'text-cyan-400    bg-cyan-500/10    border-cyan-500/20',
+  check_thermal_zone:   'text-amber-400   bg-amber-500/10   border-amber-500/20',
+  investigate_phantom:  'text-violet-400  bg-violet-500/10  border-violet-500/20',
+  schedule_offpeak:     'text-green-400   bg-green-500/10   border-green-500/20',
+  switch_quantization:  'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
 };
 
 const TopFindingSection: React.FC<{ event: InsightRecentEvent }> = ({ event }) => {

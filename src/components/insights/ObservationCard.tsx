@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock } from 'lucide-react';
+import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock, Gauge } from 'lucide-react';
 import type { DetectedInsight, ActionId } from '../../lib/patternEngine';
 import { appendRecentEvent } from '../../lib/insightLifecycle';
 
@@ -66,6 +66,8 @@ function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
       return { label: 'Investigate Phantom',icon: <Search    className="w-2.5 h-2.5" />, cls: 'text-violet-400 bg-violet-500/10 border-violet-500/20' };
     case 'schedule_offpeak':
       return { label: 'Schedule Off-Peak',  icon: <Clock     className="w-2.5 h-2.5" />, cls: 'text-blue-400   bg-blue-500/10   border-blue-500/20'   };
+    case 'switch_quantization':
+      return { label: 'Switch Quantization',icon: <Gauge     className="w-2.5 h-2.5" />, cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' };
     default:
       return { label: 'Action Required',    icon: <Server    className="w-2.5 h-2.5" />, cls: 'text-gray-400   bg-gray-500/10   border-gray-500/20'   };
   }
@@ -90,8 +92,9 @@ function patternIcon(patternId: string) {
     case 'wes_velocity_drop':    return <TrendingDown className="w-4 h-4 text-indigo-400" />;
     case 'power_gpu_decoupling': return <Cpu          className="w-4 h-4 text-cyan-400"   />;
     case 'fleet_load_imbalance': return <BarChart2    className="w-4 h-4 text-blue-400"   />;
-    case 'memory_trajectory':    return <MemoryStick  className="w-4 h-4 text-cyan-400"   />;
-    default:                     return <Server       className="w-4 h-4 text-gray-400"   />;
+    case 'memory_trajectory':    return <MemoryStick  className="w-4 h-4 text-cyan-400"    />;
+    case 'bandwidth_saturation': return <Gauge        className="w-4 h-4 text-emerald-400" />;
+    default:                     return <Server       className="w-4 h-4 text-gray-400"    />;
   }
 }
 
@@ -103,6 +106,7 @@ function hookColor(patternId: string): string {
     case 'power_gpu_decoupling': return 'text-cyan-400';
     case 'fleet_load_imbalance': return 'text-blue-400';
     case 'memory_trajectory':    return 'text-cyan-400';
+    case 'bandwidth_saturation': return 'text-emerald-400';
     default:                     return 'text-indigo-400';
   }
 }
