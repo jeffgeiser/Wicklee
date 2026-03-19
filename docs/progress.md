@@ -6,6 +6,69 @@
 
 ---
 
+## March 19, 2026 — Pattern G (Bandwidth Saturation) + Deep Metal Roadmap 🔬
+
+**The Goal:** Implement Pattern G — the "Model Suitability" / Bandwidth Saturation insight — and document the Deep Metal metrics expansion roadmap.
+
+---
+
+### `src/lib/patternEngine.ts` — Pattern G: Bandwidth Saturation ✅
+
+New `evaluatePatternG()` function wired into `evaluatePatterns()`.
+
+**Detection logic (all conditions, 5-min gate):**
+- `gpu_util_pct < 45%` — GPU cores are waiting, not working
+- VRAM > 80% (NVIDIA) or memory pressure > 70% (Apple Silicon proxy)
+- `tok_s > 0.5` — inference IS active (not phantom load)
+- Thermal state is Normal — this is not a thermal issue
+- WES dropped > 35% from session peak — confirms real degradation
+
+**Key architectural distinctions:**
+- Not Pattern A: thermals are Normal (not the root cause)
+- Not Pattern D: the bottleneck is the memory bus, not CPU-offload or batch size
+- Not Pattern C: WES is stuck low, not declining (condition already chronic)
+
+**Recommendation branches:**
+- Fleet peer available → `rebalance_workload` (shift to higher-bandwidth node) + quantization note
+- Solo/no peer → `switch_quantization` (new ActionId) + hardware upgrade note
+
+**New ActionId:** `switch_quantization` — reduce model precision to lower memory bandwidth demand. Added to `ActionId` union in `patternEngine.ts`.
+
+**Tier:** `pro` — requires GPU utilization history (NVIDIA or Apple Silicon IOKit).
+
+---
+
+### `src/components/insights/ObservationCard.tsx` ✅
+
+- New `switch_quantization` badge: `Gauge` icon, emerald color
+- New `bandwidth_saturation` pattern icon: `Gauge`, `text-emerald-400`
+- New `bandwidth_saturation` hookColor: `text-emerald-400`
+
+### `src/components/insights/InsightsBriefingCard.tsx` ✅
+
+- `bandwidth_saturation` added to `patternIcon()` + `patternColor()`
+- `switch_quantization` added to `ACTION_ID_COLORS` (emerald)
+
+---
+
+### Deep Metal Roadmap documented ✅
+
+New Phase 4B section in ROADMAP.md: "Deep Metal Metrics Expansion" table with 8 metrics,
+source, privilege level, platform, phase, and pattern trigger:
+
+| Priority | Metric | Why it matters |
+|---|---|---|
+| 4B-1 | Power jitter (stddev/10s) | PSU/VRM stress, thundering-herd LB detection |
+| 4B-1 | SSD Swap I/O | Explains inference "stuttering" when VRAM pressure causes swap |
+| 4B-2 | Clock frequency drift | Voltage/power throttle not captured by thermal_state |
+| 4B-3 | PCIe lane width | Physical bus fault causes "slow GPU" with no software signal |
+| 4B-3 | XID error logs | Pre-crash kernel events → stability penalty → near-zero WES |
+| 4B-4 | VRAM temperature | HBM throttle when core is "cool" — false normal detection |
+| 4B-4 | Fan efficacy | Predictive: blocked airflow before throttle onset |
+| 4B-enterprise | ECC / page retirement | VRAM degradation pre-failure signal (A100/H100) |
+
+---
+
 ## March 19, 2026 — Sprint 5 + Sovereignty Copy Fix + isPaired cloud bug 🛰️
 
 **The Goal:** Fix the broken Sovereignty section in cloud mode, improve context-aware copy, and ship the `GET /api/v1/insights/latest` endpoint (Sprint 5).

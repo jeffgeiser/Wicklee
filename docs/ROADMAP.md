@@ -291,6 +291,7 @@
 
 - [x] **Pattern D — Power-GPU Decoupling (Pro tier):** Inference is active (tok/s > 0) but GPU utilization is anomalously low (<20%) while drawing >50W — suggests CPU-bound or memory-bound workload (large context KV cache, CPU-offloaded layers, or under-saturated batch size). 5-min gate. `action_id: reduce_batch_size`. Distinct from Pattern B (phantom load): Pattern B fires when there is NO inference; Pattern D fires when inference IS running but the GPU isn't being fully utilized.
 - [x] **Pattern E — Fleet Load Imbalance (Pro tier):** This node is thermally stressed OR WES is >20% below the fleet's best peer, while that peer is online in Normal thermal state. Cross-node pattern — requires `FleetNodeSummary[]` context. Names the target node in the recommendation. `action_id: rebalance_workload`.
+- [x] **Pattern G — Bandwidth Saturation (Pro tier) ✅ shipped:** GPU compute utilization is low (<45%) despite active inference (tok/s > 0) and high memory occupancy (VRAM >80% or Apple Silicon mem pressure >70%), with Normal thermals and WES dropped >35% from session peak. The GPU cores are idle waiting for model weight data — the memory bus is the bottleneck, not compute or temperature. "Model Suitability" insight: identifies when software weight exceeds the hardware's physical bandwidth ceiling. `action_id: switch_quantization` (solo) or `rebalance_workload` (fleet). New ActionId `switch_quantization` added. Icon: `Gauge` (emerald). Platform: NVIDIA (VRAM fields) + Apple Silicon (mem_pressure proxy).
 
 ---
 
@@ -302,9 +303,9 @@
 - [x] **`InsightsBriefingCard` — core shell:** Pinned at top of Triage tab. 24h localStorage event buffer — onset / resolved / dismissed rows sourced from `insightLifecycle.ts`. Three-tier logging: Live Activity Feed (FleetEvent) → localStorage 24h buffer (InsightRecentEvent) → metrics.db Sprint 6 audit trail. Dedup per `patternId × nodeId` pair with `×N in 24h` count badge. 60s refresh interval. Collapsible with ChevronDown toggle. Empty state: compact dormant row.
 - [x] **Node-availability gating:** `useFleetStream()` resolves live `isOnline` status at render time — stale routing recommendations show amber `StaleNodeWarning` banner (WifiOff icon) or `DegradedNodeWarning` (AlertTriangle icon). `resolveNodeStatus()` returns `'online' | 'offline' | 'degraded' | 'unknown'`. `ONLINE_GATE_MS = 90s` mirrors the AIInsights constant. Routing action suppressed when node is offline; operator directed to `/api/v1/route/best` for current target.
 - [x] **Onset suppression + resolution logging:** `patternOnsetMapRef` tracks last emit time per `${patternId}:${nodeId}`. `ONSET_SUPPRESSION_MS = 15m` (> `OBS_HOLD_MS = 10m`) creates a 5-minute quiet window after resolution. `wes_at_onset` captured at exact onset moment for "WES 181.5 → 142.0" diffs. `durationMs = lastSeenFiringMs − onsetMs` (excludes hold wait — reflects actual stress time).
-- [ ] **Fleet Pulse (live) section:** Nodes online/total · total fleet tok/s · top WES node + score · fleet idle cost if applicable.
-- [ ] **Head-to-head comparison** (when ≥ 2 nodes with stable hardware IDs): "WK-99E9 is 12× more efficient than WK-C133 for this model class." Anchored to matching model size class from history — apples to apples. Only shown when both nodes have run the same model class within the window.
-- [ ] **Top Finding + Recommendation** — Highest-confidence active pattern displayed with its `recommendation` string and `action_id` as a copy-able curl command.
+- [x] **Fleet Pulse (live) section:** ✅ Always-visible strip: nodes online/total · fleet tok/s · top WES node + score. `computeFleetPulse()` from live `allNodeMetrics` + `lastSeenMsMap` (90s online gate). Shown even in empty state when nodes are online.
+- [x] **Head-to-head comparison** ✅ `HeadToHeadRow` — rendered in collapsible body when ≥ 2 online nodes have WES ratio ≥ 1.5×. "Spark is 2.1× more efficient than WK-C133 — prefer it for throughput-sensitive workloads."
+- [x] **Top Finding + Recommendation** ✅ `TopFindingSection` — highest-confidence onset from 24h buffer (sorted by `high > moderate > low`). Shows pattern icon, hook, hostname, recommendation text, `action_id` badge, and a copyable `curl /api/v1/insights/latest` snippet.
 - [x] **"View source →" links** — "View raw metric history →" button in the Top Finding section navigates to `DashboardTab.TRACES` via new `onNavigateToObservability` prop on `AIInsights`. Cockpit-only (isLocalHost). Requires Phase 4A Raw Metric History panel ✅ (shipped this session).
 
 ---
@@ -408,7 +409,35 @@
 
 ---
 
-## Phase 4B — Commercial Layer + Auto-Calibration *(3–5 months)*
+## Phase 4B — Deep Metal Expansion + Commercial Layer *(3–5 months)*
+
+### Deep Metal Metrics Expansion
+
+> Goal: surface physical hardware failures and bus-level bottlenecks that software-only
+> tools (vLLM, Ollama, Prometheus) are structurally blind to. Each metric satisfies the
+> "Sovereign Proof" requirement: proof of physical hardware reality that no cloud-side
+> proxy can see.
+
+| Metric | Source | Privilege | Platform | Phase | Pattern trigger |
+|---|---|---|---|---|---|
+| **Power jitter** (stddev of watts, 10s window) | 1Hz power_draw (existing) | None | All | 4B | New Pattern H: PSU/VRM stress, thundering-herd load |
+| **SSD Swap I/O** (swap write MB/s during inference) | `/proc/diskstats` · `vm_stat` · WMI | None | All | 4B | Pairs with Pattern F (Memory Pressure); explains "stuttering" |
+| **PCIe lane width** (current vs max, e.g. x4 vs x16) | NVML | None | NVIDIA | 4B | New Pattern: "slow GPU" from physical seating/bus fault |
+| **Clock frequency drift** (current vs rated, graphics + memory) | NVML | None | NVIDIA | 4B | Clock penalty in WES; catches voltage/power throttle not covered by thermal state |
+| **XID error logs** (pre-crash kernel events, e.g. XID 61) | `dmesg` / `nvidia-smi` | Optional | NVIDIA/Linux | 4B | Stability penalty slashes WES before a crash occurs |
+| **VRAM temperature** (HBM/GDDR6X vs core temp) | NVML | None | A100/H100 | 4B | ThermalPenalty driven by `max(vram_temp, core_temp)` |
+| **Fan efficacy** (fan% RPM vs rate of cooling) | NVML / IOKit SMC | None/Root | NVIDIA/macOS | 4B | Predictive: "airflow blocked before throttle onset" |
+| **ECC / page retirement** | NVML | None | A100/H100 | 4B enterprise | Pre-failure VRAM degradation; combined with XID → near-zero WES |
+
+**Priority within 4B:**
+1. Power jitter + SSD Swap I/O — zero-privilege, platform-wide, directly explains observable inference degradation
+2. Clock frequency drift — NVIDIA, zero-privilege, supplements thermal penalty
+3. PCIe lane width + XID errors — NVIDIA Linux, hardware fault detection
+4. Fan efficacy, VRAM temp, ECC — datacenter/enterprise tier
+
+---
+
+## Phase 4B — Commercial Layer + Auto-Calibration
 
 ### WES Auto-Calibration *(replaces static `wes_config.json`)*
 > The agent learns its own thermal penalty thresholds from observed hardware reality,
