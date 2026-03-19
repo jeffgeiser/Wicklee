@@ -35,7 +35,9 @@ Wicklee surfaces hardware signals that standard monitoring tools miss — especi
 - 60–80%: Elevated. Monitor closely under sustained load.
 - 80%+: Critical. Expect degraded token generation speed. Quantize down or add RAM.
 
-> Memory pressure is currently only available on Apple Silicon. Linux and Windows nodes report memory used/available instead.
+> Memory pressure is available on **Apple Silicon only** (IOKit/powermetrics). Linux and Windows nodes report memory used/available instead — `memory_pressure_percent` is the reliable Apple Silicon platform detector used throughout Wicklee's fleet aggregation logic.
+
+> **Pattern link:** **Pattern F — Memory Pressure Trajectory** detects a rising pressure trend and projects the ETA to the 85% critical threshold using linear regression over 10 minutes of localStorage history. Fires when ETA < 30 minutes — before the threshold-crossing alert ever triggers.
 
 ---
 
@@ -51,13 +53,19 @@ Wicklee surfaces hardware signals that standard monitoring tools miss — especi
 
 ## VRAM Used / Total
 
-**What it is:** The amount of dedicated GPU memory in use and total available, reported in GB. Available on NVIDIA GPUs via NVML.
+**What it is:** The amount of GPU memory in use and total available, reported in GB. Available on NVIDIA GPUs via NVML. Displayed as `X.X/Y GB` in the Fleet Status VRAM column.
 
-**Why it matters for inference:** VRAM is the hard constraint for NVIDIA-based inference. If VRAM is exhausted, the model spills to system RAM — and inference throughput collapses. Unlike Apple Silicon's unified memory pool, NVIDIA VRAM is a fixed, isolated resource.
+**Why it matters for inference:** VRAM is the hard constraint for GPU-based inference. If VRAM is exhausted, the model spills to system RAM — and inference throughput collapses.
 
-**Action:** Keep VRAM usage below 90% for stable inference. If you're consistently near the limit, try a more aggressively quantized model (Q4 instead of Q8) or a smaller parameter count.
+**NVIDIA discrete GPUs (RTX, A-series, H-series):** VRAM is a fixed, isolated resource. Wicklee reads `nvidia_vram_used_mb` and `nvidia_vram_total_mb` via NVML — sudoless, available immediately after install.
 
-> On Apple Silicon, VRAM and RAM are the same unified pool — use Memory Used / Available and Memory Pressure % instead.
+**NVIDIA GB10 Grace Blackwell (DGX Spark and similar SoCs):** The GB10 uses a **unified memory pool** — CPU and GPU share the same physical memory, with no discrete VRAM framebuffer. Wicklee detects this automatically (`vram_total_mb ≥ system_ram × 90%` heuristic) and switches to **process residency accounting**: `nvidia_vram_used_mb` = sum of `nvmlDeviceGetComputeRunningProcesses()` used bytes. The Fleet Status VRAM column shows "Unified" in the MEMORY cell and the actual used/total in the VRAM cell (e.g., `78.5/122`).
+
+**Apple Silicon:** GPU and system memory are the same unified pool. Wicklee reports `gpu_wired_limit_mb` (the OS's GPU wired memory budget from `sysctl iogpu`) as the "VRAM budget" and wired memory usage as "used". Displayed as `X.X/Y GB` in the VRAM column — directly comparable to NVIDIA's display format.
+
+**Action:** Keep VRAM usage below 90% for stable inference on discrete GPUs. For unified memory nodes (Grace Blackwell, Apple Silicon), watch Memory Pressure % as the more sensitive signal — it reflects OS-level memory stress before throughput visibly degrades.
+
+> **Pattern link:** **Pattern F — Memory Pressure Trajectory** fires when `memory_pressure_percent` is rising at a rate that projects to critical within 30 minutes. Uses localStorage 24h history — available on all tiers without cloud history.
 
 ---
 
@@ -78,9 +86,13 @@ Wicklee surfaces hardware signals that standard monitoring tools miss — especi
 
 ## Thermal State
 
-**What it is:** The hardware's thermal management status on Apple Silicon. Reports one of: **Normal**, **Fair**, **Serious**, or **Critical**.
+**What it is:** The hardware's thermal management status. Reports one of: **Normal**, **Fair**, **Serious**, or **Critical**.
 
-**Why it matters for inference:** When a node reaches Serious or Critical thermal state, the CPU and GPU are already throttling — silently reducing their clock speeds to manage heat. Your tokens-per-second has dropped 30–50% and you won't see it in CPU/GPU utilization numbers alone.
+- **Apple Silicon:** Read from IOKit via `powermetrics` — maps the kernel's internal thermal pressure state.
+- **NVIDIA (Linux):** NVML throttle reason bitmask. Multi-reason → Critical (2.5×). `HW_THERMAL` → Serious (2.0×). `SW_THERMAL`/`HW_SLOWDOWN` → Fair (1.25×). Pre-throttle (>90°C, no bits set) → Fair (1.1×). Source tag: `nvml` — hardware-authoritative.
+- **Linux (non-NVIDIA):** `/sys/class/thermal` zone scan — maps max zone temp to state. AMD nodes use k10temp + clock ratio: ≥95% → Normal, ≥80% → Fair, ≥60% → Serious, <60% → Critical. Tdie >85°C tie-breaker bumps to at least Serious. Source tag: `clock_ratio`.
+
+**Why it matters for inference:** When a node reaches Serious or Critical thermal state, the CPU and GPU are already throttling — silently reducing their clock speeds to manage heat. Your tokens-per-second has dropped 30–50% and you won't see it in CPU/GPU utilization numbers alone. See **Thermal Cost %** above for how to quantify the impact.
 
 **Action:**
 - Normal: Healthy. No action needed.
@@ -88,7 +100,7 @@ Wicklee surfaces hardware signals that standard monitoring tools miss — especi
 - Serious: Active throttling. Route inference requests to another node.
 - Critical: Severe throttling. Stop inference on this node immediately. Check cooling.
 
-> Linux thermal state reporting (for NVIDIA nodes) is coming in Phase 3B.
+> **Pattern link:** **Pattern A — Thermal Performance Drain** fires after 5 minutes of sustained degradation vs. the node's own Normal-thermal baseline. Unlike this state label, Pattern A quantifies exactly how many tok/s are being lost.
 
 ---
 
@@ -132,17 +144,34 @@ Wicklee surfaces hardware signals that standard monitoring tools miss — especi
 
 **Action:** Establish a baseline tok/s for each model/hardware combination. A drop of more than 15–20% from baseline during sustained operation is a signal to investigate thermal state, memory pressure, or competing processes.
 
-> Wicklee's **Thermal Degradation Correlation** insight card automatically tracks the relationship between thermal state transitions and tok/s change over a session, so you don't have to watch both numbers manually.
+**Historical baseline:** Wicklee stores tok/s in DuckDB alongside WES and power. The Performance History chart surfaces P95 tok/s as a dashed reference line on 24h+ time ranges — giving you a statistically grounded ceiling to compare current throughput against rather than relying on memory.
+
+> **Pattern links:**
+> - **Thermal Degradation Correlation** insight card fires immediately when `thermal_state` transitions to Serious/Critical, quantifying the tok/s drop.
+> - **Pattern A — Thermal Performance Drain** fires after 5 minutes of sustained tok/s degradation vs. Normal-thermal baseline — more specific and quantified than the threshold-crossing card.
+> - **Pattern C — WES Velocity Drop** detects falling efficiency before tok/s visibly drops — the early warning signal.
 
 ---
 
-## Wattage / 1K Tokens
+## W/1K Tokens — Primary Efficiency Standard
 
-**What it is:** The electricity cost per 1,000 tokens generated, calculated from power draw divided by tokens-per-second throughput.
+**What it is:** Watts consumed per 1,000 tokens generated — the universal hardware efficiency metric across all inference runtimes and platforms. Calculated as:
+
+```
+W/1K = (Power Draw in Watts) / (tok/s) × 1000
+```
+
+**Lower is always better.** A lower W/1K means the hardware is producing more tokens for the same electrical input. This is the primary column in the Fleet Status table and the headline in the "WATTAGE / 1K TKN" summary card — chosen over raw watts or raw tok/s because it normalizes for both dimensions simultaneously.
 
 **Why it matters for inference:** This is the true cost of local inference — a metric cloud providers never show you because they don't want you doing the math. At $0.12/kWh, a node drawing 300W generating 50 tokens/sec costs roughly $0.0002 per 1K tokens in electricity. Compare that to $0.90–$15.00 per 1K tokens for GPT-4o or Claude.
 
-**Action:** Use the [Wattage-per-Token Calculator](https://hf.co/spaces/Wicklee/Wattage-per-token) to model your fleet's cost against cloud API pricing. The crossover point — where local inference becomes cheaper — is typically around 500K–2M tokens/month depending on your hardware.
+**Interpreting values:**
+- `< 50 W/1K` — Excellent. Apple Silicon in this range.
+- `50–200 W/1K` — Good. Efficient NVIDIA workstation GPUs.
+- `200–500 W/1K` — Acceptable for high-throughput NVIDIA inference.
+- `> 500 W/1K` — Poor. CPU-only inference or severe thermal throttle.
+
+**Action:** Use W/1K to compare nodes doing the same work. A node at 90.3 W/1K and another at 684.7 W/1K on the same model class — the first is 7.5× more power-efficient regardless of whether one is Apple Silicon and the other is x86.
 
 ---
 
@@ -154,14 +183,16 @@ Wicklee surfaces hardware signals that standard monitoring tools miss — especi
 WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)
 ```
 
-**ThermalPenalty lookup:**
+**ThermalPenalty lookup (WES v2):**
 
-| Thermal State | Penalty |
-|---|---|
-| Normal | 1.0 |
-| Fair | 1.25 |
-| Serious | 2.0 |
-| Critical | 2.0+ |
+| Thermal State | Penalty | Notes |
+|---|---|---|
+| Normal | 1.0 | Hardware running at full capability |
+| Fair | 1.25 | Mild throttling beginning |
+| Serious | 1.75 | Active throttle — hardware below ceiling |
+| Critical | 2.0 | Severe throttle — workload should be moved |
+
+> WES v2 refined the Serious penalty from 2.0 → 1.75 to better reflect measured throttling ratios. Benchmarks taken before v0.4.x should be re-run against the new baseline.
 
 **Why thermal penalty matters:** A node at 89°C running 40 tok/s at 30W looks efficient on paper. But the same node at Normal thermal state would be running 55–60 tok/s at the same power draw — the true efficiency is roughly half what the raw numbers suggest. WES applies the penalty at calculation time so the score reflects what the hardware is actually capable of at its current thermal condition.
 
@@ -181,7 +212,42 @@ Apple Silicon is approximately 340× more WES-efficient than CPU-only inference 
 
 **Academic grounding:** WES is Wicklee's coined fleet efficiency standard, conceptually aligned with the Stanford / Together AI "Intelligence per Watt" framework (arXiv:2511.07885, Nov 2025), which proposes normalizing AI output quality by energy consumed. WES applies the same lens at the operator layer — measuring real tokens on real hardware under real thermal conditions.
 
+**Historical baseline:** Wicklee stores 90 days of WES samples in DuckDB (cloud backend) and 24h in agent-local `metrics.db`. The WES Trend chart shows penalized WES as a filled area and raw WES (hardware ceiling) as a dashed reference line — the gap between them is **Thermal Cost %** made visual. P95 WES over the selected window is available as a reference line on 24h+ ranges.
+
 **Action:** Use WES to compare nodes across heterogeneous hardware. Don't compare a 4090 to an M2 on raw tok/s — compare their WES scores. A thermally stressed high-end node often has a lower WES than a clean mid-range node. The **Fleet WES Leaderboard** in the Fleet Intelligence panel ranks all nodes live.
+
+> **Pattern link:** A falling WES slope over 10 minutes triggers **Pattern C — WES Velocity Drop**, surfaced as an Observation in the Triage tab before any thermal state transition occurs.
+
+---
+
+## Thermal Cost %
+
+**What it is:** The percentage of potential performance being consumed by heat — expressed as a thermal "tax" on efficiency. Calculated from:
+
+```
+Thermal Cost % = (Penalized WES − Raw WES) / Raw WES × 100
+```
+
+Or equivalently: `TC% = (1 − 1/ThermalPenalty) × 100`
+
+| Thermal State | Penalty | Thermal Cost % |
+|---|---|---|
+| Normal | 1.0 | 0% |
+| Fair | 1.25 | 20% |
+| Serious | 1.75 | ~43% |
+| Critical | 2.0 | 50% |
+
+**Why it matters:** It converts the abstract ThermalPenalty into a number that reads like a tax rate. "This node is paying a 43% thermal tax" is immediately legible to any operator. Raw WES is the hardware ceiling — what the node would score if cooling were perfect. Penalized WES is what you're actually getting. TC% is the gap.
+
+**Display:** Amber `-N% thermal` badge in the Fleet Status table when TC% > 0. Hidden when the node is at Normal thermal state. Full breakdown visible in the WES tooltip.
+
+**Action:**
+- TC% 0%: No action needed.
+- TC% 10–25%: Monitor. Consider reducing load or improving airflow.
+- TC% >25%: Significant throttle. Route workloads to a cooler node. Check fan curve and ambient temperature.
+- TC% >40%: Critical. The node is delivering less than 60% of its hardware capability.
+
+> **Pattern link:** `ThermalCostAlertCard` fires in Triage at TC% >10% (Info), >25% (Warning), >40% (Critical). Rate-of-change escalation: a rise of ≥15pp in 30 frames bumps severity one level.
 
 ---
 
@@ -346,23 +412,25 @@ scrape_configs:
 
 ---
 
-## A note on Apple Silicon vs. NVIDIA
+## Platform Coverage
 
-Wicklee is designed to work across both platforms without compromise:
+Wicklee is designed to work across all major inference platforms without compromise:
 
-| Metric | Apple Silicon | NVIDIA (Linux/Windows) |
-|---|---|---|
-| CPU usage | ✅ sudoless | ✅ sudoless |
-| Memory used / available | ✅ sudoless | ✅ sudoless |
-| Memory pressure | ✅ sudoless | — |
-| GPU utilization | ✅ sudoless (AGX via ioreg) | ✅ sudoless (NVML) |
-| VRAM used / total | — (unified memory) | ✅ sudoless (NVML) |
-| GPU temperature | — | ✅ sudoless (NVML) |
-| GPU power draw | — | ✅ sudoless (NVML) |
-| Thermal state | ✅ sudoless | ✅ sysfs thermal |
-| CPU power draw | ⚠️ requires sudo | ⚠️ requires sudo |
-| Active model (Ollama) | ✅ sudoless | ✅ sudoless |
-| Tokens per second | ✅ sudoless | ✅ sudoless |
+| Metric | Apple Silicon | NVIDIA Discrete | NVIDIA GB10 (Grace Blackwell) | AMD / Intel Linux |
+|---|---|---|---|---|
+| CPU usage | ✅ sudoless | ✅ sudoless | ✅ sudoless | ✅ sudoless |
+| Memory used / available | ✅ sudoless | ✅ sudoless | ✅ sudoless | ✅ sudoless |
+| Memory pressure | ✅ IOKit | — | — | — |
+| GPU utilization | ✅ AGX via ioreg | ✅ NVML | ✅ NVML | — |
+| VRAM used / total | ✅ wired budget (iogpu) | ✅ NVML | ✅ process residency | — |
+| GPU temperature | — | ✅ NVML | ✅ NVML | — |
+| GPU power draw | — | ✅ NVML | ✅ NVML | — |
+| Thermal state | ✅ IOKit | ✅ NVML bitmask | ✅ NVML bitmask | ✅ clock ratio / sysfs |
+| CPU power draw | ⚠️ sudo | ⚠️ sudo | ✅ NVML SoC power | ✅ RAPL sudoless |
+| Active model (Ollama/vLLM) | ✅ sudoless | ✅ sudoless | ✅ sudoless | ✅ sudoless |
+| Tokens per second | ✅ sudoless | ✅ sudoless | ✅ sudoless | ✅ sudoless |
+| WES | ✅ full | ✅ full | ✅ full | ✅ full (RAPL power) |
+| Thermal Cost % | ✅ | ✅ | ✅ | ✅ |
 
 ---
 
