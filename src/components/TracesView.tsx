@@ -1,21 +1,29 @@
 /**
  * TracesView — Observability tab
  *
- * Two sections:
+ * Four sections:
  *   1. Sovereignty — always visible (cloud + local). Telemetry destination,
- *      outbound connection manifest, and live connection event log. Structural
- *      proof that inference data never left the network.
+ *      outbound connection manifest, and live connection event log.
  *   2. Request Traces — localhost only. DuckDB-backed trace table with
  *      latency / TTFT / TPOT per inference request.
+ *   3. Metric History — localhost only. Phase 4A: time-series charts from the
+ *      agent DuckDB store (GET /api/history). Unblocks "View source →" links
+ *      in AIInsights.
+ *   4. Agent Health — localhost only. Phase 4A: harvester status, SSE
+ *      connection health, DuckDB write-path availability.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Database, Clock, RefreshCw, Filter, Activity,
   Shield, Lock, Globe, Radio,
   ArrowUpRight, CheckCircle,
+  Cpu, Zap, Server, AlertTriangle,
 } from 'lucide-react';
-import { NodeAgent, TraceRecord, PairingInfo } from '../types';
+import {
+  AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
+} from 'recharts';
+import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 
 const isLocalHost =
@@ -248,6 +256,379 @@ const SovereigntySection: React.FC<{ pairingInfo: PairingInfo | null }> = ({ pai
   );
 };
 
+// ── Metric History Panel — Phase 4A ──────────────────────────────────────────
+// Fetches GET /api/history from the local agent DuckDB store.
+// Available in Cockpit mode (isLocalHost) only — the agent must be running.
+//
+// "View source →" links in AIInsights will deep-link here so operators can
+// see the raw samples that triggered a pattern observation.
+
+type HistoryWindow = 1 | 6 | 24;
+
+/** Format a ts_ms timestamp as a short HH:MM label for chart x-axis. */
+function fmtChartTime(tsMs: number): string {
+  const d = new Date(tsMs);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Return the best tps value from a sample (raw → avg → null). */
+function sampleTps(s: HistorySample): number | null {
+  return s.tps ?? s.tps_avg ?? null;
+}
+
+interface MiniChartProps {
+  data:      HistorySample[];
+  getValue:  (s: HistorySample) => number | null;
+  label:     string;
+  unit:      string;
+  color:     string;
+  colorFill: string;
+}
+
+const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, color, colorFill }) => {
+  const chartData = data
+    .map(s => ({ ts: s.ts_ms, v: getValue(s) ?? undefined }))
+    .filter(d => d.v !== undefined);
+
+  const values = chartData.map(d => d.v as number).filter(v => v > 0);
+  const peak   = values.length > 0 ? Math.max(...values) : null;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-3 space-y-1">
+      <div className="flex items-center justify-between">
+        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">{label}</p>
+        {peak != null && (
+          <span className={`font-mono text-[10px] font-bold ${color}`}>
+            {peak % 1 === 0 ? peak.toFixed(0) : peak.toFixed(1)}{unit}
+          </span>
+        )}
+      </div>
+      {chartData.length > 1 ? (
+        <ResponsiveContainer width="100%" height={56}>
+          <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%"  stopColor={colorFill} stopOpacity={0.25} />
+                <stop offset="95%" stopColor={colorFill} stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <XAxis dataKey="ts" hide />
+            <Tooltip
+              contentStyle={{ background: '#111', border: '1px solid #374151', borderRadius: 8, fontSize: 10 }}
+              formatter={(v: number) => [`${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}${unit}`, label]}
+              labelFormatter={(ts: number) => fmtChartTime(ts)}
+            />
+            <Area
+              type="monotone"
+              dataKey="v"
+              stroke={colorFill}
+              strokeWidth={1.5}
+              fill={`url(#grad-${label})`}
+              dot={false}
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      ) : (
+        <div className="h-14 flex items-center justify-center">
+          <p className="text-[10px] text-gray-700">No data</p>
+        </div>
+      )}
+      <p className="text-[9px] text-gray-700">{chartData.length} samples</p>
+    </div>
+  );
+};
+
+const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
+  const [window_, setWindow] = useState<HistoryWindow>(1);
+  const [resp,    setResp]   = useState<HistoryResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!nodeId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const to   = Date.now();
+      const from = to - window_ * 3_600_000;
+      const url  = `/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&to=${to}`;
+      const r    = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data: HistoryResponse = await r.json();
+      setResp(data);
+    } catch {
+      setError('History unavailable — agent may not support DuckDB on this platform.');
+      setResp(null);
+    }
+    setLoading(false);
+  }, [nodeId, window_]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const samples = resp?.samples ?? [];
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── Section header ──────────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex items-center justify-center shrink-0">
+            <Database className="w-4 h-4 text-indigo-400" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-white">Metric History</h2>
+            <p className="text-xs text-gray-500">
+              Raw samples from the local DuckDB store
+              {resp && (
+                <span className="ml-2 font-mono text-[9px] text-indigo-400/60 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                  {resp.resolution}
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {/* Time window selector */}
+        <div className="flex items-center gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1">
+          {([1, 6, 24] as HistoryWindow[]).map(w => (
+            <button
+              key={w}
+              onClick={() => setWindow(w)}
+              className={`px-3 py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+                window_ === w
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {w}h
+            </button>
+          ))}
+          <button
+            onClick={load}
+            disabled={loading}
+            className="ml-1 p-1 text-gray-600 hover:text-gray-400 transition-colors disabled:opacity-40"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Error state ─────────────────────────────────────────────────────── */}
+      {error && (
+        <div className="flex items-center gap-3 p-4 bg-amber-500/8 border border-amber-500/20 rounded-xl">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <p className="text-xs text-amber-400/80">{error}</p>
+        </div>
+      )}
+
+      {/* ── Charts — 2×2 grid ───────────────────────────────────────────────── */}
+      {!error && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <MiniChart
+            data={samples}
+            getValue={sampleTps}
+            label="Tok / sec"
+            unit=" tok/s"
+            color="text-indigo-400"
+            colorFill="#6366f1"
+          />
+          <MiniChart
+            data={samples}
+            getValue={s => s.gpu_power_w ?? null}
+            label="Power Draw"
+            unit="W"
+            color="text-amber-400"
+            colorFill="#f59e0b"
+          />
+          <MiniChart
+            data={samples}
+            getValue={s => s.gpu_util_pct ?? null}
+            label="GPU Util"
+            unit="%"
+            color="text-cyan-400"
+            colorFill="#06b6d4"
+          />
+          <MiniChart
+            data={samples}
+            getValue={s => s.cpu_usage_pct ?? null}
+            label="CPU Usage"
+            unit="%"
+            color="text-blue-400"
+            colorFill="#3b82f6"
+          />
+        </div>
+      )}
+
+      {/* ── Empty state ─────────────────────────────────────────────────────── */}
+      {!error && !loading && samples.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-10 text-center">
+          <Database className="w-6 h-6 text-gray-700 mb-2" />
+          <p className="text-xs text-gray-600">
+            No samples in this window. Run some inference — history collects at 1 Hz.
+          </p>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+// ── Agent Health Panel — Phase 4A ─────────────────────────────────────────────
+// Surfaces the internal health of the local Wicklee agent:
+//   - Collection layer  — is the SSE/WS harvester delivering telemetry?
+//   - DuckDB store      — does GET /api/history respond successfully?
+//   - Last telemetry    — when did the last metric frame arrive?
+//
+// Available in Cockpit mode (isLocalHost) only.
+
+const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
+  const { connectionState, lastTelemetryMs, transport } = useFleetStream();
+  const [dbStatus, setDbStatus] = useState<'ok' | 'unavailable' | 'checking'>('checking');
+
+  // Lightweight DuckDB probe — tiny 30-second window to minimise query cost.
+  useEffect(() => {
+    if (!nodeId) return;
+    const probe = async () => {
+      try {
+        const to   = Date.now();
+        const from = to - 30_000;
+        const r    = await fetch(`/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&to=${to}`);
+        setDbStatus(r.ok ? 'ok' : 'unavailable');
+      } catch {
+        setDbStatus('unavailable');
+      }
+    };
+    probe();
+  }, [nodeId]);
+
+  const relTelemetry = lastTelemetryMs
+    ? (() => {
+        const s = Math.round((Date.now() - lastTelemetryMs) / 1000);
+        if (s < 5)  return 'just now';
+        if (s < 60) return `${s}s ago`;
+        return `${Math.floor(s / 60)}m ago`;
+      })()
+    : '—';
+
+  const connDot =
+    connectionState === 'connected'    ? 'bg-green-400 animate-pulse' :
+    connectionState === 'degraded'     ? 'bg-amber-400 animate-pulse' :
+    connectionState === 'idle'         ? 'bg-yellow-400'              :
+                                         'bg-red-500';
+
+  const connLabel =
+    connectionState === 'connected'    ? 'Connected'    :
+    connectionState === 'degraded'     ? 'Degraded'     :
+    connectionState === 'idle'         ? 'Idle'         :
+                                         'Disconnected';
+
+  const harvesters = [
+    'metrics_harvester      (tok/s · CPU% · memory)',
+    'apple_silicon / nvidia (power W · GPU%)',
+    'ollama_harvester        (model probe · TTFT)',
+    'thermal_harvester       (state · temp °C)',
+  ];
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── Section header ──────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 bg-green-500/10 border border-green-500/20 rounded-xl flex items-center justify-center shrink-0">
+          <Server className="w-4 h-4 text-green-400" />
+        </div>
+        <div>
+          <h2 className="text-sm font-bold text-white">Agent Health</h2>
+          <p className="text-xs text-gray-500">Collection layer · DuckDB store · Telemetry pipeline</p>
+        </div>
+      </div>
+
+      {/* ── Health indicators ────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+
+        {/* SSE/WS Collection */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Activity className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Collection</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full shrink-0 ${connDot}`} />
+            <span className="text-sm font-semibold text-gray-200">{connLabel}</span>
+          </div>
+          {transport && (
+            <p className="font-mono text-[9px] text-gray-600 uppercase tracking-widest">
+              transport: {transport}
+            </p>
+          )}
+        </div>
+
+        {/* DuckDB store */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Database className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">DuckDB Store</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {dbStatus === 'checking' ? (
+              <RefreshCw className="w-3 h-3 text-gray-600 animate-spin shrink-0" />
+            ) : (
+              <div className={`w-2 h-2 rounded-full shrink-0 ${
+                dbStatus === 'ok' ? 'bg-green-400' : 'bg-red-500'
+              }`} />
+            )}
+            <span className="text-sm font-semibold text-gray-200">
+              {dbStatus === 'checking' ? 'Probing…' : dbStatus === 'ok' ? 'Available' : 'Unavailable'}
+            </span>
+          </div>
+          <p className="text-[9px] text-gray-600">
+            {dbStatus === 'unavailable' ? 'musl target — DuckDB disabled' : '/api/history OK'}
+          </p>
+        </div>
+
+        {/* Last telemetry */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Last Frame</p>
+          </div>
+          <span className="text-sm font-semibold text-gray-200">{relTelemetry}</span>
+          <p className="text-[9px] text-gray-600">last telemetry received</p>
+        </div>
+
+      </div>
+
+      {/* ── Harvesters list ──────────────────────────────────────────────────── */}
+      <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 space-y-2">
+        <div className="flex items-center gap-2 mb-3">
+          <Cpu className="w-3 h-3 text-gray-600 shrink-0" />
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
+            Active Harvesters
+          </p>
+        </div>
+        {harvesters.map(h => (
+          <div key={h} className="flex items-center gap-2.5">
+            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+              connectionState === 'connected' ? 'bg-green-400/70' : 'bg-gray-600'
+            }`} />
+            <span className="font-mono text-[10px] text-gray-500">{h}</span>
+          </div>
+        ))}
+        <div className="flex items-center gap-2.5 pt-0.5 border-t border-gray-800 mt-2">
+          <Zap className="w-3 h-3 text-indigo-400/60 shrink-0" />
+          <span className="font-mono text-[10px] text-gray-600">
+            cadence: WS 100ms · SSE 1Hz · history 1Hz (DuckDB)
+          </span>
+        </div>
+      </div>
+
+    </div>
+  );
+};
+
 // ── Local trace table ──────────────────────────────────────────────────────────
 
 const TraceTable: React.FC<{ tenantId: string }> = ({ tenantId }) => {
@@ -376,11 +757,19 @@ const TraceTable: React.FC<{ tenantId: string }> = ({ tenantId }) => {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo }) => (
-  <div className="space-y-8">
-    <SovereigntySection pairingInfo={pairingInfo} />
-    {isLocalHost && <TraceTable tenantId={tenantId} />}
-  </div>
-);
+const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo }) => {
+  // node_id is always set on pairingInfo — present even before pairing.
+  const nodeId = pairingInfo?.node_id ?? '';
+
+  return (
+    <div className="space-y-8">
+      <SovereigntySection pairingInfo={pairingInfo} />
+      {isLocalHost && <TraceTable tenantId={tenantId} />}
+      {/* Phase 4A — Raw Metric History + Agent Health (Cockpit / localhost only) */}
+      {isLocalHost && nodeId && <MetricHistoryPanel nodeId={nodeId} />}
+      {isLocalHost && nodeId && <AgentHealthPanel   nodeId={nodeId} />}
+    </div>
+  );
+};
 
 export default TracesView;

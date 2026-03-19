@@ -434,6 +434,12 @@ interface AIInsightsProps {
   historyDays?: number;
   /** Subscription tier for history range gating. */
   subscriptionTier?: SubscriptionTier;
+  /**
+   * Called when the operator clicks a "View source →" link in the Triage tab.
+   * Should navigate to the Observability tab's Metric History panel.
+   * Only meaningful in Cockpit (localhost) mode where /api/history is available.
+   */
+  onNavigateToObservability?: () => void;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -446,6 +452,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   historyDays = 1,
   subscriptionTier = 'community',
   onFleetEvent,
+  onNavigateToObservability,
 }) => {
 
   // ── Hooks — all unconditional ──────────────────────────────────────────────
@@ -1574,6 +1581,17 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                         <InlineCopyButton text={curlText} />
                       </div>
                     </div>
+
+                    {/* View source → link (Cockpit only — Metric History panel) */}
+                    {isLocalHost && onNavigateToObservability && (
+                      <button
+                        onClick={onNavigateToObservability}
+                        className="flex items-center gap-1.5 text-[10px] text-indigo-400/60 hover:text-indigo-400 transition-colors pt-1"
+                      >
+                        <Activity className="w-3 h-3" />
+                        View raw metric history →
+                      </button>
+                    )}
 
                   </div>
                 );
