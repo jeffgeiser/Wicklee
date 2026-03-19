@@ -25,7 +25,7 @@ mod process_discovery;
 #[cfg(not(target_env = "musl"))]
 mod store;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
-use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{ClockType, TemperatureSensor}, Nvml};
+use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
 // NVML_ERROR_NOT_SUPPORTED on Grace Blackwell / unified-memory architectures.
 // We access nvmlDeviceGetMemoryInfo_v2 directly through the sys crate.
@@ -2110,8 +2110,8 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 // Zero-privilege; returns None on virtualised GPUs where clock
                 // info is unavailable (safe — patterns gate on Some(_) density).
                 if let (Ok(cur_mhz), Ok(max_mhz)) = (
-                    device.clock_info(ClockType::Graphics),
-                    device.max_clock_info(ClockType::Graphics),
+                    device.clock_info(Clock::Graphics),
+                    device.max_clock_info(Clock::Graphics),
                 ) {
                     if max_mhz > 0 {
                         let ratio = cur_mhz as f32 / max_mhz as f32;
