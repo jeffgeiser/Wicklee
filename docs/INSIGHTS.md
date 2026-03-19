@@ -84,12 +84,12 @@ WES is the primary input to three of the 15 insights:
 | 15 | Efficiency Regression per Model | 🔲 Phase 4A open | DuckDB per-model baseline | Team+ |
 | A | Thermal Performance Drain *(Pattern Engine)* | ✅ Shipped (Sprint 1) | Time-windowed, localStorage | Community |
 | B | Phantom Load *(Pattern Engine)* | ✅ Shipped (Sprint 1) | Time-windowed, localStorage | Community |
-| C | WES Velocity Drop *(Pattern Engine)* | 🔲 Sprint 2 | Rate-of-change, localStorage | Community |
-| F | Memory Pressure Trajectory *(Pattern Engine)* | 🔲 Sprint 2 | Rate-of-change, localStorage | Community |
+| C | WES Velocity Drop *(Pattern Engine)* | ✅ Sprint 2 | Rate-of-change, localStorage | Community |
+| F | Memory Pressure Trajectory *(Pattern Engine)* | ✅ Sprint 2 | Rate-of-change, localStorage | Community |
 | D | Power-GPU Decoupling *(Pattern Engine)* | 🔲 Sprint 3 | Cross-correlated, localStorage | Community |
 | E | Fleet Load Imbalance *(Pattern Engine)* | 🔲 Sprint 3 | Fleet-wide, localStorage | Team+ |
 
-**11 of 15 original insights shipped.** 2 pattern engine observations also live. 4 open items remain: #7 (Memory Forecasting alert layer), #15 (Efficiency Regression), #6 (Sentinel Proxy), #9 historical.
+**11 of 15 original insights shipped. 4 pattern engine observations live.** Open items: #7 (Memory Forecasting Slack alert layer), #15 (Efficiency Regression), #6 (Sentinel Proxy), #9 historical comparison. Pattern D and E in Sprint 3.
 
 ---
 
@@ -395,7 +395,7 @@ useMetricHistory (hook)          patternEngine.ts (evaluator)
 
 ---
 
-### Pattern C — WES Velocity Drop 🔲 (Sprint 2, Community)
+### Pattern C — WES Velocity Drop ✅ (Sprint 2, Community)
 
 **What:** Rate-of-change on WES score over a 10-min window is sharply negative — WES is dropping before thermal state changes or thresholds are crossed.
 
@@ -410,7 +410,7 @@ useMetricHistory (hook)          patternEngine.ts (evaluator)
 
 ---
 
-### Pattern F — Memory Pressure Trajectory 🔲 (Sprint 2, Community)
+### Pattern F — Memory Pressure Trajectory ✅ (Sprint 2, Community)
 
 **What:** `memory_pressure_percent` has been rising monotonically for 10+ min at a rate that projects to critical within the session.
 
@@ -454,7 +454,14 @@ Three shipped capabilities have no entry in the original 15:
 | **WES History Chart** | ✅ Shipped (Phase 3B) | Per-node penalized WES trend with raw WES ceiling reference. Time-range gated. Primary benchmark visualization tool. Original INSIGHTS.md doesn't address historical WES at all. |
 | **Benchmark Report Export** | ✅ Shipped (Phase 3B) | Reproducible, citable snapshot: model, quant, tok/s, watts, raw/penalized WES, TC%, thermal source, WES version. Markdown + JSON download. Not in original 15. |
 
-These should be added as **#16, #17, #18** in a future INSIGHTS.md revision or treated as subsections of existing insights.
+**#16 — Thermal Cost % (Phase 3B ✅)**
+TC% = `(penalized WES − raw WES) / raw WES`. Quantifies the efficiency headroom consumed by thermal penalty as a named percentage, not just a state label. Amber badge in Fleet Status table; `ThermalCostAlertCard` in Triage fires at >10% / >25% / >40% with rate-of-change escalation. Raw WES (hardware ceiling) displayed as dashed reference line on WES Trend chart — the gap between raw and penalized is TC% made visual.
+
+**#17 — WES History Chart (Phase 3B ✅)**
+Per-node penalized WES trend over time. Filled indigo area (operational WES) + dashed raw WES ceiling (only visible when TC% > 0). Time-range gated: 1H/24H Community, 7D Pro, 30D/90D Team. Primary visualization for benchmark research and regression detection. Source: `GET /api/fleet/wes-history`.
+
+**#18 — Benchmark Report Export (Phase 3B ✅)**
+Reproducible, citable snapshot: model name, quantization, tok/s, watts, W/1K TKN, Raw WES, Penalized WES, TC%, Thermal State + Source, WES version, Wicklee version, timestamp. Markdown + JSON tabs, copy-to-clipboard, `.md`/`.json` download. `buildReportFromLive()` (snapshot) + `buildReportFromHistory()` (history point). Makes WES a citable benchmark artifact, not just a live number.
 
 ---
 
@@ -477,6 +484,9 @@ These should be added as **#16, #17, #18** in a future INSIGHTS.md revision or t
 | 13 | Model Eviction Prediction | 3A ✅ | Warning + Keep Warm (1 node) | Keep Warm unlimited | No |
 | 14 | Fleet Inference Density Map | 3A ✅ | Full | Historical | No |
 | 15 | Efficiency Regression per Model | 4A | ❌ | Alert | Paid |
+| 16 | Thermal Cost % | 3B ✅ | TC% badge + alert card | Slack alert | Paid |
+| 17 | WES History Chart | 3B ✅ | Full (1H/24H) | 7D/30D/90D | Paid |
+| 18 | Benchmark Report Export | 3B ✅ | Full snapshot | Historical point | Free |
 
 ✅ = data already exists in current v0.4.5 build, insight is aggregation/presentation work only
 

@@ -261,11 +261,12 @@
 - [ ] **`action_id: ActionId` on `DetectedInsight`** — typed machine-readable directive for agent consumers. Enum: `rebalance_workload` | `evict_idle_models` | `reduce_batch_size` | `check_thermal_zone` | `investigate_phantom` | `schedule_offpeak`.
 - [ ] **`FleetNodeSummary[]` context in `PatternInput`** — cross-node awareness for recommendations. Pattern evaluator receives live fleet state (online status, thermal state, WES, VRAM headroom) alongside per-node history.
 - [ ] **Node-availability gate on routing recommendations** — candidate nodes must be online + Normal thermal + >20% VRAM headroom before being named. Fallback: `schedule_offpeak` when no candidate qualifies. Safety check on `phantom_load`: never recommend `ollama stop` when the node is the only online inference node.
+- [ ] **Hardware-tier-aware recommendation text** — recommendations are contextually calibrated to the node's platform tier (`wes_tier`: `workstation` | `server` | `accelerator`). A Blackwell node at thermal stress gets "Adjust MoE gating parameters or reduce batch concurrency" while an EPYC CPU node gets "Offload to GPU node — this workload is not suited for CPU inference." The `wes_tier` field in `SentinelMetrics` is the discriminator; recommendations never suggest GPU-specific tuning to a CPU-only node.
 - [ ] **DuckDB-anchored recommendation logic:**
 
-  | Pattern | DuckDB Signal | Recommendation |
+  | Pattern | DuckDB Signal | Recommendation (hardware-aware) |
   |---|---|---|
-  | Thermal Drain | `metrics_1min` -15% WES over 10m | "Thermal throttle imminent. Offload to {best_online_node} — Normal thermal, {tok_s} tok/s" |
+  | Thermal Drain | `metrics_1min` -15% WES over 10m | Accelerator: "Adjust batch size / MoE gating." Workstation: "Offload to {best_online_node} — Normal thermal, {tok_s} tok/s." |
   | Phantom Load | `metrics_1hr` high watts + 0 tok/s >60m | "Node burning ${cost}/day idle. Run `ollama stop` to cut power." |
   | WES Velocity Drop | `metrics_raw` negative WES slope | "WES declining — check thermal zone before state change triggers." |
   | Memory Trajectory | `metrics_raw` rate-of-change | "OOM in ~{eta_min}m. Evict idle models now to protect active session." |
@@ -285,6 +286,7 @@
   - **Last 24h Summary (localStorage history):** Total inference sessions · most efficient node by WES average · any nodes that never came online · peak thermal event.
   - **Head-to-head comparison** (when ≥ 2 nodes with stable hardware IDs): "WK-99E9 is 12× more efficient than WK-C133 for this model class." Anchored to matching model size class from history — apples to apples. Only shown when both nodes have run the same model class within the window.
 - [ ] **Top Finding + Recommendation** — Highest-confidence active pattern displayed with its `recommendation` string and `action_id` as a copy-able curl command.
+- [ ] **"Source Data" toggle** — each finding in the Briefing Card has a "View source →" link that navigates directly to the exact DuckDB graph (WES Trend, Metrics History, or Memory chart) that produced the finding, pre-scoped to the triggering time window. Reinforces the "Silicon Truth" principle: every recommendation is one click from its evidence. Operators can verify the data; agents can trust the `action_id`.
 
 ---
 
@@ -293,6 +295,7 @@
 > Deterministic JSON. Always returns something meaningful. No LLM. Agents get
 > a machine-readable directive; humans get the same data rendered in the Briefing Card.
 
+- [ ] **`action_id` as Primary Key for automation** — the `action_id` field is not a UI label; it is the machine directive. An orchestration agent calling this endpoint receives everything it needs to act without a follow-up lookup: the `action_id` tells it *what* to do; `best_online_node` tells it *where* to do it. No second API call required.
 - [ ] **Endpoint on cloud backend** — returns structured fleet briefing:
   ```json
   {
@@ -309,10 +312,22 @@
         "hook": "-4.2 tok/s",
         "recommendation": "Move batch workloads to WK-1EFC — online, Normal thermal, within 8% throughput parity",
         "action_id": "rebalance_workload",
+        "best_online_node": {
+          "node_id": "WK-1EFC",
+          "hostname": "JEFFs-MacBook-Pro-2",
+          "tok_s": 32.5,
+          "wes": 181.5,
+          "thermal_state": "Normal",
+          "vram_headroom_pct": 43
+        },
         "confidence": "high"
       }
     ],
-    "top_recommendation": { "action_id": "rebalance_workload", "text": "..." }
+    "top_recommendation": {
+      "action_id": "rebalance_workload",
+      "text": "Move batch workloads to WK-1EFC — online, Normal thermal, within 8% throughput parity",
+      "best_online_node": "WK-1EFC"
+    }
   }
   ```
 - [ ] **Available on all tiers** — deterministic data, not a paid AI feature. Rate-limited at same tiers as other v1 endpoints.
