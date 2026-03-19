@@ -1358,6 +1358,100 @@ function evaluatePatternI(
   };
 }
 
+// ── Pattern J: Swap I/O Pressure ─────────────────────────────────────────────
+//
+// What: Sustained swap-write activity during active inference confirms the node
+// is paging model weights or KV cache to disk — the worst-case latency spike
+// outside of thermal throttling.  Pattern F (Memory Pressure Trajectory)
+// PREDICTS this is coming; Pattern J CONFIRMS it is happening right now.
+//
+// Unlike Pattern F (pure Apple Silicon / unified memory), Pattern J fires on
+// any platform where the agent provides swap_write_mb_s — Linux and macOS.
+//
+// Trigger (all conditions sustained for 5 min):
+//   - swap_write_mb_s > 2.0   — active swap write activity
+//   - tok_s > 0               — inference is running while swapping
+//
+// Tier: community — visible to all users. No complex metric required.
+
+const PATTERN_J_ID             = 'swap_io_pressure';
+const PATTERN_J_MIN_WINDOW_MS  = 5 * 60 * 1000;
+const PATTERN_J_MIN_SAMPLES    = Math.ceil(PATTERN_J_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 10
+const PATTERN_J_SWAP_THRESH    = 2.0;   // MB/s — minimum to fire
+const PATTERN_J_STORM_THRESH   = 10.0;  // MB/s — "swap storm" escalation level
+
+function evaluatePatternJ(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_J_MIN_SAMPLES) return null;
+
+  const recent = history.slice(-PATTERN_J_MIN_SAMPLES);
+
+  // Requires swap_write_mb_s data — only present on Linux / macOS agents v0.4.4+
+  const swapSamples = nonNull(recent.map(s => s.swap_write_mb_s));
+  if (swapSamples.length < Math.ceil(PATTERN_J_MIN_SAMPLES * 0.7)) return null;
+
+  const avgSwapMbs = mean(swapSamples);
+  if (avgSwapMbs < PATTERN_J_SWAP_THRESH) return null;
+
+  // Inference must be active during the swap storm
+  const tokSSamples = nonNull(recent.map(s => s.tok_s));
+  const avgTokS     = tokSSamples.length > 0 ? mean(tokSSamples) : 0;
+  if (avgTokS < 0.5) return null;
+
+  const isStorm    = avgSwapMbs >= PATTERN_J_STORM_THRESH;
+  const swapLabel  = avgSwapMbs.toFixed(1);
+  const observedMs = recent.length * SAMPLE_INTERVAL_MS;
+  const ratio      = Math.min(observedMs / PATTERN_J_MIN_WINDOW_MS, 1);
+
+  return {
+    patternId:       PATTERN_J_ID,
+    nodeId,
+    hostname,
+    title:           isStorm ? 'Swap Storm During Inference' : 'Swap I/O During Inference',
+    hook:            `${swapLabel} MB/s swap write · ${avgTokS.toFixed(1)} tok/s degraded`,
+    body:            `${hostname} is writing ${swapLabel} MB/s to swap while inference is active. ` +
+                     `The OS is evicting memory to disk — model weights, KV cache, or activation ` +
+                     `buffers are competing for RAM and losing. This causes severe inference stalls ` +
+                     `(multi-second first-token latency) as the model layer data is paged back in on demand. ` +
+                     `${isStorm
+                       ? `At ${swapLabel} MB/s this is a full swap storm — inference throughput is severely compromised.`
+                       : `Even at moderate swap rates, inference latency spikes are typically 5–20× above baseline.`}`,
+    recommendation:  `Immediately unload the largest loaded model to relieve memory pressure and stop the swap cycle. ` +
+                     `Run \`ollama ps\` to identify all resident models; unload any that are not actively serving requests. ` +
+                     `If all models are in use, route new requests to a fleet node with available memory headroom.`,
+    resolution_steps: [
+      `Immediately check swap activity: \`cat /proc/vmstat | grep pswpout\` (Linux) or \`vm_stat | grep Swapouts\` (macOS) — confirm it's rising`,
+      `List all loaded models and their VRAM/RAM footprint: \`ollama ps\` — identify the largest or least-recently-used model`,
+      `Unload the largest idle model: \`ollama stop <model-name>\` — this should arrest the swap writes within 10–30 seconds`,
+      `Verify swap activity drops: \`watch -n 3 "curl -s http://localhost:7700/api/health | jq .swap_write_mb_s"\``,
+      `Prevent recurrence: set \`OLLAMA_MAX_LOADED_MODELS=1\` and consider adding RAM or routing large-context requests to a node with more memory`,
+    ],
+    action_id:       'evict_idle_models',
+    requiredMs:      PATTERN_J_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'community',
+    actions: [
+      {
+        label:    'Unload idle model',
+        copyText: `ollama stop $(ollama ps | awk 'NR>1 {print $1}' | head -1)`,
+      },
+      {
+        label:    'Check swap rate',
+        copyText: `curl http://localhost:7700/api/health | jq .swap_write_mb_s`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,   // Pattern J: local action — evict model to stop swap
+    best_node_hostname: null,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -1420,6 +1514,9 @@ export function evaluatePatterns(
 
   const i = evaluatePatternI(nodeId, hostname, history, now);
   if (i) results.push(i);
+
+  const j = evaluatePatternJ(nodeId, hostname, history, now);
+  if (j) results.push(j);
 
   return results;
 }

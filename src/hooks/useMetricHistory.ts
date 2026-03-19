@@ -40,6 +40,8 @@ export interface MetricSample {
   vram_used_mb:      number | null;
   /** VRAM capacity (MB) for qualifying GPU. */
   vram_total_mb:     number | null;
+  /** Swap write rate (MB/s) from agent. Null on unsupported platforms or old agents. */
+  swap_write_mb_s:   number | null;
 }
 
 // Map<node_id, MetricSample[]> — stored as JSON in localStorage
@@ -90,6 +92,7 @@ export function metricsToSample(
     nvidia_gpu_utilization_percent?: number | null;
     nvidia_vram_used_mb?:           number | null;
     nvidia_vram_total_mb?:          number | null;
+    swap_write_mb_s?:               number | null;
     ollama_tokens_per_second?:      number | null;
     vllm_tokens_per_sec?:           number | null;
     // WES score is not in SentinelMetrics directly — computed downstream
@@ -121,6 +124,7 @@ export function metricsToSample(
     gpu_util_pct:     gpuUtil,
     vram_used_mb:     vramUsed,
     vram_total_mb:    vramTotal,
+    swap_write_mb_s:  m.swap_write_mb_s ?? null,
   };
 }
 

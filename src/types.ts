@@ -138,6 +138,13 @@ export interface SentinelMetrics {
   sample_count?:   number | null;
   /** Agent WES computation version (2 = v2 with penalty fields). */
   wes_version?:    number;
+  /**
+   * Swap device write rate (MB/s).
+   * Linux: derived from /proc/vmstat pswpout counter delta.
+   * macOS: derived from vm_stat Swapouts counter delta.
+   * Null / absent on Windows and agents < v0.4.4.
+   */
+  swap_write_mb_s?: number | null;
 }
 
 /**
