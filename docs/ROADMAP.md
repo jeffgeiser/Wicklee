@@ -209,7 +209,7 @@
 > requires no external sink.
 
 - [x] **Inference Traces (TracesView):** DuckDB-backed trace table, scoped to agent-local `metrics.db`. Always localhost-only — traces never transit the cloud backend (sovereignty boundary). Primary evidence surface for "why did this recommendation fire?".
-- [x] **Sovereignty Audit section:** Telemetry destination card (fleet URL or "local only"), outbound connection manifest (Ollama probe / fleet telemetry / Clerk auth — with active/inactive status and data-type label per row), connection event log from FleetStreamContext (node_online/offline events, live pulse). Two sub-lists: what IS transmitted (CPU/GPU metrics, WES, model name) vs what NEVER leaves (inference content, prompts, responses). Replaces the old HostedPlaceholder on cloud dashboard — the trust case is explicit at wicklee.dev.
+- [x] **Sovereignty Audit section:** Telemetry destination card (fleet URL or "local only"), outbound connection manifest (Ollama probe / fleet telemetry / Clerk auth — with active/inactive status and data-type label per row), connection event log from FleetStreamContext (node_online/offline events, live pulse). Two sub-lists: what IS transmitted (CPU/GPU metrics, WES, model name) vs what NEVER leaves (inference content, prompts, responses). Replaces the old HostedPlaceholder on cloud dashboard — the trust case is explicit at wicklee.dev. **Copy fix (Mar 19):** Three-branch copy — Cockpit "this machine", Cloud-connected "each node", Cloud-no-nodes neutral placeholder. `isPaired` in cloud now derived from `connectionState` (fleet SSE), not `pairingInfo.status` (local agent handshake only). Fixes "LOCAL ONLY" badge shown incorrectly at wicklee.dev when nodes were connected.
 - [ ] **Audit Log Export (Free):** Exportable pairing and telemetry history.
 
 ### Launch Content
@@ -309,7 +309,7 @@
 
 ---
 
-### Sprint 5 — `GET /api/v1/insights/latest` (All tiers)
+### Sprint 5 — `GET /api/v1/insights/latest` (All tiers) ✅
 
 > Deterministic JSON. Always returns something meaningful. No LLM. Agents get
 > a machine-readable directive; humans get the same data rendered in the Briefing Card.
@@ -322,8 +322,8 @@
 > query in the Agent API Developer Portal. Both consumers run the same logic — the API
 > endpoint is the machine projection of what the browser already computes.
 
-- [ ] **`action_id` as Primary Key for automation** — the `action_id` field is not a UI label; it is the machine directive. An orchestration agent calling this endpoint receives everything it needs to act without a follow-up lookup: the `action_id` tells it *what* to do; `best_online_node` tells it *where* to do it. No second API call required.
-- [ ] **Endpoint on cloud backend** — returns structured fleet briefing:
+- [x] **`action_id` as Primary Key for automation** — machine-readable `pattern` key on each finding: `thermal_stress` | `memory_pressure` | `low_throughput` | `wes_below_baseline` | `node_offline` | `fleet_offline`. Agents act without follow-up lookup.
+- [x] **Endpoint on cloud backend** (`cloud/src/main.rs`) — six pattern rules evaluated against live in-memory fleet state. No DuckDB required (uses `AppState.metrics` RwLock — same source as `/api/v1/fleet`). Returns:
   ```json
   {
     "generated_at_ms": 1742000000000,
@@ -357,7 +357,7 @@
     }
   }
   ```
-- [ ] **Available on all tiers** — deterministic data, not a paid AI feature. Rate-limited at same tiers as other v1 endpoints.
+- [x] **Available on all tiers** — deterministic data, not a paid AI feature. Rate-limited at same tiers as other v1 endpoints (60/600 req/min). Auth via `X-API-Key` (same as all v1 routes).
 
 ---
 
