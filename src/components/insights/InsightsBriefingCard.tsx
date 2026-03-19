@@ -39,7 +39,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   History, ChevronDown, Thermometer, Zap, TrendingDown, Cpu,
   BarChart2, MemoryStick, Server, CheckCircle, X, Clock,
-  AlertTriangle, WifiOff,
+  AlertTriangle, WifiOff, Copy, Check, Activity,
 } from 'lucide-react';
 import {
   readRecentEvents,
@@ -49,6 +49,15 @@ import {
 } from '../../lib/insightLifecycle';
 import type { InsightRecentEvent } from '../../lib/insightLifecycle';
 import { useFleetStream } from '../../contexts/FleetStreamContext';
+import type { SentinelMetrics } from '../../types';
+import { computeWES } from '../../utils/wes';
+
+// ── Cloud URL (mirrors App.tsx / APIKeysView.tsx) ─────────────────────────────
+const CLOUD_URL = (() => {
+  const v = import.meta.env.VITE_CLOUD_URL ?? '';
+  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  return v.startsWith('http') ? v : `https://${v}`;
+})();
 
 // ── Node-availability gate constant ───────────────────────────────────────────
 // Mirrors the ONLINE_GATE_MS used in AIInsights to build FleetNodeSummary.
@@ -80,6 +89,239 @@ function patternColor(patternId: string): string {
     default:                     return 'text-indigo-400';
   }
 }
+
+// ── Fleet Pulse computation ────────────────────────────────────────────────────
+// Live fleet snapshot derived from useFleetStream() data.
+
+function computeNodeWes(m: SentinelMetrics): number | null {
+  const tps   = m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null;
+  const watts = m.cpu_power_w ?? m.nvidia_power_draw_w ?? null;
+  if (tps == null || watts == null || tps <= 0 || watts <= 0) return null;
+  return computeWES(tps, watts, m.thermal_state);
+}
+
+interface FleetPulse {
+  onlineCount:     number;
+  totalCount:      number;
+  fleetTokS:       number;
+  topNode:         { nodeId: string; hostname: string; wes: number } | null;
+  bottomNode:      { nodeId: string; hostname: string; wes: number } | null;
+  /** WES ratio top/bottom — only set when ≥ 2 nodes online and ratio ≥ 1.5. */
+  efficiencyRatio: number | null;
+}
+
+function computeFleetPulse(
+  allNodeMetrics: Record<string, SentinelMetrics>,
+  lastSeenMsMap:  Record<string, number>,
+): FleetPulse {
+  const now     = Date.now();
+  const allIds  = Object.keys(allNodeMetrics);
+  const total   = allIds.length;
+
+  const onlineIds = allIds.filter(id => {
+    const lastSeen = lastSeenMsMap[id] ?? allNodeMetrics[id]?.timestamp_ms;
+    return lastSeen != null && now - lastSeen < ONLINE_GATE_MS;
+  });
+
+  const fleetTokS = onlineIds.reduce(
+    (sum, id) => sum + (allNodeMetrics[id].ollama_tokens_per_second ?? allNodeMetrics[id].vllm_tokens_per_sec ?? 0),
+    0,
+  );
+
+  const wesNodes = onlineIds
+    .map(id => ({
+      nodeId:   id,
+      hostname: allNodeMetrics[id].hostname ?? id,
+      wes:      computeNodeWes(allNodeMetrics[id]) ?? 0,
+    }))
+    .filter(n => n.wes > 0)
+    .sort((a, b) => b.wes - a.wes);
+
+  const topNode    = wesNodes[0]    ?? null;
+  const bottomNode = wesNodes.length >= 2 ? wesNodes[wesNodes.length - 1] : null;
+  const ratio      = topNode && bottomNode && bottomNode.wes > 0
+    ? topNode.wes / bottomNode.wes
+    : null;
+
+  return {
+    onlineCount:     onlineIds.length,
+    totalCount:      total,
+    fleetTokS,
+    topNode,
+    bottomNode,
+    efficiencyRatio: ratio != null && ratio >= 1.5 ? ratio : null,
+  };
+}
+
+// ── InlineCopyButton ──────────────────────────────────────────────────────────
+
+const InlineCopyButton: React.FC<{ text: string }> = ({ text }) => {
+  const [done, setDone] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text);
+    setDone(true);
+    setTimeout(() => setDone(false), 2000);
+  };
+  return (
+    <button
+      onClick={copy}
+      className="shrink-0 p-1 text-gray-600 hover:text-gray-400 transition-colors"
+      title="Copy"
+    >
+      {done
+        ? <Check className="w-3 h-3 text-green-400" />
+        : <Copy className="w-3 h-3" />}
+    </button>
+  );
+};
+
+// ── FleetPulseStrip ───────────────────────────────────────────────────────────
+// Compact always-visible row showing live fleet health at a glance.
+
+const FleetPulseStrip: React.FC<{ pulse: FleetPulse }> = ({ pulse }) => {
+  const {
+    onlineCount, totalCount, fleetTokS, topNode,
+  } = pulse;
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-2 bg-gray-950/40 border-t border-gray-800/60 flex-wrap text-[10px]">
+      {/* Online count */}
+      <div className="flex items-center gap-1.5">
+        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+          onlineCount > 0 ? 'bg-green-400 animate-pulse' : 'bg-gray-600'
+        }`} />
+        <span className="font-semibold text-gray-400">
+          {onlineCount}<span className="text-gray-600">/{totalCount}</span>
+        </span>
+        <span className="text-gray-600">online</span>
+      </div>
+
+      <span className="text-gray-700">·</span>
+
+      {/* Fleet tok/s */}
+      <div className="flex items-center gap-1">
+        <Zap className="w-3 h-3 text-indigo-400/70 shrink-0" />
+        <span className="font-mono font-semibold text-gray-400">
+          {fleetTokS > 0 ? fleetTokS.toFixed(1) : '—'}
+        </span>
+        <span className="text-gray-600">tok/s fleet</span>
+      </div>
+
+      {/* Top WES node */}
+      {topNode && (
+        <>
+          <span className="text-gray-700">·</span>
+          <div className="flex items-center gap-1">
+            <Activity className="w-3 h-3 text-green-400/70 shrink-0" />
+            <span className="text-gray-600">top:</span>
+            <span className="font-mono font-semibold text-gray-300">{topNode.hostname}</span>
+            <span className="font-mono text-indigo-400/80">{topNode.wes.toFixed(0)}</span>
+            <span className="text-gray-600">WES</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ── HeadToHeadRow ─────────────────────────────────────────────────────────────
+// Shown when ≥ 2 online nodes have a meaningful WES gap (≥ 1.5×).
+
+const HeadToHeadRow: React.FC<{ pulse: FleetPulse }> = ({ pulse }) => {
+  const { topNode, bottomNode, efficiencyRatio } = pulse;
+  if (!topNode || !bottomNode || efficiencyRatio == null) return null;
+
+  return (
+    <div className="flex items-start gap-2 py-2.5 border-b border-gray-800/50">
+      <BarChart2 className="w-3.5 h-3.5 text-blue-400/70 shrink-0 mt-0.5" />
+      <p className="text-[10px] text-gray-500 leading-relaxed">
+        <span className="font-semibold text-gray-300">{topNode.hostname}</span>
+        {' '}is{' '}
+        <span className="font-semibold text-indigo-400">{efficiencyRatio.toFixed(1)}×</span>
+        {' '}more efficient than{' '}
+        <span className="font-semibold text-gray-300">{bottomNode.hostname}</span>
+        {' '}— prefer it for throughput-sensitive workloads.
+      </p>
+    </div>
+  );
+};
+
+// ── TopFindingSection ─────────────────────────────────────────────────────────
+// The highest-confidence active onset from the 24h buffer — shown in the
+// collapsible body above the full events list. Operators get the most
+// actionable finding immediately without scrolling.
+//
+// The curl snippet shows the /api/v1/insights/latest query pattern — even
+// before the endpoint ships (Sprint 5) it teaches external consumers the
+// API contract.
+
+const ACTION_ID_COLORS: Record<string, string> = {
+  rebalance_workload:   'text-blue-400  bg-blue-500/10  border-blue-500/20',
+  evict_idle_models:    'text-violet-400 bg-violet-500/10 border-violet-500/20',
+  reduce_batch_size:    'text-cyan-400  bg-cyan-500/10  border-cyan-500/20',
+  check_thermal_zone:   'text-amber-400 bg-amber-500/10 border-amber-500/20',
+  investigate_phantom:  'text-violet-400 bg-violet-500/10 border-violet-500/20',
+  schedule_offpeak:     'text-green-400 bg-green-500/10 border-green-500/20',
+};
+
+const TopFindingSection: React.FC<{ event: InsightRecentEvent }> = ({ event }) => {
+  const curlText = `curl ${CLOUD_URL}/api/v1/insights/latest \\\n  -H "X-API-Key: wk_live_YOUR_KEY_HERE"`;
+  const actionColor = ACTION_ID_COLORS[event.action_id] ?? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20';
+
+  return (
+    <div className="py-3 border-b border-gray-800/60 space-y-2">
+      <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 mb-1">
+        Top Finding
+      </p>
+
+      {/* Pattern + hook */}
+      <div className="flex items-start gap-2">
+        <div className="mt-0.5 shrink-0">{patternIcon(event.patternId)}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className={`text-xs font-semibold ${patternColor(event.patternId)}`}>
+              {event.title}
+            </p>
+            <span className="font-mono text-[10px] text-gray-500">{event.hook}</span>
+            <span className="text-[9px] text-gray-600">{event.hostname}</span>
+          </div>
+        </div>
+        {event.confidence && (
+          <span className={`text-[9px] font-bold uppercase tracking-wide shrink-0 ${
+            event.confidence === 'high'     ? 'text-red-400/80'   :
+            event.confidence === 'moderate' ? 'text-amber-400/80' :
+                                              'text-gray-500'
+          }`}>
+            {event.confidence}
+          </span>
+        )}
+      </div>
+
+      {/* Recommendation */}
+      {event.recommendation && (
+        <p className="text-[10px] text-gray-400 leading-relaxed ml-5">
+          {event.recommendation}
+        </p>
+      )}
+
+      {/* action_id + curl */}
+      <div className="ml-5 space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${actionColor}`}>
+            {event.action_id}
+          </span>
+          <span className="text-[9px] text-gray-600">machine directive</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <pre className="flex-1 font-mono text-[9px] text-gray-500 bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 overflow-x-auto whitespace-pre min-w-0">
+            {curlText}
+          </pre>
+          <InlineCopyButton text={curlText} />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ── Stale-node warning banner ─────────────────────────────────────────────────
 
@@ -219,8 +461,11 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
   const [events,    setEvents]    = useState<InsightRecentEvent[]>([]);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
-  // Live fleet state — used for per-render node-availability gating.
+  // Live fleet state — used for Fleet Pulse and per-render node-availability gating.
   const { allNodeMetrics, lastSeenMsMap } = useFleetStream();
+
+  // Fleet Pulse — recomputed on every render (live data).
+  const pulse = computeFleetPulse(allNodeMetrics, lastSeenMsMap);
 
   // Refresh the buffer from localStorage on mount and every 60s. Background
   // eval cycles may write new entries while this tab is not in focus.
@@ -273,19 +518,34 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
   const dismissed = events.filter(e => e.eventType === 'dismissed');
   const total     = onsets.length + resolved.length + dismissed.length;
 
-  // ── Empty state ───────────────────────────────────────────────────────────
+  // Top Finding — highest-confidence onset from the 24h buffer.
+  // Priority: high > moderate > low. Shown pinned at the top of the body.
+  const CONF_RANK = { high: 2, moderate: 1, low: 0 } as const;
+  const topFinding: InsightRecentEvent | null = onsets.length > 0
+    ? onsets
+        .map(({ event }) => event)
+        .sort((a, b) =>
+          (CONF_RANK[b.confidence ?? 'low'] ?? 0) - (CONF_RANK[a.confidence ?? 'low'] ?? 0),
+        )[0]
+    : null;
+
+  // ── Empty state — no 24h events ──────────────────────────────────────────
+  // Still show Fleet Pulse if nodes are online.
 
   if (total === 0) {
     return (
-      <div className="flex items-center gap-3 px-4 h-10 bg-gray-900 border border-gray-800 rounded-2xl">
-        <History className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-        <span className="text-xs text-gray-600 flex-1">24h Briefing</span>
-        <div className="flex items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse" />
-          <span className="font-mono text-[10px] text-gray-600 uppercase tracking-widest">
-            No observations
-          </span>
+      <div className="bg-gray-900/60 border border-gray-800 rounded-2xl overflow-hidden">
+        <div className="flex items-center gap-3 px-4 h-10">
+          <History className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+          <span className="text-xs text-gray-600 flex-1">24h Briefing</span>
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse" />
+            <span className="font-mono text-[10px] text-gray-600 uppercase tracking-widest">
+              No observations
+            </span>
+          </div>
         </div>
+        {pulse.onlineCount > 0 && <FleetPulseStrip pulse={pulse} />}
       </div>
     );
   }
@@ -327,9 +587,18 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
         />
       </button>
 
+      {/* ── Fleet Pulse — always visible ────────────────────────────────────── */}
+      {pulse.onlineCount > 0 && <FleetPulseStrip pulse={pulse} />}
+
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       {!collapsed && (
         <div className="px-4 pb-3 pt-1 border-t border-gray-800/60 space-y-0">
+
+          {/* Top Finding — highest-confidence active pattern */}
+          {topFinding && <TopFindingSection event={topFinding} />}
+
+          {/* Head-to-head — only when ≥2 online nodes have a WES gap ≥ 1.5× */}
+          <HeadToHeadRow pulse={pulse} />
 
           {/* Onset events — deduped, most recent per pattern.
               Each row resolves its named peer's live status for routing gating. */}
