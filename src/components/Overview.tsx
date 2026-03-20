@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock } from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint } from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
@@ -999,7 +999,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         // memory_pressure_percent is Apple Silicon only; fall back to used/total for Linux.
         mem:   data.memory_pressure_percent ??
                (data.total_memory_mb > 0 ? (data.used_memory_mb / data.total_memory_mb) * 100 : null),
-        power: data.cpu_power_w ?? data.nvidia_power_draw_w ?? null,
+        // Prefer apple_soc_power_w (true SoC draw ~13-14 W) over cpu_power_w alone (~1.5 W).
+        power: data.apple_soc_power_w
+          ?? (data.cpu_power_w != null || data.apple_gpu_power_w != null || data.nvidia_power_draw_w != null
+              ? (data.cpu_power_w ?? 0) + (data.apple_gpu_power_w ?? 0) + (data.nvidia_power_draw_w ?? 0)
+              : null),
       };
       const next = [...prev, pt];
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
@@ -1107,11 +1111,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       .filter((v): v is number => v != null);
     const mem = memVals.length > 0 ? memVals.reduce((a, b) => a + b, 0) / memVals.length : null;
 
-    // Power — total draw across all nodes that report any power metric
+    // Power — total draw across all nodes that report any power metric.
+    // Prefer apple_soc_power_w (true SoC total) over cpu_power_w alone.
     const powerVals = all
-      .map(m => (m.cpu_power_w != null || m.nvidia_power_draw_w != null)
-        ? (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0)
-        : null)
+      .map(m => m.apple_soc_power_w != null
+        ? m.apple_soc_power_w
+        : (m.cpu_power_w != null || m.nvidia_power_draw_w != null || m.apple_gpu_power_w != null)
+          ? (m.cpu_power_w ?? 0) + (m.apple_gpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0)
+          : null)
       .filter((v): v is number => v != null);
     const power = powerVals.length > 0 ? powerVals.reduce((a, b) => a + b, 0) : null;
 
@@ -1834,55 +1841,47 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       {isLocalHost && (
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
           {(!pairingInfo || pairingInfo.status === 'unpaired') && (
-            <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
-              <div className="flex flex-col justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <Cloud className="w-5 h-5 text-gray-400" />
-                  <div>
-                    <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Sentinel Identity</p>
-                    <p className="text-sm font-bold text-white">{pairingInfo?.node_id ?? '—'}</p>
-                  </div>
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <Fingerprint className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Node Identity</p>
+                  <p className="text-sm font-bold text-white font-mono">{pairingInfo?.node_id ?? '—'}</p>
                 </div>
-                <p className="text-xs text-gray-500">
-                  Enter your pairing code at wicklee.dev to connect this node to your fleet.
-                </p>
-                <button
-                  onClick={onOpenPairing}
-                  className="self-start px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
-                >
-                  Pair a Node →
-                </button>
               </div>
-              <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
-                <div className="w-10 h-10 bg-gray-700 rounded-lg" />
-                <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
-              </div>
+              <p className="text-xs text-gray-500">
+                Enter your pairing code at wicklee.dev to connect this node to your fleet.
+              </p>
+              <button
+                onClick={onOpenPairing}
+                className="self-start px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
+              >
+                Pair this Node →
+              </button>
             </div>
           )}
 
           {pairingInfo?.status === 'pending' && (
-            <div className="sm:grid sm:grid-cols-2 gap-6 flex flex-col">
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="relative">
-                    <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-amber-400 opacity-30" />
-                    <Cloud className="w-5 h-5 text-amber-400 relative" />
-                  </div>
-                  <p className="text-sm font-bold text-white">Pairing in Progress</p>
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-amber-400 opacity-30" />
+                  <Fingerprint className="w-5 h-5 text-amber-400 relative" />
                 </div>
-                <p className="text-3xl font-bold text-white tracking-[0.3em] tabular-nums">
-                  {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
+                <div>
+                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Node Identity</p>
+                  <p className="text-xs font-mono text-gray-400">{pairingInfo.node_id ?? '—'}</p>
+                </div>
+              </div>
+              <p className="text-3xl font-bold text-white tracking-[0.3em] tabular-nums">
+                {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
+              </p>
+              <p className="text-[11px] text-gray-500">Enter this code at wicklee.dev to complete pairing.</p>
+              {pairingInfo.expires_at && (
+                <p className="text-[11px] text-amber-400 tabular-nums">
+                  Expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
                 </p>
-                {pairingInfo.expires_at && (
-                  <p className="text-[11px] text-amber-400 tabular-nums">
-                    Expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
-                  </p>
-                )}
-              </div>
-              <div className="h-28 bg-gray-800 border border-gray-700 rounded-xl flex flex-col items-center justify-center gap-1">
-                <div className="w-10 h-10 bg-gray-700 rounded-lg" />
-                <span className="text-[10px] text-gray-600">QR — Coming Soon</span>
-              </div>
+              )}
             </div>
           )}
 
