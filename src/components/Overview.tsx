@@ -9,6 +9,7 @@ import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
+import { useLocalEvents } from '../hooks/useLocalEvents';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed from './EventFeed';
 import MetricTooltip from './MetricTooltip';
@@ -18,14 +19,19 @@ import type { HexHiveRow } from './shared/HexHive';
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 /**
- * GPU utilisation thresholds for the three-state TOK/S display:
+ * GPU utilisation thresholds for the four-state TOK/S display:
  *
- * IDLE-SPD  gpu% < GPU_IDLE_THRESHOLD  — macOS compositing only, probe ran clean
- * BUSY      gpu% ≥ GPU_BUSY_THRESHOLD  + inference_active=false — non-Ollama GPU load
- * (between thresholds: show probe value, lighter styling, no label)
+ * LIVE      inference_state === "live"     — active user session
+ * BUSY      inference_state === "busy"     — GPU >20% but no confirmed inference
+ * IDLE-SPD  inference_state === "idle-spd" — probe window; cached baseline visible
+ * IDLE      inference_state === "idle"     — quiet; gray dash, no badge
+ *
+ * inference_state is the authoritative field from v0.4.37+ agents.
+ * For pre-v0.4.37 agents (field absent), the frontend falls back to computed logic.
+ * GPU_BUSY_THRESHOLD is used only by the fallback path.
  */
 const GPU_IDLE_THRESHOLD = 15;
-const GPU_BUSY_THRESHOLD = 50;
+const GPU_BUSY_THRESHOLD = 20;
 
 /**
  * Estimated total hardware tok/s, accounting for background inference.
@@ -310,22 +316,25 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst, inferenceActive);
   const isActive     = isOnline && tps != null && tps > 0;
 
-  // Three-state TOK/S display — Silicon Truth hierarchy:
-  // IDLE-SPD: agent's background probe is running (ollama_is_probing=true). The probe fires a
-  //           real Ollama request which would otherwise trigger inference_active → ghost-LIVE.
-  //           The flag stays true for 40 s: probe duration + the 35 s /api/ps expiry window.
-  // LIVE:     inference_active=true AND probe NOT running → real user session on :11434 or
-  //           vLLM actively serving (vllm_requests_running > 0). No proxy required.
-  // BUSY:     GPU ≥ threshold AND no confirmed inference → non-LLM GPU workload.
+  // Four-state TOK/S display — Silicon Truth hierarchy.
+  // v0.4.37+ agents: use authoritative inference_state from agent (dumb mirror).
+  // Pre-v0.4.37 agents: field absent → fall back to locally computed logic.
   const isProbing   = m?.ollama_is_probing === true;
-  const isInferring = isOnline && !isProbing && (
-    inferenceActive === true ||
-    (m?.vllm_running === true && (m?.vllm_requests_running ?? 0) > 0)
-  );
+  const hasState    = m?.inference_state != null;
+  const isInferring = hasState
+    ? m!.inference_state === 'live'
+    : isOnline && !isProbing && (
+        inferenceActive === true ||
+        (m?.vllm_running === true && (m?.vllm_requests_running ?? 0) > 0)
+      );
   // ~ prefix only when tok/s is a pure GPU%-based estimate (no real measurement available)
   const isEstimated = smoothedTps == null && tps != null;
-  const isBusy      = isOnline && !isProbing && inferenceActive !== true && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
-  const isIdleSpeed = isOnline && !isInferring && !isBusy && smoothedTps != null;
+  const isBusy      = hasState
+    ? m!.inference_state === 'busy'
+    : isOnline && !isProbing && inferenceActive === false && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isIdleSpeed = hasState
+    ? m!.inference_state === 'idle-spd'
+    : isOnline && !isInferring && !isBusy && smoothedTps != null;
 
   // Thermal — not smoothed (state machine, not a continuous signal)
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
@@ -863,15 +872,22 @@ const DiagnosticRail: React.FC<{
   const smoothedTps     = tpsBuf.push(rawTps, tsMs) ?? rawTps;
   const tps             = estimateTps(smoothedTps, peakTps ?? null, gpuPct, inferenceActive);
 
-  // Same Silicon Truth hierarchy as FleetStatusRow.
+  // Same Silicon Truth hierarchy as FleetStatusRow — dumb mirror when inference_state present.
   const isProbing    = s.ollama_is_probing === true;
-  const isInferring  = tps != null && !isProbing && (
-    inferenceActive === true ||
-    (s.vllm_running === true && (s.vllm_requests_running ?? 0) > 0)
-  );
+  const hasState     = s.inference_state != null;
+  const isInferring  = hasState
+    ? s.inference_state === 'live'
+    : tps != null && !isProbing && (
+        inferenceActive === true ||
+        (s.vllm_running === true && (s.vllm_requests_running ?? 0) > 0)
+      );
   const isEstimated  = smoothedTps == null && tps != null;
-  const isBusy       = !isProbing && !isInferring && inferenceActive !== true && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
-  const isIdleSpeed  = !isInferring && !isBusy && smoothedTps != null;
+  const isBusy       = hasState
+    ? s.inference_state === 'busy'
+    : !isProbing && !isInferring && inferenceActive === false && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isIdleSpeed  = hasState
+    ? s.inference_state === 'idle-spd'
+    : !isInferring && !isBusy && smoothedTps != null;
   const hasTps       = s.ollama_running || s.vllm_running;
 
   const utilCls = (pct: number) =>
@@ -993,6 +1009,19 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
   const transport = isLocalHost ? localTransport : cloudTransport;
+
+  // Local event watcher — generates FleetEvents from single-node metric deltas
+  // and live_activities embedded in the MetricsPayload. Only active on localhost.
+  const localEvents = useLocalEvents(
+    isLocalHost ? sentinel : null,
+    isLocalHost ? localConnected : false,
+  );
+
+  // Active event list: local mode uses localEvents; cloud mode uses fleetEvents from context.
+  // Merge on localhost in case a future cloud pairing also pushes events here.
+  const activeEvents = isLocalHost
+    ? [...localEvents, ...fleetEvents].slice(0, 50)
+    : fleetEvents;
 
   const pushHistoryPoint = useCallback((data: SentinelMetrics) => {
     setHistory(prev => {
@@ -1206,11 +1235,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     : null;
 
   // Whether any node is actively serving real user inference.
-  // Ollama: inference_active=true AND is_probing=false (background probe exclusion).
-  // vLLM:   active request count > 0.
+  // v0.4.37+: use authoritative inference_state field; fallback to computed logic.
   const anyInferring = tpsNodes.some(m =>
-    (m.ollama_inference_active === true && m.ollama_is_probing !== true) ||
-    (m.vllm_running === true && (m.vllm_requests_running ?? 0) > 0)
+    m.inference_state != null
+      ? m.inference_state === 'live'
+      : (m.ollama_inference_active === true && m.ollama_is_probing !== true) ||
+        (m.vllm_running === true && (m.vllm_requests_running ?? 0) > 0)
   );
   // Whether any inferring node has the Wicklee proxy active (exact tok/s, not estimated)
   const anyProxyActive = tpsNodes.some(m => m.ollama_proxy_active === true);
@@ -1221,17 +1251,26 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? (sentinel.nvidia_gpu_utilization_percent ?? sentinel.gpu_utilization_percent ?? null)
     : null;
   const localInferenceActive = sentinel?.ollama_inference_active ?? null;
-  // Silicon Truth: inference_active=true AND probe NOT running → LIVE.
-  const localIsProbing   = sentinel?.ollama_is_probing === true;
-  const localIsInferring = sentinel != null && !localIsProbing && (
-    localInferenceActive === true ||
-    (sentinel.vllm_running === true && (sentinel.vllm_requests_running ?? 0) > 0)
-  );
-  const localIsBusy = sentinel != null && !localIsProbing && !localIsInferring &&
-    localInferenceActive === false && (localGpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  // Silicon Truth: dumb mirror when inference_state present; fallback for pre-v0.4.37 agents.
+  const localIsProbing    = sentinel?.ollama_is_probing === true;
+  const localHasState     = sentinel?.inference_state != null;
+  const localIsInferring  = localHasState
+    ? sentinel!.inference_state === 'live'
+    : sentinel != null && !localIsProbing && (
+        localInferenceActive === true ||
+        (sentinel.vllm_running === true && (sentinel.vllm_requests_running ?? 0) > 0)
+      );
+  const localIsBusy       = localHasState
+    ? sentinel!.inference_state === 'busy'
+    : sentinel != null && !localIsProbing && !localIsInferring &&
+      localInferenceActive === false && (localGpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
   // IDLE-SPD covers both probe-running (localIsProbing=true) and genuine idle with a baseline.
-  const localIsIdleSpeed = sentinel != null && !localIsInferring && !localIsBusy &&
-    (tpsNodes.length > 0);
+  const localIsIdleSpeed  = localHasState
+    ? sentinel!.inference_state === 'idle-spd'
+    : sentinel != null && !localIsInferring && !localIsBusy && (tpsNodes.length > 0);
+  const localIsIdle       = localHasState
+    ? sentinel!.inference_state === 'idle'
+    : sentinel != null && !localIsInferring && !localIsBusy && !localIsIdleSpeed;
 
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
   const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics);
@@ -1505,7 +1544,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? isLocalHost
       ? 'Live · 1 node unreachable'
       : `Live · ${unreachableNodeIds.length} node${unreachableNodeIds.length !== 1 ? 's' : ''} unreachable`
-    : 'Live · All nodes reporting';
+    : isLocalHost
+      ? `Live · ${localNodeId}`
+      : 'Live · All nodes reporting';
 
   const sseTooltip = sseState === 'red'
     ? 'SSE stream disconnected · attempting to reconnect'
@@ -1553,10 +1594,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {/* ── Row 1: Performance & Health ─────────────────────────────────── */}
 
-        {/* 1. THROUGHPUT — three-state value color matches label:
-              LIVE     → green  (proxy-confirmed user session)
+        {/* 1. THROUGHPUT — four-state value color matches label:
+              LIVE     → green  (active user inference session)
               BUSY     → amber  (GPU loaded by non-Ollama workload)
               IDLE-SPD → slate  (hardware baseline from background probe — not a user session)
+              IDLE     → gray   (quiet — no runtime or no data yet)
               null     → gray   (no runtime) */}
         <InsightTile
           label="Throughput"
@@ -1571,6 +1613,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                   ? 'text-amber-400'
                   : localIsIdleSpeed
                   ? 'text-slate-400'
+                  : localIsIdle
+                  ? 'text-gray-500 dark:text-gray-600'
                   : undefined
                 : anyInferring
                   ? 'text-green-400'
@@ -1586,6 +1630,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 ? 'idle-spd · probing'
                 : localIsIdleSpeed
                 ? 'idle-spd baseline'
+                : localIsIdle
+                ? 'idle'
                 : 'this node'
               : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · ${anyInferring ? 'live' : 'idle-spd baseline'}`
             : (hasAnyOllama || hasAnyVllm) ? 'sampling every 30s' : 'no inference runtime'}
@@ -1868,89 +1914,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         )}
       </div>
 
-      {/* ── Fleet Connect card — localhost only ───────────────────────────────── */}
-      {isLocalHost && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-          {(!pairingInfo || pairingInfo.status === 'unpaired') && (
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center gap-3">
-                <Fingerprint className="w-5 h-5 text-indigo-400" />
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Node Identity</p>
-                  <p className="text-sm font-bold text-white font-mono">{pairingInfo?.node_id ?? '—'}</p>
-                </div>
-              </div>
-              <p className="text-xs text-gray-500">
-                Enter your pairing code at wicklee.dev to connect this node to your fleet.
-              </p>
-              <button
-                onClick={onOpenPairing}
-                className="self-start px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
-              >
-                Pair this Node →
-              </button>
-            </div>
-          )}
-
-          {pairingInfo?.status === 'pending' && (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-amber-400 opacity-30" />
-                  <Fingerprint className="w-5 h-5 text-amber-400 relative" />
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold">Node Identity</p>
-                  <p className="text-xs font-mono text-gray-400">{pairingInfo.node_id ?? '—'}</p>
-                </div>
-              </div>
-              <p className="text-3xl font-bold text-white tracking-[0.3em] tabular-nums">
-                {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
-              </p>
-              <p className="text-[11px] text-gray-500">Enter this code at wicklee.dev to complete pairing.</p>
-              {pairingInfo.expires_at && (
-                <p className="text-[11px] text-amber-400 tabular-nums">
-                  Expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
-                </p>
-              )}
-            </div>
-          )}
-
-          {pairingInfo?.status === 'connected' && (
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div className="flex items-center gap-4">
-                <div className="relative shrink-0">
-                  <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-green-400 opacity-20" />
-                  <CloudLightning className="w-5 h-5 text-green-400 relative" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <p className="text-sm font-bold text-white">Connected to Fleet</p>
-                    <span className="text-[10px] bg-green-500/10 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">{pairingInfo.node_id}</span>
-                  </div>
-                  <p className="text-[11px] text-gray-500">wicklee.dev</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <a
-                  href="https://wicklee.dev"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 text-xs font-medium rounded-xl transition-all"
-                >
-                  View Fleet Dashboard →
-                </a>
-                <button
-                  onClick={onOpenPairing}
-                  className="px-3 py-1.5 border border-red-500/30 hover:border-red-500/60 text-red-400 hover:text-red-300 text-xs font-medium rounded-xl transition-all"
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Charts + event feed ──────────────────────────────────────────────── */}
       {(() => {
@@ -2080,7 +2043,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             </div>
 
             <div className="lg:col-span-1 h-full min-h-[400px]">
-              <EventFeed events={fleetEvents} />
+              <EventFeed events={activeEvents} />
             </div>
           </div>
         );
@@ -2465,6 +2428,99 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         </div>
       </div>
       )} {/* end isLocalMode ternary — Fleet Intelligence / Fleet Preview CTA */}
+
+      {/* ── Fleet Connect status bar — localhost only, always at bottom ──────── */}
+      {isLocalHost && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-gray-800 bg-gray-900/50 text-[11px] flex-wrap">
+
+          {/* Left: identity + state label */}
+          {(!pairingInfo || pairingInfo.status === 'unpaired') && (
+            <div className="flex items-center gap-2 text-gray-500">
+              <Fingerprint className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+              <span className="font-mono text-gray-400">{pairingInfo?.node_id ?? '—'}</span>
+              <span className="text-gray-700">·</span>
+              <span>Not paired to fleet</span>
+            </div>
+          )}
+
+          {pairingInfo?.status === 'pending' && (
+            <div className="flex items-center gap-2 text-amber-400/80">
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+              </span>
+              <span className="font-mono text-gray-400">{pairingInfo.node_id ?? '—'}</span>
+              <span className="text-gray-700">·</span>
+              <span>Pairing code:&nbsp;
+                <span className="font-mono font-bold text-amber-300 tracking-widest">
+                  {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
+                </span>
+              </span>
+              {pairingInfo.expires_at && (
+                <>
+                  <span className="text-gray-700">·</span>
+                  <span className="tabular-nums text-amber-500/70">
+                    expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
+          {pairingInfo?.status === 'connected' && (
+            <div className="flex items-center gap-2 text-gray-400">
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-40" style={{ animationDuration: '3s' }} />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+              </span>
+              <span className="text-green-400 font-medium">Connected to Fleet</span>
+              <span className="text-gray-700">·</span>
+              <span className="font-mono text-gray-500">{pairingInfo.node_id}</span>
+              <span className="text-gray-700">·</span>
+              <span className="text-gray-600">wicklee.dev</span>
+            </div>
+          )}
+
+          {/* Right: action */}
+          {(!pairingInfo || pairingInfo.status === 'unpaired') && (
+            <button
+              onClick={onOpenPairing}
+              className="px-3 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-400 hover:text-indigo-300 font-medium rounded-lg transition-all"
+            >
+              Pair this Node →
+            </button>
+          )}
+
+          {pairingInfo?.status === 'pending' && (
+            <button
+              onClick={onOpenPairing}
+              className="px-3 py-1 border border-amber-500/30 text-amber-400/70 hover:text-amber-300 font-medium rounded-lg transition-all"
+            >
+              Cancel
+            </button>
+          )}
+
+          {pairingInfo?.status === 'connected' && (
+            <div className="flex items-center gap-2">
+              <a
+                href="https://wicklee.dev"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-400 hover:text-indigo-300 font-medium rounded-lg transition-all"
+              >
+                View Fleet →
+              </a>
+              <button
+                onClick={onOpenPairing}
+                className="px-3 py-1 border border-gray-700 hover:border-red-500/40 text-gray-600 hover:text-red-400 font-medium rounded-lg transition-all"
+              >
+                Disconnect
+              </button>
+            </div>
+          )}
+
+        </div>
+      )}
     </div>
   );
 };

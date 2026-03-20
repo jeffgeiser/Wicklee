@@ -125,6 +125,15 @@ export interface SentinelMetrics {
    * /api/ps expiry window). When true, show IDLE-SPD instead of LIVE — the probe
    * fires a real Ollama request which would otherwise appear as a user session. */
   ollama_is_probing?: boolean | null;
+  /**
+   * Authoritative inference state computed once by the Rust agent each tick.
+   * "live"     — active user inference session
+   * "busy"     — GPU >20% but no confirmed inference (another workload)
+   * "idle-spd" — probe window; show cached tok/s but suppress LIVE badge
+   * "idle"     — quiet, no badge
+   * Absent on pre-v0.4.37 agents — frontend falls back to computed logic.
+   */
+  inference_state?: string;
   // vLLM runtime (absent/false when not running)
   vllm_running?:          boolean;
   vllm_model_name?:       string | null;
@@ -173,6 +182,26 @@ export interface SentinelMetrics {
    * stale cached interfaces and prompt a hard-reload.
    */
   agent_version?: string;
+  /**
+   * System-level lifecycle events from the agent (startup, update, service restart, etc.).
+   * Embedded in the metrics stream — no separate endpoint needed.
+   * Only populated on frames where new events occurred; absent/empty otherwise.
+   */
+  live_activities?: LiveActivityEvent[];
+}
+
+/**
+ * A system-level event emitted by the agent and embedded in MetricsPayload.
+ * Used to surface agent lifecycle events (startup, update, service restart) in the
+ * Live Activity feed without a separate endpoint.
+ */
+export interface LiveActivityEvent {
+  /** Human-readable description, e.g. "Agent started · v0.4.37" */
+  message:      string;
+  /** Unix epoch milliseconds */
+  timestamp_ms: number;
+  /** Severity level — maps to FleetEvent.type on the frontend */
+  level:        'info' | 'warn' | 'error';
 }
 
 /**

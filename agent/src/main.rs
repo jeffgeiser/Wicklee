@@ -67,25 +67,64 @@ struct OllamaMetrics {
     /// When true, tok/s comes from done-packet eval_count/eval_duration rather than the 30s probe.
     #[serde(default)]
     ollama_proxy_active: bool,
-    /// Timestamp of the most recent background probe start.
-    /// Used to derive `ollama_is_probing` for the frontend without adding a second lock.
-    /// Skipped in serialization — forwarded via MetricsPayload.ollama_is_probing instead.
+    /// Set to `Some(Instant::now())` when probe_ollama_tps() begins.
     #[serde(skip)]
     last_probe_start: Option<std::time::Instant>,
+    /// Set to `Some(Instant::now())` when probe_ollama_tps() returns.
+    #[serde(skip)]
+    last_probe_end: Option<std::time::Instant>,
 }
 
 impl OllamaMetrics {
-    /// True during the background probe run AND for 40 s afterward.
-    /// The 40 s window covers the probe run itself (~5–15 s) plus the 35 s
-    /// /api/ps expiry window that Ollama sets after the generate completes.
-    /// This prevents the probe's own Ollama activity from appearing as LIVE inference.
-    fn is_probing(&self) -> bool {
+    /// 40-second authoritative IDLE-SPD window: covers the probe run itself
+    /// (~5–15 s) plus the 35 s /api/ps expiry lag Ollama sets after each
+    /// generate completes. Used by compute_inference_state() — not exported.
+    fn is_probe_window(&self) -> bool {
         self.last_probe_start.map_or(false, |t| t.elapsed().as_secs() < 40)
+    }
+
+    /// Frontend diagnostic field: true while the probe is actively running,
+    /// or within 5 s of finishing (short cool-down). Exported as
+    /// `ollama_is_probing` in MetricsPayload so the UI can show "probing" badge.
+    fn is_probing_display(&self) -> bool {
+        match (self.last_probe_start, self.last_probe_end) {
+            (None, _)          => false,                         // never started
+            (Some(_), Some(e)) => e.elapsed().as_secs() < 5,    // finished — 5 s cool-down
+            (Some(s), None)    => s.elapsed().as_secs() < 60,   // still running (generous timeout)
+        }
     }
 }
 
 // vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
+/// Canonical four-state inference classifier.
+///
+/// Evaluated once per broadcast tick in the Rust agent and sent as
+/// `inference_state` in MetricsPayload.  The frontend uses this field
+/// directly — no re-computation needed, no localhost/cloud discrepancy.
+///
+/// Hierarchy (first match wins):
+///   "idle-spd"  probe is within 40 s window (run + /api/ps expiry lag)
+///   "live"      confirmed user inference (Ollama active OR vLLM serving)
+///   "busy"      GPU > 20% spike with inference confirmed idle
+///   "idle"      default — hardware at rest
+fn compute_inference_state(
+    is_probe_window:       bool,
+    inference_active:      Option<bool>,
+    vllm_requests_running: Option<u32>,
+    gpu_util:              Option<f32>,
+) -> &'static str {
+    if is_probe_window { return "idle-spd"; }
+    let user_infer = inference_active == Some(true)
+        || vllm_requests_running.map_or(false, |r| r > 0);
+    if user_infer { return "live"; }
+    // BUSY only when inference is confirmed false — null (unknown runtime) is not BUSY.
+    if inference_active == Some(false) && gpu_util.map_or(false, |g| g > 20.0) {
+        return "busy";
+    }
+    "idle"
+}
+
 #[derive(Serialize, Clone, Default)]
 struct VllmMetrics {
     vllm_running:          bool,
@@ -290,6 +329,11 @@ struct MetricsPayload {
     /// The frontend compares this against its own build-time UI version to detect
     /// stale cached interfaces and prompt a hard-reload.
     agent_version: String,
+    /// Authoritative inference state, computed once by compute_inference_state().
+    /// "idle-spd" | "live" | "busy" | "idle"
+    /// Sent to both the local WebSocket and the cloud telemetry API so both
+    /// surfaces always display the same label — no frontend re-computation needed.
+    inference_state: String,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -2863,13 +2907,18 @@ fn start_ollama_harvester(
                 }
 
                 // GPU is idle enough — fire the full 20-token benchmark.
-                // Mark probe start so the frontend shows IDLE-SPD (not LIVE) for the
-                // duration of the probe + the 35 s /api/ps expiry window that follows.
+                // Set last_probe_start now; last_probe_end after it returns.
+                // compute_inference_state() uses last_probe_start for the 40 s IDLE-SPD window.
+                // ollama_is_probing (frontend display) uses last_probe_end + 5 s cool-down.
                 if let Ok(mut g) = shared_probe.lock() {
                     g.last_probe_start = Some(std::time::Instant::now());
+                    g.last_probe_end   = None; // clear end so is_probing_display() knows it's running
                 }
                 let new_tps = probe_ollama_tps(&probe_client, port, &model).await;
-                if let Ok(mut g) = shared_probe.lock() { g.ollama_tokens_per_second = new_tps; }
+                if let Ok(mut g) = shared_probe.lock() {
+                    g.ollama_tokens_per_second = new_tps;
+                    g.last_probe_end = Some(std::time::Instant::now());
+                }
             }
         });
     }
@@ -3320,7 +3369,13 @@ fn start_metrics_broadcaster(
 
             // Compute before struct literal so we can borrow `ollama` without
             // conflicting with the field moves (Option<String> fields are not Copy).
-            let ollama_is_probing_flag = if ollama.is_probing() { Some(true) } else { None };
+            let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
+            let inference_state_val = compute_inference_state(
+                ollama.is_probe_window(),
+                ollama.ollama_inference_active,
+                vllm.vllm_requests_running,
+                nvidia.nvidia_gpu_utilization_percent.or(apple.gpu_utilization_percent),
+            ).to_string();
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
@@ -3386,6 +3441,7 @@ fn start_metrics_broadcaster(
                 pcie_link_width:     nvidia.pcie_link_width,
                 pcie_link_max_width: nvidia.pcie_link_max_width,
                 agent_version:       env!("CARGO_PKG_VERSION").to_string(),
+                inference_state:     inference_state_val,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -3713,7 +3769,13 @@ async fn handle_metrics(
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let swap_mb_s     = swap_metrics.read();
-            let ollama_is_probing_flag = if ollama.is_probing() { Some(true) } else { None };
+            let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
+            let inference_state_val = compute_inference_state(
+                ollama.is_probe_window(),
+                ollama.ollama_inference_active,
+                vllm.vllm_requests_running,
+                nvidia.nvidia_gpu_utilization_percent.or(apple.gpu_utilization_percent),
+            ).to_string();
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -3780,6 +3842,7 @@ async fn handle_metrics(
                 pcie_link_width:     nvidia.pcie_link_width,
                 pcie_link_max_width: nvidia.pcie_link_max_width,
                 agent_version:       env!("CARGO_PKG_VERSION").to_string(),
+                inference_state:     inference_state_val,
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -4235,6 +4298,16 @@ async fn main() {
 
     // Shared event queue for drain-on-send live activity entries (update notifications etc.).
     let live_events: Arc<Mutex<Vec<LiveActivityEvent>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Emit a startup event so the Live Activity feed is immediately populated.
+    {
+        let mut evts = live_events.lock().unwrap();
+        evts.push(LiveActivityEvent {
+            message:      format!("Agent started · v{}", env!("CARGO_PKG_VERSION")),
+            timestamp_ms: now_ms(),
+            level:        "info",
+        });
+    }
 
     let broadcast_tx          = start_metrics_broadcaster(
         Arc::clone(&apple_metrics),

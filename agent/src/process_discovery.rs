@@ -154,7 +154,23 @@ pub const RUNTIME_SPECS: &[RuntimeSpec] = &[
         default_port:    8000,
     },
     // ── Add future runtimes below — one entry each ────────────────────────────
-    // RuntimeSpec { name: "llamacpp",  exact_binary: &["llama-server"],              cmdline_markers: &[],              port_arg: "--port", default_port: 8080 },
+    // llama.cpp: port discovery only in v0.4.37.
+    // inference_active harvester (GET /health) deferred to v0.4.38.
+    RuntimeSpec {
+        name:            "llamacpp",
+        exact_binary:    &["llama-server"],
+        cmdline_markers: &["llama-server", "llama_server"],
+        port_arg:        "--port",
+        default_port:    8080,
+    },
+    // llama-box (llama.cpp single-binary distribution)
+    RuntimeSpec {
+        name:            "llama-box",
+        exact_binary:    &["llama-box"],
+        cmdline_markers: &["llama-box"],
+        port_arg:        "--port",
+        default_port:    8080,
+    },
     // RuntimeSpec { name: "lmstudio",  exact_binary: &["lms"],                       cmdline_markers: &[],              port_arg: "--port", default_port: 1234 },
     // RuntimeSpec { name: "tgi",       exact_binary: &["text-generation-launcher"],  cmdline_markers: &[],              port_arg: "--port", default_port: 3000 },
     // RuntimeSpec { name: "triton",    exact_binary: &["tritonserver"],              cmdline_markers: &[],              port_arg: "--http-port", default_port: 8000 },
