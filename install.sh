@@ -85,21 +85,25 @@ chmod +x "$TMP"
 # Prevents "port 7700 already in use" when the new binary first starts.
 # We attempt a clean service stop first; pkill is the belt-and-suspenders fallback.
 
+GHOST_KILLED=false
+
 if [[ "$OS_TAG" == "darwin" ]]; then
   if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
-    sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null || true
+    sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null && GHOST_KILLED=true || true
     sleep 1
   fi
   # Also kill any manual `sudo wicklee` process not managed by launchd.
-  sudo pkill -x wicklee 2>/dev/null || true
+  sudo pkill -x wicklee 2>/dev/null && GHOST_KILLED=true || true
 
 elif [[ "$OS_TAG" == "linux" ]]; then
   if command -v systemctl &>/dev/null && systemctl is-active --quiet wicklee 2>/dev/null; then
-    sudo systemctl stop wicklee
+    sudo systemctl stop wicklee && GHOST_KILLED=true
   fi
-  sudo pkill -x wicklee-agent 2>/dev/null || true
-  sudo pkill -x wicklee       2>/dev/null || true
+  sudo pkill -x wicklee-agent 2>/dev/null && GHOST_KILLED=true || true
+  sudo pkill -x wicklee       2>/dev/null && GHOST_KILLED=true || true
 fi
+
+[[ "$GHOST_KILLED" == "true" ]] && dim "  Stopped previous Wicklee instance."
 
 # ── Install ───────────────────────────────────────────────────────────────────
 # Use cp+mv rather than cp-in-place so an existing running wicklee service
