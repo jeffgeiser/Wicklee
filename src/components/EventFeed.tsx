@@ -131,7 +131,7 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
           <div className="flex flex-col items-center justify-center h-full py-10 text-center">
             <Terminal className="w-8 h-8 text-gray-300 dark:text-gray-700 mb-3" />
             <p className="text-sm text-gray-500 font-medium">No activity yet</p>
-            <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Fleet events will appear here</p>
+            <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Node events will appear here</p>
           </div>
         ) : (
           <>
