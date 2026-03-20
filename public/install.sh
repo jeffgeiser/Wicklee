@@ -145,8 +145,12 @@ fi
 
 # ── Success ───────────────────────────────────────────────────────────────────
 
+# Read the actual version from the installed binary (e.g. "wicklee-agent v0.4.36").
+INSTALLED_VERSION="$("${INSTALL_PATH}" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+VERSION_LABEL="${INSTALLED_VERSION:-${RELEASE_TAG}}"
+
 echo ""
-green "  ✓ Wicklee agent installed successfully (${RELEASE_TAG})"
+green "  ✓ Wicklee agent installed successfully  —  ${VERSION_LABEL}"
 echo ""
 
 if [[ "$SERVICE_UPDATED" == "true" ]]; then
