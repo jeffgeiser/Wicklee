@@ -76,9 +76,11 @@ struct OllamaMetrics {
 }
 
 impl OllamaMetrics {
-    /// 40-second authoritative IDLE-SPD window: covers the probe run itself
-    /// (~5–15 s) plus the 35 s /api/ps expiry lag Ollama sets after each
-    /// generate completes. Used by compute_inference_state() — not exported.
+    /// 40-second IDLE-SPD window: covers the probe run itself (~5–15 s) plus
+    /// the 35 s /api/ps expiry lag Ollama sets after each generate completes.
+    /// Only active when inference_active is false — confirmed user inference
+    /// takes priority and renders this window irrelevant (LIVE wins).
+    /// Used by compute_inference_state() — not exported.
     fn is_probe_window(&self) -> bool {
         self.last_probe_start.map_or(false, |t| t.elapsed().as_secs() < 40)
     }
@@ -104,20 +106,29 @@ impl OllamaMetrics {
 /// directly — no re-computation needed, no localhost/cloud discrepancy.
 ///
 /// Hierarchy (first match wins):
-///   "idle-spd"  probe is within 40 s window (run + /api/ps expiry lag)
 ///   "live"      confirmed user inference (Ollama active OR vLLM serving)
-///   "busy"      GPU > 20% spike with inference confirmed idle
-///   "idle"      default — hardware at rest
+///               — wins unconditionally, even during the probe window.
+///               The probe is real inference; LIVE during a probe is honest.
+///   "idle-spd"  probe window active (40 s from last_probe_start) AND no
+///               confirmed user inference — shows cached baseline tok/s.
+///   "busy"      GPU > 20% spike with inference confirmed false (Some(false)).
+///               Null = unknown runtime, not BUSY; only strict false triggers.
+///   "idle"      default — hardware at rest, no active inference signal.
 fn compute_inference_state(
     is_probe_window:       bool,
     inference_active:      Option<bool>,
     vllm_requests_running: Option<u32>,
     gpu_util:              Option<f32>,
 ) -> &'static str {
-    if is_probe_window { return "idle-spd"; }
+    // LIVE is the highest-priority state — confirmed inference wins over probe window.
+    // This prevents is_probe_window from masking a user job running concurrently.
     let user_infer = inference_active == Some(true)
         || vllm_requests_running.map_or(false, |r| r > 0);
     if user_infer { return "live"; }
+
+    // No confirmed inference — probe window takes over if active.
+    if is_probe_window { return "idle-spd"; }
+
     // BUSY only when inference is confirmed false — null (unknown runtime) is not BUSY.
     if inference_active == Some(false) && gpu_util.map_or(false, |g| g > 20.0) {
         return "busy";
@@ -2831,15 +2842,14 @@ fn start_ollama_harvester(
                     m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
                     m.ollama_proxy_active = true;
                 } else {
-                    // 120 s window: covers streaming responses that take longer than 35 s
-                    // (the old window) without producing a completion that resets expires_at.
-                    // Probe-generated activity is excluded by is_probe_window() (40 s) in
-                    // compute_inference_state(), so false-LIVE from probes is not a concern.
-                    // After real inference ends, the probe re-fires within ~30 s, keeping
-                    // the overlapping probe windows continuous — ensuring a clean IDLE-SPD
-                    // transition rather than a brief false-LIVE blip.
+                    // 35 s window: covers Ollama's /api/ps keep_alive cleanup lag.
+                    // expires_at resets on each request completion; the 35 s window
+                    // bridges the gap between completions for multi-turn sessions.
+                    // Long single-turn streaming responses (>35 s without completion)
+                    // will show BUSY via the GPU gate in compute_inference_state —
+                    // an honest label: "hardware is pegged, can't confirm AI process."
                     m.ollama_inference_active =
-                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 120));
+                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 35));
                 }
 
                 if let Ok(mut g) = shared_main.lock() { *g = m; }
