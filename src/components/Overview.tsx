@@ -806,7 +806,7 @@ const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, b
   <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0">
     <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 w-28 shrink-0">{label}</p>
     <div className="flex items-center gap-1.5 w-20 shrink-0">
-      <p className={`text-sm font-telin font-bold ${textCls}`}>{value}</p>
+      <p className={`text-sm font-telin font-bold whitespace-nowrap ${textCls}`}>{value}</p>
       {badge && (
         <span className={`text-[8px] font-semibold uppercase tracking-widest leading-none ${badgeCls}`}>
           {badge}
