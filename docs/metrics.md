@@ -295,6 +295,74 @@ Or equivalently: `TC% = (1 − 1/ThermalPenalty) × 100`
 
 ---
 
+## Swap Write Rate (MB/s)
+
+**What it is:** The rate at which the operating system is writing memory pages to disk swap, measured in megabytes per second. Sampled from `/proc/diskstats` (Linux), `vm_stat` (macOS), or WMI (Windows). Zero-privilege on all platforms.
+
+**Why it matters for inference:** When VRAM or unified memory is exhausted, the OS begins swapping active memory pages to disk. Swap writes during inference cause the characteristic "stuttering" pattern — generation proceeds at normal speed, then freezes for hundreds of milliseconds, then resumes. The freeze corresponds to a page fault during a forward pass weight access. This is invisible in CPU/GPU utilization metrics; swap write rate is the only direct signal.
+
+**Interpreting values:**
+- `0 MB/s`: No swap pressure. Healthy.
+- `< 10 MB/s`: Light swap activity — may be background processes, not inference. Monitor.
+- `10–50 MB/s`: Significant swap during inference. Expect noticeable throughput degradation and stutter.
+- `> 50 MB/s`: Severe swap storm. The model has exceeded the node's effective memory ceiling. Throughput will collapse.
+
+**Action:** If swap write rate rises during inference, the loaded model is too large for this node's available memory. Options: switch to a lower quantization, reduce context window length (`num_ctx`), or unload competing models (`ollama stop`).
+
+**Display:** Visible in the Observability tab → Raw Metric History panel as the 5th chart (rose, MB/s scale). Not yet shown in the Fleet Status table — fleet-level swap visibility is a future sprint.
+
+> **Pattern link:** A dedicated Swap Write pattern rule is planned (4B roadmap) that fires when `swap_write_mb_s` exceeds a threshold during active inference. Until then, use the chart and **Pattern F — Memory Pressure Trajectory** together: Pattern F detects the pressure trajectory *before* swap begins; the Swap Write chart confirms when swap is actively occurring.
+
+---
+
+## Clock Throttle %
+
+**What it is:** The percentage by which the GPU's current graphics clock frequency is below its rated maximum. Calculated as `(1 − current_clock / max_clock) × 100`. Sourced from NVML `clock_info(Clock::Graphics)` and `max_clock_info(Clock::Graphics)`. Zero-privilege.
+
+**Why it matters for inference:** A GPU running at 70% of its rated clock speed delivers approximately 70% of its potential token throughput — regardless of what GPU utilization percentage shows. Clock throttling from non-thermal causes (TDP cap, VRM current limit, driver frequency policy) is invisible in standard monitoring. The GPU may show 90% utilization and still be underperforming by 30% because it's executing fewer operations per second.
+
+**Interpreting values:**
+- `0%`: Full rated clock speed. No throttling.
+- `1–15%`: Minor throttle — often transient. Monitor under sustained load.
+- `15–35%`: Meaningful throughput loss during inference. Investigate TDP settings and power delivery.
+- `> 35%`: Severe clock reduction. The node is delivering significantly less inference throughput than its hardware is capable of.
+
+**Action:**
+- Check your GPU's TDP cap: `nvidia-smi -q -d POWER` to see power limit vs default.
+- Raise power limit if headroom exists: `sudo nvidia-smi -pl <watts>`.
+- Check VRM thermals — a hot VRM will reduce current delivery, causing clock droops identical to TDP limiting.
+- Distinguish from thermal throttle (Pattern A): Clock Drift (Pattern K) fires only at Normal thermal state — if thermals are elevated, address cooling first.
+
+> **Pattern link:** **Pattern K — Clock Drift** fires when `clock_throttle_pct > 15%` is sustained for 5 minutes during active inference, with ≤30% hot thermal samples. Quantifies implied full-speed tok/s and escalates to "Severe" at > 35% throttle. Community tier — available without a Pro subscription.
+
+---
+
+## PCIe Lane Width
+
+**What it is:** The number of PCIe lanes currently active between the GPU and the CPU/motherboard, reported alongside the maximum lane count the GPU and slot support. Sourced from NVML `current_pcie_link_width()` and `max_pcie_link_width()`. Zero-privilege.
+
+**Why it matters for inference:** PCIe bandwidth is the pipe through which model weight data moves from system RAM to GPU during inference. A GPU designed for PCIe x16 running at x4 (due to a physical seating issue or slot fault) operates at 25% of its designed memory bandwidth — silently. There is no software error; the GPU appears "fine" in every other metric. Token throughput drops proportionally to bandwidth loss, and the cause is completely invisible without reading the lane width directly.
+
+**Lane counts and their bandwidth:**
+| Lanes | Bandwidth (PCIe 4.0) | Relative to x16 |
+|---|---|---|
+| x16 | ~32 GB/s | 100% |
+| x8 | ~16 GB/s | 50% |
+| x4 | ~8 GB/s | 25% |
+| x1 | ~2 GB/s | 6% |
+
+**Action:** If `pcie_link_width < pcie_link_max_width`:
+1. Power down the system completely (not just restart) — PCIe lane negotiation happens at POST.
+2. Reseat the GPU in its slot. Ensure it is fully clicked in.
+3. If the slot itself is faulty, move the GPU to a different x16 slot on the motherboard.
+4. Check motherboard documentation — some boards run secondary slots at x4 regardless of the GPU's capability.
+
+**Display:** `pcie_link_width` and `pcie_link_max_width` are stored in `MetricSample` localStorage history and used by Pattern L. They are not yet displayed in the Fleet Status table — this is a future sprint for NVIDIA-specific node detail panels.
+
+> **Pattern link:** **Pattern L — PCIe Lane Degradation** fires when ≥70% of a 5-minute sample window shows `pcie_link_width < pcie_link_max_width` during active inference. Reports `bandwidthLossPct = (1 − cur/max) × 100`. Pro tier.
+
+---
+
 ## Enterprise Contextual Metrics *(Phase 5)*
 
 These metrics are computed from existing telemetry + operator-configured context. No new agent instrumentation required.
@@ -431,6 +499,9 @@ Wicklee is designed to work across all major inference platforms without comprom
 | Tokens per second | ✅ sudoless | ✅ sudoless | ✅ sudoless | ✅ sudoless |
 | WES | ✅ full | ✅ full | ✅ full | ✅ full (RAPL power) |
 | Thermal Cost % | ✅ | ✅ | ✅ | ✅ |
+| Swap Write Rate (MB/s) | ✅ vm_stat | ✅ /proc/diskstats | ✅ /proc/diskstats | ✅ /proc/diskstats |
+| Clock Throttle % | — | ✅ NVML sudoless | ✅ NVML sudoless | — |
+| PCIe Lane Width (cur/max) | — | ✅ NVML sudoless | ✅ NVML sudoless | — |
 
 ---
 

@@ -4,7 +4,14 @@
 
 ---
 
-## ✅ Shipped (v0.4.28)
+## ✅ Shipped (v0.4.33)
+
+**Agent CLI + Deep Metal Sprint (v0.4.29–v0.4.33)**
+- **Hardware-derived node ID (v0.4.29)** — `generate_node_id()` reads `/etc/machine-id` (Linux), `IOPlatformUUID` via `ioreg` (macOS), or `MachineGuid` registry key (Windows). XOR-folds to stable WK-XXXX suffix. Timestamp fallback for containers/live ISOs. Existing paired nodes unaffected.
+- **Swap Write field (v0.4.30)** — `swap_write_mb_s` on `MetricsPayload`. Sources: `/proc/diskstats` (Linux), `vm_stat` (macOS), WMI (Windows). Explains inference stuttering caused by VRAM-pressure-induced swap. Zero-privilege on all platforms.
+- **Clock throttle + PCIe probes (v0.4.31)** — `clock_throttle_pct` from `nvmlDeviceGetClock(Graphics)` vs max. `pcie_link_width` + `pcie_link_max_width` from `current_pcie_link_width()` / `max_pcie_link_width()`. Both zero-privilege NVML calls. **Also:** `ClockType` → `Clock` enum fix (nvml_wrapper 0.10 API rename — caught by Linux CI build).
+- **launchctl reinstall fix (v0.4.32)** — `--install-service` on macOS now uses `launchctl bootout system/dev.wicklee.agent` + `launchctl bootstrap system <plist>` instead of deprecated `launchctl load -w`. Fixes I/O error 5 on reinstall when service label already registered. Same fix in `--uninstall-service`.
+- **Version on every invocation (v0.4.33)** — `println!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"))` as first statement in `main()`. Every CLI invocation announces its version — `--install-service`, `--status`, daemon startup log, all paths. `--version` handler simplified to just `return`.
 
 **Agent Hardening Sprint (v0.4.21–v0.4.28)**
 - **`HOME` resolution via `getpwuid` (v0.4.25)** — `config_path()` falls back to `/etc/passwd` when `$HOME` is absent. Fixes `/.wicklee/config.toml` (root-owned) appearing when systemd starts the service with no `HOME=` env var.
@@ -295,6 +302,8 @@
 - [x] **Pattern H — Power Jitter (Community tier) ✅ shipped:** Power draw coefficient of variation (`stddev(watts)/mean(watts)`) exceeds 20% for 5 min with active inference (tok/s > 0) and mean watts > 30W. Two root causes: thundering herd (tok/s CoV also elevated → load balancer fix) vs PSU/VRM stress (watts-only variance → hardware check). Differentiator: standard tools track average power; Wicklee tracks power *cleanliness*. `action_id: reduce_batch_size`. Icon: `Waves` (orange). `stddev()` helper added to patternEngine.
 - [x] **Pattern I — Efficiency Penalty Drag (Pro tier) ✅ shipped:** `penalty_avg > 30%` sustained 5 min with Normal thermals, active GPU (>30% util), and no memory/VRAM saturation. First pattern to directly exploit the `penalty_avg` WES v2 field — catches the "invisible tax" class of losses: oversized context windows, under-saturated batches, KV cache fragmentation, MoE routing overhead. `action_id: reduce_batch_size`. Icon: `TrendingDown` (yellow) in ObservationCard / `Wind` in Briefing.
 - [x] **`resolution_steps: string[]` on all patterns A–I ✅:** Five numbered prescriptive steps per pattern (commands + config changes + physical actions), ordered by execution sequence. Each step is a complete standalone instruction. Rendered as a numbered list in ObservationCard below the recommendation block. Exposed in `/api/v1/insights/latest` for automation consumers. Steps are fleet-context-aware where applicable (e.g., Pattern A names the alt node in step 2 if one exists).
+- [x] **Pattern K — Clock Drift (Community tier) ✅ shipped:** `clock_throttle_pct > 15%` sustained 5 min, `tok_s > 0.5`, ≤30% hot thermal samples (guards against Pattern A overlap). Two thresholds: soft 15% (warning) / hard 35% (severe escalation changes title). Quantifies implied full-speed tok/s via `avgTokS / ((100 - avgThrottle) / 100)`. Root causes: TDP cap, VRM current limit, driver frequency cap. `action_id: check_power_limits`. Icon: `Zap` (sky blue). Distinct from Pattern A: fires at Normal thermal state only.
+- [x] **Pattern L — PCIe Lane Degradation (Pro tier) ✅ shipped:** 70% of 5-min samples show `pcie_link_width < pcie_link_max_width`, with ≥50% active inference samples. Physical hardware condition — GPU not fully seated, or slot wiring fault. `bandwidthLossPct = (1 - cur/max) × 100`. Hook: `"PCIe x{cur} of x{max} ({loss}% bandwidth loss)"`. `action_id: check_power_limits`. Icon: `CpuIcon` (orange). Static condition — window is for data-quality confidence, not change detection.
 
 ---
 
@@ -371,7 +380,7 @@
 > "one click from recommendation to raw data" chain started by the Morning Briefing Card.
 > See `docs/SPEC.md → Observability Tab Specification` for section definitions.
 
-- [x] **Raw Metric History panel** — `MetricHistoryPanel` in `TracesView.tsx`. Fetches `GET /api/history?node_id=X&from=X&to=X` from the agent DuckDB store. Four mini area charts (Recharts): tok/s (tps or tps_avg), power draw (W), GPU util %, CPU usage %. Time window selector: 1h / 6h / 24h. Auto resolution (raw → 1min → 1hr). Resolution badge + sample count displayed. Error state for musl agents. Cockpit (localhost) only.
+- [x] **Raw Metric History panel** — `MetricHistoryPanel` in `TracesView.tsx`. Six mini area charts in a 2×3 grid (`lg:grid-cols-3`): tok/s (indigo), power draw (amber), GPU util % (cyan), CPU usage % (blue), **Swap Write in MB/s** (rose, `swap_write_mb_s`), **Clock Throttle %** (violet, `clock_throttle_pct`). Time window selector: 1h / 6h / 24h. Auto resolution (raw → 1min → 1hr). Resolution badge + sample count displayed. Error state for musl agents. Cockpit (localhost) only. *(Charts 5 + 6 added in v0.4.31 alongside Pattern K + L.)*
 - [x] **Agent Health panel** — `AgentHealthPanel` in `TracesView.tsx`. Three health indicators: Collection (SSE/WS connection state dot + transport badge), DuckDB Store (lightweight /api/history probe on mount → ok/unavailable), Last Frame (relative time from `lastTelemetryMs`). Harvester manifest table: four active collection threads + cadences. Cockpit (localhost) only.
 
 ---
@@ -428,22 +437,21 @@
 |---|---|---|---|---|---|
 | **Power jitter** (stddev of watts, 30s window) | 1Hz power_draw (existing) | None | All | ✅ Pattern H shipped | PSU/VRM stress, thundering-herd load — CoV > 20% over 5 min |
 | **Efficiency Penalty Drag** (penalty_avg > 30%) | WES v2 penalty_avg (existing) | None | All | ✅ Pattern I shipped | Context length, batch fragmentation, MoE routing overhead |
-| **SSD Swap I/O** (swap write MB/s during inference) | `/proc/diskstats` · `vm_stat` · WMI | None | All | 4B | New agent field `swap_write_mb_s` needed; pairs with Pattern F; explains inference "stuttering" |
-| **PCIe lane width** (current vs max, e.g. x4 vs x16) | NVML `nvmlDeviceGetCurrPcieLinkWidth()` | None | NVIDIA | 4B | New Pattern: "slow GPU" from physical seating/bus fault |
-| **Clock frequency drift** (current vs rated, graphics + memory) | NVML `nvmlDeviceGetClock()` | None | NVIDIA | 4B | New field `clock_throttle_pct`; clock penalty in WES; catches voltage/power throttle not covered by thermal state |
+| **SSD Swap I/O** (swap write MB/s during inference) | `/proc/diskstats` · `vm_stat` · WMI | None | All | ✅ Field shipped (v0.4.30) · Pattern TBD | `swap_write_mb_s` field live on all platforms. Chart visible in Observability tab (rose). Pattern to fire when swap write > threshold during inference is a future sprint. |
+| **Clock frequency drift** (current vs rated, graphics + memory) | NVML `clock_info(Clock::Graphics)` / `max_clock_info` | None | NVIDIA | ✅ Pattern K shipped (v0.4.31) | `clock_throttle_pct` field + Pattern K (Clock Drift) — fires at Normal thermal state only, distinguishes from heat-driven throttle (Pattern A). |
+| **PCIe lane width** (current vs max, e.g. x4 vs x16) | NVML `current_pcie_link_width()` / `max_pcie_link_width()` | None | NVIDIA | ✅ Pattern L shipped (v0.4.31) | `pcie_link_width` + `pcie_link_max_width` fields + Pattern L (PCIe Lane Degradation) — physical bus fault, no software signal. |
 | **XID error logs** (pre-crash kernel events, e.g. XID 61) | `dmesg` / `nvidia-smi` scraping | Optional | NVIDIA/Linux | 4B | Stability penalty slashes WES before a crash occurs |
 | **VRAM temperature** (HBM/GDDR6X vs core temp) | NVML `nvmlDeviceGetTemperature(NVML_TEMPERATURE_MEMORY)` | None | A100/H100 | 4B | `ThermalPenalty` driven by `max(vram_temp, core_temp)` |
 | **Fan efficacy** (fan% RPM vs rate of cooling) | NVML / IOKit SMC | None/Root | NVIDIA/macOS | 4B | Predictive: "airflow blocked before throttle onset" |
 | **ECC / page retirement** | NVML `nvmlDeviceGetMemoryErrorCounter()` | None | A100/H100 | 4B enterprise | Pre-failure VRAM degradation; combined with XID → near-zero WES |
 
-> **Current status:** Patterns H + I are the frontier of what's achievable on current `MetricSample` data (no new agent fields required). All remaining 4B patterns require new fields on `SentinelMetrics` and new Rust agent probes.
+> **Current status:** Patterns H, I, K, and L are all shipped. The Observability tab shows 6 charts (including Swap Write and Clock Throttle). Remaining 4B work: Swap Write pattern rule, XID errors, VRAM temp, fan efficacy, ECC.
 
-**Priority within 4B:**
-1. ~~Power jitter~~ ✅ shipped (Pattern H) · ~~Efficiency Penalty Drag~~ ✅ shipped (Pattern I)
-2. **SSD Swap I/O** — zero-privilege, platform-wide, directly explains observable inference stuttering. Agent needs: `swap_write_mb_s` field, sourced from `/proc/diskstats` (Linux), `vm_stat` (macOS), WMI (Windows).
-3. **Clock frequency drift** — NVIDIA, zero-privilege, supplements thermal penalty. Agent needs: `clock_throttle_pct` via `nvmlDeviceGetClock()`.
-4. **PCIe lane width + XID errors** — NVIDIA Linux, hardware fault detection. Agent needs: `pcie_link_width` + `xid_error_count`.
-5. Fan efficacy, VRAM temp, ECC — datacenter/enterprise tier.
+**Priority within 4B (remaining):**
+1. ~~Power jitter~~ ✅ · ~~Efficiency Penalty Drag~~ ✅ · ~~SSD Swap field~~ ✅ · ~~Clock throttle~~ ✅ · ~~PCIe lane width~~ ✅
+2. **Swap Write pattern rule** — field and chart exist; need pattern logic: fires when `swap_write_mb_s > threshold` sustained during active inference.
+3. **XID error logs** — NVIDIA Linux, hardware fault detection. Agent needs: `xid_error_count` from `dmesg` scrape.
+4. Fan efficacy, VRAM temp, ECC — datacenter/enterprise tier.
 
 ---
 
