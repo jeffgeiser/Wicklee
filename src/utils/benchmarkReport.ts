@@ -16,7 +16,7 @@ import type { SentinelMetrics } from '../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const WICKLEE_VERSION = 'v0.4.3';
+export const WICKLEE_VERSION = 'v0.4.33';
 
 // ── Report type ───────────────────────────────────────────────────────────────
 

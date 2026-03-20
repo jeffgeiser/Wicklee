@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { version as pkgVersion } from '../../package.json';
 import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock } from 'lucide-react';
 import type { NodeAgent, PairingInfo } from '../types';
 import {
@@ -587,7 +588,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="grid grid-cols-2 gap-6">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Agent Version</p>
-              <p className="text-sm font-telin text-gray-900 dark:text-white">v0.4.5</p>
+              <p className="text-sm font-telin text-gray-900 dark:text-white">v{(import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? pkgVersion}</p>
             </div>
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Fleet Status</p>
