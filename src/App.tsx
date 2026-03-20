@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { version } from '../package.json';
-import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/clerk-react';
 import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier } from './types';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
@@ -547,7 +547,14 @@ interface DashboardShellProps {
 }
 
 const DashboardShell: React.FC<DashboardShellProps> = (props) => {
-  const { connectionState, lastTelemetryMs, lastSeenMsMap } = useFleetStream();
+  const { connectionState, lastTelemetryMs, lastSeenMsMap, allNodeMetrics } = useFleetStream();
+  // Version mismatch detection: compare agent's Cargo version against this UI's package.json version.
+  const localAgentVersion = Object.values(allNodeMetrics)[0]?.agent_version;
+  const [versionBannerDismissed, setVersionBannerDismissed] = useState(false);
+  const showVersionBanner = isLocalHost
+    && !versionBannerDismissed
+    && localAgentVersion != null
+    && localAgentVersion !== version;
   const {
     nodes, activeTab, handleTabChange, setActiveTab,
     currentUser, currentTenant, setCurrentTenant,
@@ -610,6 +617,25 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
           onOpenPairing={isLocalHost ? () => setIsPairingModalOpen(true) : () => setIsAddNodeModalOpen(true)}
           isLocalHost={isLocalHost}
         />
+
+        {/* Version mismatch banner — appears when browser has a cached UI older than the running agent */}
+        {showVersionBanner && (
+          <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/25 text-amber-300 text-xs">
+            <RefreshCw className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+            <span className="flex-1">
+              UI out of date — browser is running <span className="font-mono">v{version}</span> but the agent is <span className="font-mono">v{localAgentVersion}</span>. Hard-reload to get the latest interface.
+            </span>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-mono transition-colors"
+            >
+              Reload
+            </button>
+            <button onClick={() => setVersionBannerDismissed(true)} className="text-amber-500/60 hover:text-amber-400 transition-colors ml-1">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 scroll-smooth">
           <div className="max-w-7xl mx-auto space-y-6">
