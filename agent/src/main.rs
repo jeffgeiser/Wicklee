@@ -1517,8 +1517,15 @@ async fn install_service() {
             eprintln!("       Run with sudo: sudo wicklee --install-service");
             return;
         }
+        // Bootout any existing registration so we can replace it cleanly.
+        // `launchctl load -w` (deprecated) fails with I/O error 5 when the
+        // label is already live in the system domain. The modern approach is
+        // bootout (ignore error if not registered) then bootstrap.
+        let _ = tokio::process::Command::new("launchctl")
+            .args(["bootout", "system/dev.wicklee.agent"])
+            .status().await;
         let status = tokio::process::Command::new("launchctl")
-            .args(["load", "-w", plist_path])
+            .args(["bootstrap", "system", plist_path])
             .status().await;
         match status {
             Ok(s) if s.success() => {
@@ -1528,7 +1535,7 @@ async fn install_service() {
                 println!("  Logs:  /var/log/wicklee.log");
                 println!("  To remove: sudo wicklee --uninstall-service");
             }
-            Ok(s) => eprintln!("error: launchctl load exited with status {s}"),
+            Ok(s) => eprintln!("error: launchctl bootstrap exited with status {s}"),
             Err(e) => eprintln!("error: launchctl: {e}"),
         }
     }
@@ -1649,8 +1656,9 @@ async fn uninstall_service() {
             eprintln!("Service not installed (plist not found: {plist_path}).");
             return;
         }
+        // Use modern bootout instead of deprecated `unload -w`.
         let _ = tokio::process::Command::new("launchctl")
-            .args(["unload", "-w", plist_path])
+            .args(["bootout", "system/dev.wicklee.agent"])
             .status().await;
         if let Err(e) = std::fs::remove_file(plist_path) {
             eprintln!("error: cannot remove {plist_path}: {e}");
