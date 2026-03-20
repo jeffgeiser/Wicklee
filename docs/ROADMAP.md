@@ -4,7 +4,21 @@
 
 ---
 
+## ✅ Shipped (v0.4.34–v0.4.38)
+
+**Silicon Truth + Live Activity Sprint (v0.4.34–v0.4.38)**
+- **Apple Silicon power fix (v0.4.35)** — Dashboard sparklines and fleet power aggregation now use `apple_soc_power_w` (Combined Power CPU+GPU+ANE, ~13.6 W) instead of `cpu_power_w` alone (~1.5 W). `parse_powermetrics` extended to handle multi-prefix Combined Power line across macOS versions with component synthesis fallback. stderr surfaced on powermetrics failure.
+- **System-global config path (v0.4.37)** — `config_path()` moved from `~/.wicklee/config.toml` to `/Library/Application Support/Wicklee/config.toml` (macOS) / `/etc/wicklee/config.toml` (Linux). Prevents node ID drift when launchd runs as root vs. user. One-time migration from legacy path on first startup.
+- **Ghost-Killer (v0.4.36)** — `try_evict_port()` evicts a previous wicklee process holding port 7700 on startup. 500 ms sleep in `install_service()` after `launchctl bootout` ensures port release before bootstrap. Nodes upgrade cleanly without pre-stopping the service.
+- **Silicon Truth state machine (v0.4.37)** — Authoritative `inference_state: String` field (`"idle-spd"` | `"live"` | `"busy"` | `"idle"`) computed once in `compute_inference_state()` and sent to both WS and cloud API. Frontend is a dumb mirror — falls back to computed logic for pre-v0.4.37 agents only. `is_probe_window()` (40 s) covers /api/ps 35 s expiry for ghost-inference suppression; `is_probing_display()` (probe+5 s) is the frontend diagnostic field.
+- **`llama-server` / `llama-box` port discovery (v0.4.37)** — Added to `RUNTIME_SPECS` in `process_discovery.rs`. Inference-active harvester deferred to v0.4.39 (llama.cpp /health endpoint).
+- **Live Activity feed fix (v0.4.38)** — Agent startup event was drain-once and missed by browsers connecting after the first tick. Added `recent_events_log` ring buffer (last 20 events, 5-minute TTL) exposed at `GET /api/events/recent`. Frontend `useLocalEvents` hook fetches on every fresh WS connect to seed the feed.
+- **Node Identity UI (v0.4.37)** — "Sentinel Identity" → "Node Identity", "Pair a Node" → "Pair this Node", QR placeholder sections removed, Cloud icon → Fingerprint icon, node_id displayed in `font-mono`.
+
+---
+
 ## ✅ Shipped (v0.4.33)
+
 
 **Agent CLI + Deep Metal Sprint (v0.4.29–v0.4.33)**
 - **Hardware-derived node ID (v0.4.29)** — `generate_node_id()` reads `/etc/machine-id` (Linux), `IOPlatformUUID` via `ioreg` (macOS), or `MachineGuid` registry key (Windows). XOR-folds to stable WK-XXXX suffix. Timestamp fallback for containers/live ISOs. Existing paired nodes unaffected.
@@ -169,6 +183,8 @@
 - [ ] **Windows Thermal:** WMI thermal data for Windows nodes. Annotated as "estimated" in UI — lowest data quality platform.
 - [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.
 - [ ] **macOS CPU Power (sudoless):** Entitlement-based `powermetrics` access without requiring root.
+- [ ] **llama.cpp inference-active harvester (v0.4.39)** — `llama-server` and `llama-box` detected via port discovery since v0.4.37. Inference-active status deferred: needs `GET /health` polling (returns `{"status":"ok","slots_idle":N,"slots_processing":N}`). `slots_processing > 0` = inference active. Add `RuntimeHarvester` entry in `process_discovery.rs`.
+- [ ] **DuckDB event persistence** — Store Live Activity events in `metrics.db` so the Observability tab can surface historical node lifecycle events (startup, model swaps, thermal transitions, updates). Agent side: append to a `node_events` table on every ring-buffer push. Frontend: Observability tab queries via new `GET /api/events/history?limit=N&before=<ts>` endpoint.
 - [x] **Linux arm64-nvidia build** — `ubuntu-24.04-arm` native runner + CUDA aarch64 NVML headers. Enables DGX Spark and Ampere Altra + NVIDIA installs. install.sh auto-detects and downloads correct binary on all Linux arches.
 
 ### WES Platform Expansion

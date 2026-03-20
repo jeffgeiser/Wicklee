@@ -3713,6 +3713,24 @@ async fn handle_dismissed_list(
     }
 }
 
+/// Returns the last 20 lifecycle events from the recent_events_log ring buffer,
+/// filtered to those within the last 5 minutes. Used by the frontend to seed
+/// the Live Activity feed on every fresh WS connect — catches the startup event
+/// and any lifecycle activity that fired before the browser was opened.
+async fn handle_events_recent(
+    axum::extract::Extension(log): axum::extract::Extension<
+        Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>>
+    >,
+) -> axum::Json<Vec<LiveActivityEvent>> {
+    let cutoff = now_ms().saturating_sub(5 * 60 * 1_000); // 5-minute window
+    let events: Vec<LiveActivityEvent> = log.lock().unwrap()
+        .iter()
+        .filter(|e| e.timestamp_ms >= cutoff)
+        .cloned()
+        .collect();
+    axum::Json(events)
+}
+
 async fn handle_tags() -> Json<TagsResponse> {
     Json(TagsResponse {
         models: vec![
@@ -3931,8 +3949,9 @@ fn is_newer_version(current: &str, remote: &str) -> bool {
 /// **Sovereign Mode gate**: if the agent is unpaired (no cloud_session_token),
 /// the check is skipped entirely to honour the operator's no-outbound-traffic choice.
 async fn check_and_apply_update(
-    pairing_state: Arc<Mutex<PairingState>>,
-    live_events:   Arc<Mutex<Vec<LiveActivityEvent>>>,
+    pairing_state:     Arc<Mutex<PairingState>>,
+    live_events:       Arc<Mutex<Vec<LiveActivityEvent>>>,
+    recent_events_log: Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>>,
 ) {
     // ── Sovereign Mode gate ────────────────────────────────────────────────────
     {
@@ -4048,13 +4067,17 @@ async fn check_and_apply_update(
 
     // ── Emit Live Activity event ───────────────────────────────────────────────
     // Push before restarting so the broadcaster picks it up in the next tick.
+    // Also push to recent_events_log so late-joining browsers see the update event.
     {
-        let mut evts = live_events.lock().unwrap();
-        evts.push(LiveActivityEvent {
-            message:      msg,
+        let event = LiveActivityEvent {
+            message:      msg.clone(),
             timestamp_ms: now_ms(),
             level:        "info",
-        });
+        };
+        live_events.lock().unwrap().push(event.clone());
+        let mut log = recent_events_log.lock().unwrap();
+        log.push_back(event);
+        if log.len() > 20 { log.pop_front(); }
     }
 
     // Give the broadcaster one full tick to drain the event to all WebSocket clients.
@@ -4299,14 +4322,24 @@ async fn main() {
     // Shared event queue for drain-on-send live activity entries (update notifications etc.).
     let live_events: Arc<Mutex<Vec<LiveActivityEvent>>> = Arc::new(Mutex::new(Vec::new()));
 
+    // Ring buffer of the last 20 lifecycle events for late-joining browsers.
+    // Populated alongside live_events but never drained — persists for 5 minutes.
+    // Exposed via GET /api/events/recent so browsers that open after agent startup
+    // can still see the startup event and any recent lifecycle activity.
+    let recent_events_log: Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>> =
+        Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(20)));
+
     // Emit a startup event so the Live Activity feed is immediately populated.
     {
-        let mut evts = live_events.lock().unwrap();
-        evts.push(LiveActivityEvent {
+        let event = LiveActivityEvent {
             message:      format!("Agent started · v{}", env!("CARGO_PKG_VERSION")),
             timestamp_ms: now_ms(),
             level:        "info",
-        });
+        };
+        live_events.lock().unwrap().push(event.clone());
+        let mut log = recent_events_log.lock().unwrap();
+        log.push_back(event);
+        if log.len() > 20 { log.pop_front(); }
     }
 
     let broadcast_tx          = start_metrics_broadcaster(
@@ -4411,6 +4444,7 @@ async fn main() {
     let app = {
         let r = Router::new()
             .route("/api/tags",           get(handle_tags))
+            .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/ws",                 get(handle_ws))             // WebSocket primary (10 Hz)
             .route("/api/pair/status",    get(handle_pair_status))
@@ -4440,6 +4474,7 @@ async fn main() {
          .layer(axum::extract::Extension(vllm_metrics))
          .layer(axum::extract::Extension(wes_metrics))
          .layer(axum::extract::Extension(swap_metrics))
+         .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(cors)
     };
@@ -4482,13 +4517,14 @@ async fn main() {
     // Runs once after the server is bound. Spawned so axum::serve is not delayed.
     // Sovereign Mode agents (unpaired) skip this entirely inside the function.
     {
-        let pairing_state = Arc::clone(&pairing_state);
-        let live_events   = Arc::clone(&live_events);
+        let pairing_state     = Arc::clone(&pairing_state);
+        let live_events       = Arc::clone(&live_events);
+        let recent_events_log = Arc::clone(&recent_events_log);
         tokio::spawn(async move {
             // Brief startup delay — lets the server stabilise and write its
             // first few metrics frames before we do any network I/O.
             tokio::time::sleep(Duration::from_secs(5)).await;
-            check_and_apply_update(pairing_state, live_events).await;
+            check_and_apply_update(pairing_state, live_events, recent_events_log).await;
         });
     }
 
