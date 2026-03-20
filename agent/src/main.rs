@@ -3793,6 +3793,11 @@ async fn check_and_apply_update(
 
 #[tokio::main]
 async fn main() {
+    // Print version on every invocation — CLI tools, daemon startup, and sudo
+    // install/uninstall all benefit from an immediate "which build is this?"
+    // confirmation without having to run --version separately.
+    println!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"));
+
     let config = load_or_create_config();
     let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
     let pairing_state = Arc::new(Mutex::new(PairingState {
@@ -3806,8 +3811,7 @@ async fn main() {
     }));
 
     if std::env::args().any(|a| a == "--version" || a == "-V") {
-        println!("wicklee-agent {}", env!("CARGO_PKG_VERSION"));
-        return;
+        return; // version already printed above
     }
 
     if std::env::args().any(|a| a == "--install-service") {
