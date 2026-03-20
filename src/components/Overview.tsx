@@ -333,7 +333,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     ? m!.inference_state === 'busy'
     : isOnline && !isProbing && inferenceActive === false && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed = hasState
-    ? m!.inference_state === 'idle-spd'
+    ? m!.inference_state === 'idle-spd' && tps != null
     : isOnline && !isInferring && !isBusy && smoothedTps != null;
 
   // Thermal — not smoothed (state machine, not a continuous signal)
@@ -886,7 +886,7 @@ const DiagnosticRail: React.FC<{
     ? s.inference_state === 'busy'
     : !isProbing && !isInferring && inferenceActive === false && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed  = hasState
-    ? s.inference_state === 'idle-spd'
+    ? s.inference_state === 'idle-spd' && tps != null
     : !isInferring && !isBusy && smoothedTps != null;
   const hasTps       = s.ollama_running || s.vllm_running;
 
