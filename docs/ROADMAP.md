@@ -153,7 +153,7 @@
 - [ ] RTX 4090 Vast.ai test (~$0.50/hr) — complete four-node comparison table *(capture after WES v2 ships)*
 - [x] Update wicklee.dev hero — "Local AI inference, finally observable." + updated meta/OG tags
 - [ ] GitHub repo description update
-- [ ] Show HN: "I coined WES — the MPG for local AI inference. Apple M2 scores 181.5. Ryzen 9 7950X scores 0.14. Here's why."
+- [ ] Show HN: "I coined WES — the MPG for local AI inference. Apple M2 scores ~24. Ryzen 9 7950X scores 0.14. Here's why." *(pre-v0.4.35 scores showed 181.5 — inflated ~7–8× due to CPU-only power probe; v0.4.35 fixes SoC power measurement)*
 - [ ] r/LocalLLaMA post
 - [ ] Ollama Discord #showcase
 

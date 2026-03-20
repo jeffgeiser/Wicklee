@@ -626,8 +626,8 @@ const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metric
     {
       label: 'RAPL (Linux CPU power)',
       ok: m == null ? null : isLinux && m.cpu_power_w != null,
-      detail: isLinux && m?.cpu_power_w != null ? 'Active' : isNvidia ? 'Not applicable' : 'Unavailable · sudo wicklee --install-service',
-      detailMono: !(isLinux && m?.cpu_power_w != null) && !isNvidia,
+      detail: isLinux && m?.cpu_power_w != null ? 'Active' : (isNvidia || isApple) ? 'Not applicable' : 'Unavailable · sudo wicklee --install-service',
+      detailMono: !(isLinux && m?.cpu_power_w != null) && !isNvidia && !isApple,
     },
     {
       label: 'IOKit / AGX (Apple)',
