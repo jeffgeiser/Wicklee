@@ -1572,6 +1572,121 @@ function evaluatePatternK(
   };
 }
 
+// ── Pattern L: PCIe Lane Degradation ─────────────────────────────────────────
+//
+// What: NVIDIA GPU is operating at fewer PCIe lanes than its hardware maximum.
+// e.g., a PCIe 4.0 x16 card seated in a x8 slot (electrical), or a failed
+// lane forcing negotiation down from x16 to x8.
+//
+// Why it matters: PCIe x8 provides half the bidirectional bandwidth of x16.
+// For inference, this primarily hits DMA during model weight loading (cold start
+// latency) and large-context prefill where KV cache must stream across the bus.
+// A 3090 at x8 PCIe 4.0 loses ~16 GB/s of peak DMA bandwidth vs x16.
+//
+// Distinguisher from Pattern G (Bandwidth Saturation): Pattern G fires on
+// sustained low GPU utilisation despite high VRAM fill — a runtime symptom.
+// Pattern L fires on a structural hardware mismatch that Pattern G cannot see
+// because it manifests as a lower ceiling, not a temporary dip.
+//
+// Trigger (sustained 5 min, 70% data coverage):
+//   - pcie_link_width < pcie_link_max_width  — lane-degraded slot
+//   - tok_s > 0                               — inference is actively running
+//
+// Note: PCIe link width is set at GPU enumeration time and does not change
+// during operation. The 5-min window and 70% coverage gate are purely to
+// ensure data-quality confidence, not to detect a transient condition.
+//
+// Platform: NVIDIA Linux/Windows only. nvml_wrapper 0.10 exposes
+// current_pcie_link_width() / max_pcie_link_width() without elevated privilege.
+// Tier: pro — requires hardware context to interpret and act on.
+
+const PATTERN_L_ID            = 'pcie_lane_degradation';
+const PATTERN_L_MIN_WINDOW_MS = 5 * 60 * 1000;
+const PATTERN_L_MIN_SAMPLES   = Math.ceil(PATTERN_L_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 10
+
+function evaluatePatternL(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_L_MIN_SAMPLES) return null;
+
+  const recent = history.slice(-PATTERN_L_MIN_SAMPLES);
+
+  // pcie_link_width only present on NVIDIA Linux/Windows agents >= v0.4.31
+  const pcieSamples = recent.filter(
+    s => s.pcie_link_width != null && s.pcie_link_max_width != null,
+  );
+  if (pcieSamples.length < Math.ceil(PATTERN_L_MIN_SAMPLES * 0.7)) return null;
+
+  // All qualifying samples must show lane degradation (width is static — should be unanimous)
+  const degradedSamples = pcieSamples.filter(
+    s => s.pcie_link_width! < s.pcie_link_max_width!,
+  );
+  if (degradedSamples.length < Math.ceil(pcieSamples.length * 0.7)) return null;
+
+  // Inference must be active — idle lane degradation is invisible to throughput
+  const tokSSamples = recent.filter(s => s.tok_s != null && s.tok_s > 0.5);
+  if (tokSSamples.length < Math.ceil(PATTERN_L_MIN_SAMPLES * 0.5)) return null;
+
+  // Use the most common reported width pair for display
+  const curWidth  = degradedSamples[degradedSamples.length - 1].pcie_link_width!;
+  const maxWidth  = degradedSamples[degradedSamples.length - 1].pcie_link_max_width!;
+  const bandwidthLossPct = Math.round((1 - curWidth / maxWidth) * 100);
+
+  const observedMs  = pcieSamples.length * SAMPLE_INTERVAL_MS;
+  const ratio       = Math.min(observedMs / PATTERN_L_MIN_WINDOW_MS, 1);
+
+  return {
+    patternId:       PATTERN_L_ID,
+    nodeId,
+    hostname,
+    title:           'PCIe Lane Degradation',
+    hook:            `x${curWidth} of x${maxWidth} lanes · ${bandwidthLossPct}% PCIe bandwidth loss`,
+    body:            `${hostname}'s GPU is operating at PCIe x${curWidth} but its maximum is x${maxWidth}. ` +
+                     `This is a structural hardware mismatch — the card is seated in a slot with fewer ` +
+                     `electrical lanes than its design spec, or a PCIe lane failure has forced a ` +
+                     `negotiation downgrade. At x${curWidth} vs x${maxWidth}, peak DMA bandwidth is ` +
+                     `approximately ${bandwidthLossPct}% lower than the card's rated maximum. ` +
+                     `For inference, this reduces model-weight loading speed and large-context prefill ` +
+                     `throughput — particularly visible on models larger than VRAM capacity where ` +
+                     `layers must be streamed across the PCIe bus during execution.`,
+    recommendation:  `Reseat the GPU in a slot with x${maxWidth} electrical lanes. ` +
+                     `On consumer motherboards, the primary x16 slot is typically x16 electrical; ` +
+                     `secondary slots are often x8 or x4 even when physically x16. ` +
+                     `Consult the motherboard manual to identify the correct slot. ` +
+                     `If the GPU is already in the primary slot, a lane failure may have occurred — ` +
+                     `check BIOS for PCIe error logs and consider reseating the card.`,
+    resolution_steps: [
+      `Confirm the current lane state: \`nvidia-smi --query-gpu=pcie.link.width.current,pcie.link.width.max --format=csv\` — should show ${curWidth} / ${maxWidth}`,
+      `Power down the system completely (not just reboot) and reseat the GPU in the primary PCIe x${maxWidth} slot`,
+      `Check motherboard manual: physical x16 slots are often only x8 or x4 electrical on consumer boards — the primary slot is nearly always full x16`,
+      `After reseating: \`nvidia-smi --query-gpu=pcie.link.width.current --format=csv,noheader\` should return ${maxWidth}`,
+      `If already in the correct slot and the lane count is still degraded, check BIOS → Advanced → PCIe for error logs or link speed overrides; a lane failure may require RMA`,
+    ],
+    action_id:       'check_power_limits',  // closest available — physical hardware action
+    requiredMs:      PATTERN_L_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'pro',
+    actions: [
+      {
+        label:    'Check PCIe lane width',
+        copyText: `nvidia-smi --query-gpu=pcie.link.width.current,pcie.link.width.max,name --format=csv,noheader`,
+      },
+      {
+        label:    'Check PCIe errors (BIOS)',
+        copyText: `nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.gen.max --format=csv,noheader`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,   // Pattern L: physical fix — no routing target
+    best_node_hostname: null,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -1640,6 +1755,9 @@ export function evaluatePatterns(
 
   const k = evaluatePatternK(nodeId, hostname, history, now);
   if (k) results.push(k);
+
+  const l = evaluatePatternL(nodeId, hostname, history, now);
+  if (l) results.push(l);
 
   return results;
 }

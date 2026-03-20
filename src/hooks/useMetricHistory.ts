@@ -44,6 +44,10 @@ export interface MetricSample {
   swap_write_mb_s:    number | null;
   /** CPU/GPU clock throttle percentage. 0 = full speed, 100 = fully throttled. */
   clock_throttle_pct: number | null;
+  /** Current PCIe link width in lanes (1/4/8/16). NVIDIA only; null on other platforms. */
+  pcie_link_width:     number | null;
+  /** Max PCIe link width the GPU + slot support. Pattern L: fires when current < max. */
+  pcie_link_max_width: number | null;
 }
 
 // Map<node_id, MetricSample[]> — stored as JSON in localStorage
@@ -96,6 +100,8 @@ export function metricsToSample(
     nvidia_vram_total_mb?:          number | null;
     swap_write_mb_s?:               number | null;
     clock_throttle_pct?:            number | null;
+    pcie_link_width?:               number | null;
+    pcie_link_max_width?:           number | null;
     ollama_tokens_per_second?:      number | null;
     vllm_tokens_per_sec?:           number | null;
     // WES score is not in SentinelMetrics directly — computed downstream
@@ -129,6 +135,8 @@ export function metricsToSample(
     vram_total_mb:    vramTotal,
     swap_write_mb_s:    m.swap_write_mb_s    ?? null,
     clock_throttle_pct: m.clock_throttle_pct ?? null,
+    pcie_link_width:    m.pcie_link_width     ?? null,
+    pcie_link_max_width: m.pcie_link_max_width ?? null,
   };
 }
 

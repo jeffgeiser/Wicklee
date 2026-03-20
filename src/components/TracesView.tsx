@@ -820,6 +820,7 @@ const PATTERN_LABELS: Record<string, string> = {
   efficiency_drag:       'Efficiency Drag',
   swap_io_pressure:      'Swap I/O Pressure',
   clock_drift:           'Clock Drift',
+  pcie_lane_degradation: 'PCIe Lane Degradation',
 };
 
 const FIVE_YEARS_MS = 5 * 365 * 24 * 60 * 60 * 1_000;
