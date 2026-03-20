@@ -615,7 +615,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             <>
               <span className={`${V} text-green-400`}
                 title={isEstimated ? "Live estimate — inference in progress. ~ indicates GPU%-estimated throughput." : "Live — inference in progress."}>
-                {isEstimated ? `~${tps!.toFixed(1)}` : tps!.toFixed(1)}
+                {tps != null ? (isEstimated ? `~${tps.toFixed(1)}` : tps.toFixed(1)) : '—'}
               </span>
               <p className="text-[9px] uppercase tracking-widest text-green-500 mt-0.5 font-semibold leading-none">live</p>
             </>
@@ -631,7 +631,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             <>
               <span className={`${V} text-gray-400 dark:text-gray-500`}
                 title="Idle-speed baseline — hardware unloaded. Probe result from last 30s window.">
-                {tps!.toFixed(1)}
+                {tps?.toFixed(1) ?? '—'}
               </span>
               <p className="text-[9px] uppercase tracking-widest text-gray-500 dark:text-gray-600 mt-0.5 leading-none">idle-spd</p>
             </>
@@ -927,7 +927,7 @@ const DiagnosticRail: React.FC<{
         isInferring ? (
           <RailRow
             label="Tok/s"
-            value={isEstimated ? `~${tps!.toFixed(1)}` : tps!.toFixed(1)}
+            value={tps != null ? (isEstimated ? `~${tps.toFixed(1)}` : tps.toFixed(1)) : '—'}
             textCls="text-green-400"
             barCls="bg-green-400"
             badge="live"
@@ -945,7 +945,7 @@ const DiagnosticRail: React.FC<{
         ) : isIdleSpeed ? (
           <RailRow
             label="Tok/s"
-            value={tps!.toFixed(1)}
+            value={tps?.toFixed(1) ?? '—'}
             textCls="text-gray-400 dark:text-gray-500"
             barCls="bg-gray-500"
             badge="idle-spd"
