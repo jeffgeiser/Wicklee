@@ -103,6 +103,15 @@ struct NvidiaMetrics {
     /// #[serde(skip)] — forwarded via MetricsPayload.clock_throttle_pct, not directly.
     #[serde(skip)]
     clock_throttle_pct:             Option<f32>,
+    /// Current PCIe link width (lanes): 1, 2, 4, 8, or 16.
+    /// nvmlDeviceGetCurrPcieLinkWidth. None on virtualised GPUs where PCIe info is unavailable.
+    #[serde(skip)]
+    pcie_link_width:                Option<u32>,
+    /// Maximum PCIe link width the card + slot support.
+    /// nvmlDeviceGetMaxPcieLinkWidth. When pcie_link_width < pcie_link_max_width the card is
+    /// running in a narrower slot than its design spec (lane-degraded).
+    #[serde(skip)]
+    pcie_link_max_width:            Option<u32>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -230,6 +239,13 @@ struct MetricsPayload {
     /// None on macOS, Windows, non-AMD Linux without cpufreq, and musl builds.
     #[serde(skip_serializing_if = "Option::is_none")]
     clock_throttle_pct: Option<f32>,
+    /// Current PCIe link width in lanes (1/4/8/16). NVIDIA only; None on non-NVIDIA.
+    /// Pattern L fires when pcie_link_width < pcie_link_max_width (lane-degraded slot).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pcie_link_width:     Option<u32>,
+    /// Maximum PCIe link width the GPU + slot support. Paired with pcie_link_width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pcie_link_max_width: Option<u32>,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -2119,6 +2135,18 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                     }
                 }
 
+                // ── PCIe link width ───────────────────────────────────────────
+                // current_pcie_link_width() returns the negotiated lane count (1/4/8/16).
+                // max_pcie_link_width() returns the maximum the card + slot support.
+                // When current < max, the GPU is lane-degraded (wrong slot or failed lane).
+                // Zero-privilege; returns NotSupported on virtualised guests.
+                if let Ok(cur_w) = device.current_pcie_link_width() {
+                    m.pcie_link_width = Some(cur_w);
+                }
+                if let Ok(max_w) = device.max_pcie_link_width() {
+                    m.pcie_link_max_width = Some(max_w);
+                }
+
                 if let Ok(mut guard) = shared_clone.lock() {
                     *guard = m;
                 }
@@ -3137,6 +3165,8 @@ fn start_metrics_broadcaster(
                         .and_then(|lt| lt.clock_ratio)
                         .map(|r| ((1.0 - r) * 100.0).clamp(0.0, 100.0) as f32)
                 }),
+                pcie_link_width:     nvidia.pcie_link_width,
+                pcie_link_max_width: nvidia.pcie_link_max_width,
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -3524,6 +3554,8 @@ async fn handle_metrics(
                         .and_then(|lt| lt.clock_ratio)
                         .map(|r| ((1.0 - r) * 100.0).clamp(0.0, 100.0) as f32)
                 }),
+                pcie_link_width:     nvidia.pcie_link_width,
+                pcie_link_max_width: nvidia.pcie_link_max_width,
             };
 
             let event = match Event::default().json_data(&payload) {

@@ -153,6 +153,10 @@ export interface SentinelMetrics {
    * 0% is healthy; higher values mean the GPU/CPU clock is below its rated maximum.
    */
   clock_throttle_pct?: number | null;
+  /** Current PCIe link width in lanes (1/4/8/16). NVIDIA only; absent on other platforms. */
+  pcie_link_width?: number | null;
+  /** Maximum PCIe link width the GPU + slot support. Pattern L fires when current < max. */
+  pcie_link_max_width?: number | null;
 }
 
 /**
@@ -369,6 +373,10 @@ export interface HistorySample {
   swap_write_mb_s?: number | null;
   /** GPU clock throttle % — raw tier only. 0 = full speed. Null on aggregated tiers. */
   clock_throttle_pct?: number | null;
+  /** Current PCIe link width (lanes). Raw tier only; null on aggregated tiers. */
+  pcie_link_width?: number | null;
+  /** Max PCIe link width the GPU + slot support. Raw tier only. */
+  pcie_link_max_width?: number | null;
 }
 
 /** Response envelope from GET /api/history. */
