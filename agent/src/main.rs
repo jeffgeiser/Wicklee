@@ -122,8 +122,12 @@ struct AppleSiliconMetrics {
     /// GPU power draw reported by powermetrics "GPU Power: NNN mW".
     /// None on Intel Macs and non-macOS platforms.
     gpu_power_w:             Option<f32>,
-    /// Total SoC power from powermetrics "Combined Power (CPU + GPU + ANE): NNN mW".
+    /// Apple Neural Engine power from "ANE Power: NNN mW" (some macOS versions).
+    ane_power_w:             Option<f32>,
+    /// Total SoC power from powermetrics "Combined Power (CPU + GPU + ANE): NNN mW"
+    /// (or "Combined Power:" / "Package Power:" on older/newer macOS versions).
     /// This is the authoritative total for Apple Silicon WES calculation.
+    /// Synthesized from cpu + gpu + ane if the combined line is absent.
     /// None on Intel Macs and non-macOS platforms.
     soc_power_w:             Option<f32>,
     gpu_utilization_percent: Option<f32>,
@@ -1089,15 +1093,31 @@ async fn try_evict_port(port: u16) -> bool {
     true
 }
 
-/// powermetrics without sudo — parses CPU power + memory pressure.
+/// powermetrics — parses CPU/GPU/SoC power and memory pressure.
+/// The process may already be root (launchd service) or not; powermetrics
+/// requires root for power sampling. When run without root it typically
+/// exits non-zero — we surface the stderr so ops can diagnose permissions.
 async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
     let out = tokio::process::Command::new("powermetrics")
-        .args(["--samplers", "cpu_power,gpu_power,thermal", "-n", "1", "-i", "1000"])
+        .args(["--samplers", "cpu_power,gpu_power,thermal", "-n", "1", "-i", "500"])
         .output()
         .await
         .ok()?;
-    if !out.status.success() { return None; }
-    Some(parse_powermetrics(&String::from_utf8_lossy(&out.stdout)))
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !stderr.trim().is_empty() {
+            eprintln!("[power] powermetrics failed: {}", stderr.trim());
+            eprintln!("[power] hint: run as root (sudo wicklee --install-service) for SoC power data");
+        }
+        return None;
+    }
+    let result = parse_powermetrics(&String::from_utf8_lossy(&out.stdout));
+    // Debug: warn if we got cpu_power but no soc_power — suggests parse miss
+    if result.cpu_power_w.is_some() && result.soc_power_w.is_none() {
+        eprintln!("[power] parsed cpu_power_w={:.1}W but soc_power_w=None — Combined Power line not found",
+            result.cpu_power_w.unwrap_or(0.0));
+    }
+    Some(result)
 }
 
 fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
@@ -1116,7 +1136,17 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
             m.pcpu_power_w = parse_mw(rest);
         } else if let Some(rest) = line.strip_prefix("GPU Power: ") {
             m.gpu_power_w = parse_mw(rest);
-        } else if let Some(rest) = line.strip_prefix("Combined Power (CPU + GPU + ANE): ") {
+        } else if let Some(rest) = line.strip_prefix("ANE Power: ") {
+            // Apple Neural Engine power — present on some macOS versions as a separate line
+            m.ane_power_w = parse_mw(rest);
+        } else if let Some(rest) =
+            // macOS 13-14 (Ventura/Sonoma): "Combined Power (CPU + GPU + ANE): XXXX mW"
+            line.strip_prefix("Combined Power (CPU + GPU + ANE): ")
+            // macOS 15 (Sequoia) variant observed in the wild — parenthetical dropped
+            .or_else(|| line.strip_prefix("Combined Power: "))
+            // Older Intel-era label still seen on some Mx configurations
+            .or_else(|| line.strip_prefix("Package Power: "))
+        {
             m.soc_power_w = parse_mw(rest);
         } else if let Some(rest) = line.strip_prefix("GPU Active residency: ") {
             m.gpu_utilization_percent = parse_percent(rest);
@@ -1131,6 +1161,19 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
             if !state.is_empty() { m.thermal_state = Some(state); }
         }
     }
+
+    // Synthesize soc_power_w from components if the combined line was absent.
+    // This handles macOS versions that omit "Combined Power" but still output
+    // individual CPU + GPU + ANE lines.
+    if m.soc_power_w.is_none() {
+        if m.cpu_power_w.is_some() || m.gpu_power_w.is_some() || m.ane_power_w.is_some() {
+            let total = m.cpu_power_w.unwrap_or(0.0)
+                + m.gpu_power_w.unwrap_or(0.0)
+                + m.ane_power_w.unwrap_or(0.0);
+            if total > 0.1 { m.soc_power_w = Some(total); }
+        }
+    }
+
     m
 }
 
