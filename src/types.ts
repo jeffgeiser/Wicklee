@@ -34,6 +34,12 @@ export interface SentinelMetrics {
   cpu_power_w:             number | null;
   ecpu_power_w:            number | null;
   pcpu_power_w:            number | null;
+  /** GPU power draw from powermetrics "GPU Power:" line. Apple Silicon only. */
+  apple_gpu_power_w?:      number | null;
+  /** Total SoC power from powermetrics "Combined Power (CPU + GPU + ANE):" line.
+   *  This is the authoritative total for Apple Silicon WES calculation.
+   *  Prefer this over cpu_power_w + apple_gpu_power_w. */
+  apple_soc_power_w?:      number | null;
   gpu_utilization_percent: number | null;
   memory_pressure_percent: number | null;
   thermal_state:           string | null;

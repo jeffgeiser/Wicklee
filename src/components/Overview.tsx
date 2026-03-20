@@ -330,8 +330,14 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const thermalWarn = thermalStr != null && !['normal', 'nominal'].includes(thermalStr.toLowerCase());
 
   // Power — hasPower is an availability flag (raw); totalPowerW is smoothed for display
-  const hasPower    = m ? (m.cpu_power_w != null || m.nvidia_power_draw_w != null) : false;
-  const rawTotalW   = m ? (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0) : null;
+  // For Apple Silicon: prefer apple_soc_power_w (CPU + GPU + ANE combined) over cpu_power_w alone.
+  // cpu_power_w on Apple Silicon is ~1.7 W during inference; soc_power_w is the true ~13-14 W total.
+  const hasPower    = m ? (m.cpu_power_w != null || m.nvidia_power_draw_w != null || m.apple_soc_power_w != null) : false;
+  const rawTotalW   = m
+    ? m.apple_soc_power_w != null
+      ? m.apple_soc_power_w
+      : (m.cpu_power_w ?? 0) + (m.apple_gpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0)
+    : null;
   const totalPowerW = pushOne('watts', hasPower ? rawTotalW : null, tsMs) ?? 0;
 
   // WES — only when actively inferencing
@@ -815,6 +821,7 @@ const DiagnosticRail: React.FC<{
   const gpuBuf   = useRollingBuffer();
   const memBuf   = useRollingBuffer();
   const powerBuf = useRollingBuffer();
+  const swapBuf  = useRollingBuffer();
   const tpsBuf   = useRollingBuffer();
 
   if (!s) {
@@ -837,9 +844,11 @@ const DiagnosticRail: React.FC<{
     ?? (s.total_memory_mb > 0 ? (s.used_memory_mb / s.total_memory_mb) * 100 : null);
   const memPct  = memBuf.push(memRaw, tsMs) ?? memRaw;
 
-  const powerRaw = (s.cpu_power_w ?? 0) + (s.nvidia_power_draw_w ?? 0);
+  const powerRaw = s.apple_soc_power_w != null
+    ? s.apple_soc_power_w
+    : (s.cpu_power_w ?? 0) + (s.apple_gpu_power_w ?? 0) + (s.nvidia_power_draw_w ?? 0);
   const powerW   = powerBuf.push(powerRaw, tsMs) ?? powerRaw;
-  const hasPow   = s.cpu_power_w != null || s.nvidia_power_draw_w != null;
+  const hasPow   = s.cpu_power_w != null || s.nvidia_power_draw_w != null || s.apple_soc_power_w != null;
 
   // TOK/S — same three-state logic as FleetStatusRow
   const rawOllamaTps    = s.ollama_tokens_per_second ?? null;
@@ -880,6 +889,17 @@ const DiagnosticRail: React.FC<{
       {hasPow && (
         <RailRow label="Board Power" value={`${powerW.toFixed(1)} W`} textCls="text-amber-400" barCls="bg-amber-400" />
       )}
+      {s.swap_write_mb_s != null && (() => {
+        const raw = swapBuf.push(s.swap_write_mb_s, tsMs) ?? s.swap_write_mb_s;
+        const pct = Math.min((raw / 500) * 100, 100);
+        const cls = raw > 10 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-green-400', bar: 'bg-green-400' };
+        return <RailRow label="Swap Write" value={`${raw.toFixed(1)} MB/s`} pct={pct > 0 ? pct : undefined} textCls={cls.text} barCls={cls.bar} />;
+      })()}
+      {s.clock_throttle_pct != null && (() => {
+        const pct = Math.min(s.clock_throttle_pct, 100);
+        const cls = pct > 50 ? { text: 'text-red-400', bar: 'bg-red-400' } : pct > 20 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-gray-400', bar: 'bg-gray-500' };
+        return <RailRow label="Clk Throttle" value={`${pct.toFixed(0)}%`} pct={pct} textCls={cls.text} barCls={cls.bar} />;
+      })()}
       {/* TOK/S — three-state: LIVE (green ~), IDLE-SPD (muted baseline), BUSY (amber last-probe) */}
       {hasTps && (
         isInferring ? (

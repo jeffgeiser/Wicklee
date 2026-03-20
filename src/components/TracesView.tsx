@@ -1035,7 +1035,9 @@ const DismissalLogPanel: React.FC = () => {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo }) => {
-  // node_id is always set on pairingInfo — present even before pairing.
+  // node_id is always populated once pairingInfo loads from /api/pair/status.
+  // Gate on pairingInfo !== null (not on nodeId) so the panels aren't permanently
+  // hidden during the brief window before the first API response arrives.
   const nodeId = pairingInfo?.node_id ?? '';
 
   return (
@@ -1043,10 +1045,10 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
       <SovereigntySection pairingInfo={pairingInfo} />
       {isLocalHost && <TraceTable tenantId={tenantId} />}
       {/* Phase 4A — Raw Metric History + Agent Health (Cockpit / localhost only) */}
-      {isLocalHost && nodeId && <MetricHistoryPanel nodeId={nodeId} />}
-      {isLocalHost && nodeId && <AgentHealthPanel   nodeId={nodeId} />}
+      {isLocalHost && pairingInfo !== null && <MetricHistoryPanel nodeId={nodeId} />}
+      {isLocalHost && pairingInfo !== null && <AgentHealthPanel   nodeId={nodeId} />}
       {/* Sprint 6 — Dismissal Log (Cockpit / localhost only) */}
-      {isLocalHost && nodeId && <DismissalLogPanel />}
+      {isLocalHost && pairingInfo !== null && <DismissalLogPanel />}
     </div>
   );
 };

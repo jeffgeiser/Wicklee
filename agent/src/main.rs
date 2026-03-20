@@ -119,6 +119,13 @@ struct AppleSiliconMetrics {
     cpu_power_w:             Option<f32>,
     ecpu_power_w:            Option<f32>,
     pcpu_power_w:            Option<f32>,
+    /// GPU power draw reported by powermetrics "GPU Power: NNN mW".
+    /// None on Intel Macs and non-macOS platforms.
+    gpu_power_w:             Option<f32>,
+    /// Total SoC power from powermetrics "Combined Power (CPU + GPU + ANE): NNN mW".
+    /// This is the authoritative total for Apple Silicon WES calculation.
+    /// None on Intel Macs and non-macOS platforms.
+    soc_power_w:             Option<f32>,
     gpu_utilization_percent: Option<f32>,
     memory_pressure_percent: Option<f32>,
     thermal_state:           Option<String>,
@@ -152,6 +159,15 @@ struct MetricsPayload {
     cpu_power_w:             Option<f32>,
     ecpu_power_w:            Option<f32>,
     pcpu_power_w:            Option<f32>,
+    /// GPU power draw from powermetrics "GPU Power:" line.
+    /// Use soc_power_w for total WES power calculation (it includes CPU + GPU + ANE).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apple_gpu_power_w:       Option<f32>,
+    /// Total SoC power from powermetrics "Combined Power (CPU + GPU + ANE):" line.
+    /// This is the authoritative total power for Apple Silicon WES calculation.
+    /// Prefer this over cpu_power_w + apple_gpu_power_w.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apple_soc_power_w:       Option<f32>,
     gpu_utilization_percent: Option<f32>,
     memory_pressure_percent: Option<f32>,
     thermal_state:           Option<String>,
@@ -1045,6 +1061,10 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
             .or_else(|| line.strip_prefix("P-core Power: "))
         {
             m.pcpu_power_w = parse_mw(rest);
+        } else if let Some(rest) = line.strip_prefix("GPU Power: ") {
+            m.gpu_power_w = parse_mw(rest);
+        } else if let Some(rest) = line.strip_prefix("Combined Power (CPU + GPU + ANE): ") {
+            m.soc_power_w = parse_mw(rest);
         } else if let Some(rest) = line.strip_prefix("GPU Active residency: ") {
             m.gpu_utilization_percent = parse_percent(rest);
         } else if let Some(rest) = line.strip_prefix("System Memory Pressure: ")
@@ -3130,6 +3150,8 @@ fn start_metrics_broadcaster(
                 cpu_power_w:             apple.cpu_power_w.or(rapl_power),
                 ecpu_power_w:            apple.ecpu_power_w,
                 pcpu_power_w:            apple.pcpu_power_w,
+                apple_gpu_power_w:       apple.gpu_power_w,
+                apple_soc_power_w:       apple.soc_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
@@ -3518,6 +3540,8 @@ async fn handle_metrics(
                 cpu_power_w:             apple.cpu_power_w.or(rapl_power),
                 ecpu_power_w:            apple.ecpu_power_w,
                 pcpu_power_w:            apple.pcpu_power_w,
+                apple_gpu_power_w:       apple.gpu_power_w,
+                apple_soc_power_w:       apple.soc_power_w,
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
