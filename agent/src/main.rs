@@ -1151,31 +1151,58 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// System-global config path — identical whether the process runs as root (launchd/systemd)
+/// or as a normal user. This prevents the "two config files" problem where upgrading via
+/// launchd creates a separate identity from the user's manually-run instance.
+///
+/// macOS:   /Library/Application Support/Wicklee/config.toml
+/// Linux:   /etc/wicklee/config.toml
+/// Windows: %APPDATA%\Wicklee\config.toml  (fallback: C:\ProgramData\Wicklee\config.toml)
 fn config_path() -> PathBuf {
-    // Prefer $HOME if set. Fall back to the effective user's home directory
-    // so the config never lands in the filesystem root when systemd starts
-    // the service without an explicit HOME= environment variable.
-    let home = std::env::var("HOME").unwrap_or_else(|_| {
-        // Derive from /etc/passwd for the effective uid — works on any POSIX system.
-        #[cfg(unix)]
-        {
-            let uid = unsafe { libc::getuid() };
-            let pw  = unsafe { libc::getpwuid(uid) };
-            if !pw.is_null() {
-                let dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) };
-                if let Ok(s) = dir.to_str() {
-                    return s.to_string();
-                }
-            }
-            if uid == 0 { "/root".to_string() } else { format!("/home/{}", whoami_fallback()) }
-        }
-        #[cfg(not(unix))]
-        { ".".to_string() }
-    });
-    Path::new(&home).join(".wicklee").join("config.toml")
+    #[cfg(target_os = "macos")]
+    {
+        Path::new("/Library/Application Support/Wicklee/config.toml").to_path_buf()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Path::new("/etc/wicklee/config.toml").to_path_buf()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var("APPDATA")
+            .or_else(|_| std::env::var("PROGRAMDATA"))
+            .unwrap_or_else(|_| r"C:\ProgramData".to_string());
+        Path::new(&base).join("Wicklee").join("config.toml")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        // Fallback for any other platform
+        Path::new(".wicklee").join("config.toml")
+    }
 }
 
-/// Parent directory of config_path() — always `~/.wicklee/`.
+/// Legacy per-user config path (pre-v0.4.37). Used only for one-time migration.
+fn legacy_config_path() -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        // Try $HOME first; then derive from /etc/passwd for the effective uid.
+        let home = std::env::var("HOME").ok().or_else(|| {
+            let uid = unsafe { libc::getuid() };
+            // Real user's home — look up uid=500+ first; if root (0) skip migration.
+            if uid == 0 { return None; }
+            let pw = unsafe { libc::getpwuid(uid) };
+            if pw.is_null() { return None; }
+            let dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) };
+            dir.to_str().ok().map(|s| s.to_string())
+        })?;
+        let legacy = Path::new(&home).join(".wicklee").join("config.toml");
+        if legacy.exists() { Some(legacy) } else { None }
+    }
+    #[cfg(not(unix))]
+    { None }
+}
+
+/// Parent directory of config_path() — the Wicklee system config dir.
 /// Used for the metrics DB and any future agent-local state files.
 fn wicklee_dir() -> PathBuf {
     config_path()
@@ -1184,10 +1211,6 @@ fn wicklee_dir() -> PathBuf {
         .to_path_buf()
 }
 
-#[cfg(unix)]
-fn whoami_fallback() -> String {
-    std::env::var("USER").unwrap_or_else(|_| "root".to_string())
-}
 
 /// Read the platform hardware identity string — stable across reboots and reinstalls.
 ///
@@ -1297,6 +1320,8 @@ fn generate_node_id() -> String {
 
 fn load_or_create_config() -> WickleeConfig {
     let path = config_path();
+
+    // ── Load from system-global path ─────────────────────────────────────────
     if path.exists() {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
@@ -1304,6 +1329,21 @@ fn load_or_create_config() -> WickleeConfig {
             }
         }
     }
+
+    // ── One-time migration from legacy ~/.wicklee/config.toml (pre-v0.4.37) ──
+    // If the system-global path doesn't exist yet but the user's home config
+    // does, copy it over so the node_id and fleet pairing are preserved.
+    if let Some(legacy) = legacy_config_path() {
+        if let Ok(content) = std::fs::read_to_string(&legacy) {
+            if let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
+                println!("  Migrating config from {} → {}", legacy.display(), path.display());
+                save_config(&cfg);
+                return cfg;
+            }
+        }
+    }
+
+    // ── First-run: generate a new identity ───────────────────────────────────
     let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None };
     save_config(&cfg);
     cfg
