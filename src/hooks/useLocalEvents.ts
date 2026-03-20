@@ -281,5 +281,39 @@ export function useLocalEvents(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sentinel, connected]);
 
+  // On every fresh connect, fetch the agent's recent-events ring buffer.
+  // This catches the startup event and any lifecycle events that fired
+  // before the browser was opened (agent starts on boot, browser opens later).
+  useEffect(() => {
+    if (!connected) return;
+
+    fetch('http://localhost:7700/api/events/recent')
+      .then(r => r.ok ? r.json() : [])
+      .then((acts: LiveActivityEvent[]) => {
+        if (!acts.length) return;
+        const fresh: FleetEvent[] = [];
+        for (const act of acts) {
+          const key = `${act.timestamp_ms}:${act.message}`;
+          if (seenActivityIds.current.has(key)) continue;
+          seenActivityIds.current.add(key);
+          fresh.push({
+            id:       uid(),
+            ts:       act.timestamp_ms,
+            type:     act.level === 'error' ? 'error' : 'node_online',
+            nodeId:   'local',
+            hostname: 'local',
+            detail:   act.message,
+          });
+        }
+        if (fresh.length > 0) {
+          setEvents(prev =>
+            [...fresh.sort((a, b) => b.ts - a.ts), ...prev].slice(0, MAX_EVENTS)
+          );
+        }
+      })
+      .catch(() => { /* agent not yet ready — silently ignore */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+
   return events;
 }
