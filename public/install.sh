@@ -29,6 +29,7 @@ BIN_NAME="wicklee"
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 dim()   { printf '\033[2m%s\033[0m\n'  "$*"; }
+bold()  { printf '\033[1m%s\033[0m\n'  "$*"; }
 
 die()  { red "error: $*" >&2; exit 1; }
 need() { command -v "$1" &>/dev/null || die "'$1' is required but not installed."; }
@@ -82,6 +83,31 @@ curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" \
 
 chmod +x "$TMP"
 
+# ── Ghost-Kill preflight ─────────────────────────────────────────────────────
+# Stop any running wicklee instance before swapping the binary.
+# Prevents "port 7700 already in use" when the new binary first starts.
+# We attempt a clean service stop first; pkill is the belt-and-suspenders fallback.
+
+GHOST_KILLED=false
+
+if [[ "$OS_TAG" == "darwin" ]]; then
+  if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
+    sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null && GHOST_KILLED=true || true
+    sleep 1
+  fi
+  # Also kill any manual `sudo wicklee` process not managed by launchd.
+  sudo pkill -x wicklee 2>/dev/null && GHOST_KILLED=true || true
+
+elif [[ "$OS_TAG" == "linux" ]]; then
+  if command -v systemctl &>/dev/null && systemctl is-active --quiet wicklee 2>/dev/null; then
+    sudo systemctl stop wicklee && GHOST_KILLED=true
+  fi
+  sudo pkill -x wicklee-agent 2>/dev/null && GHOST_KILLED=true || true
+  sudo pkill -x wicklee       2>/dev/null && GHOST_KILLED=true || true
+fi
+
+[[ "$GHOST_KILLED" == "true" ]] && dim "  Stopped previous Wicklee instance."
+
 # ── Install ───────────────────────────────────────────────────────────────────
 # Use cp+mv rather than cp-in-place so an existing running wicklee service
 # (Text file busy) doesn't block the update.  mv replaces the directory entry
@@ -97,17 +123,46 @@ else
   sudo cp "$TMP" "$INSTALL_TMP" && sudo mv "$INSTALL_TMP" "$INSTALL_PATH"
 fi
 
+# ── Service update ────────────────────────────────────────────────────────────
+# If a service is already registered, re-run --install-service so the unit
+# file stays current and the service is restarted with the new binary.
+
+SERVICE_UPDATED=false
+
+if [[ "$OS_TAG" == "linux" ]] && command -v systemctl &>/dev/null; then
+  if systemctl list-unit-files wicklee.service &>/dev/null 2>&1; then
+    echo "  Updating systemd service…"
+    sudo "${INSTALL_PATH}" --install-service
+    SERVICE_UPDATED=true
+  fi
+elif [[ "$OS_TAG" == "darwin" ]]; then
+  if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
+    echo "  Updating launchd service…"
+    sudo "${INSTALL_PATH}" --install-service
+    SERVICE_UPDATED=true
+  fi
+fi
+
 # ── Success ───────────────────────────────────────────────────────────────────
 
 echo ""
-green "  ✓ wicklee installed successfully."
-echo ""
-echo "     Run:        wicklee"
-echo "     Dashboard:  http://localhost:7700"
+green "  ✓ Wicklee agent installed successfully (${RELEASE_TAG})"
 echo ""
 
-if [[ "$OS" == "Darwin" ]]; then
-  echo "  💡 macOS tip: run \`sudo wicklee\` to unlock CPU power draw metrics."
-  dim "     All other metrics (GPU, memory pressure, thermal) work without sudo."
+if [[ "$SERVICE_UPDATED" == "true" ]]; then
+  dim "  Service updated and restarted automatically."
   echo ""
+else
+  echo "  Start monitoring your node:"
+  echo ""
+  bold "  Recommended — runs on every boot:"
+  bold "    sudo wicklee --install-service"
+  echo ""
+  echo "  To upgrade later, just run this script again — it stops the old"
+  echo "  instance automatically before swapping in the new binary."
 fi
+
+echo ""
+echo "  Your dashboard:     http://localhost:7700"
+echo "  Pair with your fleet: https://wicklee.dev"
+echo ""
