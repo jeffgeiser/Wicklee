@@ -80,6 +80,27 @@ curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" \
 
 chmod +x "$TMP"
 
+# ── Ghost-Kill preflight ─────────────────────────────────────────────────────
+# Stop any running wicklee instance before swapping the binary.
+# Prevents "port 7700 already in use" when the new binary first starts.
+# We attempt a clean service stop first; pkill is the belt-and-suspenders fallback.
+
+if [[ "$OS_TAG" == "darwin" ]]; then
+  if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
+    sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null || true
+    sleep 1
+  fi
+  # Also kill any manual `sudo wicklee` process not managed by launchd.
+  sudo pkill -x wicklee 2>/dev/null || true
+
+elif [[ "$OS_TAG" == "linux" ]]; then
+  if command -v systemctl &>/dev/null && systemctl is-active --quiet wicklee 2>/dev/null; then
+    sudo systemctl stop wicklee
+  fi
+  sudo pkill -x wicklee-agent 2>/dev/null || true
+  sudo pkill -x wicklee       2>/dev/null || true
+fi
+
 # ── Install ───────────────────────────────────────────────────────────────────
 # Use cp+mv rather than cp-in-place so an existing running wicklee service
 # (Text file busy) doesn't block the update.  mv replaces the directory entry

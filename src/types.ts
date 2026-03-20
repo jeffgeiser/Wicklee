@@ -163,6 +163,12 @@ export interface SentinelMetrics {
   pcie_link_width?: number | null;
   /** Maximum PCIe link width the GPU + slot support. Pattern L fires when current < max. */
   pcie_link_max_width?: number | null;
+  /**
+   * Compile-time agent version from Cargo.toml (e.g. "0.4.36").
+   * The frontend compares this against its own package.json version to detect
+   * stale cached interfaces and prompt a hard-reload.
+   */
+  agent_version?: string;
 }
 
 /**

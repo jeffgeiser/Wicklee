@@ -262,6 +262,10 @@ struct MetricsPayload {
     /// Maximum PCIe link width the GPU + slot support. Paired with pcie_link_width.
     #[serde(skip_serializing_if = "Option::is_none")]
     pcie_link_max_width: Option<u32>,
+    /// Compile-time agent version from Cargo.toml (e.g. "0.4.36").
+    /// The frontend compares this against its own build-time UI version to detect
+    /// stale cached interfaces and prompt a hard-reload.
+    agent_version: String,
 }
 
 // ── Fleet Pairing Types ───────────────────────────────────────────────────────
@@ -1036,6 +1040,55 @@ fn parse_vmstat_pressure(text: &str) -> Option<f32> {
     Some((in_use as f32 / total as f32) * 100.0)
 }
 
+// ── Ghost-Killer ─────────────────────────────────────────────────────────────
+// If port {port} is held by a previous wicklee process, send SIGTERM then
+// SIGKILL and wait for the port to be released before the caller retries bind.
+// Returns true when the port has been freed, false when it couldn't be evicted
+// (not a wicklee process, permission denied, or OS doesn't have lsof/ps).
+#[cfg(not(target_os = "windows"))]
+async fn try_evict_port(port: u16) -> bool {
+    // Step 1: find the PID holding the port.
+    let lsof = tokio::process::Command::new("lsof")
+        .args(["-ti", &format!("tcp:{port}")])
+        .output().await;
+    let Ok(lsof_out) = lsof else { return false };
+    let pid_str = String::from_utf8_lossy(&lsof_out.stdout).trim().to_string();
+    let Ok(_pid) = pid_str.parse::<u32>() else { return false };
+
+    // Step 2: confirm the process is a wicklee binary (not some other service).
+    let ps = tokio::process::Command::new("ps")
+        .args(["-p", &pid_str, "-o", "comm="])
+        .output().await;
+    let Ok(ps_out) = ps else { return false };
+    let proc_name = String::from_utf8_lossy(&ps_out.stdout).trim().to_lowercase();
+    if !proc_name.contains("wicklee") { return false; }
+
+    println!("  Evicting previous wicklee instance (PID {pid_str})…");
+
+    // Step 3: SIGTERM — allow graceful shutdown.
+    let _ = tokio::process::Command::new("kill")
+        .args(["-TERM", &pid_str])
+        .status().await;
+
+    // Step 4: poll up to 2 s for the port to be free.
+    for _ in 0..4 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let check = tokio::process::Command::new("lsof")
+            .args(["-ti", &format!("tcp:{port}")])
+            .output().await;
+        if check.map(|o| o.stdout.trim_ascii().is_empty()).unwrap_or(true) {
+            return true;
+        }
+    }
+
+    // Step 5: SIGKILL if still alive after 2 s.
+    let _ = tokio::process::Command::new("kill")
+        .args(["-KILL", &pid_str])
+        .status().await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    true
+}
+
 /// powermetrics without sudo — parses CPU power + memory pressure.
 async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
     let out = tokio::process::Command::new("powermetrics")
@@ -1544,6 +1597,9 @@ async fn install_service() {
         let _ = tokio::process::Command::new("launchctl")
             .args(["bootout", "system/dev.wicklee.agent"])
             .status().await;
+        // Give the kernel ~500 ms to release port 7700 after the old process exits.
+        // Without this pause the bootstrap can race the previous process's TCP teardown.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let status = tokio::process::Command::new("launchctl")
             .args(["bootstrap", "system", plist_path])
             .status().await;
@@ -3197,6 +3253,7 @@ fn start_metrics_broadcaster(
                 }),
                 pcie_link_width:     nvidia.pcie_link_width,
                 pcie_link_max_width: nvidia.pcie_link_max_width,
+                agent_version:       env!("CARGO_PKG_VERSION").to_string(),
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -3588,6 +3645,7 @@ async fn handle_metrics(
                 }),
                 pcie_link_width:     nvidia.pcie_link_width,
                 pcie_link_max_width: nvidia.pcie_link_max_width,
+                agent_version:       env!("CARGO_PKG_VERSION").to_string(),
             };
 
             let event = match Event::default().json_data(&payload) {
@@ -4181,22 +4239,36 @@ async fn main() {
     // Suppress unused-variable warning on musl where metrics_store = None:()
     let _ = &metrics_store;
 
-    let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
-        Ok(l) => l,
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            if pair_on_start {
-                // Agent is running as a service; pairing was registered above.
-                // Restart the service to pick up the new session token.
-                println!();
-                println!("  Agent is running on :{port} — pairing code registered.");
-                println!("  Restart the service to activate:  sudo systemctl restart wicklee");
-            } else {
-                eprintln!("Failed to bind port {port}: address already in use.");
-                eprintln!("Another wicklee agent is running. Stop it first or use a different PORT.");
+    // ── Port binding with Ghost-Killer ───────────────────────────────────────
+    // On AddrInUse we check whether the incumbent is an old wicklee process.
+    // If so, we evict it (SIGTERM → SIGKILL) and retry once. This makes
+    // `curl | sh` upgrades seamless — no manual "stop the old agent" step.
+    let mut eviction_attempted = false;
+    let listener = loop {
+        match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
+            Ok(l) => break l,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                #[cfg(not(target_os = "windows"))]
+                if !eviction_attempted {
+                    eviction_attempted = true;
+                    if try_evict_port(port).await {
+                        println!("  ✓ Previous instance evicted. Starting on :{port}…");
+                        continue; // retry bind
+                    }
+                }
+                // Not a wicklee process, eviction failed, or Windows.
+                if pair_on_start {
+                    println!();
+                    println!("  Agent is running on :{port} — pairing code registered.");
+                    println!("  Restart the service to activate:  sudo systemctl restart wicklee");
+                } else {
+                    eprintln!("Failed to bind port {port}: address already in use.");
+                    eprintln!("Run: sudo pkill -x wicklee  then retry.");
+                }
+                return;
             }
-            return;
+            Err(e) => panic!("Failed to bind port {port}: {e}"),
         }
-        Err(e) => panic!("Failed to bind port {port}: {e}"),
     };
 
     // ── Self-update check ─────────────────────────────────────────────────────
