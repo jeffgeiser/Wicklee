@@ -67,6 +67,21 @@ struct OllamaMetrics {
     /// When true, tok/s comes from done-packet eval_count/eval_duration rather than the 30s probe.
     #[serde(default)]
     ollama_proxy_active: bool,
+    /// Timestamp of the most recent background probe start.
+    /// Used to derive `ollama_is_probing` for the frontend without adding a second lock.
+    /// Skipped in serialization — forwarded via MetricsPayload.ollama_is_probing instead.
+    #[serde(skip)]
+    last_probe_start: Option<std::time::Instant>,
+}
+
+impl OllamaMetrics {
+    /// True during the background probe run AND for 40 s afterward.
+    /// The 40 s window covers the probe run itself (~5–15 s) plus the 35 s
+    /// /api/ps expiry window that Ollama sets after the generate completes.
+    /// This prevents the probe's own Ollama activity from appearing as LIVE inference.
+    fn is_probing(&self) -> bool {
+        self.last_probe_start.map_or(false, |t| t.elapsed().as_secs() < 40)
+    }
 }
 
 // vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
@@ -205,6 +220,11 @@ struct MetricsPayload {
     /// Frontend uses this to label tok/s as "live" (not "live estimate").
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_proxy_active: Option<bool>,
+    /// True during the agent's 30s background probe AND for 40 s afterward.
+    /// Frontend uses this to show IDLE-SPD instead of LIVE during probe activity —
+    /// the probe fires a real Ollama request which would otherwise look like a user session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_is_probing: Option<bool>,
     // vLLM runtime (null/false when vLLM not running)
     #[serde(default)]
     vllm_running:          bool,
@@ -2843,6 +2863,11 @@ fn start_ollama_harvester(
                 }
 
                 // GPU is idle enough — fire the full 20-token benchmark.
+                // Mark probe start so the frontend shows IDLE-SPD (not LIVE) for the
+                // duration of the probe + the 35 s /api/ps expiry window that follows.
+                if let Ok(mut g) = shared_probe.lock() {
+                    g.last_probe_start = Some(std::time::Instant::now());
+                }
                 let new_tps = probe_ollama_tps(&probe_client, port, &model).await;
                 if let Ok(mut g) = shared_probe.lock() { g.ollama_tokens_per_second = new_tps; }
             }
@@ -3293,6 +3318,10 @@ fn start_metrics_broadcaster(
                 .map(|mut v| std::mem::take(&mut *v))
                 .unwrap_or_default();
 
+            // Compute before struct literal so we can borrow `ollama` without
+            // conflicting with the field moves (Option<String> fields are not Copy).
+            let ollama_is_probing_flag = if ollama.is_probing() { Some(true) } else { None };
+
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
                 hostname:                node_id.clone(),
@@ -3323,10 +3352,11 @@ fn start_metrics_broadcaster(
                 ollama_running:           ollama.ollama_running,
                 ollama_active_model:      ollama.ollama_active_model,
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
-                ollama_quantization:      ollama.ollama_quantization,
-                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
                 ollama_inference_active:  ollama.ollama_inference_active,
                 ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
+                ollama_is_probing:        ollama_is_probing_flag,
+                ollama_quantization:      ollama.ollama_quantization,
+                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
@@ -3683,6 +3713,7 @@ async fn handle_metrics(
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let swap_mb_s     = swap_metrics.read();
+            let ollama_is_probing_flag = if ollama.is_probing() { Some(true) } else { None };
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -3714,10 +3745,11 @@ async fn handle_metrics(
                 ollama_running:           ollama.ollama_running,
                 ollama_active_model:      ollama.ollama_active_model,
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
-                ollama_quantization:      ollama.ollama_quantization,
-                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
                 ollama_inference_active:  ollama.ollama_inference_active,
                 ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
+                ollama_is_probing:        ollama_is_probing_flag,
+                ollama_quantization:      ollama.ollama_quantization,
+                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
