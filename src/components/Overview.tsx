@@ -310,21 +310,21 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst, inferenceActive);
   const isActive     = isOnline && tps != null && tps > 0;
 
-  // Three-state TOK/S display derived from inference_active + GPU%
-  // Three-state TOK/S display:
-  // LIVE:     real user session confirmed — Ollama via Wicklee proxy (ollama_proxy_active=true)
-  //           OR vLLM actively serving requests (vllm_requests_running > 0).
-  //           NOTE: ollama_inference_active alone fires during Wicklee background probes →
-  //           ghost-LIVE. Require proxy_active to gate on a genuine user-facing session.
-  // BUSY:     GPU ≥ threshold AND no confirmed inference — non-Ollama GPU workload.
-  // IDLE-SPD: No active inference; tok/s value is the hardware baseline from last probe run.
-  const isInferring = isOnline && (
-    (inferenceActive === true && m?.ollama_proxy_active === true) ||
+  // Three-state TOK/S display — Silicon Truth hierarchy:
+  // IDLE-SPD: agent's background probe is running (ollama_is_probing=true). The probe fires a
+  //           real Ollama request which would otherwise trigger inference_active → ghost-LIVE.
+  //           The flag stays true for 40 s: probe duration + the 35 s /api/ps expiry window.
+  // LIVE:     inference_active=true AND probe NOT running → real user session on :11434 or
+  //           vLLM actively serving (vllm_requests_running > 0). No proxy required.
+  // BUSY:     GPU ≥ threshold AND no confirmed inference → non-LLM GPU workload.
+  const isProbing   = m?.ollama_is_probing === true;
+  const isInferring = isOnline && !isProbing && (
+    inferenceActive === true ||
     (m?.vllm_running === true && (m?.vllm_requests_running ?? 0) > 0)
   );
   // ~ prefix only when tok/s is a pure GPU%-based estimate (no real measurement available)
   const isEstimated = smoothedTps == null && tps != null;
-  const isBusy      = isOnline && inferenceActive !== true && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isBusy      = isOnline && !isProbing && inferenceActive !== true && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed = isOnline && !isInferring && !isBusy && smoothedTps != null;
 
   // Thermal — not smoothed (state machine, not a continuous signal)
@@ -863,13 +863,14 @@ const DiagnosticRail: React.FC<{
   const smoothedTps     = tpsBuf.push(rawTps, tsMs) ?? rawTps;
   const tps             = estimateTps(smoothedTps, peakTps ?? null, gpuPct, inferenceActive);
 
-  // Same three-state gate as FleetStatusRow — proxy required for Ollama LIVE.
-  const isInferring  = tps != null && (
-    (inferenceActive === true && s.ollama_proxy_active === true) ||
+  // Same Silicon Truth hierarchy as FleetStatusRow.
+  const isProbing    = s.ollama_is_probing === true;
+  const isInferring  = tps != null && !isProbing && (
+    inferenceActive === true ||
     (s.vllm_running === true && (s.vllm_requests_running ?? 0) > 0)
   );
   const isEstimated  = smoothedTps == null && tps != null;
-  const isBusy       = !isInferring && inferenceActive !== true && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  const isBusy       = !isProbing && !isInferring && inferenceActive !== true && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
   const isIdleSpeed  = !isInferring && !isBusy && smoothedTps != null;
   const hasTps       = s.ollama_running || s.vllm_running;
 
@@ -1205,10 +1206,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     : null;
 
   // Whether any node is actively serving real user inference.
-  // Ollama: requires proxy_active to avoid ghost-LIVE during background probes.
-  // vLLM:   requires vllm_requests_running > 0 (real request count).
+  // Ollama: inference_active=true AND is_probing=false (background probe exclusion).
+  // vLLM:   active request count > 0.
   const anyInferring = tpsNodes.some(m =>
-    (m.ollama_inference_active === true && m.ollama_proxy_active === true) ||
+    (m.ollama_inference_active === true && m.ollama_is_probing !== true) ||
     (m.vllm_running === true && (m.vllm_requests_running ?? 0) > 0)
   );
   // Whether any inferring node has the Wicklee proxy active (exact tok/s, not estimated)
@@ -1220,13 +1221,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? (sentinel.nvidia_gpu_utilization_percent ?? sentinel.gpu_utilization_percent ?? null)
     : null;
   const localInferenceActive = sentinel?.ollama_inference_active ?? null;
-  // Proxy required for Ollama LIVE — consistent with FleetStatusRow / DiagnosticRail.
-  const localIsInferring = sentinel != null && (
-    (localInferenceActive === true && sentinel.ollama_proxy_active === true) ||
+  // Silicon Truth: inference_active=true AND probe NOT running → LIVE.
+  const localIsProbing   = sentinel?.ollama_is_probing === true;
+  const localIsInferring = sentinel != null && !localIsProbing && (
+    localInferenceActive === true ||
     (sentinel.vllm_running === true && (sentinel.vllm_requests_running ?? 0) > 0)
   );
-  const localIsBusy = sentinel != null && !localIsInferring &&
+  const localIsBusy = sentinel != null && !localIsProbing && !localIsInferring &&
     localInferenceActive === false && (localGpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  // IDLE-SPD covers both probe-running (localIsProbing=true) and genuine idle with a baseline.
   const localIsIdleSpeed = sentinel != null && !localIsInferring && !localIsBusy &&
     (tpsNodes.length > 0);
 
@@ -1579,6 +1582,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 ? 'live · inferring'
                 : localIsBusy
                 ? 'busy · non-inference'
+                : localIsProbing
+                ? 'idle-spd · probing'
                 : localIsIdleSpeed
                 ? 'idle-spd baseline'
                 : 'this node'

@@ -121,6 +121,10 @@ export interface SentinelMetrics {
    * When true, tok/s comes from done-packet eval_count/eval_duration (exact),
    * not the 30-second synthetic probe. Frontend shows "live" not "live estimate". */
   ollama_proxy_active?: boolean | null;
+  /** True during the agent's 30s background probe AND for 40 s afterward (covering the
+   * /api/ps expiry window). When true, show IDLE-SPD instead of LIVE — the probe
+   * fires a real Ollama request which would otherwise appear as a user session. */
+  ollama_is_probing?: boolean | null;
   // vLLM runtime (absent/false when not running)
   vllm_running?:          boolean;
   vllm_model_name?:       string | null;
