@@ -1594,8 +1594,12 @@ async fn install_service() {
         // `launchctl load -w` (deprecated) fails with I/O error 5 when the
         // label is already live in the system domain. The modern approach is
         // bootout (ignore error if not registered) then bootstrap.
+        // Suppress launchctl's own stderr — "Boot-out failed: 3: No such process" is
+        // expected on a fresh install (nothing registered yet) and is not an error.
         let _ = tokio::process::Command::new("launchctl")
             .args(["bootout", "system/dev.wicklee.agent"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status().await;
         // Give the kernel ~500 ms to release port 7700 after the old process exits.
         // Without this pause the bootstrap can race the previous process's TCP teardown.
@@ -1605,11 +1609,26 @@ async fn install_service() {
             .status().await;
         match status {
             Ok(s) if s.success() => {
+                // Brief pause so launchd can start the process before we verify.
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                // Confirm the service is actually running (guards against launchd throttle).
+                let running = tokio::process::Command::new("launchctl")
+                    .args(["list", "dev.wicklee.agent"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status().await
+                    .map(|s| s.success())
+                    .unwrap_or(false);
                 println!("✓ Wicklee Sentinel installed as a launchd service.");
                 println!("  Starts automatically on boot (runs as root).");
                 println!("  Plist: {plist_path}");
                 println!("  Logs:  /var/log/wicklee.log");
                 println!("  To remove: sudo wicklee --uninstall-service");
+                if !running {
+                    eprintln!("warning: service registered but not yet visible in launchctl list.");
+                    eprintln!("         If http://localhost:7700 is unreachable, run:");
+                    eprintln!("         sudo launchctl start dev.wicklee.agent");
+                }
             }
             Ok(s) => eprintln!("error: launchctl bootstrap exited with status {s}"),
             Err(e) => eprintln!("error: launchctl: {e}"),
