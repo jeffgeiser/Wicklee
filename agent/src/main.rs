@@ -2831,8 +2831,15 @@ fn start_ollama_harvester(
                     m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
                     m.ollama_proxy_active = true;
                 } else {
+                    // 120 s window: covers streaming responses that take longer than 35 s
+                    // (the old window) without producing a completion that resets expires_at.
+                    // Probe-generated activity is excluded by is_probe_window() (40 s) in
+                    // compute_inference_state(), so false-LIVE from probes is not a concern.
+                    // After real inference ends, the probe re-fires within ~30 s, keeping
+                    // the overlapping probe windows continuous — ensuring a clean IDLE-SPD
+                    // transition rather than a brief false-LIVE blip.
                     m.ollama_inference_active =
-                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 35));
+                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 120));
                 }
 
                 if let Ok(mut g) = shared_main.lock() { *g = m; }
@@ -3161,11 +3168,17 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
             // 3. Memory pressure via vm_stat (no sudo required)
             m.memory_pressure_percent = read_memory_pressure_vmstat().await;
 
-            // 4. CPU power via powermetrics (no sudo — overrides mem_pressure if available)
+            // 4. Power + thermal via powermetrics (no sudo required when running as root)
+            //    Copy all power fields: cpu, gpu, ane, and the combined SoC total.
+            //    apple_soc_power_w (= soc_power_w) is the true ~13-20 W system draw
+            //    during inference; cpu_power_w alone (~1.7-7 W) under-reports by 2-3×.
             if let Some(pm) = try_powermetrics_nosudo().await {
                 m.cpu_power_w  = pm.cpu_power_w;
                 m.ecpu_power_w = pm.ecpu_power_w;
                 m.pcpu_power_w = pm.pcpu_power_w;
+                m.gpu_power_w  = pm.gpu_power_w;  // GPU cluster power (W)
+                m.ane_power_w  = pm.ane_power_w;  // Apple Neural Engine power (W)
+                m.soc_power_w  = pm.soc_power_w;  // Combined SoC total — prefer this for WES
                 if pm.memory_pressure_percent.is_some() {
                     m.memory_pressure_percent = pm.memory_pressure_percent;
                 }
