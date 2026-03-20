@@ -65,7 +65,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   }, []);
 
   const items = [
-    { id: DashboardTab.OVERVIEW,     icon: LayoutGrid, label: isLocalMode ? 'Node Intelligence' : 'Intelligence', show: true },
+    { id: DashboardTab.OVERVIEW,     icon: LayoutGrid, label: 'Intelligence', show: true },
     { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
     { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
     { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },

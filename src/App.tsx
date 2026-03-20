@@ -704,10 +704,10 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
             )}
           </div>
           <div className="flex items-center gap-4">
-            {/* VITE_AGENT_VERSION is injected by the Rust build script from Cargo.toml
-                (e.g. VITE_AGENT_VERSION=0.5.1 npm run build). Falls back to package.json
-                version for the cloud/dev build. */}
-            <span className="mono">v{(import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? version}</span>
+            {/* On localhost: show live agent_version from metrics (always current).
+                On cloud: use VITE_AGENT_VERSION injected by the Rust build script, or
+                package.json version as fallback for dev builds. */}
+            <span className="mono">v{(isLocalHost && localAgentVersion) ? localAgentVersion : ((import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? version)}</span>
           </div>
         </footer>
       </main>
