@@ -58,8 +58,12 @@ function estimateTps(
   const frac = (gpuUtil ?? 0) / 100;
   // Prefer /api/ps signal; fall back to GPU% heuristic when not yet available
   const underLoad = inferenceActive != null ? inferenceActive : (gpuUtil ?? 0) >= 40;
+  // rawTps is null only when the probe was skipped (GPU ≥ 40% threshold).
+  // In that case, estimate current throughput as peak × gpu_fraction.
+  // When rawTps IS available, use it directly — adding peak × frac on top would
+  // double-count (the probe already measured performance at the current GPU load).
   if (rawTps == null) return underLoad && frac > 0 ? peak * frac : null;
-  return underLoad ? rawTps + (peak * frac) : rawTps;
+  return rawTps;
 }
 
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
