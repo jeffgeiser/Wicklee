@@ -73,6 +73,10 @@ struct OllamaMetrics {
     /// Set to `Some(Instant::now())` when probe_ollama_tps() returns.
     #[serde(skip)]
     last_probe_end: Option<std::time::Instant>,
+    /// Set when /api/ps expires_at changes while NOT in the probe window.
+    /// Distinguishes user-initiated inference from probe-caused expires_at resets.
+    #[serde(skip)]
+    last_user_infer_ts: Option<std::time::Instant>,
 }
 
 impl OllamaMetrics {
@@ -106,27 +110,34 @@ impl OllamaMetrics {
 /// directly — no re-computation needed, no localhost/cloud discrepancy.
 ///
 /// Hierarchy (first match wins):
-///   "live"      confirmed user inference (Ollama active OR vLLM serving)
-///               — wins unconditionally, even during the probe window.
-///               The probe is real inference; LIVE during a probe is honest.
-///   "idle-spd"  probe window active (40 s from last_probe_start) AND no
-///               confirmed user inference — shows cached baseline tok/s.
+///   "live"      confirmed user inference — expires_at changed OUTSIDE probe window
+///               (last_user_infer_ts < 35 s), OR vLLM is serving, OR sustained GPU >40%
+///               during probe window (user job concurrent with probe).
+///   "idle-spd"  probe window active (40 s from last_probe_start) AND no confirmed
+///               user inference — shows cached baseline tok/s.
 ///   "busy"      GPU > 20% spike with inference confirmed false (Some(false)).
 ///               Null = unknown runtime, not BUSY; only strict false triggers.
 ///   "idle"      default — hardware at rest, no active inference signal.
 fn compute_inference_state(
     is_probe_window:       bool,
+    last_user_infer_ts:    Option<std::time::Instant>,
     inference_active:      Option<bool>,
     vllm_requests_running: Option<u32>,
     gpu_util:              Option<f32>,
 ) -> &'static str {
-    // LIVE is the highest-priority state — confirmed inference wins over probe window.
-    // This prevents is_probe_window from masking a user job running concurrently.
-    let user_infer = inference_active == Some(true)
-        || vllm_requests_running.map_or(false, |r| r > 0);
+    // High sustained GPU during the probe window strongly implies a concurrent user job.
+    // Our own 20-token probe only spikes GPU briefly and typically <20%.
+    let high_gpu_probe = is_probe_window
+        && inference_active == Some(true)
+        && gpu_util.map_or(false, |g| g > 40.0);
+
+    let user_infer = last_user_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 35)
+        || vllm_requests_running.map_or(false, |r| r > 0)
+        || high_gpu_probe;
+
     if user_infer { return "live"; }
 
-    // No confirmed inference — probe window takes over if active.
+    // No confirmed user inference — probe window takes over if active.
     if is_probe_window { return "idle-spd"; }
 
     // BUSY only when inference is confirmed false — null (unknown runtime) is not BUSY.
@@ -2826,6 +2837,12 @@ fn start_ollama_harvester(
                                 let exp_owned = exp_str.to_string();
                                 if prev_expires.as_deref() != Some(&exp_owned) {
                                     last_infer_ts = Some(std::time::Instant::now());
+                                    // Credit as user inference only outside the probe window.
+                                    // During the probe window the change was caused by our own
+                                    // /api/generate call, not the user's job.
+                                    if !m.is_probe_window() {
+                                        m.last_user_infer_ts = Some(std::time::Instant::now());
+                                    }
                                 }
                                 prev_expires = Some(exp_owned);
                             }
@@ -3395,6 +3412,7 @@ fn start_metrics_broadcaster(
             let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
             let inference_state_val = compute_inference_state(
                 ollama.is_probe_window(),
+                ollama.last_user_infer_ts,
                 ollama.ollama_inference_active,
                 vllm.vllm_requests_running,
                 nvidia.nvidia_gpu_utilization_percent.or(apple.gpu_utilization_percent),
@@ -3813,6 +3831,7 @@ async fn handle_metrics(
             let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
             let inference_state_val = compute_inference_state(
                 ollama.is_probe_window(),
+                ollama.last_user_infer_ts,
                 ollama.ollama_inference_active,
                 vllm.vllm_requests_running,
                 nvidia.nvidia_gpu_utilization_percent.or(apple.gpu_utilization_percent),

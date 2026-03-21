@@ -989,6 +989,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
+  // Local peak tok/s tracker — mirrors FleetStreamContext's peakTpsRef but for the
+  // local WS node, which never passes through the fleet SSE loop.
+  // Without this, peakTpsMap[sentinel.node_id] is always undefined on localhost,
+  // causing estimateTps to short-circuit and return the raw probe value (no GPU boost).
+  const localPeakTpsRef   = useRef<number | null>(null);
+  const localPeakModelRef = useRef<string | null>(null);
+
   // Fleet-level rolling-average buffers (5-sample window, display-layer only).
   // Placed here (before the early returns below) so hooks are always called
   // unconditionally per the Rules of Hooks.
@@ -1049,6 +1056,17 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     setSentinel(data);
     setLocalConnected(true);
     pushHistoryPoint(data);
+
+    // Update local peak tok/s so DiagnosticRail estimateTps can apply the GPU boost.
+    const rawTps   = data.ollama_tokens_per_second ?? data.vllm_tokens_per_sec ?? null;
+    const curModel = data.ollama_active_model ?? data.vllm_model_name ?? null;
+    if (localPeakModelRef.current !== curModel) {
+      localPeakTpsRef.current = null; // reset peak on model swap
+    }
+    localPeakModelRef.current = curModel;
+    if (rawTps != null && rawTps > 0 && rawTps > (localPeakTpsRef.current ?? 0)) {
+      localPeakTpsRef.current = rawTps;
+    }
   }, [pushHistoryPoint]);
 
   // Local WS/SSE connection — only active on localhost.
@@ -1867,7 +1885,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           <DiagnosticRail
             sentinel={sentinel}
             transport={transport}
-            peakTps={sentinel ? peakTpsMap[sentinel.node_id] : undefined}
+            peakTps={sentinel
+              ? (peakTpsMap[sentinel.node_id] ?? localPeakTpsRef.current ?? undefined)
+              : undefined}
           />
         ) : (
           // ── Fleet Status table ───────────────────────────────────────────────
