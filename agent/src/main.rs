@@ -108,6 +108,10 @@ struct HardwareSignals {
     // Apple Silicon
     ane_power_w:    Option<f32>,  // ANE power — ML-specific, most accurate signal
     soc_power_w:    Option<f32>,  // Combined CPU+GPU+ANE (fallback if ANE absent)
+    /// GPU HW active residency % from IOKit (primary) / powermetrics (fallback).
+    /// Distinct from GPU *power*: M2 base GPU reads ~88 mW at 40 % residency.
+    /// Used as Tier 3 "Power Blindness" override for M2/M3 base chips.
+    apple_gpu_pct:  Option<f32>,
     // NVIDIA
     nvidia_gpu_pct: Option<f32>,
     nvidia_vram_mb: Option<u64>,  // non-zero = Ollama process holds GPU memory
@@ -150,10 +154,18 @@ fn compute_inference_state(s: &HardwareSignals) -> &'static str {
     // ai_runtime_loaded (prevents LIVE from video encoding, compilation, etc.)
     if !s.probe_active && s.ai_runtime_loaded {
         let ai_specific = s.ane_power_w.map_or(false, |p| p > 0.5);
-        let physics     = s.soc_power_w.map_or(false,    |p| p > 8.0)
-                       || (s.nvidia_gpu_pct.map_or(false, |g| g > 30.0)
-                           && s.nvidia_vram_mb.map_or(false, |v| v > 0))
-                       || s.nvidia_power_w.map_or(false,  |p| p > 40.0);
+        let physics =
+            // SoC power gate (M1 Pro/Max/Ultra, M2/M3 Pro/Max — larger GPU arrays)
+            s.soc_power_w.map_or(false, |p| p > 8.0)
+            // "Power Blindness" override: M2/M3 base GPU reports near-zero power
+            // (~88 mW) even at 40 %+ residency. Use GPU residency directly.
+            // 20 % sits above system-idle flicker (3–5 %) and below inference load (40 %+).
+            // Source: IOKit IOAccelerator (real-time), fallback powermetrics residency.
+            || s.apple_gpu_pct.map_or(false, |g| g > 20.0)
+            // NVIDIA checks (unchanged)
+            || (s.nvidia_gpu_pct.map_or(false, |g| g > 30.0)
+                && s.nvidia_vram_mb.map_or(false, |v| v > 0))
+            || s.nvidia_power_w.map_or(false, |p| p > 40.0);
         if ai_specific || physics { return "live"; }
     }
 
@@ -2941,7 +2953,7 @@ fn start_ollama_harvester(
                 if let Some(ref ps) = proxy_main {
                     let proxy_active = ps.inference_active.load(std::sync::atomic::Ordering::Relaxed);
                     let since_done   = ps.last_done_ts.lock().unwrap()
-                        .map_or(false, |t| t.elapsed().as_secs() < 35);
+                        .map_or(false, |t| t.elapsed().as_secs() < 15);
                     m.ollama_inference_active = Some(proxy_active || since_done);
                     m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
                     m.ollama_proxy_active = true;
@@ -2952,8 +2964,11 @@ fn start_ollama_harvester(
                     // Long single-turn streaming responses (>35 s without completion)
                     // will show BUSY via the GPU gate in compute_inference_state —
                     // an honest label: "hardware is pegged, can't confirm AI process."
+                    // 15 s matches the Tier 2 attribution window in compute_inference_state.
+                    // inference_state is now the SSOT for live detection; this window is
+                    // belt-and-suspenders for frontend fallback on pre-v0.5.4 agents only.
                     m.ollama_inference_active =
-                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 35));
+                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 15));
                 }
 
                 if let Ok(mut g) = shared_main.lock() { *g = m; }
@@ -3511,6 +3526,7 @@ fn start_metrics_broadcaster(
             let hw = HardwareSignals {
                 ane_power_w:          apple.ane_power_w,
                 soc_power_w:          apple.soc_power_w,
+                apple_gpu_pct:        apple.gpu_utilization_percent,
                 nvidia_gpu_pct:       nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_mb:       nvidia.nvidia_vram_used_mb,
                 nvidia_power_w:       nvidia.nvidia_power_draw_w,
@@ -3937,6 +3953,7 @@ async fn handle_metrics(
             let hw = HardwareSignals {
                 ane_power_w:          apple.ane_power_w,
                 soc_power_w:          apple.soc_power_w,
+                apple_gpu_pct:        apple.gpu_utilization_percent,
                 nvidia_gpu_pct:       nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_mb:       nvidia.nvidia_vram_used_mb,
                 nvidia_power_w:       nvidia.nvidia_power_draw_w,
