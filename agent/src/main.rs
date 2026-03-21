@@ -2838,12 +2838,21 @@ fn start_ollama_harvester(
                     }
                 }
 
-                // Carry forward previous tok/s — the probe task updates it independently.
-                let prev_tps = shared_main.lock().ok()
-                    .and_then(|g| g.ollama_tokens_per_second);
+                // Carry forward the previous shared state so the probe task's writes
+                // (last_probe_start, last_probe_end) and attribution writes
+                // (last_user_request_ts) survive across harvester ticks.
+                // Without this, *g = m at the end of the loop would overwrite every
+                // #[serde(skip)] field with None, destroying probe timing and the
+                // 15 s user-request window.
+                let prev_state = shared_main.lock().ok()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
                 let mut m = OllamaMetrics {
-                    ollama_running: true,
-                    ollama_tokens_per_second: prev_tps,
+                    ollama_running:           true,
+                    ollama_tokens_per_second: prev_state.ollama_tokens_per_second,
+                    last_probe_start:         prev_state.last_probe_start,
+                    last_probe_end:           prev_state.last_probe_end,
+                    last_user_request_ts:     prev_state.last_user_request_ts,
                     ..Default::default()
                 };
 
@@ -2864,11 +2873,20 @@ fn start_ollama_harvester(
                                 let exp_owned = exp_str.to_string();
                                 if prev_expires.as_deref() != Some(&exp_owned) {
                                     last_infer_ts = Some(std::time::Instant::now());
-                                    // Credit as user inference only when probe_active == false.
-                                    // Atomic check: if our probe is in-flight, expires_at changed
-                                    // because of us — not the user. AtomicBool eliminates the
-                                    // timer-overlap bug where is_probe_window() was always true.
-                                    if !probe_active_harvester.load(std::sync::atomic::Ordering::Acquire) {
+                                    // Credit as user inference only when:
+                                    //   (a) probe is not currently in-flight (AtomicBool), AND
+                                    //   (b) probe did not just complete within the last 10s.
+                                    //
+                                    // Rationale for (b): when the probe finishes, scopeguard drops
+                                    // probe_active → false and last_probe_end is set. On the next
+                                    // /api/ps poll (≤5 s later) we'd see the expires_at change that
+                                    // our probe caused, but probe_active is already false. The 10 s
+                                    // grace window (2× poll interval) prevents mis-attribution.
+                                    let probe_just_ended = m.last_probe_end
+                                        .map_or(false, |t| t.elapsed().as_secs() < 10);
+                                    if !probe_active_harvester.load(std::sync::atomic::Ordering::Acquire)
+                                        && !probe_just_ended
+                                    {
                                         m.last_user_request_ts = Some(std::time::Instant::now());
                                     }
                                 }
