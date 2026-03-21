@@ -317,7 +317,14 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // the gap using the session peak × GPU utilisation.
   const smoothedTps  = pushOne('tps', rawTps, tsMs);
   const inferenceActive = m?.ollama_inference_active ?? null;
-  const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst, inferenceActive);
+  // For estimation: override inferenceActive when inference_state signals an active runtime.
+  // During 'idle-spd', ollama_inference_active may be false (no /api/ps trigger seen) even
+  // though Ollama is loaded and the probe recently ran. Force underLoad=true so estimateTps
+  // can fall back to peak×gpu_frac when the probe was skipped (GPU ≥ 40%).
+  const inferenceActiveForEst = (m?.inference_state === 'live' || m?.inference_state === 'idle-spd')
+    ? true
+    : inferenceActive;
+  const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst, inferenceActiveForEst);
   const isActive     = isOnline && tps != null && tps > 0;
 
   // Four-state TOK/S display — Silicon Truth hierarchy.
@@ -336,8 +343,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const isBusy      = hasState
     ? m!.inference_state === 'busy'
     : isOnline && !isProbing && inferenceActive === false && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
+  // isIdleSpeed: do NOT require tps != null when hasState — probe may have been skipped
+  // (GPU ≥ 40%) leaving tps null even though inference_state is 'idle-spd'. Badge should
+  // still show; value renders as '—' or an estimate if peak + GPU data are available.
   const isIdleSpeed = hasState
-    ? m!.inference_state === 'idle-spd' && tps != null
+    ? m!.inference_state === 'idle-spd'
     : isOnline && !isInferring && !isBusy && smoothedTps != null;
 
   // Thermal — not smoothed (state machine, not a continuous signal)
@@ -874,7 +884,14 @@ const DiagnosticRail: React.FC<{
                         : (rawOllamaTps ?? rawVllmTps);
   const inferenceActive = s.ollama_inference_active ?? null;
   const smoothedTps     = tpsBuf.push(rawTps, tsMs) ?? rawTps;
-  const tps             = estimateTps(smoothedTps, peakTps ?? null, gpuPct, inferenceActive);
+  // For estimation: when inference_state signals 'live' or 'idle-spd', treat as under load
+  // so estimateTps can provide a peak×gpu_frac estimate when the probe was skipped (GPU ≥ 40%).
+  // ollama_inference_active can be false/null during IDLE-SPD because it tracks /api/ps
+  // expires_at changes, not the runtime-loaded state — so we override it here.
+  const inferenceActiveForEst = (s.inference_state === 'live' || s.inference_state === 'idle-spd')
+    ? true
+    : inferenceActive;
+  const tps             = estimateTps(smoothedTps, peakTps ?? null, gpuPct, inferenceActiveForEst);
 
   // Same Silicon Truth hierarchy as FleetStatusRow — dumb mirror when inference_state present.
   const isProbing    = s.ollama_is_probing === true;
@@ -889,8 +906,11 @@ const DiagnosticRail: React.FC<{
   const isBusy       = hasState
     ? s.inference_state === 'busy'
     : !isProbing && !isInferring && inferenceActive === false && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
+  // isIdleSpeed: do NOT require tps != null — the agent may have skipped the probe (GPU ≥ 40%)
+  // so tps can be null even when inference_state is 'idle-spd'. The badge should still show;
+  // the value will display as '—' or an estimate if peak + GPU data is available.
   const isIdleSpeed  = hasState
-    ? s.inference_state === 'idle-spd' && tps != null
+    ? s.inference_state === 'idle-spd'
     : !isInferring && !isBusy && smoothedTps != null;
   const hasTps       = s.ollama_running || s.vllm_running;
 
@@ -1250,9 +1270,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   });
   const fleetTps     = tpsNodes.length > 0
     ? tpsNodes.reduce((acc, m) => {
-        const rawCombined = (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0) || null;
-        const gpu         = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
-        return acc + (estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpu, m.ollama_inference_active ?? null) ?? 0);
+        const rawCombined    = (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0) || null;
+        const gpu            = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
+        // Same inference_state-aware underLoad as DiagnosticRail / FleetStatusRow
+        const infActiveForEst = (m.inference_state === 'live' || m.inference_state === 'idle-spd')
+          ? true
+          : (m.ollama_inference_active ?? null);
+        return acc + (estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpu, infActiveForEst) ?? 0);
       }, 0)
     : null;
 
