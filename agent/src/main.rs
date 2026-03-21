@@ -1774,12 +1774,53 @@ async fn install_service() {
 </dict>\n\
 </plist>\n"
         );
+        // Migrate old user-level LaunchAgent plist (pre-v0.5.3 installs).
+        // When running as root (sudo), $HOME resolves to /var/root — scan /Users/ instead.
+        // Uses MetadataExt::uid() to get the exact GUI-session UID for bootout.
+        #[cfg(target_os = "macos")]
+        if let Ok(users_dir) = std::fs::read_dir("/Users") {
+            for entry in users_dir.flatten() {
+                let old_plist = entry.path()
+                    .join("Library/LaunchAgents/dev.wicklee.agent.plist");
+                if old_plist.exists() {
+                    eprintln!("[install] migrating LaunchAgent → LaunchDaemon for {}",
+                        entry.path().display());
+                    #[cfg(unix)]
+                    let uid_val: u32 = {
+                        use std::os::unix::fs::MetadataExt;
+                        std::fs::metadata(entry.path()).map(|m| m.uid()).unwrap_or(501)
+                    };
+                    let _ = tokio::process::Command::new("launchctl")
+                        .args(["bootout", &format!("gui/{uid_val}/dev.wicklee.agent")])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status().await;
+                    let _ = std::fs::remove_file(&old_plist);
+                    eprintln!("[install] removed old LaunchAgent plist");
+                }
+            }
+        }
+
         let plist_path = "/Library/LaunchDaemons/dev.wicklee.agent.plist";
         if let Err(e) = std::fs::write(plist_path, plist) {
             eprintln!("error: cannot write {plist_path}: {e}");
             eprintln!("       Run with sudo: sudo wicklee --install-service");
             return;
         }
+        // Ensure correct ownership/permissions required by launchd for system daemons.
+        // launchd silently refuses plists not owned root:wheel or writable by group/other.
+        // Belt-and-suspenders: sudo already creates root-owned files, but umask
+        // variations on some systems can leave wrong group ownership.
+        let _ = tokio::process::Command::new("chown")
+            .args(["root:wheel", plist_path])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().await;
+        let _ = tokio::process::Command::new("chmod")
+            .args(["644", plist_path])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().await;
         // Bootout any existing registration so we can replace it cleanly.
         // `launchctl load -w` (deprecated) fails with I/O error 5 when the
         // label is already live in the system domain. The modern approach is
@@ -2977,13 +3018,15 @@ fn start_ollama_harvester(
                     .and_then(|g| g.nvidia_gpu_utilization_percent)
                     .or_else(|| apple_probe.lock().ok().and_then(|g| g.gpu_utilization_percent));
 
-                // Skip when GPU is clearly under load — estimation formula covers this.
+                // Skip when GPU is clearly under load — retain the last successful
+                // probe value so the UI shows "last known: N tok/s" rather than "—".
+                // Clearing to None would flatline the display; the cached baseline is
+                // a better approximation than nothing during high-load windows.
                 if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
                     eprintln!(
-                        "[ollama] probe skipped — GPU at {:.0}% (≥{:.0}%), using estimation",
+                        "[ollama] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                         gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT,
                     );
-                    if let Ok(mut g) = shared_probe.lock() { g.ollama_tokens_per_second = None; }
                     continue;
                 }
 
@@ -3195,11 +3238,10 @@ fn start_vllm_harvester(
                 .or_else(|| apple.lock().ok().and_then(|g| g.gpu_utilization_percent));
             if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
                 eprintln!(
-                    "[vllm] probe skipped — GPU at {:.0}% (≥{:.0}%), using estimation",
+                    "[vllm] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                     gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
                 );
-                if let Ok(mut g) = shared_probe.lock() { g.vllm_tokens_per_sec = None; }
-                continue;
+                continue; // retain last probe value — UI shows "last known: N tok/s"
             }
 
             eprintln!("[vllm] probing idle tok/s on :{port} model={model}");
@@ -4330,6 +4372,25 @@ async fn main() {
 
     // Run diagnostics first so the output appears before the banner
     run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port, &config).await;
+
+    // ── Privilege warning (macOS only) ────────────────────────────────────────
+    // powermetrics requires root to expose the SoC, GPU, and ANE power rails.
+    // Without them the HardwareSignals bundle is blind: soc_power_w and
+    // ane_power_w are always None → Tier 3 inference detection never fires.
+    // Log this prominently so the issue is immediately diagnosable from
+    // /var/log/wicklee.log without needing a full stack trace.
+    #[cfg(target_os = "macos")]
+    if unsafe { libc::getuid() } != 0 {
+        eprintln!("[warn] ╔══════════════════════════════════════════════════════════════╗");
+        eprintln!("[warn] ║  RESTRICTED HARDWARE ACCESS — agent is NOT running as root   ║");
+        eprintln!("[warn] ╠══════════════════════════════════════════════════════════════╣");
+        eprintln!("[warn] ║  macOS restricts powermetrics output for non-root processes. ║");
+        eprintln!("[warn] ║  SoC power · GPU power · ANE power  →  all unavailable.     ║");
+        eprintln!("[warn] ║  Tier 3 inference detection (physics gate) is DISABLED.     ║");
+        eprintln!("[warn] ║                                                              ║");
+        eprintln!("[warn] ║  Fix:  sudo wicklee --install-service                       ║");
+        eprintln!("[warn] ╚══════════════════════════════════════════════════════════════╝");
+    }
 
     // ── Optional Ollama transparent proxy ─────────────────────────────────────
     // When enabled in config, try to bind :11434 and forward to Ollama on
