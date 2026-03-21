@@ -73,20 +73,18 @@ struct OllamaMetrics {
     /// Set to `Some(Instant::now())` when probe_ollama_tps() returns.
     #[serde(skip)]
     last_probe_end: Option<std::time::Instant>,
-    /// Set when /api/ps expires_at changes while NOT in the probe window.
-    /// Distinguishes user-initiated inference from probe-caused expires_at resets.
+    /// Set when /api/ps expires_at changes while probe_active == false.
+    /// Attributed to user inference only — probe-caused resets are excluded via AtomicBool.
     #[serde(skip)]
-    last_user_infer_ts: Option<std::time::Instant>,
+    last_user_request_ts: Option<std::time::Instant>,
 }
 
 impl OllamaMetrics {
-    /// 40-second IDLE-SPD window: covers the probe run itself (~5–15 s) plus
-    /// the 35 s /api/ps expiry lag Ollama sets after each generate completes.
-    /// Only active when inference_active is false — confirmed user inference
-    /// takes priority and renders this window irrelevant (LIVE wins).
-    /// Used by compute_inference_state() — not exported.
-    fn is_probe_window(&self) -> bool {
-        self.last_probe_start.map_or(false, |t| t.elapsed().as_secs() < 40)
+    /// True for 30 s after the probe completes — matches the 30s probe interval so
+    /// IDLE-SPD displays continuously while Ollama is loaded and probes are running.
+    /// Used exclusively for the IDLE-SPD display state; attribution now uses AtomicBool.
+    fn recent_probe_baseline(&self) -> bool {
+        self.last_probe_end.map_or(false, |t| t.elapsed().as_secs() < 30)
     }
 
     /// Frontend diagnostic field: true while the probe is actively running,
@@ -103,47 +101,70 @@ impl OllamaMetrics {
 
 // vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
+
+/// Platform-independent sensor bundle. All fields are Option — absent sensors
+/// are skipped. No platform #[cfg] branches in the state machine itself.
+struct HardwareSignals {
+    // Apple Silicon
+    ane_power_w:    Option<f32>,  // ANE power — ML-specific, most accurate signal
+    soc_power_w:    Option<f32>,  // Combined CPU+GPU+ANE (fallback if ANE absent)
+    // NVIDIA
+    nvidia_gpu_pct: Option<f32>,
+    nvidia_vram_mb: Option<u64>,  // non-zero = Ollama process holds GPU memory
+    nvidia_power_w: Option<f32>,
+    // Runtime presence — gates Tier 3 to prevent false LIVE from non-AI workloads
+    ai_runtime_loaded: bool,      // ollama_running || vllm_running
+    // Tier 1 exact
+    vllm_requests: Option<u32>,
+    // Tier 2 attribution
+    probe_active:         bool,
+    last_user_request_ts: Option<std::time::Instant>,
+    // IDLE-SPD display
+    recent_probe: bool,
+}
+
 /// Canonical four-state inference classifier.
 ///
 /// Evaluated once per broadcast tick in the Rust agent and sent as
-/// `inference_state` in MetricsPayload.  The frontend uses this field
+/// `inference_state` in MetricsPayload. The frontend uses this field
 /// directly — no re-computation needed, no localhost/cloud discrepancy.
 ///
 /// Hierarchy (first match wins):
-///   "live"      confirmed user inference — expires_at changed OUTSIDE probe window
-///               (last_user_infer_ts < 35 s), OR vLLM is serving, OR sustained GPU >40%
-///               during probe window (user job concurrent with probe).
-///   "idle-spd"  probe window active (40 s from last_probe_start) AND no confirmed
-///               user inference — shows cached baseline tok/s.
-///   "busy"      GPU > 20% spike with inference confirmed false (Some(false)).
-///               Null = unknown runtime, not BUSY; only strict false triggers.
-///   "idle"      default — hardware at rest, no active inference signal.
-fn compute_inference_state(
-    is_probe_window:       bool,
-    last_user_infer_ts:    Option<std::time::Instant>,
-    inference_active:      Option<bool>,
-    vllm_requests_running: Option<u32>,
-    gpu_util:              Option<f32>,
-) -> &'static str {
-    // High sustained GPU during the probe window strongly implies a concurrent user job.
-    // Our own 20-token probe only spikes GPU briefly and typically <20%.
-    let high_gpu_probe = is_probe_window
-        && inference_active == Some(true)
-        && gpu_util.map_or(false, |g| g > 40.0);
+///   "live"      User or client inference confirmed (any tier)
+///   "idle-spd"  Probe recently completed — fresh baseline visible, hardware idle
+///   "busy"      Hardware loaded but no AI runtime active (rogue workload)
+///   "idle"      Silicon at rest
+fn compute_inference_state(s: &HardwareSignals) -> &'static str {
+    // ── Tier 1: Exact runtime counts (zero heuristic) ────────────────────────
+    if s.vllm_requests.map_or(false, |r| r > 0) { return "live"; }
 
-    let user_infer = last_user_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 35)
-        || vllm_requests_running.map_or(false, |r| r > 0)
-        || high_gpu_probe;
-
-    if user_infer { return "live"; }
-
-    // No confirmed user inference — probe window takes over if active.
-    if is_probe_window { return "idle-spd"; }
-
-    // BUSY only when inference is confirmed false — null (unknown runtime) is not BUSY.
-    if inference_active == Some(false) && gpu_util.map_or(false, |g| g > 20.0) {
-        return "busy";
+    // ── Tier 2: Attribution-confirmed user request ────────────────────────────
+    // last_user_request_ts is set by /api/ps harvester only when probe_active==false,
+    // so this timestamp is guaranteed to not be from our own probe.
+    if s.last_user_request_ts.map_or(false, |t| t.elapsed().as_secs() < 15) {
+        return "live";
     }
+
+    // ── Tier 3: Physics / sensor fusion (≤500ms latency) ─────────────────────
+    // Gated by !probe_active (probe itself also heats silicon) and
+    // ai_runtime_loaded (prevents LIVE from video encoding, compilation, etc.)
+    if !s.probe_active && s.ai_runtime_loaded {
+        let ai_specific = s.ane_power_w.map_or(false, |p| p > 0.5);
+        let physics     = s.soc_power_w.map_or(false,    |p| p > 8.0)
+                       || (s.nvidia_gpu_pct.map_or(false, |g| g > 30.0)
+                           && s.nvidia_vram_mb.map_or(false, |v| v > 0))
+                       || s.nvidia_power_w.map_or(false,  |p| p > 40.0);
+        if ai_specific || physics { return "live"; }
+    }
+
+    // ── IDLE-SPD: fresh probe baseline available ──────────────────────────────
+    if s.recent_probe { return "idle-spd"; }
+
+    // ── BUSY: hardware loaded, no AI runtime ─────────────────────────────────
+    let any_load = s.nvidia_gpu_pct.map_or(false, |g| g > 20.0)
+                || s.soc_power_w.map_or(false,    |p| p > 10.0);
+    if any_load && !s.ai_runtime_loaded { return "busy"; }
+
     "idle"
 }
 
@@ -2760,13 +2781,19 @@ fn start_ollama_harvester(
     nvidia:    Arc<Mutex<NvidiaMetrics>>,
     proxy_arc: Option<Arc<ProxyState>>,
     port_rx: process_discovery::PortRx,
-) -> Arc<Mutex<OllamaMetrics>> {
+) -> (Arc<Mutex<OllamaMetrics>>, Arc<std::sync::atomic::AtomicBool>) {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
+    // Atomic flag: true while the /api/generate probe is in-flight.
+    // Owned here; cloned into the harvester task (for attribution) and
+    // the probe task (to set/clear). Broadcast loops read it for Tier 3 gate.
+    let probe_active: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // ── Main task: watch for port, poll /api/ps every 5s ────────────────────
     let shared_main = Arc::clone(&shared);
     let proxy_main  = proxy_arc.clone();
     let mut port_rx_main = port_rx.clone();
+    let probe_active_harvester = Arc::clone(&probe_active);
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -2837,11 +2864,12 @@ fn start_ollama_harvester(
                                 let exp_owned = exp_str.to_string();
                                 if prev_expires.as_deref() != Some(&exp_owned) {
                                     last_infer_ts = Some(std::time::Instant::now());
-                                    // Credit as user inference only outside the probe window.
-                                    // During the probe window the change was caused by our own
-                                    // /api/generate call, not the user's job.
-                                    if !m.is_probe_window() {
-                                        m.last_user_infer_ts = Some(std::time::Instant::now());
+                                    // Credit as user inference only when probe_active == false.
+                                    // Atomic check: if our probe is in-flight, expires_at changed
+                                    // because of us — not the user. AtomicBool eliminates the
+                                    // timer-overlap bug where is_probe_window() was always true.
+                                    if !probe_active_harvester.load(std::sync::atomic::Ordering::Acquire) {
+                                        m.last_user_request_ts = Some(std::time::Instant::now());
                                     }
                                 }
                                 prev_expires = Some(exp_owned);
@@ -2886,6 +2914,7 @@ fn start_ollama_harvester(
         let shared_probe = Arc::clone(&shared);
         let apple_probe  = Arc::clone(&apple);
         let nvidia_probe = Arc::clone(&nvidia);
+        let probe_active_clone = Arc::clone(&probe_active);
         tokio::spawn(async move {
             // Generous timeout: CPU-only inference of 20 tokens can take several seconds.
             let probe_client = reqwest::Client::builder()
@@ -2941,23 +2970,31 @@ fn start_ollama_harvester(
                 }
 
                 // GPU is idle enough — fire the full 20-token benchmark.
+                // Set probe_active = true before the HTTP call; Drop guard resets it
+                // to false even if the future is cancelled or panics (scopeguard).
                 // Set last_probe_start now; last_probe_end after it returns.
-                // compute_inference_state() uses last_probe_start for the 40 s IDLE-SPD window.
                 // ollama_is_probing (frontend display) uses last_probe_end + 5 s cool-down.
                 if let Ok(mut g) = shared_probe.lock() {
                     g.last_probe_start = Some(std::time::Instant::now());
                     g.last_probe_end   = None; // clear end so is_probing_display() knows it's running
+                }
+                probe_active_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                // Drop guard: resets probe_active = false even on panic or cancellation.
+                // scopeguard::defer! expands to a let-binding — do NOT wrap in another let.
+                scopeguard::defer! {
+                    probe_active_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
                 let new_tps = probe_ollama_tps(&probe_client, port, &model).await;
                 if let Ok(mut g) = shared_probe.lock() {
                     g.ollama_tokens_per_second = new_tps;
                     g.last_probe_end = Some(std::time::Instant::now());
                 }
+                // defer guard drops here → probe_active = false
             }
         });
     }
 
-    shared
+    (shared, probe_active)
 }
 
 // ── vLLM Harvester ──────────────────────────────────────────────────────────────────────────────
@@ -3361,6 +3398,7 @@ fn start_metrics_broadcaster(
     live_events:           Arc<Mutex<Vec<LiveActivityEvent>>>,
     wes_metrics:           Arc<Mutex<WesMetrics>>,
     swap_metrics:          SwapMetrics,
+    probe_active:          Arc<std::sync::atomic::AtomicBool>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -3410,13 +3448,19 @@ fn start_metrics_broadcaster(
             // Compute before struct literal so we can borrow `ollama` without
             // conflicting with the field moves (Option<String> fields are not Copy).
             let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
-            let inference_state_val = compute_inference_state(
-                ollama.is_probe_window(),
-                ollama.last_user_infer_ts,
-                ollama.ollama_inference_active,
-                vllm.vllm_requests_running,
-                nvidia.nvidia_gpu_utilization_percent.or(apple.gpu_utilization_percent),
-            ).to_string();
+            let hw = HardwareSignals {
+                ane_power_w:          apple.ane_power_w,
+                soc_power_w:          apple.soc_power_w,
+                nvidia_gpu_pct:       nvidia.nvidia_gpu_utilization_percent,
+                nvidia_vram_mb:       nvidia.nvidia_vram_used_mb,
+                nvidia_power_w:       nvidia.nvidia_power_draw_w,
+                ai_runtime_loaded:    ollama.ollama_running || vllm.vllm_running,
+                vllm_requests:        vllm.vllm_requests_running,
+                probe_active:         probe_active.load(std::sync::atomic::Ordering::Acquire),
+                last_user_request_ts: ollama.last_user_request_ts,
+                recent_probe:         ollama.recent_probe_baseline(),
+            };
+            let inference_state_val = compute_inference_state(&hw).to_string();
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
@@ -3791,6 +3835,7 @@ async fn handle_metrics(
     axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
     axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
     axum::extract::Extension(swap_metrics):          axum::extract::Extension<SwapMetrics>,
+    axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -3829,13 +3874,19 @@ async fn handle_metrics(
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let swap_mb_s     = swap_metrics.read();
             let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
-            let inference_state_val = compute_inference_state(
-                ollama.is_probe_window(),
-                ollama.last_user_infer_ts,
-                ollama.ollama_inference_active,
-                vllm.vllm_requests_running,
-                nvidia.nvidia_gpu_utilization_percent.or(apple.gpu_utilization_percent),
-            ).to_string();
+            let hw = HardwareSignals {
+                ane_power_w:          apple.ane_power_w,
+                soc_power_w:          apple.soc_power_w,
+                nvidia_gpu_pct:       nvidia.nvidia_gpu_utilization_percent,
+                nvidia_vram_mb:       nvidia.nvidia_vram_used_mb,
+                nvidia_power_w:       nvidia.nvidia_power_draw_w,
+                ai_runtime_loaded:    ollama.ollama_running || vllm.vllm_running,
+                vllm_requests:        vllm.vllm_requests_running,
+                probe_active:         probe_active.load(std::sync::atomic::Ordering::Acquire),
+                last_user_request_ts: ollama.last_user_request_ts,
+                recent_probe:         ollama.recent_probe_baseline(),
+            };
+            let inference_state_val = compute_inference_state(&hw).to_string();
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
@@ -4341,7 +4392,7 @@ async fn main() {
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
-    let ollama_metrics        = start_ollama_harvester(
+    let (ollama_metrics, probe_active) = start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         proxy_arc,
@@ -4394,6 +4445,7 @@ async fn main() {
         Arc::clone(&live_events),
         Arc::clone(&wes_metrics),
         swap_metrics.clone(),
+        Arc::clone(&probe_active),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -4518,6 +4570,7 @@ async fn main() {
          .layer(axum::extract::Extension(swap_metrics))
          .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
          .layer(axum::extract::Extension(broadcast_tx))
+         .layer(axum::extract::Extension(probe_active))
          .layer(cors)
     };
     // Suppress unused-variable warning on musl where metrics_store = None:()
