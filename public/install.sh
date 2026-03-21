@@ -91,6 +91,17 @@ chmod +x "$TMP"
 GHOST_KILLED=false
 
 if [[ "$OS_TAG" == "darwin" ]]; then
+  # Migrate old user-level LaunchAgent (pre-v0.5.3 installs).
+  # Runs as the real user (before sudo), so $HOME and id -u are correct.
+  OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/dev.wicklee.agent.plist"
+  if [[ -f "$OLD_AGENT_PLIST" ]]; then
+    echo "  Migrating from user LaunchAgent to system LaunchDaemon…"
+    launchctl bootout "gui/$(id -u)/dev.wicklee.agent" 2>/dev/null || true
+    sleep 0.5
+    rm -f "$OLD_AGENT_PLIST"
+    dim "  Old LaunchAgent removed — full SoC/ANE power will be available after install."
+  fi
+
   if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
     sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null && GHOST_KILLED=true || true
     sleep 1
