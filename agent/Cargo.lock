@@ -3059,7 +3059,7 @@ dependencies = [
 
 [[package]]
 name = "wicklee-agent"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "axum",
  "duckdb",
