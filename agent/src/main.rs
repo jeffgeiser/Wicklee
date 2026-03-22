@@ -4881,9 +4881,34 @@ async fn main() {
         });
     }
 
+    // ── Graceful shutdown ──────────────────────────────────────────────────────
+    // Catches SIGTERM (launchd/systemd stop) and Ctrl-C (interactive).
+    // Allows in-flight HTTP responses and WebSocket frames to flush,
+    // and lets DuckDB's Drop impl cleanly close the WAL.
+    let shutdown = async {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate())
+                .expect("failed to register SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => eprintln!("[agent] received SIGINT — shutting down"),
+                _ = sigterm.recv()          => eprintln!("[agent] received SIGTERM — shutting down"),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c().await.ok();
+            eprintln!("[agent] received Ctrl-C — shutting down");
+        }
+    };
+
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
         .await
         .expect("Server exited unexpectedly");
+
+    eprintln!("[agent] clean shutdown complete");
 }
 
 // ── Unit tests for inference state machine ──────────────────────────────────
