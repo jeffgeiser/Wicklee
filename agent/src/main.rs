@@ -1267,7 +1267,10 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
             .or_else(|| line.strip_prefix("Package Power: "))
         {
             m.soc_power_w = parse_mw(rest);
-        } else if let Some(rest) = line.strip_prefix("GPU Active residency: ") {
+        } else if let Some(rest) = line.strip_prefix("GPU Active residency: ")
+            // macOS Sequoia (24D+) changed the label to include "HW" — handle both.
+            .or_else(|| line.strip_prefix("GPU HW active residency: "))
+        {
             m.gpu_utilization_percent = parse_percent(rest);
         } else if let Some(rest) = line.strip_prefix("System Memory Pressure: ")
             .or_else(|| line.strip_prefix("Memory Pressure: "))
@@ -1566,11 +1569,15 @@ fn start_cloud_push(
             .build()
             .unwrap_or_default();
 
-        let mut rx         = broadcast_tx.subscribe();
-        let mut last_push  = std::time::Instant::now()
+        let mut rx                = broadcast_tx.subscribe();
+        let mut last_push         = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(10))  // push immediately on first tick
             .unwrap_or_else(std::time::Instant::now);
-        let push_interval  = std::time::Duration::from_secs(2);
+        let push_interval         = std::time::Duration::from_secs(2);
+        // Track the last inference_state we pushed.  When it changes (e.g. idle-spd → live)
+        // we bypass the 2s throttle so the fleet/cloud view reflects the transition in <100 ms
+        // rather than up to 2s later — eliminating the local-LIVE / cloud-IDLE-SPD divergence.
+        let mut last_pushed_state: Option<String> = None;
 
         loop {
             let frame = match rx.recv().await {
@@ -1579,8 +1586,14 @@ fn start_cloud_push(
                 Err(RecvError::Lagged(_))   => continue,
             };
 
-            // Throttle to one push every 2 s.
-            if last_push.elapsed() < push_interval { continue; }
+            // Extract inference_state for the bypass decision (one cheap JSON parse).
+            let curr_state: Option<String> = serde_json::from_str::<serde_json::Value>(&frame)
+                .ok()
+                .and_then(|v| v["inference_state"].as_str().map(|s| s.to_string()));
+            let state_changed = curr_state.as_deref() != last_pushed_state.as_deref();
+
+            // Throttle regular metric updates to 1/2s; bypass immediately on state transition.
+            if !state_changed && last_push.elapsed() < push_interval { continue; }
 
             // Only push when paired (session_token present).
             let wk_id = {
@@ -1602,6 +1615,7 @@ fn start_cloud_push(
             };
 
             last_push = std::time::Instant::now();
+            last_pushed_state = curr_state;
             let _ = client
                 .post(format!("{cloud}/api/telemetry"))
                 .header("content-type", "application/json")
