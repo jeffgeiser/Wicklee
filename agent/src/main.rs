@@ -1218,7 +1218,11 @@ async fn try_evict_port(port: u16) -> bool {
 /// exits non-zero — we surface the stderr so ops can diagnose permissions.
 async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
     let out = tokio::process::Command::new("powermetrics")
-        .args(["--samplers", "cpu_power,gpu_power,thermal", "-n", "1", "-i", "500"])
+        // 5000 ms window: M2 token-decode is bursty (~28 ms/token at 35 tok/s).
+        // A 500 ms window can catch the inter-token idle and report ~1–2 W when the
+        // true average is 3–5 W.  5000 ms spans ≥175 decode steps, covering the full
+        // chip duty-cycle for an accurate average power reading.
+        .args(["--samplers", "cpu_power,gpu_power,thermal", "-n", "1", "-i", "5000"])
         .output()
         .await
         .ok()?;
@@ -1844,6 +1848,15 @@ async fn install_service() {
             .status().await;
         let _ = tokio::process::Command::new("chmod")
             .args(["644", plist_path])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status().await;
+        // Fix ownership of the data directory. When upgrading from a user LaunchAgent,
+        // the database and config files were created by the user account. The root
+        // LaunchDaemon can't reliably write those files until ownership is corrected.
+        // Silently ignore errors (directory may not exist on a fresh install).
+        let _ = tokio::process::Command::new("chown")
+            .args(["-R", "root:wheel", "/Library/Application Support/Wicklee"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status().await;
@@ -3051,7 +3064,21 @@ fn start_ollama_harvester(
                 // probe value so the UI shows "last known: N tok/s" rather than "—".
                 // Clearing to None would flatline the display; the cached baseline is
                 // a better approximation than nothing during high-load windows.
-                if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+                //
+                // Exception: if no baseline exists yet (fresh start / first run), always
+                // fire the probe regardless of GPU load.  Without a first successful probe
+                // the "retain cached" path has nothing to retain, leaving the UI blank.
+                // One probe under load is acceptable — it establishes the peak reference
+                // that all subsequent GPU-scaled estimates depend on.
+                let has_baseline = shared_probe.lock().ok()
+                    .map(|g| g.ollama_tokens_per_second.is_some())
+                    .unwrap_or(false);
+                if !has_baseline {
+                    eprintln!(
+                        "[ollama] no baseline yet — forcing initial probe despite GPU at {:.0}%",
+                        gpu_util.unwrap_or(0.0),
+                    );
+                } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
                     eprintln!(
                         "[ollama] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                         gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT,
@@ -3262,10 +3289,19 @@ fn start_vllm_harvester(
             };
 
             // Skip when GPU is already under load — same gate as Ollama probe.
+            // Exception: no baseline yet → force the first probe to establish a reference.
             let gpu_util: Option<f32> = nvidia.lock().ok()
                 .and_then(|g| g.nvidia_gpu_utilization_percent)
                 .or_else(|| apple.lock().ok().and_then(|g| g.gpu_utilization_percent));
-            if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+            let vllm_has_baseline = shared_probe.lock().ok()
+                .map(|g| g.vllm_tokens_per_sec.is_some())
+                .unwrap_or(false);
+            if !vllm_has_baseline {
+                eprintln!(
+                    "[vllm] no baseline yet — forcing initial probe despite GPU at {:.0}%",
+                    gpu_util.unwrap_or(0.0),
+                );
+            } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
                 eprintln!(
                     "[vllm] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                     gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
