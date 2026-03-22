@@ -1,0 +1,90 @@
+use crate::PairingState;
+use std::sync::{Arc, Mutex};
+
+pub(crate) const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.up.railway.app";
+
+/// Spawn a background task that forwards live telemetry to the cloud every 2 s.
+/// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
+/// throttles pushes to 1 per 2 s so we don't hammer Railway.
+/// Stops automatically when the session_token is cleared (on disconnect).
+pub(crate) fn start_cloud_push(
+    pairing_state: Arc<Mutex<PairingState>>,
+    broadcast_tx:  tokio::sync::broadcast::Sender<String>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    tokio::spawn(async move {
+        let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+
+        let mut rx                = broadcast_tx.subscribe();
+        let mut last_push         = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(10))  // push immediately on first tick
+            .unwrap_or_else(std::time::Instant::now);
+        let push_interval         = std::time::Duration::from_secs(2);
+        // Track the last inference_state we pushed.  When it changes (e.g. idle-spd → live)
+        // we bypass the 2s throttle so the fleet/cloud view reflects the transition in <100 ms
+        // rather than up to 2s later — eliminating the local-LIVE / cloud-IDLE-SPD divergence.
+        let mut last_pushed_state: Option<String> = None;
+
+        loop {
+            let frame = match rx.recv().await {
+                Ok(json)                    => json,
+                Err(RecvError::Closed)      => break,
+                Err(RecvError::Lagged(_))   => continue,
+            };
+
+            // Extract inference_state for the bypass decision (one cheap JSON parse).
+            let curr_state: Option<String> = serde_json::from_str::<serde_json::Value>(&frame)
+                .ok()
+                .and_then(|v| v["inference_state"].as_str().map(|s| s.to_string()));
+            let state_changed = curr_state.as_deref() != last_pushed_state.as_deref();
+
+            // Throttle regular metric updates to 1/2s; bypass immediately on state transition.
+            if !state_changed && last_push.elapsed() < push_interval { continue; }
+
+            // Only push when paired (session_token present).
+            let wk_id = {
+                let state = pairing_state.lock().unwrap();
+                if state.cloud_session_token.is_none() { continue; }
+                state.node_id.clone()
+            };
+
+            // Patch the JSON frame: replace node_id with the WK-XXXX identifier
+            // so it matches the nodes table key; preserve the machine hostname
+            // in a separate `hostname` field for display in the fleet dashboard.
+            let patched = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&frame) {
+                let machine_hostname = val["node_id"].as_str().unwrap_or("").to_string();
+                val["node_id"] = serde_json::json!(wk_id);
+                val["hostname"] = serde_json::json!(machine_hostname);
+                val.to_string()
+            } else {
+                frame
+            };
+
+            last_push = std::time::Instant::now();
+            // Only advance last_pushed_state on a successful POST.
+            // If the request fails (network blip, 5xx, timeout) last_pushed_state stays
+            // at the old value — state_changed remains true on the next tick and we retry
+            // immediately rather than waiting for the 2s throttle to expire.
+            // Without this guard a single failed POST silently drops a state transition
+            // (e.g. idle-spd → live) and the fleet view can stay stale until the *next*
+            // state change forces another bypass — which may never come.
+            let post_ok = client
+                .post(format!("{cloud}/api/telemetry"))
+                .header("content-type", "application/json")
+                .body(patched)
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if post_ok {
+                last_pushed_state = curr_state;
+            }
+        }
+    });
+}
