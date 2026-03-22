@@ -24,6 +24,12 @@ use tokio::sync::{broadcast, watch};
 mod process_discovery;
 #[cfg(not(target_env = "musl"))]
 mod store;
+mod inference;
+mod harvester;
+mod proxy;
+mod cloud_push;
+mod service;
+mod diagnostics;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -33,6 +39,9 @@ use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Cl
 use nvml_wrapper_sys::bindings::{nvmlMemory_v2_t, nvmlDevice_t};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
+
+use inference::{read_hardware_signals, compute_inference_state};
+use proxy::ProxyState;
 
 // ── Embedded Frontend ─────────────────────────────────────────────────────────
 
@@ -51,53 +60,53 @@ struct ModelInfo { name: String, size: u64 }
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
-struct OllamaMetrics {
-    ollama_running:           bool,
-    ollama_active_model:      Option<String>,
-    ollama_model_size_gb:     Option<f32>,
-    ollama_quantization:      Option<String>,
+pub(crate) struct OllamaMetrics {
+    pub(crate) ollama_running:           bool,
+    pub(crate) ollama_active_model:      Option<String>,
+    pub(crate) ollama_model_size_gb:     Option<f32>,
+    pub(crate) ollama_quantization:      Option<String>,
     /// Sustained tok/s: eval_rate from Ollama /api/generate probe every 30s.
     /// Reflects actual node throughput under current thermal/load conditions.
-    ollama_tokens_per_second: Option<f32>,
+    pub(crate) ollama_tokens_per_second: Option<f32>,
     /// True when a request completed within the last 35s (one probe interval).
     /// Derived from expires_at resets observed in /api/ps polls.
     /// None = not yet determined (no expires_at change seen since agent start).
-    ollama_inference_active: Option<bool>,
+    pub(crate) ollama_inference_active: Option<bool>,
     /// True when the transparent proxy is active on :11434.
     /// When true, tok/s comes from done-packet eval_count/eval_duration rather than the 30s probe.
     #[serde(default)]
-    ollama_proxy_active: bool,
+    pub(crate) ollama_proxy_active: bool,
     /// Set to `Some(Instant::now())` when probe_ollama_tps() begins.
     #[serde(skip)]
-    last_probe_start: Option<std::time::Instant>,
+    pub(crate) last_probe_start: Option<std::time::Instant>,
     /// Set to `Some(Instant::now())` when probe_ollama_tps() returns.
     #[serde(skip)]
-    last_probe_end: Option<std::time::Instant>,
+    pub(crate) last_probe_end: Option<std::time::Instant>,
     /// Set when /api/ps expires_at changes while probe_active == false.
     /// Attributed to user inference only — probe-caused resets are excluded via AtomicBool.
     #[serde(skip)]
-    last_user_request_ts: Option<std::time::Instant>,
+    pub(crate) last_user_request_ts: Option<std::time::Instant>,
     /// Set to `true` when the probe completes. The /api/ps harvester consumes this
     /// flag on the first `expires_at` change it observes — that change is the probe's
     /// own reset and must not be attributed to the user. Any subsequent expires_at
     /// change is a real user request and is attributed normally.
     /// This replaces the 10s time-based blackout that caused the Dead Zone.
     #[serde(skip)]
-    probe_caused_next_reset: bool,
+    pub(crate) probe_caused_next_reset: bool,
 }
 
 impl OllamaMetrics {
     /// True for 30 s after the probe completes — matches the 30s probe interval so
     /// IDLE-SPD displays continuously while Ollama is loaded and probes are running.
     /// Used exclusively for the IDLE-SPD display state; attribution now uses AtomicBool.
-    fn recent_probe_baseline(&self) -> bool {
+    pub(crate) fn recent_probe_baseline(&self) -> bool {
         self.last_probe_end.map_or(false, |t| t.elapsed().as_secs() < 30)
     }
 
     /// Frontend diagnostic field: true while the probe is actively running,
     /// or within 5 s of finishing (short cool-down). Exported as
     /// `ollama_is_probing` in MetricsPayload so the UI can show "probing" badge.
-    fn is_probing_display(&self) -> bool {
+    pub(crate) fn is_probing_display(&self) -> bool {
         match (self.last_probe_start, self.last_probe_end) {
             (None, _)          => false,                         // never started
             (Some(_), Some(e)) => e.elapsed().as_secs() < 5,    // finished — 5 s cool-down
@@ -109,182 +118,24 @@ impl OllamaMetrics {
 // vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
 
-/// Platform-independent sensor bundle. All fields are Option — absent sensors
-/// are skipped. No platform #[cfg] branches in the state machine itself.
-struct HardwareSignals {
-    // Apple Silicon
-    ane_power_w:    Option<f32>,  // ANE power — ML-specific, most accurate signal
-    soc_power_w:    Option<f32>,  // Combined CPU+GPU+ANE (fallback if ANE absent)
-    /// GPU HW active residency % from IOKit (primary) / powermetrics (fallback).
-    /// Distinct from GPU *power*: M2 base GPU reads ~88 mW at 40 % residency.
-    /// Used as Tier 3 "Power Blindness" override for M2/M3 base chips.
-    apple_gpu_pct:  Option<f32>,
-    // NVIDIA
-    nvidia_gpu_pct: Option<f32>,
-    nvidia_vram_mb: Option<u64>,  // non-zero = Ollama process holds GPU memory
-    nvidia_power_w: Option<f32>,
-    // Runtime presence — gates Tier 3 to prevent false LIVE from non-AI workloads
-    ai_runtime_loaded: bool,      // ollama_running || vllm_running
-    // Tier 1 exact
-    vllm_requests: Option<u32>,
-    // Tier 2 attribution
-    probe_active:         bool,
-    last_user_request_ts: Option<std::time::Instant>,
-    // IDLE-SPD display
-    recent_probe: bool,
-}
-
-/// Build a HardwareSignals snapshot from the current sensor state.
-///
-/// Extracted from the broadcast tick loop to make signal construction testable
-/// and keep the 400-line broadcast loop focused on serialization + send.
-fn read_hardware_signals(
-    apple:        &AppleSiliconMetrics,
-    nvidia:       &NvidiaMetrics,
-    ollama:       &OllamaMetrics,
-    vllm:         &VllmMetrics,
-    probe_active: &std::sync::atomic::AtomicBool,
-) -> HardwareSignals {
-    HardwareSignals {
-        ane_power_w:          apple.ane_power_w,
-        soc_power_w:          apple.soc_power_w,
-        apple_gpu_pct:        apple.gpu_utilization_percent,
-        nvidia_gpu_pct:       nvidia.nvidia_gpu_utilization_percent,
-        nvidia_vram_mb:       nvidia.nvidia_vram_used_mb,
-        nvidia_power_w:       nvidia.nvidia_power_draw_w,
-        ai_runtime_loaded:    ollama.ollama_running || vllm.vllm_running,
-        vllm_requests:        vllm.vllm_requests_running,
-        probe_active:         probe_active.load(std::sync::atomic::Ordering::Acquire),
-        last_user_request_ts: ollama.last_user_request_ts,
-        recent_probe:         ollama.recent_probe_baseline(),
-    }
-}
-
-/// Canonical four-state inference classification.
-///
-/// Internal enum — serialized to wire-format strings at the single MetricsPayload
-/// serialization point. Enables exhaustive pattern matching in tests and future
-/// transition logic without coupling the state machine to JSON field values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InferenceState {
-    /// User or client inference confirmed (any tier).
-    Live,
-    /// Probe recently completed — fresh baseline visible, hardware idle.
-    IdleSpd,
-    /// Hardware loaded but no AI runtime active (rogue workload).
-    Busy,
-    /// Silicon at rest.
-    Idle,
-}
-
-impl InferenceState {
-    /// Wire-format string. These values are FROZEN — shared with the cloud
-    /// backend and React frontend. Do not rename.
-    fn as_str(&self) -> &'static str {
-        match self {
-            InferenceState::Live    => "live",
-            InferenceState::IdleSpd => "idle-spd",
-            InferenceState::Busy    => "busy",
-            InferenceState::Idle    => "idle",
-        }
-    }
-}
-
-impl std::fmt::Display for InferenceState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Canonical four-state inference classifier.
-///
-/// Pure function: no side effects, no async, no stored state. Re-derives
-/// from sensors every tick so it self-corrects on agent restart and sensor dropout.
-///
-/// Hierarchy (first match wins):
-///   Live      Tier 1: vLLM exact count, or Tier 2: attributed user request, or Tier 3: physics
-///   IdleSpd   Probe recently completed — fresh baseline visible
-///   Busy      Hardware loaded, no AI runtime
-///   Idle      Silicon at rest
-fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
-    // ── Tier 1: Exact runtime counts (zero heuristic) ────────────────────────
-    if s.vllm_requests.map_or(false, |r| r > 0) {
-        return InferenceState::Live;
-    }
-
-    // ── Tier 2: Attribution-confirmed user request ────────────────────────────
-    // last_user_request_ts is set by /api/ps harvester only when the expires_at
-    // change is NOT from our own probe (snapshot-based filter), so this timestamp
-    // is guaranteed to represent a real user request.
-    if s.last_user_request_ts.map_or(false, |t| t.elapsed().as_secs() < 15) {
-        return InferenceState::Live;
-    }
-
-    // ── Tier 3: Physics / sensor fusion (≤500ms latency) ─────────────────────
-    // Gated by:
-    //   !probe_active — probe itself heats silicon
-    //   !recent_probe — GPU residency lingers 10-15s after probe ends; without
-    //                   this gate the 20% threshold hallucinates LIVE from probe heat
-    //   ai_runtime_loaded — prevents LIVE from video encoding, etc.
-    //
-    // High-confidence override: the synthetic probe never drives GPU above ~60%.
-    // If residency is ≥ 75% during the recent_probe window it can only be real
-    // user inference — skip the recent_probe gate.
-    let saturated_gpu = s.apple_gpu_pct.map_or(false,  |g| g >= 75.0)
-                     || s.nvidia_gpu_pct.map_or(false, |g| g >= 75.0);
-
-    if !s.probe_active && (!s.recent_probe || saturated_gpu) && s.ai_runtime_loaded {
-        let ai_specific = s.ane_power_w.map_or(false, |p| p > 0.5);
-        let physics =
-            // SoC power gate (M1 Pro/Max/Ultra, M2/M3 Pro/Max — larger GPU arrays)
-            s.soc_power_w.map_or(false, |p| p > 8.0)
-            // "Power Blindness" override: M2/M3 base GPU reports near-zero power
-            // (~88 mW) even at 40%+ residency. Use GPU residency directly.
-            // 20% sits above system-idle flicker (3–5%) and below inference load (40%+).
-            || s.apple_gpu_pct.map_or(false, |g| g > 20.0)
-            // NVIDIA checks
-            || (s.nvidia_gpu_pct.map_or(false, |g| g > 30.0)
-                && s.nvidia_vram_mb.map_or(false, |v| v > 0))
-            || s.nvidia_power_w.map_or(false, |p| p > 40.0);
-
-        if ai_specific || physics {
-            return InferenceState::Live;
-        }
-    }
-
-    // ── IDLE-SPD: fresh probe baseline available ──────────────────────────────
-    if s.recent_probe {
-        return InferenceState::IdleSpd;
-    }
-
-    // ── BUSY: hardware loaded, no AI runtime ─────────────────────────────────
-    let any_load = s.nvidia_gpu_pct.map_or(false, |g| g > 20.0)
-                || s.soc_power_w.map_or(false,    |p| p > 10.0);
-    if any_load && !s.ai_runtime_loaded {
-        return InferenceState::Busy;
-    }
-
-    InferenceState::Idle
-}
-
 #[derive(Serialize, Clone, Default)]
-struct VllmMetrics {
-    vllm_running:          bool,
-    vllm_model_name:       Option<String>,
-    vllm_tokens_per_sec:   Option<f32>,
-    vllm_cache_usage_perc: Option<f32>,
-    vllm_requests_running: Option<u32>,
+pub(crate) struct VllmMetrics {
+    pub(crate) vllm_running:          bool,
+    pub(crate) vllm_model_name:       Option<String>,
+    pub(crate) vllm_tokens_per_sec:   Option<f32>,
+    pub(crate) vllm_cache_usage_perc: Option<f32>,
+    pub(crate) vllm_requests_running: Option<u32>,
 }
 
 // NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
 // All fields are Option so the payload serialises cleanly as null on other platforms.
 #[derive(Serialize, Clone, Default)]
-struct NvidiaMetrics {
-    nvidia_gpu_utilization_percent: Option<f32>,
-    nvidia_vram_used_mb:            Option<u64>,
-    nvidia_vram_total_mb:           Option<u64>,
-    nvidia_gpu_temp_c:              Option<u32>,
-    nvidia_power_draw_w:            Option<f32>,
+pub(crate) struct NvidiaMetrics {
+    pub(crate) nvidia_gpu_utilization_percent: Option<f32>,
+    pub(crate) nvidia_vram_used_mb:            Option<u64>,
+    pub(crate) nvidia_vram_total_mb:           Option<u64>,
+    pub(crate) nvidia_gpu_temp_c:              Option<u32>,
+    pub(crate) nvidia_power_draw_w:            Option<f32>,
     /// Human-readable GPU model name, e.g. "NVIDIA GeForce RTX 4080"
     nvidia_gpu_name:                Option<String>,
     /// Thermal penalty derived from the NVML throttle-reason bitmask (WES v2).
@@ -292,49 +143,49 @@ struct NvidiaMetrics {
     /// None on non-NVIDIA platforms. The WES sampler prefers this over string-inferred
     /// thermal_state because it is hardware-authoritative, not temperature-proxied.
     #[serde(skip)]   // internal use only; not forwarded in MetricsPayload
-    nvidia_throttle_penalty:        Option<f32>,
+    pub(crate) nvidia_throttle_penalty:        Option<f32>,
     /// GPU clock throttle percentage: 0.0 = running at full rated speed, 100.0 = fully throttled.
     /// Derived from nvmlDeviceGetClockInfo(GRAPHICS) / nvmlDeviceGetMaxClockInfo(GRAPHICS).
     /// Inverse of clock ratio so higher values always mean worse state (consistent with other %).
     /// #[serde(skip)] — forwarded via MetricsPayload.clock_throttle_pct, not directly.
     #[serde(skip)]
-    clock_throttle_pct:             Option<f32>,
+    pub(crate) clock_throttle_pct:             Option<f32>,
     /// Current PCIe link width (lanes): 1, 2, 4, 8, or 16.
     /// nvmlDeviceGetCurrPcieLinkWidth. None on virtualised GPUs where PCIe info is unavailable.
     #[serde(skip)]
-    pcie_link_width:                Option<u32>,
+    pub(crate) pcie_link_width:                Option<u32>,
     /// Maximum PCIe link width the card + slot support.
     /// nvmlDeviceGetMaxPcieLinkWidth. When pcie_link_width < pcie_link_max_width the card is
     /// running in a narrower slot than its design spec (lane-degraded).
     #[serde(skip)]
-    pcie_link_max_width:            Option<u32>,
+    pub(crate) pcie_link_max_width:            Option<u32>,
 }
 
 #[derive(Serialize, Clone, Default)]
-struct AppleSiliconMetrics {
-    cpu_power_w:             Option<f32>,
-    ecpu_power_w:            Option<f32>,
-    pcpu_power_w:            Option<f32>,
+pub(crate) struct AppleSiliconMetrics {
+    pub(crate) cpu_power_w:             Option<f32>,
+    pub(crate) ecpu_power_w:            Option<f32>,
+    pub(crate) pcpu_power_w:            Option<f32>,
     /// GPU power draw reported by powermetrics "GPU Power: NNN mW".
     /// None on Intel Macs and non-macOS platforms.
-    gpu_power_w:             Option<f32>,
+    pub(crate) gpu_power_w:             Option<f32>,
     /// Apple Neural Engine power from "ANE Power: NNN mW" (some macOS versions).
-    ane_power_w:             Option<f32>,
+    pub(crate) ane_power_w:             Option<f32>,
     /// Total SoC power from powermetrics "Combined Power (CPU + GPU + ANE): NNN mW"
     /// (or "Combined Power:" / "Package Power:" on older/newer macOS versions).
     /// This is the authoritative total for Apple Silicon WES calculation.
     /// Synthesized from cpu + gpu + ane if the combined line is absent.
     /// None on Intel Macs and non-macOS platforms.
-    soc_power_w:             Option<f32>,
-    gpu_utilization_percent: Option<f32>,
-    memory_pressure_percent: Option<f32>,
-    thermal_state:           Option<String>,
+    pub(crate) soc_power_w:             Option<f32>,
+    pub(crate) gpu_utilization_percent: Option<f32>,
+    pub(crate) memory_pressure_percent: Option<f32>,
+    pub(crate) thermal_state:           Option<String>,
     /// Apple Silicon chip description, e.g. "Apple M3 Max"
-    gpu_name:                Option<String>,
+    pub(crate) gpu_name:                Option<String>,
     /// GPU wired memory budget (MB) from `sysctl iogpu.wired_limit_mb`.
     /// This is the maximum unified memory macOS will wire for GPU use —
     /// typically ~75% of total RAM. None on Intel Macs and non-macOS.
-    gpu_wired_limit_mb:      Option<u64>,
+    pub(crate) gpu_wired_limit_mb:      Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -485,16 +336,16 @@ struct MetricsPayload {
 /// Provides zero-lag inference detection and exact tok/s from done packets.
 /// Requires the user to move Ollama to ollama_port (OLLAMA_HOST=127.0.0.1:11435).
 #[derive(Serialize, Deserialize, Default, Clone)]
-struct OllamaProxyConfig {
+pub(crate) struct OllamaProxyConfig {
     /// Enable the transparent proxy. Default: false (Phase A /api/ps polling).
     #[serde(default)]
-    enabled: bool,
+    pub(crate) enabled: bool,
     /// Port where Ollama listens after being moved. Default: 11435.
     #[serde(default = "default_proxy_ollama_port")]
-    ollama_port: u16,
+    pub(crate) ollama_port: u16,
     /// Return 503 immediately when backend is unreachable rather than timing out.
     #[serde(default)]
-    bypass_if_proxy_down: bool,
+    pub(crate) bypass_if_proxy_down: bool,
 }
 
 fn default_proxy_ollama_port() -> u16 { 11435 }
@@ -513,42 +364,42 @@ fn default_proxy_ollama_port() -> u16 { 11435 }
 /// ollama = 11434
 /// ```
 #[derive(Serialize, Deserialize, Default, Clone)]
-struct RuntimePortsConfig {
+pub(crate) struct RuntimePortsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    ollama: Option<u16>,
+    pub(crate) ollama: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    vllm: Option<u16>,
+    pub(crate) vllm: Option<u16>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
-struct WickleeConfig {
-    node_id: String,
+pub(crate) struct WickleeConfig {
+    pub(crate) node_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    fleet_url: Option<String>,
+    pub(crate) fleet_url: Option<String>,
     /// Cloud session token — persisted so telemetry push resumes after restart.
     #[serde(skip_serializing_if = "Option::is_none")]
-    session_token: Option<String>,
+    pub(crate) session_token: Option<String>,
     /// Optional transparent Ollama proxy configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    ollama_proxy: Option<OllamaProxyConfig>,
+    pub(crate) ollama_proxy: Option<OllamaProxyConfig>,
     /// Explicit port overrides — bypasses process-based auto-detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    runtime_ports: Option<RuntimePortsConfig>,
+    pub(crate) runtime_ports: Option<RuntimePortsConfig>,
 }
 
 #[derive(Clone)]
-enum PairingStatus {
+pub(crate) enum PairingStatus {
     Unpaired,
     Pending { code: String, expires_at: u64 },
     Connected { fleet_url: String },
 }
 
-struct PairingState {
-    status:               PairingStatus,
-    node_id:              String,
+pub(crate) struct PairingState {
+    pub(crate) status:               PairingStatus,
+    pub(crate) node_id:              String,
     /// Session token returned by the cloud backend after a successful claim.
     /// Present only while paired; used to authenticate telemetry pushes.
-    cloud_session_token:  Option<String>,
+    pub(crate) cloud_session_token:  Option<String>,
 }
 
 #[derive(Serialize)]
@@ -566,11 +417,11 @@ struct PairingStatusResponse {
 /// Written by background tasks (e.g. self-update) and drained into every
 /// MetricsPayload broadcast on the next 100 ms tick.
 #[derive(Serialize, Clone)]
-struct LiveActivityEvent {
-    message:      String,
-    timestamp_ms: u64,
+pub(crate) struct LiveActivityEvent {
+    pub(crate) message:      String,
+    pub(crate) timestamp_ms: u64,
     /// Frontend style hint: "info" | "warn" | "error"
-    level:        &'static str,
+    pub(crate) level:        &'static str,
 }
 
 /// Response shape of GET https://wicklee.dev/api/agent/version
@@ -633,7 +484,7 @@ async fn read_thermal_pmset() -> Option<String> {
     parse_pmset_therm(&String::from_utf8_lossy(&out.stdout))
 }
 
-fn parse_pmset_therm(output: &str) -> Option<String> {
+pub(crate) fn parse_pmset_therm(output: &str) -> Option<String> {
     for line in output.lines() {
         let line = line.trim();
 
@@ -715,7 +566,7 @@ async fn try_ioreg_class(class: &str) -> Option<f32> {
     parse_ioreg_gpu(&String::from_utf8_lossy(&out.stdout))
 }
 
-fn parse_ioreg_gpu(text: &str) -> Option<f32> {
+pub(crate) fn parse_ioreg_gpu(text: &str) -> Option<f32> {
     for line in text.lines() {
         // Intel / AMD: "Device Utilization %" = N  (integer percent, e.g. 42)
         if let Some(pos) = line.find("\"Device Utilization %\"") {
@@ -841,14 +692,14 @@ fn read_linux_chip_name() -> Option<String> { None }
 //   3. amd-core layout                 (fallback for some AMD configs)
 
 #[cfg(target_os = "linux")]
-const RAPL_PATHS: &[(&str, &str)] = &[
+pub(crate) const RAPL_PATHS: &[(&str, &str)] = &[
     ("/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj", "intel-rapl"),
     ("/sys/class/powercap/intel-rapl:0/energy_uj",            "intel-rapl:0"),
     ("/sys/class/powercap/amd-core/amd-core:0/energy_uj",     "amd-core"),
 ];
 
 #[cfg(target_os = "linux")]
-fn read_rapl_uj(path: &str) -> Option<u64> {
+pub(crate) fn read_rapl_uj(path: &str) -> Option<u64> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
@@ -1640,8 +1491,6 @@ fn save_config(cfg: &WickleeConfig) {
     }
 }
 
-const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.up.railway.app";
-
 fn generate_code() -> String {
     format!("{:06}", now_ms() % 1_000_000)
 }
@@ -1649,7 +1498,7 @@ fn generate_code() -> String {
 /// POST { code, node_id, fleet_url } to the cloud backend.
 /// Returns the session_token to use for subsequent telemetry pushes.
 async fn register_pair_code(node_id: &str, code: &str) -> Option<String> {
-    let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
+    let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| cloud_push::CLOUD_URL.to_string());
     let fleet  = std::env::var("WICKLEE_FLEET_URL").unwrap_or_else(|_| "http://localhost:7700".to_string());
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(3))
@@ -1665,92 +1514,6 @@ async fn register_pair_code(node_id: &str, code: &str) -> Option<String> {
     if !res.status().is_success() { return None; }
     let body: serde_json::Value = res.json().await.ok()?;
     body["session_token"].as_str().map(|s| s.to_string())
-}
-
-/// Spawn a background task that forwards live telemetry to the cloud every 2 s.
-/// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
-/// throttles pushes to 1 per 2 s so we don't hammer Railway.
-/// Stops automatically when the session_token is cleared (on disconnect).
-fn start_cloud_push(
-    pairing_state: Arc<Mutex<PairingState>>,
-    broadcast_tx:  broadcast::Sender<String>,
-) {
-    use tokio::sync::broadcast::error::RecvError;
-
-    tokio::spawn(async move {
-        let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap_or_default();
-
-        let mut rx                = broadcast_tx.subscribe();
-        let mut last_push         = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_secs(10))  // push immediately on first tick
-            .unwrap_or_else(std::time::Instant::now);
-        let push_interval         = std::time::Duration::from_secs(2);
-        // Track the last inference_state we pushed.  When it changes (e.g. idle-spd → live)
-        // we bypass the 2s throttle so the fleet/cloud view reflects the transition in <100 ms
-        // rather than up to 2s later — eliminating the local-LIVE / cloud-IDLE-SPD divergence.
-        let mut last_pushed_state: Option<String> = None;
-
-        loop {
-            let frame = match rx.recv().await {
-                Ok(json)                    => json,
-                Err(RecvError::Closed)      => break,
-                Err(RecvError::Lagged(_))   => continue,
-            };
-
-            // Extract inference_state for the bypass decision (one cheap JSON parse).
-            let curr_state: Option<String> = serde_json::from_str::<serde_json::Value>(&frame)
-                .ok()
-                .and_then(|v| v["inference_state"].as_str().map(|s| s.to_string()));
-            let state_changed = curr_state.as_deref() != last_pushed_state.as_deref();
-
-            // Throttle regular metric updates to 1/2s; bypass immediately on state transition.
-            if !state_changed && last_push.elapsed() < push_interval { continue; }
-
-            // Only push when paired (session_token present).
-            let wk_id = {
-                let state = pairing_state.lock().unwrap();
-                if state.cloud_session_token.is_none() { continue; }
-                state.node_id.clone()
-            };
-
-            // Patch the JSON frame: replace node_id with the WK-XXXX identifier
-            // so it matches the nodes table key; preserve the machine hostname
-            // in a separate `hostname` field for display in the fleet dashboard.
-            let patched = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&frame) {
-                let machine_hostname = val["node_id"].as_str().unwrap_or("").to_string();
-                val["node_id"] = serde_json::json!(wk_id);
-                val["hostname"] = serde_json::json!(machine_hostname);
-                val.to_string()
-            } else {
-                frame
-            };
-
-            last_push = std::time::Instant::now();
-            // Only advance last_pushed_state on a successful POST.
-            // If the request fails (network blip, 5xx, timeout) last_pushed_state stays
-            // at the old value — state_changed remains true on the next tick and we retry
-            // immediately rather than waiting for the 2s throttle to expire.
-            // Without this guard a single failed POST silently drops a state transition
-            // (e.g. idle-spd → live) and the fleet view can stay stale until the *next*
-            // state change forces another bypass — which may never come.
-            let post_ok = client
-                .post(format!("{cloud}/api/telemetry"))
-                .header("content-type", "application/json")
-                .body(patched)
-                .send()
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-            if post_ok {
-                last_pushed_state = curr_state;
-            }
-        }
-    });
 }
 
 fn print_pairing_box(node_id: &str, code: &str) {
@@ -1789,614 +1552,9 @@ fn pairing_response(state: &PairingState) -> PairingStatusResponse {
     }
 }
 
-// ── Service Installation ──────────────────────────────────────────────────────
-
-/// C3 — Validates that a binary path is safe to embed in service descriptors.
-///
-/// launchd plists, systemd unit files, and Windows sc.exe descriptors are text
-/// formats that the respective service managers parse with their own rules.
-/// Embedding a path with shell metacharacters, XML-significant characters, or
-/// newlines can silently corrupt the descriptor or enable local privilege
-/// escalation when the service manager reloads it.
-///
-/// **Allowed (POSIX):** `[a-zA-Z0-9/_.-]` only.  Covers every normal Unix
-/// install path (`/usr/local/bin/wicklee`, `/opt/wicklee/bin/wicklee`, etc.).
-///
-/// **Allowed (Windows):** drive letter + `:` + `[\\/a-zA-Z0-9_.- ]` only.
-/// Spaces are common in Windows paths (`C:\Program Files\…`); they are handled
-/// by quoting at the call site rather than here.
-///
-/// The check rejects `.` components and path traversal (`..`) unconditionally
-/// regardless of platform, and enforces a sensible maximum path length.
-///
-/// If validation fails, `install_service` prints a clear human-readable error
-/// and aborts rather than writing a potentially broken service descriptor.
-#[cfg(not(target_os = "windows"))]
-fn validate_binary_path(path: &str) -> Result<(), String> {
-    if path.is_empty() || path.len() > 4096 {
-        return Err(format!(
-            "binary path length {} is out of range (1–4096 bytes)", path.len()
-        ));
-    }
-    if !path.starts_with('/') {
-        return Err("binary path must be absolute (must start with '/')".to_string());
-    }
-    // Reject ".." components wherever they appear.
-    if path.split('/').any(|component| component == "..") {
-        return Err("binary path must not contain path traversal ('..') components".to_string());
-    }
-    // Byte-level allowlist: [a-zA-Z0-9/_.-]
-    // '/' is the POSIX path separator; '_', '.', '-' appear in common binary names.
-    // Everything else (spaces, semicolons, shell expansions, XML metacharacters,
-    // newlines, null bytes, …) is rejected.
-    for (i, b) in path.bytes().enumerate() {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
-            | b'/' | b'_' | b'.' | b'-' => {}
-            _ => return Err(format!(
-                "binary path contains unsafe byte 0x{b:02X} at index {i} — \
-                 only [a-zA-Z0-9/_.-] are permitted in service paths; \
-                 move the binary to a simpler path and re-run --install-service"
-            )),
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn validate_binary_path(path: &str) -> Result<(), String> {
-    if path.is_empty() || path.len() > 4096 {
-        return Err(format!(
-            "binary path length {} is out of range (1–4096 bytes)", path.len()
-        ));
-    }
-    let bytes = path.as_bytes();
-    // Must start with <DriveLetter>:\ or <DriveLetter>:/
-    if bytes.len() < 3
-        || !bytes[0].is_ascii_alphabetic()
-        || bytes[1] != b':'
-        || (bytes[2] != b'\\' && bytes[2] != b'/')
-    {
-        return Err(
-            "Windows binary path must be absolute — expected format: C:\\...\\wicklee.exe"
-                .to_string(),
-        );
-    }
-    // Reject ".." anywhere.
-    for component in path.split(['\\', '/']) {
-        if component == ".." {
-            return Err("binary path must not contain path traversal ('..') components".to_string());
-        }
-    }
-    // Byte-level allowlist for the rest of the path.
-    // Spaces allowed (common in "Program Files"); colon only as drive separator (already
-    // validated at byte 1).  All shell-significant and XML-significant characters rejected.
-    for (i, b) in bytes.iter().enumerate().skip(3) {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
-            | b'\\' | b'/' | b'_' | b'.' | b'-' | b' ' => {}
-            _ => return Err(format!(
-                "binary path contains unsafe byte 0x{b:02X} at index {i} — \
-                 only [a-zA-Z0-9\\\\/._- ] are permitted in Windows service paths"
-            )),
-        }
-    }
-    Ok(())
-}
-
-async fn install_service() {
-    let exe = match std::env::current_exe() {
-        Ok(p)  => p,
-        Err(e) => { eprintln!("error: cannot determine executable path: {e}"); return; }
-    };
-    let exe_str = exe.to_string_lossy().into_owned();
-
-    // C3 — Validate before embedding in any service descriptor.
-    // An attacker who installs the binary at a path with shell metacharacters
-    // could inject commands executed when the service manager reloads the unit.
-    // Abort with a clear error rather than writing a potentially dangerous file.
-    if let Err(msg) = validate_binary_path(&exe_str) {
-        eprintln!("error: cannot install service — unsafe binary path: {msg}");
-        eprintln!("       Move the wicklee binary to a path using only [a-zA-Z0-9/_.-]");
-        eprintln!("       (e.g. /usr/local/bin/wicklee) and re-run --install-service.");
-        return;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let plist = format!(
-"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\"\n\
-  \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-<plist version=\"1.0\">\n\
-<dict>\n\
-    <key>Label</key>\n\
-    <string>dev.wicklee.agent</string>\n\
-    <key>ProgramArguments</key>\n\
-    <array>\n\
-        <string>{exe_str}</string>\n\
-    </array>\n\
-    <key>RunAtLoad</key>\n\
-    <true/>\n\
-    <key>KeepAlive</key>\n\
-    <true/>\n\
-    <key>StandardOutPath</key>\n\
-    <string>/var/log/wicklee.log</string>\n\
-    <key>StandardErrorPath</key>\n\
-    <string>/var/log/wicklee.log</string>\n\
-</dict>\n\
-</plist>\n"
-        );
-        // Migrate old user-level LaunchAgent plist (pre-v0.5.3 installs).
-        // When running as root (sudo), $HOME resolves to /var/root — scan /Users/ instead.
-        // Uses MetadataExt::uid() to get the exact GUI-session UID for bootout.
-        #[cfg(target_os = "macos")]
-        if let Ok(users_dir) = std::fs::read_dir("/Users") {
-            for entry in users_dir.flatten() {
-                let old_plist = entry.path()
-                    .join("Library/LaunchAgents/dev.wicklee.agent.plist");
-                if old_plist.exists() {
-                    eprintln!("[install] migrating LaunchAgent → LaunchDaemon for {}",
-                        entry.path().display());
-                    #[cfg(unix)]
-                    let uid_val: u32 = {
-                        use std::os::unix::fs::MetadataExt;
-                        std::fs::metadata(entry.path()).map(|m| m.uid()).unwrap_or(501)
-                    };
-                    let _ = tokio::process::Command::new("launchctl")
-                        .args(["bootout", &format!("gui/{uid_val}/dev.wicklee.agent")])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status().await;
-                    let _ = std::fs::remove_file(&old_plist);
-                    eprintln!("[install] removed old LaunchAgent plist");
-                }
-            }
-        }
-
-        let plist_path = "/Library/LaunchDaemons/dev.wicklee.agent.plist";
-        if let Err(e) = std::fs::write(plist_path, plist) {
-            eprintln!("error: cannot write {plist_path}: {e}");
-            eprintln!("       Run with sudo: sudo wicklee --install-service");
-            return;
-        }
-        // Ensure correct ownership/permissions required by launchd for system daemons.
-        // launchd silently refuses plists not owned root:wheel or writable by group/other.
-        // Belt-and-suspenders: sudo already creates root-owned files, but umask
-        // variations on some systems can leave wrong group ownership.
-        let _ = tokio::process::Command::new("chown")
-            .args(["root:wheel", plist_path])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status().await;
-        let _ = tokio::process::Command::new("chmod")
-            .args(["644", plist_path])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status().await;
-        // Fix ownership of the data directory. When upgrading from a user LaunchAgent,
-        // the database and config files were created by the user account. The root
-        // LaunchDaemon can't reliably write those files until ownership is corrected.
-        // Silently ignore errors (directory may not exist on a fresh install).
-        let _ = tokio::process::Command::new("chown")
-            .args(["-R", "root:wheel", "/Library/Application Support/Wicklee"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status().await;
-        // Bootout any existing registration so we can replace it cleanly.
-        // `launchctl load -w` (deprecated) fails with I/O error 5 when the
-        // label is already live in the system domain. The modern approach is
-        // bootout (ignore error if not registered) then bootstrap.
-        // Suppress launchctl's own stderr — "Boot-out failed: 3: No such process" is
-        // expected on a fresh install (nothing registered yet) and is not an error.
-        let _ = tokio::process::Command::new("launchctl")
-            .args(["bootout", "system/dev.wicklee.agent"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status().await;
-        // Give the kernel ~500 ms to release port 7700 after the old process exits.
-        // Without this pause the bootstrap can race the previous process's TCP teardown.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let status = tokio::process::Command::new("launchctl")
-            .args(["bootstrap", "system", plist_path])
-            .status().await;
-        match status {
-            Ok(s) if s.success() => {
-                // Brief pause so launchd can start the process before we verify.
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                // Confirm the service is actually running (guards against launchd throttle).
-                let running = tokio::process::Command::new("launchctl")
-                    .args(["list", "dev.wicklee.agent"])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status().await
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                println!("✓ Wicklee Sentinel installed as a launchd service.");
-                println!("  Starts automatically on boot (runs as root).");
-                println!("  Plist: {plist_path}");
-                println!("  Logs:  /var/log/wicklee.log");
-                println!("  To remove: sudo wicklee --uninstall-service");
-                if !running {
-                    eprintln!("warning: service registered but not yet visible in launchctl list.");
-                    eprintln!("         If http://localhost:7700 is unreachable, run:");
-                    eprintln!("         sudo launchctl start dev.wicklee.agent");
-                }
-            }
-            Ok(s) => eprintln!("error: launchctl bootstrap exited with status {s}"),
-            Err(e) => eprintln!("error: launchctl: {e}"),
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Detect the actual invoking user even when called with sudo.
-        // SUDO_USER is set by sudo to the original login name; fall back to
-        // the process owner if not present (direct root login).
-        let svc_user = std::env::var("SUDO_USER")
-            .unwrap_or_else(|_| {
-                std::env::var("USER").unwrap_or_else(|_| "root".to_string())
-            });
-        // Derive the home directory for that user so the agent reads the
-        // correct config (~/.wicklee/config.toml) rather than /root/.wicklee/.
-        let svc_home = if svc_user == "root" {
-            "/root".to_string()
-        } else {
-            format!("/home/{svc_user}")
-        };
-
-        let unit = format!(
-"[Unit]\n\
-Description=Wicklee Sentinel Agent\n\
-After=network.target\n\
-\n\
-[Service]\n\
-Type=simple\n\
-User={svc_user}\n\
-Environment=HOME={svc_home}\n\
-ExecStart={exe_str}\n\
-Restart=always\n\
-RestartSec=5\n\
-\n\
-[Install]\n\
-WantedBy=multi-user.target\n"
-        );
-        let unit_path = "/etc/systemd/system/wicklee.service";
-        if let Err(e) = std::fs::write(unit_path, unit) {
-            eprintln!("error: cannot write {unit_path}: {e}");
-            eprintln!("       Run with sudo: sudo wicklee --install-service");
-            return;
-        }
-        let _ = tokio::process::Command::new("systemctl")
-            .args(["daemon-reload"])
-            .status().await;
-        // Enable for boot persistence, then restart so a freshly-installed
-        // binary is picked up immediately — even if the service was already
-        // running with an older version on the same inode.
-        let _ = tokio::process::Command::new("systemctl")
-            .args(["enable", "wicklee"])
-            .status().await;
-        // Transfer binary ownership to the service user so the agent can
-        // self-update without requiring root on every update cycle.
-        // This is safe: the binary is in /usr/local/bin (root-writable by
-        // install.sh) and the service user only gains write access to this
-        // one file, not to the directory itself.
-        if svc_user != "root" {
-            let owner_arg = format!("{}:{}", svc_user, svc_user);
-            let _ = tokio::process::Command::new("chown")
-                .args([&owner_arg, &exe_str])
-                .status().await;
-        }
-        let status = tokio::process::Command::new("systemctl")
-            .args(["restart", "wicklee"])
-            .status().await;
-        match status {
-            Ok(s) if s.success() => {
-                println!("✓ Wicklee Sentinel installed as a systemd service.");
-                println!("  Starts now and automatically on every boot.");
-                println!("  Unit: {unit_path}");
-                println!("  To remove: sudo wicklee --uninstall-service");
-            }
-            Ok(s) => eprintln!("error: systemctl restart exited with status {s}"),
-            Err(e) => eprintln!("error: systemctl: {e}"),
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let status = tokio::process::Command::new("sc")
-            .args(["create", "WickleeSentinel",
-                   "binPath=", &exe_str,
-                   "start=", "auto",
-                   "DisplayName=", "Wicklee Sentinel"])
-            .status().await;
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => {
-                eprintln!("error: sc create exited with status {s}");
-                eprintln!("       Run from an elevated (Administrator) prompt.");
-                return;
-            }
-            Err(e) => { eprintln!("error: sc: {e}"); return; }
-        }
-        let _ = tokio::process::Command::new("sc")
-            .args(["description", "WickleeSentinel", "Wicklee Sentinel Agent"])
-            .status().await;
-        let start = tokio::process::Command::new("sc")
-            .args(["start", "WickleeSentinel"])
-            .status().await;
-        match start {
-            Ok(s) if s.success() => {
-                println!("+ Wicklee Sentinel installed and started as a Windows service.");
-                println!("  To remove: wicklee --uninstall-service  (run as Administrator)");
-            }
-            Ok(s) => eprintln!("warning: sc start exited with status {s} — service registered but not started"),
-            Err(e) => eprintln!("error: sc start: {e}"),
-        }
-    }
-}
-
-async fn uninstall_service() {
-    #[cfg(target_os = "macos")]
-    {
-        let plist_path = "/Library/LaunchDaemons/dev.wicklee.agent.plist";
-        if !std::path::Path::new(plist_path).exists() {
-            eprintln!("Service not installed (plist not found: {plist_path}).");
-            return;
-        }
-        // Use modern bootout instead of deprecated `unload -w`.
-        let _ = tokio::process::Command::new("launchctl")
-            .args(["bootout", "system/dev.wicklee.agent"])
-            .status().await;
-        if let Err(e) = std::fs::remove_file(plist_path) {
-            eprintln!("error: cannot remove {plist_path}: {e}");
-            eprintln!("       Run with sudo: sudo wicklee --uninstall-service");
-            return;
-        }
-        println!("✓ Wicklee Sentinel service removed.");
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let unit_path = "/etc/systemd/system/wicklee.service";
-        if !std::path::Path::new(unit_path).exists() {
-            eprintln!("Service not installed (unit not found: {unit_path}).");
-            return;
-        }
-        let _ = tokio::process::Command::new("systemctl")
-            .args(["stop", "wicklee"])
-            .status().await;
-        let _ = tokio::process::Command::new("systemctl")
-            .args(["disable", "wicklee"])
-            .status().await;
-        if let Err(e) = std::fs::remove_file(unit_path) {
-            eprintln!("error: cannot remove {unit_path}: {e}");
-            eprintln!("       Run with sudo: sudo wicklee --uninstall-service");
-            return;
-        }
-        let _ = tokio::process::Command::new("systemctl")
-            .args(["daemon-reload"])
-            .status().await;
-        println!("✓ Wicklee Sentinel service removed.");
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let _ = tokio::process::Command::new("sc")
-            .args(["stop", "WickleeSentinel"])
-            .status().await;
-        let del = tokio::process::Command::new("sc")
-            .args(["delete", "WickleeSentinel"])
-            .status().await;
-        match del {
-            Ok(s) if s.success() => println!("+ Wicklee Sentinel service removed."),
-            Ok(s) => eprintln!("error: sc delete exited with status {s}\n       Run from an elevated (Administrator) prompt."),
-            Err(e) => eprintln!("error: sc: {e}"),
-        }
-    }
-}
-
-// ── Startup Diagnostics ───────────────────────────────────────────────────────
-//
-// Runs once at boot. Prints a clean bordered summary to stdout showing only
-// what is relevant on this platform. Silent absence means N/A — no SKIP lines.
-
-async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16, cfg_ref: &WickleeConfig) {
-    // Format one 48-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
-    let row = |key: &str, val: &str| -> String {
-        let inner = format!("   {:<7}{}", key, val);
-        let capped = if inner.chars().count() <= 46 {
-            format!("{:<46}", inner)
-        } else {
-            inner.chars().take(43).collect::<String>() + "..."
-        };
-        format!("║{}║", capped)
-    };
-    let sep       = "╠══════════════════════════════════════════════╣";
-    let top       = "╔══════════════════════════════════════════════╗";
-    let bot       = "╚══════════════════════════════════════════════╝";
-    let blank_row = "║                                              ║";
-
-    // ── Banner ────────────────────────────────────────────────────────────────
-    println!("{top}");
-    println!("{blank_row}");
-    println!("{}", row("", &format!("Wicklee Sentinel  ·  v{}", env!("CARGO_PKG_VERSION"))));
-    println!("{}", row("", &format!("http://localhost:{port}")));
-    println!("{blank_row}");
-    println!("{sep}");
-
-    // ── Identity ─────────────────────────────────────────────────────────────
-    println!("{}", row("Node", node_id));
-    println!("{}", row("Pairing", pairing_status));
-
-    // ── Platform rows (only what's relevant on this OS) ───────────────────────
-    let mut platform_rows: Vec<String> = Vec::new();
-
-    // macOS: pmset thermal + ioreg GPU util + powermetrics power
-    #[cfg(target_os = "macos")]
-    {
-        // pmset -g therm → CPU thermal throttle state
-        if let Ok(out) = tokio::process::Command::new("pmset")
-            .args(["-g", "therm"]).output().await
-        {
-            let text = String::from_utf8_lossy(&out.stdout);
-            if let Some(state) = parse_pmset_therm(&text) {
-                platform_rows.push(row("Thermal", &state));
-            }
-        }
-
-        // ioreg IOAccelerator → GPU utilization
-        if let Ok(out) = tokio::process::Command::new("ioreg")
-            .args(["-r", "-c", "IOAccelerator"]).output().await
-        {
-            let text = String::from_utf8_lossy(&out.stdout);
-            if let Some(v) = parse_ioreg_gpu(&text) {
-                platform_rows.push(row("GPU", &format!("{v}%  (IOAccelerator)")));
-            }
-        }
-
-        // powermetrics → CPU power draw (requires root)
-        match tokio::process::Command::new("powermetrics")
-            .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
-            .output().await
-        {
-            Ok(out) if out.status.success() =>
-                platform_rows.push(row("Power", "powermetrics  ✓  (root)")),
-            _ =>
-                platform_rows.push(row("Power", "powermetrics needs root for cpu_power_w")),
-        }
-    }
-
-    // Linux: NVML (glibc only) + RAPL CPU power
-    #[cfg(target_os = "linux")]
-    {
-        // NVML — not available in musl builds
-        #[cfg(not(target_env = "musl"))]
-        match Nvml::init() {
-            Ok(nvml) => {
-                let count = nvml.device_count().unwrap_or(0);
-                if count > 0 {
-                    if let Ok(dev) = nvml.device_by_index(0) {
-                        let name = dev.name().unwrap_or_else(|_| "GPU".to_string());
-                        let temp = dev.temperature(TemperatureSensor::Gpu)
-                            .map(|t| format!("{t}°C"))
-                            .unwrap_or_else(|_| "?°C".to_string());
-                        let util = dev.utilization_rates()
-                            .map(|u| format!("{}%", u.gpu))
-                            .unwrap_or_else(|_| "?%".to_string());
-                        platform_rows.push(row("GPU", &format!("{name}  {temp}  {util}")));
-                        if let Ok(mem) = dev.memory_info() {
-                            let used  = mem.used  as f64 / 1_073_741_824.0;
-                            let total = mem.total as f64 / 1_073_741_824.0;
-                            platform_rows.push(row("VRAM", &format!("{used:.1} / {total:.1} GB")));
-                        }
-                        if let Ok(mw) = dev.power_usage() {
-                            platform_rows.push(row("GPU Pwr", &format!("{:.0}W", mw as f64 / 1000.0)));
-                        }
-                    }
-                }
-            }
-            Err(_) => {} // no NVIDIA on this machine — silent
-        }
-
-        // RAPL CPU power (powercap, no sudo needed)
-        {
-            let found = RAPL_PATHS.iter().find(|(path, _)| read_rapl_uj(path).is_some());
-            if let Some((path, label)) = found {
-                if let Some(e1) = read_rapl_uj(path) {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    if let Some(e2) = read_rapl_uj(path) {
-                        let power_w = if e2 > e1 { (e2 - e1) as f64 / 500_000.0 } else { 0.0 };
-                        platform_rows.push(row("CPU Pwr", &format!("{power_w:.1}W  (RAPL/{label})")));
-                    }
-                }
-            }
-        }
-    }
-
-    // Windows: NVML GPU
-    #[cfg(target_os = "windows")]
-    match Nvml::init() {
-        Ok(nvml) => {
-            let count = nvml.device_count().unwrap_or(0);
-            if count > 0 {
-                if let Ok(dev) = nvml.device_by_index(0) {
-                    let name = dev.name().unwrap_or_else(|_| "GPU".to_string());
-                    let temp = dev.temperature(TemperatureSensor::Gpu)
-                        .map(|t| format!("{t}°C"))
-                        .unwrap_or_else(|_| "?°C".to_string());
-                    let util = dev.utilization_rates()
-                        .map(|u| format!("{}%", u.gpu))
-                        .unwrap_or_else(|_| "?%".to_string());
-                    platform_rows.push(row("GPU", &format!("{name}  {temp}  {util}")));
-                    if let Ok(mem) = dev.memory_info() {
-                        let used  = mem.used  as f64 / 1_073_741_824.0;
-                        let total = mem.total as f64 / 1_073_741_824.0;
-                        platform_rows.push(row("VRAM", &format!("{used:.1} / {total:.1} GB")));
-                    }
-                }
-            }
-        }
-        Err(_) => {}
-    }
-
-    if !platform_rows.is_empty() {
-        println!("{sep}");
-        for r in &platform_rows {
-            println!("{r}");
-        }
-    }
-
-    // ── Runtime (all platforms) ───────────────────────────────────────────────
-    println!("{sep}");
-
-    // ── Inference runtime detection (process-first, port-agnostic) ──────────
-    {
-        let discovered = process_discovery::scan_runtimes();
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .unwrap_or_default();
-
-        // Ollama
-        if let Some(&port) = discovered.get("ollama") {
-            let model_hint = async {
-                let resp = client
-                    .get(format!("http://127.0.0.1:{port}/api/ps"))
-                    .send().await.ok()?;
-                let json: serde_json::Value = resp.json().await.ok()?;
-                let name = json["models"].as_array()?.first()?["name"].as_str()?.to_string();
-                Some(format!("{} loaded", name))
-            }.await.unwrap_or_else(|| "running (no model loaded)".to_string());
-            println!("{}", row("Ollama", &format!(":{port} · {model_hint}")));
-        } else {
-            println!("{}", row("Ollama", "not running"));
-        }
-
-        // vLLM — check config override first, then process scan
-        let vllm_cfg_port  = cfg_ref.runtime_ports.as_ref().and_then(|r| r.vllm);
-        let vllm_auto_port = discovered.get("vllm").copied();
-        let vllm_port      = vllm_cfg_port.or(vllm_auto_port);
-        let vllm_source    = if vllm_cfg_port.is_some() { " (config)" } else { "" };
-        if let Some(port) = vllm_port {
-            let up = client
-                .get(format!("http://127.0.0.1:{port}/health"))
-                .send().await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-            println!("{}", row("vLLM", &format!(":{port}{vllm_source} · {}", if up { "healthy" } else { "starting up" })));
-        } else {
-            println!("{}", row("vLLM", "not detected  →  set runtime_ports.vllm in config"));
-            // On Linux, a cross-user vLLM process (e.g. owned by a service account)
-            // can be auto-discovered without any config by granting cap_sys_ptrace.
-            // Print the hint so operators know how to enable zero-config detection.
-            #[cfg(target_os = "linux")]
-            println!("       hint: sudo setcap cap_sys_ptrace+ep $(which wicklee)  # zero-config cross-user detection");
-        }
-    }
-
-    println!("{bot}");
-}
+// Service and diagnostics functions moved to service.rs and diagnostics.rs
+// (validate_binary_path, install_service, uninstall_service → service.rs)
+// (run_startup_diagnostics → diagnostics.rs)
 
 // ── NVIDIA Harvester ──────────────────────────────────────────────────────────
 //
@@ -2649,811 +1807,6 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
             }
         });
     }
-
-    shared
-}
-
-// ── Ollama Transparent Proxy ──────────────────────────────────────────────────
-//
-// Optional. Binds :11434 and forwards to Ollama on a user-configured backend port
-// (default :11435). Provides:
-//   - Zero-lag inference detection (inference_active flips true on first byte in)
-//   - Exact tok/s from the done packet (eval_count / eval_duration), replacing the probe
-//   - The 30s /api/generate probe is disabled when the proxy is active
-//
-// Falls back gracefully: if :11434 cannot be bound, Phase A /api/ps polling takes over.
-
-/// Shared state between the proxy Axum app and the OllamaMetrics writer task.
-struct ProxyState {
-    ollama_port:    u16,
-    bypass_if_down: bool,
-    client:         reqwest::Client,
-    /// Set to true the instant a request arrives; cleared via 35s window after last done packet.
-    inference_active: std::sync::atomic::AtomicBool,
-    /// Timestamp of last completed request (done packet received).
-    last_done_ts:   Mutex<Option<std::time::Instant>>,
-    /// Exact tok/s from the most recent done packet.
-    exact_tps:      Mutex<Option<f32>>,
-}
-
-/// Proxy handler for /api/generate and /api/chat — streams request through and
-/// inspects the final done packet for exact tok/s.
-async fn proxy_ollama_streaming(
-    axum::extract::State(state): axum::extract::State<Arc<ProxyState>>,
-    req: axum::extract::Request,
-) -> impl IntoResponse {
-    use tokio_stream::StreamExt;
-
-    let path = req.uri().path_and_query()
-        .map(|pq| pq.as_str().to_string())
-        .unwrap_or_default();
-
-    let method = req.method().clone();
-    let headers = req.headers().clone();
-
-    // Buffer request body (prompt JSON — typically <64 KB)
-    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 1024).await {
-        Ok(b) => b,
-        Err(_) => return axum::http::Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from("request body too large"))
-            .unwrap(),
-    };
-
-    // Extract model name and mark inference as active immediately
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-        // model field optional — Ollama uses last loaded model if absent
-        let _ = v["model"].as_str();
-    }
-    state.inference_active.store(true, std::sync::atomic::Ordering::Relaxed);
-
-    // Forward to backend Ollama
-    let backend_url = format!("http://127.0.0.1:{}{}", state.ollama_port, path);
-    let upstream = state.client
-        .request(method, &backend_url)
-        .headers(headers)
-        .body(body_bytes)
-        .send()
-        .await;
-
-    let upstream_resp = match upstream {
-        Ok(r) => r,
-        Err(e) => {
-            let hint = format!(
-                "Wicklee proxy: cannot reach Ollama on :{} — {}\n\
-                 Check that Ollama is running with OLLAMA_HOST=127.0.0.1:{}",
-                state.ollama_port, e, state.ollama_port
-            );
-            if state.bypass_if_down {
-                return axum::http::Response::builder()
-                    .status(StatusCode::SERVICE_UNAVAILABLE)
-                    .header("X-Wicklee-Hint", "backend-unreachable")
-                    .body(Body::from(hint))
-                    .unwrap();
-            } else {
-                return axum::http::Response::builder()
-                    .status(StatusCode::BAD_GATEWAY)
-                    .body(Body::from(hint))
-                    .unwrap();
-            }
-        }
-    };
-
-    let status  = upstream_resp.status();
-    let resp_headers = upstream_resp.headers().clone();
-
-    // Stream response back, inspecting chunks for the done packet
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
-    let proxy_state = Arc::clone(&state);
-
-    tokio::spawn(async move {
-        let mut byte_stream = upstream_resp.bytes_stream();
-        while let Some(chunk) = byte_stream.next().await {
-            match chunk {
-                Ok(bytes) => {
-                    // Scan for done packet — Ollama sends one JSON object per line (NDJSON).
-                    // The done packet is the last line; it's small and rarely split across chunks.
-                    if let Ok(text) = std::str::from_utf8(&bytes) {
-                        for line in text.lines() {
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                                if v["done"].as_bool() == Some(true) {
-                                    if let (Some(ec), Some(ed)) = (
-                                        v["eval_count"].as_u64(),
-                                        v["eval_duration"].as_u64(),
-                                    ) {
-                                        let tps = ec as f64 / (ed as f64 / 1_000_000_000.0);
-                                        *proxy_state.exact_tps.lock().unwrap() = Some(tps as f32);
-                                        *proxy_state.last_done_ts.lock().unwrap() =
-                                            Some(std::time::Instant::now());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if tx.send(Ok(bytes)).await.is_err() {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await;
-                    break;
-                }
-            }
-        }
-    });
-
-    let stream_body = Body::from_stream(ReceiverStream::new(rx));
-    let mut builder = axum::http::Response::builder().status(status);
-    for (name, value) in &resp_headers {
-        builder = builder.header(name, value);
-    }
-    builder.body(stream_body).unwrap_or_else(|_| {
-        axum::http::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
-            .unwrap()
-    })
-}
-
-/// Proxy passthrough for all other Ollama routes (/api/tags, /api/ps, /api/version, etc.).
-/// Pure forwarding — no inspection needed.
-async fn proxy_passthrough(
-    axum::extract::State(state): axum::extract::State<Arc<ProxyState>>,
-    req: axum::extract::Request,
-) -> impl IntoResponse {
-    use tokio_stream::StreamExt;
-
-    let path = req.uri().path_and_query()
-        .map(|pq| pq.as_str().to_string())
-        .unwrap_or_default();
-
-    let method  = req.method().clone();
-    let headers = req.headers().clone();
-    let body_bytes = axum::body::to_bytes(req.into_body(), 64 * 1024 * 1024)
-        .await
-        .unwrap_or_default();
-
-    let backend_url = format!("http://127.0.0.1:{}{}", state.ollama_port, path);
-    let upstream = state.client
-        .request(method, &backend_url)
-        .headers(headers)
-        .body(body_bytes)
-        .send()
-        .await;
-
-    match upstream {
-        Err(e) => axum::http::Response::builder()
-            .status(StatusCode::BAD_GATEWAY)
-            .body(Body::from(format!("Wicklee proxy: backend unreachable — {e}")))
-            .unwrap(),
-        Ok(resp) => {
-            let status       = resp.status();
-            let resp_headers = resp.headers().clone();
-            let (tx, rx)     = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
-            tokio::spawn(async move {
-                let mut s = resp.bytes_stream();
-                while let Some(c) = s.next().await {
-                    match c {
-                        Ok(b)  => { if tx.send(Ok(b)).await.is_err() { break; } }
-                        Err(e) => { let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await; break; }
-                    }
-                }
-            });
-            let mut builder = axum::http::Response::builder().status(status);
-            for (name, value) in &resp_headers {
-                builder = builder.header(name, value);
-            }
-            builder.body(Body::from_stream(ReceiverStream::new(rx))).unwrap_or_else(|_| {
-                axum::http::Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::empty())
-                    .unwrap()
-            })
-        }
-    }
-}
-
-// ── Ollama Harvester ──────────────────────────────────────────────────────────
-//
-// Auto-detects Ollama on 127.0.0.1:11434 (explicit IPv4 — avoids Windows resolving
-// localhost → ::1 while Ollama is bound to 127.0.0.1). No configuration required.
-//
-// Two concurrent tasks share the same Arc<Mutex<OllamaMetrics>>:
-//
-//   Main task (5s):  GET /api/ps — active model name, size, quantization.
-//
-//   Probe task (30s): POST /api/generate with stream:false, num_predict:20.
-//     Non-streaming responses contain eval_count (tokens generated) and
-//     eval_duration (nanoseconds) but NOT eval_rate. tok/s is derived as:
-//         tps = eval_count / (eval_duration / 1_000_000_000)
-//     num_predict:20 ensures the GPU reaches sustained generation speed before
-//     the measurement is taken. The 30s probe interval makes the overhead negligible.
-//     NOTE: /metrics Prometheus endpoint does not exist in Ollama ≤ v0.17.7.
-
-/// Discovers the first model installed in Ollama via GET /api/tags.
-///
-/// Returns None when Ollama has no models installed or the request fails.
-/// Used as a probe fallback when /api/ps shows no loaded model — Ollama will
-/// auto-load the returned model when the subsequent /api/generate probe arrives.
-/// This is identical behaviour to a user's first request on a fresh Ollama session.
-async fn discover_first_ollama_model(client: &reqwest::Client, port: u16) -> Option<String> {
-    let resp = client
-        .get(format!("http://127.0.0.1:{port}/api/tags"))
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() { return None; }
-    let json: serde_json::Value = resp.json().await.ok()?;
-    let name = json["models"]
-        .as_array()?
-        .first()?
-        .get("name")?
-        .as_str()?
-        .to_string();
-    eprintln!("[ollama] probe fallback — no model in /api/ps, discovered: {name}");
-    Some(name)
-}
-
-/// Fires a non-streaming 20-token generate probe and returns tok/s derived from
-/// eval_count / eval_duration returned by Ollama. Non-streaming responses do not
-/// include eval_rate, so tok/s is calculated from the raw timing fields.
-async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> Option<f32> {
-    // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
-    let url = format!("http://127.0.0.1:{port}/api/generate");
-    let resp = match client
-        .post(&url)
-        .json(&serde_json::json!({
-            "model":   model,
-            "prompt":  " ",
-            "stream":  false,
-            "options": { "num_predict": 20 }
-        }))
-        .send()
-        .await
-    {
-        Ok(r)  => { eprintln!("[ollama] probe {} → HTTP {}", url, r.status()); r }
-        Err(e) => { eprintln!("[ollama] probe {} → error: {}", url, e); return None; }
-    };
-
-    if !resp.status().is_success() { return None; }
-
-    let text = resp.text().await.ok()?;
-
-    // Non-streaming response is a single JSON object with eval_count (u64, tokens
-    // generated) and eval_duration (u64, nanoseconds). Derive tok/s from these.
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let (Some(count), Some(dur_ns)) = (
-            json["eval_count"].as_u64(),
-            json["eval_duration"].as_u64(),
-        ) {
-            if count > 0 && dur_ns > 0 {
-                let tps = count as f64 / (dur_ns as f64 / 1_000_000_000.0);
-                if tps > 0.0 { return Some(tps as f32); }
-            }
-        }
-    }
-    None
-}
-
-/// Fires a non-streaming 20-token completions probe against the vLLM
-/// OpenAI-compatible API and returns tok/s derived from wall-clock timing.
-///
-/// Mirrors `probe_ollama_tps` semantics: the result represents the node's
-/// **idle sustained throughput** — the baseline speed when the scheduler is
-/// free, used to populate the IDLE-SPD label in the dashboard.
-async fn probe_vllm_tps(client: &reqwest::Client, port: u16, model: &str) -> Option<f32> {
-    let url = format!("http://127.0.0.1:{port}/v1/completions");
-    let t0 = std::time::Instant::now();
-    let resp = match client
-        .post(&url)
-        .json(&serde_json::json!({
-            "model":       model,
-            "prompt":      " ",
-            "max_tokens":  20,
-            "temperature": 0,
-            "stream":      false,
-        }))
-        .send()
-        .await
-    {
-        Ok(r)  => { eprintln!("[vllm] probe {url} → HTTP {}", r.status()); r }
-        Err(e) => { eprintln!("[vllm] probe {url} → error: {e}"); return None; }
-    };
-    if !resp.status().is_success() { return None; }
-    let elapsed = t0.elapsed().as_secs_f64();
-    if elapsed <= 0.0 { return None; }
-    let text = resp.text().await.ok()?;
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(n) = json["usage"]["completion_tokens"].as_u64() {
-            if n > 0 {
-                let tps = n as f64 / elapsed;
-                if tps > 0.0 { return Some(tps as f32); }
-            }
-        }
-    }
-    None
-}
-
-/// GPU utilisation above this threshold (%) causes the probe to be skipped.
-/// The dashboard estimation formula (peak × gpu_util%) covers the busy case,
-/// so firing tokens into an already-loaded scheduler would only add noise.
-const GPU_LOAD_THRESHOLD_PCT: f32 = 40.0;
-
-fn start_ollama_harvester(
-    apple:     Arc<Mutex<AppleSiliconMetrics>>,
-    nvidia:    Arc<Mutex<NvidiaMetrics>>,
-    proxy_arc: Option<Arc<ProxyState>>,
-    port_rx: process_discovery::PortRx,
-) -> (Arc<Mutex<OllamaMetrics>>, Arc<std::sync::atomic::AtomicBool>) {
-    let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
-    // Atomic flag: true while the /api/generate probe is in-flight.
-    // Owned here; cloned into the harvester task (for attribution) and
-    // the probe task (to set/clear). Broadcast loops read it for Tier 3 gate.
-    let probe_active: Arc<std::sync::atomic::AtomicBool> =
-        Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-    // ── Main task: watch for port, poll /api/ps every 5s ────────────────────
-    let shared_main = Arc::clone(&shared);
-    let proxy_main  = proxy_arc.clone();
-    let mut port_rx_main = port_rx.clone();
-    let probe_active_harvester = Arc::clone(&probe_active);
-    tokio::spawn(async move {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
-
-        loop {
-            // ── Wait until the discovery loop reports Ollama is running ──────
-            loop {
-                if port_rx_main.borrow().is_some() { break; }
-                // Park until discovery sends an update (Some or None).
-                if port_rx_main.changed().await.is_err() { return; }
-            }
-            let port = port_rx_main.borrow().unwrap();
-            let base = format!("http://127.0.0.1:{port}");
-            eprintln!("[ollama] connected on :{port}");
-
-            let mut interval      = tokio::time::interval(Duration::from_secs(5));
-            let mut prev_expires:  Option<String>             = None;
-            let mut last_infer_ts: Option<std::time::Instant> = None;
-
-            // ── Inner poll loop — runs while Ollama is present ───────────────
-            loop {
-                interval.tick().await;
-
-                // React to port changes delivered by the discovery loop.
-                // None  → runtime stopped: clear metrics and re-enter wait loop.
-                // Some(new) → port changed (e.g. restart on different port): update URL.
-                if port_rx_main.has_changed().unwrap_or(false) {
-                    match *port_rx_main.borrow_and_update() {
-                        None => {
-                            eprintln!("[ollama] process gone — clearing metrics");
-                            if let Ok(mut g) = shared_main.lock() { *g = OllamaMetrics::default(); }
-                            break; // back to outer wait loop
-                        }
-                        Some(new_port) if new_port != port => {
-                            // Port changed — restart the inner loop with the new URL.
-                            // We break here; the outer loop will re-enter with the new port.
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Carry forward the previous shared state so the probe task's writes
-                // (last_probe_start, last_probe_end) and attribution writes
-                // (last_user_request_ts) survive across harvester ticks.
-                // Without this, *g = m at the end of the loop would overwrite every
-                // #[serde(skip)] field with None, destroying probe timing and the
-                // 15 s user-request window.
-                let prev_state = shared_main.lock().ok()
-                    .map(|g| g.clone())
-                    .unwrap_or_default();
-                let mut m = OllamaMetrics {
-                    ollama_running:           true,
-                    ollama_tokens_per_second: prev_state.ollama_tokens_per_second,
-                    last_probe_start:         prev_state.last_probe_start,
-                    last_probe_end:           prev_state.last_probe_end,
-                    last_user_request_ts:     prev_state.last_user_request_ts,
-                    probe_caused_next_reset:  prev_state.probe_caused_next_reset,
-                    ..Default::default()
-                };
-
-                // Poll /api/ps for the loaded model and inference state.
-                if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(first) = json["models"].as_array().and_then(|a| a.first()) {
-                            m.ollama_active_model = first["name"].as_str().map(|s| s.to_string());
-                            m.ollama_model_size_gb = first["size"].as_u64()
-                                .map(|b| b as f32 / 1_073_741_824.0);
-                            m.ollama_quantization = first["details"]["quantization_level"]
-                                .as_str().map(|s| s.to_string());
-                            // Detect inference activity via expires_at resets.
-                            // Ollama resets expires_at = now + keep_alive after each request
-                            // completes. When the string changes between polls, a request just
-                            // finished — mark inference active for the next 35 s.
-                            if let Some(exp_str) = first["expires_at"].as_str() {
-                                let exp_owned = exp_str.to_string();
-                                if prev_expires.as_deref() != Some(&exp_owned) {
-                                    last_infer_ts = Some(std::time::Instant::now());
-                                    // Credit as user inference when the probe is not in-flight
-                                    // AND this expires_at change was not caused by our probe.
-                                    //
-                                    // Flag-based filter (replaces 10s time-based blackout):
-                                    // When the probe completes, it sets probe_caused_next_reset=true.
-                                    // The first expires_at change the harvester sees with the flag
-                                    // set is the probe's own reset — consume the flag and skip
-                                    // attribution. Any subsequent expires_at change is a real user
-                                    // request and is attributed immediately.
-                                    //
-                                    // This eliminates the Dead Zone: user requests arriving
-                                    // immediately after a probe are correctly attributed on the
-                                    // very next /api/ps poll (≤5s), not blocked for 10s.
-                                    let is_probe_caused = m.probe_caused_next_reset
-                                        && !probe_active_harvester.load(std::sync::atomic::Ordering::Acquire);
-                                    if is_probe_caused {
-                                        // Consume the flag — only skip once.
-                                        m.probe_caused_next_reset = false;
-                                    }
-                                    if !probe_active_harvester.load(std::sync::atomic::Ordering::Acquire)
-                                        && !is_probe_caused
-                                    {
-                                        m.last_user_request_ts = Some(std::time::Instant::now());
-                                    }
-                                }
-                                prev_expires = Some(exp_owned);
-                            }
-                        }
-                    }
-                }
-
-                // Inference-active signal: proxy takes priority; fall back to /api/ps timer.
-                if let Some(ref ps) = proxy_main {
-                    let proxy_active = ps.inference_active.load(std::sync::atomic::Ordering::Relaxed);
-                    let since_done   = ps.last_done_ts.lock().unwrap()
-                        .map_or(false, |t| t.elapsed().as_secs() < 15);
-                    m.ollama_inference_active = Some(proxy_active || since_done);
-                    m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
-                    m.ollama_proxy_active = true;
-                } else {
-                    // 35 s window: covers Ollama's /api/ps keep_alive cleanup lag.
-                    // expires_at resets on each request completion; the 35 s window
-                    // bridges the gap between completions for multi-turn sessions.
-                    // Long single-turn streaming responses (>35 s without completion)
-                    // will show BUSY via the GPU gate in compute_inference_state —
-                    // an honest label: "hardware is pegged, can't confirm AI process."
-                    // 15 s matches the Tier 2 attribution window in compute_inference_state.
-                    // inference_state is now the SSOT for live detection; this window is
-                    // belt-and-suspenders for frontend fallback on pre-v0.5.4 agents only.
-                    m.ollama_inference_active =
-                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 15));
-                }
-
-                if let Ok(mut g) = shared_main.lock() { *g = m; }
-            }
-        }
-    });
-
-    // ── Probe task: scheduled 20-token benchmark every 30s ──────────────────
-    // Skipped entirely when the proxy is active — the proxy provides exact tok/s
-    // from done packets, so synthetic probes are redundant and wasteful.
-    // Dynamic scheduling: the probe only fires when the GPU is idle enough to
-    // give a clean reading. When GPU util ≥ GPU_LOAD_THRESHOLD_PCT, we skip
-    // the probe and write None — the dashboard estimation formula takes over
-    // (peak_tps × gpu_util%). Firing tokens into a loaded scheduler would
-    // queue behind the active job and produce a noisy / depressed reading.
-    if proxy_arc.is_none() {
-        let shared_probe = Arc::clone(&shared);
-        let apple_probe  = Arc::clone(&apple);
-        let nvidia_probe = Arc::clone(&nvidia);
-        let probe_active_clone = Arc::clone(&probe_active);
-        tokio::spawn(async move {
-            // Generous timeout: CPU-only inference of 20 tokens can take several seconds.
-            let probe_client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .unwrap_or_default();
-
-            // ── Startup delay ────────────────────────────────────────────────
-            // Tokio fires the first interval.tick() immediately.  The main task
-            // also starts immediately and needs one HTTP round-trip to /api/ps
-            // before ollama_active_model is populated.  Without this delay the
-            // probe fires, finds ollama_active_model = None, skips, then waits
-            // a full 30 s before trying again — causing the visible startup lag.
-            // 7 s comfortably covers the /api/ps round-trip even on slow machines.
-            tokio::time::sleep(Duration::from_secs(7)).await;
-
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-
-                // Read the current port — skip if Ollama isn't running.
-                let Some(port) = *port_rx.borrow() else { continue; };
-
-                // Model resolution order:
-                //   1. Currently loaded model from /api/ps  (preferred — already warm)
-                //   2. First installed model from /api/tags (fallback — handles the
-                //      restart case where keep_alive has already unloaded everything;
-                //      Ollama auto-loads the model when the generate request arrives)
-                //   3. None → skip this cycle (no models installed at all)
-                let current_model = shared_probe.lock().ok()
-                    .and_then(|g| if g.ollama_running { g.ollama_active_model.clone() } else { None });
-                let model = if current_model.is_some() {
-                    current_model
-                } else {
-                    discover_first_ollama_model(&probe_client, port).await
-                };
-                let Some(model) = model else { continue; };
-
-                // Read current GPU utilisation — NVIDIA takes priority, fall back to
-                // Apple Silicon. None means no GPU sensor available (CPU-only node).
-                let gpu_util: Option<f32> = nvidia_probe.lock().ok()
-                    .and_then(|g| g.nvidia_gpu_utilization_percent)
-                    .or_else(|| apple_probe.lock().ok().and_then(|g| g.gpu_utilization_percent));
-
-                // Skip when GPU is clearly under load — retain the last successful
-                // probe value so the UI shows "last known: N tok/s" rather than "—".
-                // Clearing to None would flatline the display; the cached baseline is
-                // a better approximation than nothing during high-load windows.
-                //
-                // Exception: if no baseline exists yet (fresh start / first run), always
-                // fire the probe regardless of GPU load.  Without a first successful probe
-                // the "retain cached" path has nothing to retain, leaving the UI blank.
-                // One probe under load is acceptable — it establishes the peak reference
-                // that all subsequent GPU-scaled estimates depend on.
-                let has_baseline = shared_probe.lock().ok()
-                    .map(|g| g.ollama_tokens_per_second.is_some())
-                    .unwrap_or(false);
-                if !has_baseline {
-                    eprintln!(
-                        "[ollama] no baseline yet — forcing initial probe despite GPU at {:.0}%",
-                        gpu_util.unwrap_or(0.0),
-                    );
-                } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
-                    eprintln!(
-                        "[ollama] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
-                        gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT,
-                    );
-                    continue;
-                }
-
-                // GPU is idle enough — fire the full 20-token benchmark.
-                // Set probe_active = true before the HTTP call; Drop guard resets it
-                // to false even if the future is cancelled or panics (scopeguard).
-                // Set last_probe_start now; last_probe_end after it returns.
-                // ollama_is_probing (frontend display) uses last_probe_end + 5 s cool-down.
-                if let Ok(mut g) = shared_probe.lock() {
-                    g.last_probe_start = Some(std::time::Instant::now());
-                    g.last_probe_end   = None; // clear end so is_probing_display() knows it's running
-                }
-                probe_active_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                // Drop guard: resets probe_active = false even on panic or cancellation.
-                // scopeguard::defer! expands to a let-binding — do NOT wrap in another let.
-                scopeguard::defer! {
-                    probe_active_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                }
-                let new_tps = probe_ollama_tps(&probe_client, port, &model).await;
-                if let Ok(mut g) = shared_probe.lock() {
-                    g.ollama_tokens_per_second = new_tps;
-                    g.last_probe_end = Some(std::time::Instant::now());
-                    // Tell the harvester: the next expires_at change you see is mine.
-                    // The harvester will consume this flag and skip attribution for
-                    // that single change. Any further changes are user requests.
-                    g.probe_caused_next_reset = true;
-                }
-                // defer guard drops here → probe_active = false
-            }
-        });
-    }
-
-    (shared, probe_active)
-}
-
-// ── vLLM Harvester ──────────────────────────────────────────────────────────────────────────────
-//
-// Polls the vLLM Prometheus /metrics endpoint on the port discovered by the
-// process scanner. Called on a 2 s tick with a 500 ms timeout per call.
-// No full Prometheus parser: lines are matched by metric-name prefix.
-
-/// Probe vLLM once on `port`; returns (running, model_name, tok/s, cache_pct, req_count).
-/// Never panics on malformed input; returns (false, …) on any connection failure.
-async fn harvest_vllm(port: u16) -> (bool, Option<String>, Option<f32>, Option<f32>, Option<u32>) {
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-    {
-        Ok(c)  => c,
-        Err(_) => return (false, None, None, None, None),
-    };
-
-    // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
-    let resp = match client.get(format!("http://127.0.0.1:{port}/metrics")).send().await {
-        Ok(r) if r.status().is_success() => r,
-        _ => return (false, None, None, None, None),
-    };
-
-    let text = match resp.text().await {
-        Ok(t)  => t,
-        Err(_) => return (true, None, None, None, None),
-    };
-
-    let mut model_name:       Option<String> = None;
-    let mut tokens_per_sec:   Option<f32>    = None;
-    let mut cache_usage_perc: Option<f32>    = None;
-    let mut requests_running: Option<u32>    = None;
-
-    for line in text.lines() {
-        // Skip Prometheus comment / metadata lines.
-        if line.starts_with('#') { continue; }
-
-        // Metric name = everything before the first '{' (labels) or first ' ' (no labels).
-        let metric_name = if let Some(brace) = line.find('{') {
-            &line[..brace]
-        } else if let Some(space) = line.find(' ') {
-            &line[..space]
-        } else {
-            continue;
-        };
-
-        // Numeric value = last whitespace-separated token on the line.
-        let value: Option<f32> = line.split_whitespace().last()
-            .and_then(|s| s.parse().ok());
-
-        // Extract model_name="..." from the label string (first occurrence wins).
-        if model_name.is_none() {
-            if let Some(start) = line.find("model_name=\"") {
-                let rest = &line[start + 12..];
-                if let Some(end) = rest.find('"') {
-                    model_name = Some(rest[..end].to_string());
-                }
-            }
-        }
-
-        match metric_name.trim() {
-            // vllm:avg_generation_throughput_toks_per_s is a direct tok/s gauge emitted
-            // by vLLM during active generation. Zero when idle — we filter that out so
-            // the probe-measured IDLE-SPD baseline isn't overwritten by a 0.0 from an
-            // idle Prometheus scrape.
-            "vllm:avg_generation_throughput_toks_per_s" => {
-                tokens_per_sec = value.filter(|&v| v > 0.1);
-            }
-            "vllm:gpu_cache_usage_perc" => {
-                // vLLM reports 0.0–1.0; multiply by 100 for percentage.
-                cache_usage_perc = value.map(|v| v * 100.0);
-            }
-            "vllm:num_requests_running" => {
-                requests_running = value.and_then(|v| {
-                    if v >= 0.0 && v < u32::MAX as f32 { Some(v as u32) } else { None }
-                });
-            }
-            _ => {}
-        }
-    }
-
-    (true, model_name, tokens_per_sec, cache_usage_perc, requests_running)
-}
-
-/// Spawns a 2 s polling loop that watches for vLLM via the discovery channel,
-/// then polls the Prometheus /metrics endpoint on the discovered port.
-///
-/// Also spawns a 30 s idle-probe task that fires `probe_vllm_tps` when the
-/// scheduler is idle (`num_requests_running == 0`) and the GPU is below the
-/// load threshold — the result populates `vllm_tokens_per_sec` as the IDLE-SPD
-/// baseline, exactly mirroring the Ollama probe behaviour.
-fn start_vllm_harvester(
-    mut port_rx: process_discovery::PortRx,
-    apple:       Arc<Mutex<AppleSiliconMetrics>>,
-    nvidia:      Arc<Mutex<NvidiaMetrics>>,
-) -> Arc<Mutex<VllmMetrics>> {
-    let shared = Arc::new(Mutex::new(VllmMetrics::default()));
-
-    // ── Main task: 2 s Prometheus /metrics poll ──────────────────────────────
-    let shared_main  = Arc::clone(&shared);
-    let mut port_rx_main = port_rx.clone();
-    tokio::spawn(async move {
-        loop {
-            // Wait until discovery reports vLLM is running.
-            loop {
-                if port_rx_main.borrow().is_some() { break; }
-                if port_rx_main.changed().await.is_err() { return; }
-            }
-            let port = port_rx_main.borrow().unwrap();
-            eprintln!("[vllm] connected on :{port}");
-
-            let mut interval = tokio::time::interval(Duration::from_secs(2));
-
-            loop {
-                interval.tick().await;
-
-                if port_rx_main.has_changed().unwrap_or(false) {
-                    match *port_rx_main.borrow_and_update() {
-                        None => {
-                            eprintln!("[vllm] process gone — clearing metrics");
-                            if let Ok(mut g) = shared_main.lock() { *g = VllmMetrics::default(); }
-                            break;
-                        }
-                        Some(new_port) if new_port != port => { break; }
-                        _ => {}
-                    }
-                }
-
-                let (running, model, tps, cache, reqs) = harvest_vllm(port).await;
-                if let Ok(mut g) = shared_main.lock() {
-                    if !running {
-                        *g = VllmMetrics::default();
-                    } else {
-                        g.vllm_running          = true;
-                        if let Some(m) = model  { g.vllm_model_name = Some(m); }
-                        // Only overwrite tok/s with live Prometheus value when the
-                        // scheduler is actively generating (filter_out_zero applied
-                        // upstream). When idle (None), preserve the probe baseline.
-                        if tps.is_some()        { g.vllm_tokens_per_sec = tps; }
-                        g.vllm_cache_usage_perc = cache;
-                        g.vllm_requests_running = reqs;
-                    }
-                }
-            }
-        }
-    });
-
-    // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ─────────
-    let shared_probe = Arc::clone(&shared);
-    tokio::spawn(async move {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .unwrap_or_default();
-
-        // Brief startup delay — gives the main task (2 s Prometheus poll) time to
-        // populate vllm_model_name before the first probe fires.  Mirrors the
-        // Ollama probe delay; 7 s is generous for the 2 s main-task cycle.
-        tokio::time::sleep(Duration::from_secs(7)).await;
-
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-
-            // Read port and model while idle — bail if not ready.
-            let (port, model) = {
-                let g = match shared_probe.lock() { Ok(g) => g, Err(_) => continue };
-                if !g.vllm_running { continue; }
-                if g.vllm_requests_running.map_or(false, |r| r > 0) { continue; }
-                let port  = match *port_rx.borrow() { Some(p) => p, None => continue };
-                let model = match g.vllm_model_name.clone() { Some(m) => m, None => continue };
-                (port, model)
-            };
-
-            // Skip when GPU is already under load — same gate as Ollama probe.
-            // Exception: no baseline yet → force the first probe to establish a reference.
-            let gpu_util: Option<f32> = nvidia.lock().ok()
-                .and_then(|g| g.nvidia_gpu_utilization_percent)
-                .or_else(|| apple.lock().ok().and_then(|g| g.gpu_utilization_percent));
-            let vllm_has_baseline = shared_probe.lock().ok()
-                .map(|g| g.vllm_tokens_per_sec.is_some())
-                .unwrap_or(false);
-            if !vllm_has_baseline {
-                eprintln!(
-                    "[vllm] no baseline yet — forcing initial probe despite GPU at {:.0}%",
-                    gpu_util.unwrap_or(0.0),
-                );
-            } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
-                eprintln!(
-                    "[vllm] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
-                    gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
-                );
-                continue; // retain last probe value — UI shows "last known: N tok/s"
-            }
-
-            eprintln!("[vllm] probing idle tok/s on :{port} model={model}");
-            if let Some(tps) = probe_vllm_tps(&client, port, &model).await {
-                eprintln!("[vllm] idle probe → {tps:.1} tok/s");
-                if let Ok(mut g) = shared_probe.lock() {
-                    g.vllm_tokens_per_sec = Some(tps);
-                }
-            }
-        }
-    });
 
     shared
 }
@@ -4449,12 +2802,12 @@ async fn main() {
     }
 
     if std::env::args().any(|a| a == "--install-service") {
-        install_service().await;
+        service::install_service().await;
         return;
     }
 
     if std::env::args().any(|a| a == "--uninstall-service") {
-        uninstall_service().await;
+        service::uninstall_service().await;
         return;
     }
 
@@ -4550,7 +2903,7 @@ async fn main() {
     }
 
     // Run diagnostics first so the output appears before the banner
-    run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port, &config).await;
+    diagnostics::run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port, &config).await;
 
     // ── Privilege warning (macOS only) ────────────────────────────────────────
     // powermetrics requires root to expose the SoC, GPU, and ANE power rails.
@@ -4592,9 +2945,9 @@ async fn main() {
                 });
                 let ps_clone = Arc::clone(&ps);
                 let proxy_app = axum::Router::new()
-                    .route("/api/generate", axum::routing::post(proxy_ollama_streaming))
-                    .route("/api/chat",     axum::routing::post(proxy_ollama_streaming))
-                    .fallback(proxy_passthrough)
+                    .route("/api/generate", axum::routing::post(proxy::proxy_ollama_streaming))
+                    .route("/api/chat",     axum::routing::post(proxy::proxy_ollama_streaming))
+                    .fallback(proxy::proxy_passthrough)
                     .with_state(ps_clone)
                     .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any));
                 tokio::spawn(async move {
@@ -4650,7 +3003,7 @@ async fn main() {
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
-    let (ollama_metrics, probe_active) = start_ollama_harvester(
+    let (ollama_metrics, probe_active) = harvester::start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         proxy_arc,
@@ -4658,7 +3011,7 @@ async fn main() {
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
-    let vllm_metrics          = start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
+    let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
 
     // WES v2 — 2 s thermal-penalty sampler (30-sample rolling window).
     // Must start after the platform harvesters above so it has data to read.
@@ -4707,7 +3060,7 @@ async fn main() {
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
-    start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone());
+    cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone());
 
     // ── Local metrics store (DuckDB) ──────────────────────────────────────────
     // Opens ~/.wicklee/metrics.db and subscribes to the broadcast channel.
@@ -4911,179 +3264,3 @@ async fn main() {
     eprintln!("[agent] clean shutdown complete");
 }
 
-// ── Unit tests for inference state machine ──────────────────────────────────
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Baseline: all sensors quiet, no runtime loaded.
-    fn idle_signals() -> HardwareSignals {
-        HardwareSignals {
-            ane_power_w:          None,
-            soc_power_w:          None,
-            apple_gpu_pct:        None,
-            nvidia_gpu_pct:       None,
-            nvidia_vram_mb:       None,
-            nvidia_power_w:       None,
-            ai_runtime_loaded:    false,
-            vllm_requests:        None,
-            probe_active:         false,
-            last_user_request_ts: None,
-            recent_probe:         false,
-        }
-    }
-
-    // ── Test 1: Probe running + user inference → NOT LIVE ────────────────────
-    // Probe is on silicon; physics would be ambiguous. Must stay non-LIVE.
-    #[test]
-    fn probe_active_high_gpu_not_live() {
-        let s = HardwareSignals {
-            apple_gpu_pct:     Some(99.0),
-            ai_runtime_loaded: true,
-            probe_active:      true,
-            ..idle_signals()
-        };
-        assert_ne!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    // ── Test 2: Probe just ended + high GPU → LIVE (saturated override) ─────
-    // GPU ≥ 75% is physically impossible from probe residual → must be user.
-    #[test]
-    fn recent_probe_saturated_gpu_is_live() {
-        let s = HardwareSignals {
-            apple_gpu_pct:     Some(99.0),
-            ai_runtime_loaded: true,
-            recent_probe:      true,
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    // ── Test 3: Probe just ended + medium GPU → IDLE-SPD ────────────────────
-    // 50% could be probe residency decay (~45-60% range). Must stay IDLE-SPD.
-    #[test]
-    fn recent_probe_medium_gpu_is_idle_spd() {
-        let s = HardwareSignals {
-            apple_gpu_pct:     Some(50.0),
-            ai_runtime_loaded: true,
-            recent_probe:      true,
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::IdleSpd);
-    }
-
-    // ── Test 4: No probe history + GPU 99% → LIVE ───────────────────────────
-    #[test]
-    fn no_probe_high_gpu_is_live() {
-        let s = HardwareSignals {
-            apple_gpu_pct:     Some(99.0),
-            ai_runtime_loaded: true,
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    // ── Test 5: No probe history + GPU 15% → IDLE or BUSY ──────────────────
-    // 15% is below the 20% physics threshold.
-    #[test]
-    fn no_probe_low_gpu_with_runtime_is_idle() {
-        let s = HardwareSignals {
-            apple_gpu_pct:     Some(15.0),
-            ai_runtime_loaded: true,
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Idle);
-    }
-
-    #[test]
-    fn no_probe_low_gpu_no_runtime_high_soc_is_busy() {
-        let s = HardwareSignals {
-            soc_power_w:       Some(12.0),
-            ai_runtime_loaded: false,
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Busy);
-    }
-
-    // ── Test 6: Tier 2 fires within 15s → LIVE ─────────────────────────────
-    #[test]
-    fn tier2_recent_user_request_is_live() {
-        let s = HardwareSignals {
-            last_user_request_ts: Some(std::time::Instant::now()),
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    #[test]
-    fn tier2_expired_user_request_is_not_live() {
-        let s = HardwareSignals {
-            // 20s ago — beyond the 15s window
-            last_user_request_ts: Some(
-                std::time::Instant::now()
-                    .checked_sub(std::time::Duration::from_secs(20))
-                    .unwrap()
-            ),
-            ..idle_signals()
-        };
-        assert_ne!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    // ── Test 7: vLLM requests > 0 → LIVE unconditionally (Tier 1) ──────────
-    #[test]
-    fn vllm_requests_is_live() {
-        let s = HardwareSignals {
-            vllm_requests: Some(3),
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    // ── Test 8: ANE power > 0.5W → LIVE (ai_specific path) ─────────────────
-    #[test]
-    fn ane_power_is_live() {
-        let s = HardwareSignals {
-            ane_power_w:       Some(1.2),
-            ai_runtime_loaded: true,
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    // ── Additional edge cases ───────────────────────────────────────────────
-
-    // Wire-format serialization is correct.
-    #[test]
-    fn inference_state_as_str() {
-        assert_eq!(InferenceState::Live.as_str(),    "live");
-        assert_eq!(InferenceState::IdleSpd.as_str(), "idle-spd");
-        assert_eq!(InferenceState::Busy.as_str(),    "busy");
-        assert_eq!(InferenceState::Idle.as_str(),    "idle");
-    }
-
-    // Display impl matches as_str (used by .to_string() at call sites).
-    #[test]
-    fn inference_state_display() {
-        assert_eq!(InferenceState::Live.to_string(), "live");
-        assert_eq!(InferenceState::IdleSpd.to_string(), "idle-spd");
-    }
-
-    // NVIDIA saturated GPU also triggers the override.
-    #[test]
-    fn nvidia_saturated_gpu_during_recent_probe_is_live() {
-        let s = HardwareSignals {
-            nvidia_gpu_pct:    Some(85.0),
-            nvidia_vram_mb:    Some(4096),
-            ai_runtime_loaded: true,
-            recent_probe:      true,
-            ..idle_signals()
-        };
-        assert_eq!(compute_inference_state(&s), InferenceState::Live);
-    }
-
-    // Bare idle — no sensors, no runtime → IDLE.
-    #[test]
-    fn bare_idle() {
-        assert_eq!(compute_inference_state(&idle_signals()), InferenceState::Idle);
-    }
-}
