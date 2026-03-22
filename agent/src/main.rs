@@ -150,9 +150,11 @@ fn compute_inference_state(s: &HardwareSignals) -> &'static str {
     }
 
     // ── Tier 3: Physics / sensor fusion (≤500ms latency) ─────────────────────
-    // Gated by !probe_active (probe itself also heats silicon) and
-    // ai_runtime_loaded (prevents LIVE from video encoding, compilation, etc.)
-    if !s.probe_active && s.ai_runtime_loaded {
+    // Gated by !probe_active (probe itself also heats silicon),
+    // !recent_probe (GPU residency lingers 10-15s after probe ends — without
+    // this gate the 20% GPU threshold halluccinates LIVE from probe heat),
+    // and ai_runtime_loaded (prevents LIVE from video encoding, etc.)
+    if !s.probe_active && !s.recent_probe && s.ai_runtime_loaded {
         let ai_specific = s.ane_power_w.map_or(false, |p| p > 0.5);
         let physics =
             // SoC power gate (M1 Pro/Max/Ultra, M2/M3 Pro/Max — larger GPU arrays)
@@ -1299,6 +1301,14 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
             if total > 0.1 { m.soc_power_w = Some(total); }
         }
     }
+
+    // Diagnostic: log the power component breakdown so operators can verify
+    // GPU + ANE rails are being captured during active inference.
+    eprintln!("[power] soc={:.2}W  (cpu={:.2} + gpu={:.2} + ane={:.2})",
+        m.soc_power_w.unwrap_or(0.0),
+        m.cpu_power_w.unwrap_or(0.0),
+        m.gpu_power_w.unwrap_or(0.0),
+        m.ane_power_w.unwrap_or(0.0));
 
     m
 }
