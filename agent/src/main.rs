@@ -152,9 +152,15 @@ fn compute_inference_state(s: &HardwareSignals) -> &'static str {
     // ── Tier 3: Physics / sensor fusion (≤500ms latency) ─────────────────────
     // Gated by !probe_active (probe itself also heats silicon),
     // !recent_probe (GPU residency lingers 10-15s after probe ends — without
-    // this gate the 20% GPU threshold halluccinates LIVE from probe heat),
+    // this gate the 20% GPU threshold hallucinates LIVE from probe heat),
     // and ai_runtime_loaded (prevents LIVE from video encoding, etc.)
-    if !s.probe_active && !s.recent_probe && s.ai_runtime_loaded {
+    //
+    // High-confidence override: the synthetic probe never drives GPU above ~60 %.
+    // If residency is ≥ 75 % during the recent_probe window it can only be real
+    // user inference — skip the recent_probe gate in that case.
+    let saturated_gpu = s.apple_gpu_pct.map_or(false,  |g| g >= 75.0)
+                     || s.nvidia_gpu_pct.map_or(false, |g| g >= 75.0);
+    if !s.probe_active && (!s.recent_probe || saturated_gpu) && s.ai_runtime_loaded {
         let ai_specific = s.ane_power_w.map_or(false, |p| p > 0.5);
         let physics =
             // SoC power gate (M1 Pro/Max/Ultra, M2/M3 Pro/Max — larger GPU arrays)
