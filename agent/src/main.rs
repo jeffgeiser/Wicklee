@@ -1271,6 +1271,10 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
             .or_else(|| line.strip_prefix("Combined Power: "))
             // Older Intel-era label still seen on some Mx configurations
             .or_else(|| line.strip_prefix("Package Power: "))
+            // Sequoia 15.2+ renames the combined line on Apple Silicon
+            .or_else(|| line.strip_prefix("SoC Power: "))
+            // Additional observed variant on some M-series configurations
+            .or_else(|| line.strip_prefix("System Power: "))
         {
             m.soc_power_w = parse_mw(rest);
         } else if let Some(rest) = line.strip_prefix("GPU Active residency: ")
@@ -1287,6 +1291,19 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
         {
             let state = rest.split_whitespace().next().unwrap_or("").to_string();
             if !state.is_empty() { m.thermal_state = Some(state); }
+        }
+    }
+
+    // Diagnostic: dump every "Power" line from the raw output so operators can
+    // see the exact labels powermetrics uses on this macOS version.  This lets
+    // us catch label changes (e.g. "Combined Power" → "SoC Power" in Sequoia)
+    // without guessing.  Log prefix [pm_raw] — filter with:
+    //   sudo tail -f /var/log/wicklee.log | grep '\[pm_raw\]'
+    for line in output.lines() {
+        let t = line.trim();
+        let lower = t.to_ascii_lowercase();
+        if lower.contains("power") || lower.contains("residency") {
+            eprintln!("[pm_raw] {t}");
         }
     }
 
@@ -1629,13 +1646,24 @@ fn start_cloud_push(
             };
 
             last_push = std::time::Instant::now();
-            last_pushed_state = curr_state;
-            let _ = client
+            // Only advance last_pushed_state on a successful POST.
+            // If the request fails (network blip, 5xx, timeout) last_pushed_state stays
+            // at the old value — state_changed remains true on the next tick and we retry
+            // immediately rather than waiting for the 2s throttle to expire.
+            // Without this guard a single failed POST silently drops a state transition
+            // (e.g. idle-spd → live) and the fleet view can stay stale until the *next*
+            // state change forces another bypass — which may never come.
+            let post_ok = client
                 .post(format!("{cloud}/api/telemetry"))
                 .header("content-type", "application/json")
                 .body(patched)
                 .send()
-                .await;
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if post_ok {
+                last_pushed_state = curr_state;
+            }
         }
     });
 }
