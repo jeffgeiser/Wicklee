@@ -1640,14 +1640,17 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {/* ── Row 1: Performance & Health ─────────────────────────────────── */}
 
-        {/* 1. THROUGHPUT — four-state value color matches label:
-              LIVE     → green  (active user inference session)
-              BUSY     → amber  (GPU loaded by non-Ollama workload)
-              IDLE-SPD → slate  (hardware baseline from background probe — not a user session)
-              IDLE     → gray   (quiet — no runtime or no data yet)
-              null     → gray   (no runtime) */}
+        {/* 1. THROUGHPUT / CAPACITY — four-state value color matches label:
+              LIVE     → green  (active user inference session)      → tile: "Throughput"
+              BUSY     → amber  (GPU loaded by non-Ollama workload)  → tile: "Throughput"
+              IDLE-SPD → slate  (hardware baseline from probe)       → tile: "Capacity"
+              IDLE     → gray   (quiet — no runtime or no data)      → tile: "Capacity"
+              Tile label switches to "Capacity" in idle/idle-spd to clarify this is a
+              probe-measured baseline (what the node CAN do), not current throughput. */}
         <InsightTile
-          label="Throughput"
+          label={isLocalMode
+            ? (localIsInferring || localIsBusy ? 'Throughput' : 'Capacity')
+            : (anyInferring ? 'Throughput' : 'Capacity')}
           value={displayFleetTps != null ? `${displayFleetTps.toFixed(1)} tok/s` : '—'}
           valueCls={
             displayFleetTps == null
@@ -1673,13 +1676,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 : localIsBusy
                 ? 'busy · non-inference'
                 : localIsProbing
-                ? 'idle-spd · probing'
+                ? 'probing baseline'
                 : localIsIdleSpeed
-                ? 'idle-spd baseline'
+                ? 'capacity · probe baseline'
                 : localIsIdle
-                ? 'idle'
+                ? 'capacity · idle'
                 : 'this node'
-              : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · ${anyInferring ? 'live' : 'idle-spd baseline'}`
+              : `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · ${anyInferring ? 'live' : 'capacity · baseline'}`
             : (hasAnyOllama || hasAnyVllm) ? 'sampling every 30s' : 'no inference runtime'}
           icon={Activity}
           iconCls="text-indigo-400"
