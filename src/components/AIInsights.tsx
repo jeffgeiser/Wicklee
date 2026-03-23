@@ -68,6 +68,7 @@ import ObservationCard from './insights/ObservationCard';
 import AccordionObservationCard from './insights/AccordionObservationCard';
 import CompactMonitoringStrip from './insights/CompactMonitoringStrip';
 import ModelFitMiniTile from './insights/ModelFitMiniTile';
+import FleetHeaderBar from './insights/FleetHeaderBar';
 import InsightsBriefingCard from './insights/InsightsBriefingCard';
 import { useMetricHistory, metricsToSample } from '../hooks/useMetricHistory';
 import { evaluatePatterns } from '../lib/patternEngine';
@@ -486,6 +487,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     } catch { return []; }
   });
   const [logExpanded, setLogExpanded] = useState(false);
+  const [showResolved, setShowResolved] = useState(false);
 
   const appendToLog = useCallback((entry: AlertLogEntry) => {
     setAlertLog(prev => {
@@ -1213,18 +1215,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'triage' && (
             <>
-              {/* ── 24h Morning Briefing ────────────────────────────────────────
-                  Reads the localStorage recent-events buffer. Shows "what fired,
-                  what resolved, what was dismissed" since the operator last looked.
-                  Empty state collapses to a single compact dormant row.           */}
-              <InsightsBriefingCard />
-
-              {/* ── Fleet Pulse — live snapshot ───────────────────────────────
-                  Four stat cells: nodes online, fleet tok/s, top WES node,
-                  and fleet power draw. Pure useFleetStream()/SSE data —
-                  no DuckDB required.                                           */}
-              {effectiveNodes.length > 0 && (() => {
-                // Top WES node — highest WES across the live fleet
+              {/* ── Fleet Header HUD — pulse stats + health pips ──────────── */}
+              {(() => {
+                // Top WES node
                 let topWesNode: SentinelMetrics | null = null;
                 let topWesVal: number | null = null;
                 for (const n of effectiveNodes) {
@@ -1234,86 +1227,29 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     topWesNode = n;
                   }
                 }
-                // Fleet wattage — sum of all reported draw values
+                // Fleet wattage
                 const fleetWatts = effectiveNodes.reduce<number | null>((sum, n) => {
                   const w = getNodePowerW(n);
                   return w != null ? (sum ?? 0) + w : sum;
                 }, null);
-                // Total node count: prefer fleet registry length; fall back to live count
                 const nodesTotal = Math.max(nodes.length, effectiveNodes.length);
+                // Health pips — only dormant (non-latched) dimensions
+                const healthPips = [
+                  ...(!thermalLatch.showing ? [{ key: 'thermal', icon: <Thermometer className="w-3 h-3" />, label: 'Thermal',      reading: thermalReading }] : []),
+                  ...(!powerLatch.showing   ? [{ key: 'power',   icon: <Zap          className="w-3 h-3" />, label: 'Power',        reading: powerReading   }] : []),
+                  ...(!memLatch.showing     ? [{ key: 'mem',     icon: <HardDrive    className="w-3 h-3" />, label: 'Memory',       reading: memReading     }] : []),
+                  ...(!tcLatch.showing      ? [{ key: 'tc',      icon: <Thermometer  className="w-3 h-3" />, label: 'TC',           reading: tcReading      }] : []),
+                ];
                 return (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Radio className="w-3 h-3 text-indigo-400/60 shrink-0" />
-                      <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
-                        Fleet Pulse
-                      </p>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-
-                      {/* Nodes online */}
-                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Online</p>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className={`font-mono text-xl font-bold ${
-                            effectiveNodes.length > 0 ? 'text-white' : 'text-gray-600'
-                          }`}>{effectiveNodes.length}</span>
-                          {nodesTotal > 0 && (
-                            <span className="text-xs text-gray-600">/ {nodesTotal}</span>
-                          )}
-                        </div>
-                        <p className="text-[9px] text-gray-600">node{effectiveNodes.length !== 1 ? 's' : ''}</p>
-                      </div>
-
-                      {/* Fleet throughput */}
-                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Throughput</p>
-                        <span className={`font-mono text-xl font-bold ${
-                          fleetTokS != null && fleetTokS > 0 ? 'text-green-400' : 'text-gray-600'
-                        }`}>
-                          {fleetTokS != null ? fleetTokS.toFixed(1) : '—'}
-                        </span>
-                        <p className="text-[9px] text-gray-600">tok / sec</p>
-                      </div>
-
-                      {/* Top WES node */}
-                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Top WES</p>
-                        {topWesVal != null && topWesNode ? (
-                          <>
-                            <span className={`font-mono text-xl font-bold ${
-                              topWesVal >= 3 ? 'text-green-400' : topWesVal >= 1.5 ? 'text-amber-400' : 'text-red-400'
-                            }`}>
-                              {topWesVal.toFixed(1)}
-                            </span>
-                            <p className="text-[9px] text-gray-600 truncate">
-                              {topWesNode.hostname ?? topWesNode.node_id}
-                            </p>
-                          </>
-                        ) : (
-                          <>
-                            <span className="font-mono text-xl font-bold text-gray-700">—</span>
-                            <p className="text-[9px] text-gray-600">no active inference</p>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Fleet power draw */}
-                      <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-col gap-1">
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Power Draw</p>
-                        <span className={`font-mono text-xl font-bold ${
-                          fleetWatts == null     ? 'text-gray-700'
-                          : fleetWatts > 200     ? 'text-amber-400'
-                          : fleetWatts > 50      ? 'text-gray-300'
-                          :                        'text-green-400'
-                        }`}>
-                          {fleetWatts != null ? `${fleetWatts.toFixed(0)}W` : '—'}
-                        </span>
-                        <p className="text-[9px] text-gray-600">fleet total</p>
-                      </div>
-
-                    </div>
-                  </div>
+                  <FleetHeaderBar
+                    onlineCount={effectiveNodes.length}
+                    totalCount={nodesTotal}
+                    fleetTokS={fleetTokS}
+                    topWes={topWesVal}
+                    topWesHost={topWesNode ? (topWesNode.hostname ?? topWesNode.node_id) : null}
+                    fleetWatts={fleetWatts}
+                    healthPips={healthPips}
+                  />
                 );
               })()}
 
@@ -1350,170 +1286,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       : <ThermalCostAlertCard node={n} tcPct={tcPctByNode[n.node_id] ?? 0} rateOfChangePct={tcRateByNode[n.node_id] ?? 0} showNodeHeader={effectiveNodes.length > 1} />}
                   </div>
                 ))}
-
-                {/* Compact monitoring strip — 4-across health grid replacing stacked dormant rows.
-                    Only shows cells for conditions that are NOT latched. */}
-                {(() => {
-                  const dormant = [
-                    ...(!thermalLatch.showing ? [{ key: 'thermal', icon: <Thermometer className="w-3.5 h-3.5" />, label: 'Thermal',      reading: thermalReading }] : []),
-                    ...(!powerLatch.showing   ? [{ key: 'power',   icon: <Zap          className="w-3.5 h-3.5" />, label: 'Power',        reading: powerReading   }] : []),
-                    ...(!memLatch.showing     ? [{ key: 'mem',     icon: <HardDrive    className="w-3.5 h-3.5" />, label: 'Memory',       reading: memReading     }] : []),
-                    ...(!tcLatch.showing      ? [{ key: 'tc',      icon: <Thermometer  className="w-3.5 h-3.5" />, label: 'Thermal Cost', reading: tcReading      }] : []),
-                  ];
-                  if (dormant.length === 0) return null;
-                  return <CompactMonitoringStrip items={dormant} />;
-                })()}
-              </div>
-
-              {/* Model Eviction + Idle Resource Cost */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-
-                {/* Model Eviction — Community+ (live_session gate) */}
-                {isLocalHost ? (
-                  // Cockpit: single-node, local SSE tracking
-                  tier2EvictionActive && m ? (
-                    <div id="insight-model-eviction">
-                      <ModelEvictionCard
-                      node={m}
-                      lastActiveTsMs={lastActiveTsMs}
-                      canKeepWarm
-                      onKeepWarm={() => emitFleetEvent({
-                        id:       `${Date.now()}-keepwarm`,
-                        ts:       Date.now(),
-                        type:     'keep_warm_taken',
-                        nodeId:   m.node_id,
-                        hostname: m.hostname ?? m.node_id,
-                        detail:   m.ollama_active_model ?? 'active model',
-                      })}
-                    />
-                    </div>
-                  ) : (
-                    <Section2NominalRow
-                      icon={<Cpu className="w-4 h-4" />}
-                      label="Model Eviction"
-                      status={m?.ollama_active_model
-                        ? `${m.ollama_active_model} active — no eviction predicted`
-                        : 'No model loaded'}
-                    />
-                  )
-                ) : fleetEvictionNodes.length > 0 ? (
-                  // Mission Control: one card per eviction-predicted node
-                  <div className="space-y-3">
-                    {fleetEvictionNodes.map(n => (
-                      <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
-                        <ModelEvictionCard
-                          node={n}
-                          lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now}
-                          showNodeHeader={fleetEvictionNodes.length > 1}
-                          canKeepWarm
-                          onKeepWarm={() => emitFleetEvent({
-                            id:       `${Date.now()}-keepwarm`,
-                            ts:       Date.now(),
-                            type:     'keep_warm_taken',
-                            nodeId:   n.node_id,
-                            hostname: n.hostname ?? n.node_id,
-                            detail:   n.ollama_active_model ?? 'active model',
-                          })}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <Section2NominalRow
-                    icon={<Cpu className="w-4 h-4" />}
-                    label="Model Eviction"
-                    status={effectiveNodes.some(n => n.ollama_active_model)
-                      ? 'Models active — no eviction predicted'
-                      : 'No models loaded'}
-                  />
-                )}
-
-                {/* Idle Resource Cost */}
-                {canViewInsight(6) ? (
-                  isLocalHost ? (
-                    // Cockpit: single-node, local SSE tracking
-                    tier2IdleActive && m ? (
-                      <div id="insight-idle-resource">
-                        <IdleResourceCard
-                          node={m}
-                          lastActiveTsMs={lastActiveTsMs}
-                          kwhRate={localSettings.kwhRate}
-                          pue={localSettings.pue}
-                        />
-                      </div>
-                    ) : (
-                      <Section2NominalRow
-                        icon={<Zap className="w-4 h-4" />}
-                        label="Idle Resource Cost"
-                        status="No idle overhead detected"
-                      />
-                    )
-                  ) : fleetIdleNodes.length > 0 ? (
-                    // Mission Control: one card per idle node
-                    <div className="space-y-3">
-                      {fleetIdleNodes.map(n => {
-                        const ns = getNodeSettings(n.node_id);
-                        return (
-                          <div key={n.node_id} id={`insight-idle-resource-${n.node_id}`}>
-                            <IdleResourceCard
-                              node={n}
-                              lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now}
-                              kwhRate={ns.kwhRate}
-                              pue={ns.pue}
-                              showNodeHeader={fleetIdleNodes.length > 1}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <Section2NominalRow
-                      icon={<Zap className="w-4 h-4" />}
-                      label="Idle Resource Cost"
-                      status="No idle overhead detected"
-                    />
-                  )
-                ) : (
-                  // Community: live monitoring row with current fleet wattage.
-                  // Full idle cost analysis (1-hr threshold + $/hr ticker) requires Pro.
-                  <Section2NominalRow
-                    icon={<Zap className="w-4 h-4" />}
-                    label="Idle Resource Cost"
-                    status={(() => {
-                      const w = effectiveNodes.reduce<number | null>((sum, n) => {
-                        const nw = getNodePowerW(n);
-                        return nw != null ? (sum ?? 0) + nw : sum;
-                      }, null);
-                      return w != null ? `${w.toFixed(0)}W fleet draw · monitoring` : 'Monitoring idle overhead';
-                    })()}
-                  />
-                )}
-
-              </div>
-
-              {/* Model Fit — compact 2-across mini tiles */}
-              <div>
-                {fitNodes.length > 0
-                  ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        {fitNodes.map(n => {
-                          const fit = computeModelFitScore(n);
-                          return fit ? (
-                            <ModelFitMiniTile key={n.node_id} result={fit} node={n} showNodeHeader={fitNodes.length > 1} />
-                          ) : null;
-                        })}
-                      </div>
-                    )
-                  : (
-                      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
-                        <Target className="w-4 h-4 text-gray-600 shrink-0" />
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Model Fit Score</p>
-                          <p className="text-xs text-gray-700 mt-0.5">No model loaded.</p>
-                        </div>
-                      </div>
-                    )
-                }
               </div>
 
               {/* ── Top Finding — highest-confidence active observation ──────
@@ -1601,8 +1373,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   can acknowledge them like an inbox. */}
               {obsEntries.length > 0 && (() => {
                 // ── Dedup bidirectional patterns ──────────────────────────
-                // fleet_load_imbalance fires per-node (A vs B, B vs A).
-                // Group into one card listing all affected nodes.
                 const deduped: Array<ObsEntry & { groupedNodes?: Array<{ nodeId: string; hostname: string }> }> = [];
                 const byPattern = new Map<string, ObsEntry[]>();
                 for (const e of obsEntries) {
@@ -1626,26 +1396,43 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   }
                 }
 
+                // Filter: hide resolved by default
+                const hasResolved = deduped.some(e => e.resolvedMs !== null);
+                const visibleObs = showResolved ? deduped : deduped.filter(e => e.resolvedMs === null);
+
                 return (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <SectionHeader>Observations</SectionHeader>
-                      {obsEntries.some(e => e.resolvedMs !== null) && (
-                        <button
-                          onClick={() => {
-                            for (const [key, entry] of obsCacheRef.current.entries()) {
-                              if (entry.resolvedMs !== null) obsCacheRef.current.delete(key);
-                            }
-                            setObsEntries(prev => prev.filter(e => e.resolvedMs === null));
-                          }}
-                          className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors -mt-4 mb-4"
-                        >
-                          <CheckCircle className="w-3 h-3" />
-                          Clear resolved
-                        </button>
-                      )}
+                      <div className="flex items-center gap-3 -mt-4 mb-4">
+                        {hasResolved && (
+                          <button
+                            onClick={() => setShowResolved(v => !v)}
+                            className={`flex items-center gap-1.5 text-[10px] transition-colors ${
+                              showResolved ? 'text-indigo-400 hover:text-indigo-300' : 'text-gray-500 hover:text-gray-300'
+                            }`}
+                          >
+                            <CheckCircle className="w-3 h-3" />
+                            {showResolved ? 'Hide resolved' : 'Show resolved'}
+                          </button>
+                        )}
+                        {showResolved && hasResolved && (
+                          <button
+                            onClick={() => {
+                              for (const [key, entry] of obsCacheRef.current.entries()) {
+                                if (entry.resolvedMs !== null) obsCacheRef.current.delete(key);
+                              }
+                              setObsEntries(prev => prev.filter(e => e.resolvedMs === null));
+                              setShowResolved(false);
+                            }}
+                            className="flex items-center gap-1.5 text-[10px] text-gray-600 hover:text-gray-400 transition-colors"
+                          >
+                            Clear all
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    {deduped.map(entry => (
+                    {visibleObs.map(entry => (
                       <AccordionObservationCard
                         key={`${entry.insight.patternId}-${entry.insight.nodeId}`}
                         insight={{ ...entry.insight, firstFiredMs: entry.firstFiredMs }}
@@ -1668,6 +1455,89 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </div>
                 );
               })()}
+
+              {/* Model Fit — compact 2-across mini tiles */}
+              <div>
+                {fitNodes.length > 0
+                  ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        {fitNodes.map(n => {
+                          const fit = computeModelFitScore(n);
+                          return fit ? (
+                            <ModelFitMiniTile key={n.node_id} result={fit} node={n} showNodeHeader={fitNodes.length > 1} />
+                          ) : null;
+                        })}
+                      </div>
+                    )
+                  : (
+                      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                        <Target className="w-4 h-4 text-gray-600 shrink-0" />
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Model Fit Score</p>
+                          <p className="text-xs text-gray-700 mt-0.5">No model loaded.</p>
+                        </div>
+                      </div>
+                    )
+                }
+              </div>
+
+              {/* Model Eviction + Idle Resource Cost */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {isLocalHost ? (
+                  tier2EvictionActive && m ? (
+                    <div id="insight-model-eviction">
+                      <ModelEvictionCard node={m} lastActiveTsMs={lastActiveTsMs} canKeepWarm
+                        onKeepWarm={() => emitFleetEvent({ id: `${Date.now()}-keepwarm`, ts: Date.now(), type: 'keep_warm_taken', nodeId: m.node_id, hostname: m.hostname ?? m.node_id, detail: m.ollama_active_model ?? 'active model' })} />
+                    </div>
+                  ) : (
+                    <Section2NominalRow icon={<Cpu className="w-4 h-4" />} label="Model Eviction"
+                      status={m?.ollama_active_model ? `${m.ollama_active_model} active — no eviction predicted` : 'No model loaded'} />
+                  )
+                ) : fleetEvictionNodes.length > 0 ? (
+                  <div className="space-y-3">
+                    {fleetEvictionNodes.map(n => (
+                      <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
+                        <ModelEvictionCard node={n} lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now} showNodeHeader={fleetEvictionNodes.length > 1} canKeepWarm
+                          onKeepWarm={() => emitFleetEvent({ id: `${Date.now()}-keepwarm`, ts: Date.now(), type: 'keep_warm_taken', nodeId: n.node_id, hostname: n.hostname ?? n.node_id, detail: n.ollama_active_model ?? 'active model' })} />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Section2NominalRow icon={<Cpu className="w-4 h-4" />} label="Model Eviction"
+                    status={effectiveNodes.some(n => n.ollama_active_model) ? 'Models active — no eviction predicted' : 'No models loaded'} />
+                )}
+
+                {canViewInsight(6) ? (
+                  isLocalHost ? (
+                    tier2IdleActive && m ? (
+                      <div id="insight-idle-resource">
+                        <IdleResourceCard node={m} lastActiveTsMs={lastActiveTsMs} kwhRate={localSettings.kwhRate} pue={localSettings.pue} />
+                      </div>
+                    ) : (
+                      <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected" />
+                    )
+                  ) : fleetIdleNodes.length > 0 ? (
+                    <div className="space-y-3">
+                      {fleetIdleNodes.map(n => {
+                        const ns = getNodeSettings(n.node_id);
+                        return (
+                          <div key={n.node_id} id={`insight-idle-resource-${n.node_id}`}>
+                            <IdleResourceCard node={n} lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now} kwhRate={ns.kwhRate} pue={ns.pue} showNodeHeader={fleetIdleNodes.length > 1} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected" />
+                  )
+                ) : (
+                  <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost"
+                    status={(() => {
+                      const w = effectiveNodes.reduce<number | null>((sum, n) => { const nw = getNodePowerW(n); return nw != null ? (sum ?? 0) + nw : sum; }, null);
+                      return w != null ? `${w.toFixed(0)}W fleet draw · monitoring` : 'Monitoring idle overhead';
+                    })()} />
+                )}
+              </div>
 
               {/* ── Recent Activity — session-scoped alert history ──────────── */}
               {alertLog.length > 0 && (
