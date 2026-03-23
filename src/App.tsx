@@ -548,8 +548,25 @@ interface DashboardShellProps {
 
 const DashboardShell: React.FC<DashboardShellProps> = (props) => {
   const { connectionState, lastTelemetryMs, lastSeenMsMap, allNodeMetrics } = useFleetStream();
-  // Version mismatch detection: compare agent's Cargo version against this UI's package.json version.
-  const localAgentVersion = Object.values(allNodeMetrics)[0]?.agent_version;
+
+  // On localhost, FleetStreamContext doesn't populate allNodeMetrics (the WS
+  // lives in Overview.tsx). Fetch agent_version directly via a one-shot API call.
+  const [localAgentVersionDirect, setLocalAgentVersionDirect] = useState<string | undefined>();
+  useEffect(() => {
+    if (!isLocalHost) return;
+    fetch('/api/metrics')
+      .then(r => r.ok ? r.json() : null)
+      .then((d: Record<string, unknown> | null) => {
+        if (d && typeof d.agent_version === 'string') {
+          setLocalAgentVersionDirect(d.agent_version);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const localAgentVersion = isLocalHost
+    ? localAgentVersionDirect
+    : Object.values(allNodeMetrics)[0]?.agent_version;
   const [versionBannerDismissed, setVersionBannerDismissed] = useState(false);
   const showVersionBanner = isLocalHost
     && !versionBannerDismissed
