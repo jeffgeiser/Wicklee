@@ -649,7 +649,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
               <p className="text-[9px] uppercase tracking-widest text-gray-500 dark:text-gray-600 mt-0.5 leading-none">idle-spd</p>
             </>
           ) : (
-            <span className={`${V} text-gray-500 dark:text-gray-600`}>—</span>
+            <>
+              <span className={`${V} text-gray-500 dark:text-gray-600`}>—</span>
+              <p className="text-[9px] uppercase tracking-widest mt-0.5 leading-none invisible" aria-hidden="true">&nbsp;</p>
+            </>
           )}
         </div>
       )}
@@ -932,6 +935,26 @@ const DiagnosticRail: React.FC<{
       {hasPow && (
         <RailRow label="Board Power" value={`${powerW.toFixed(1)} W`} textCls="text-amber-400" barCls="bg-amber-400" />
       )}
+      {s.thermal_state != null && (() => {
+        const state = s.thermal_state;
+        const cls = state === 'Critical' ? 'text-red-400'
+                  : state === 'Serious'  ? 'text-red-400'
+                  : state === 'Fair'     ? 'text-amber-400'
+                  :                        'text-green-400';
+        const penalty = s.penalty_avg != null && s.penalty_avg > 1.0
+          ? `${s.penalty_avg.toFixed(2)}×`
+          : undefined;
+        return (
+          <RailRow
+            label="Thermal"
+            value={state}
+            textCls={cls}
+            barCls="bg-transparent"
+            badge={penalty}
+            badgeCls={state === 'Normal' ? 'text-gray-600' : cls}
+          />
+        );
+      })()}
       {s.swap_write_mb_s != null && (() => {
         const raw = swapBuf.push(s.swap_write_mb_s, tsMs) ?? s.swap_write_mb_s;
         const pct = Math.min((raw / 500) * 100, 100);
