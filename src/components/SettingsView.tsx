@@ -226,6 +226,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   getToken,
   subscriptionTier = 'community',
 }) => {
+  const isCloudMode = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
+
   // ── Fleet defaults drafts (numbers need validation before commit) ───────────
   const [kwhDraft, setKwhDraft] = useState(settings.fleet.kwhRate.toString());
   const [pueDraft, setPueDraft] = useState(settings.fleet.pue.toString());
@@ -398,14 +400,16 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </p>
           </div>
 
-          <p className="text-[11px] text-gray-400 dark:text-gray-500">
-            These values apply to all nodes. Override any setting per-node in Node Configuration below.
-          </p>
+          {isCloudMode && (
+            <p className="text-[11px] text-gray-400 dark:text-gray-500">
+              These values apply to all nodes. Override any setting per-node in Node Configuration below.
+            </p>
+          )}
         </div>
       </Section>
 
-      {/* ── ② NODE CONFIGURATION ─────────────────────────────────────────── */}
-      <Section id="node-configuration" title="Node Configuration" icon={MapPin} iconBg="bg-indigo-500/10" iconCls="text-indigo-400">
+      {/* ── ② NODE CONFIGURATION (Cloud only — per-node overrides) ─────── */}
+      {isCloudMode && <Section id="node-configuration" title="Node Configuration" icon={MapPin} iconBg="bg-indigo-500/10" iconCls="text-indigo-400">
         {nodes.length === 0 ? (
           <div className="px-6 py-12 text-center space-y-2">
             <p className="text-sm text-gray-500">No nodes connected yet.</p>
@@ -524,7 +528,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
         )}
-      </Section>
+      </Section>}
 
       {/* ── ③ DISPLAY & UNITS ────────────────────────────────────────────── */}
       <Section id="display-units" title="Display & Units" icon={Monitor} iconBg="bg-blue-500/10" iconCls="text-blue-400">

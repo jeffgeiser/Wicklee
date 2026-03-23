@@ -267,6 +267,12 @@ struct MetricsPayload {
     /// Frontend uses this to label tok/s as "live" (not "live estimate").
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_proxy_active: Option<bool>,
+    /// Port the proxy listens on (e.g. 11434). None when proxy is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proxy_listen_port: Option<u16>,
+    /// Port the proxy forwards to (the real Ollama port, e.g. 11435). None when proxy is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proxy_target_port: Option<u16>,
     /// True during the agent's 30s background probe AND for 40 s afterward.
     /// Frontend uses this to show IDLE-SPD instead of LIVE during probe activity —
     /// the probe fires a real Ollama request which would otherwise look like a user session.
@@ -2073,6 +2079,8 @@ fn start_metrics_broadcaster(
     wes_metrics:           Arc<Mutex<WesMetrics>>,
     swap_metrics:          SwapMetrics,
     probe_active:          Arc<std::sync::atomic::AtomicBool>,
+    proxy_listen_port:     Option<u16>,
+    proxy_target_port:     Option<u16>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -2158,6 +2166,8 @@ fn start_metrics_broadcaster(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_inference_active:  ollama.ollama_inference_active,
                 ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
+                proxy_listen_port,
+                proxy_target_port,
                 ollama_is_probing:        ollama_is_probing_flag,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
@@ -2564,6 +2574,13 @@ async fn handle_tags() -> Json<TagsResponse> {
     })
 }
 
+/// Immutable proxy port config, set once at startup.
+#[derive(Clone)]
+struct ProxyPorts {
+    listen: Option<u16>,
+    target: Option<u16>,
+}
+
 async fn handle_metrics(
     axum::extract::Extension(apple_metrics):         axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
     axum::extract::Extension(nvidia_metrics):        axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
@@ -2575,10 +2592,14 @@ async fn handle_metrics(
     axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
     axum::extract::Extension(swap_metrics):          axum::extract::Extension<SwapMetrics>,
     axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
+    axum::extract::Extension(proxy_ports):           axum::extract::Extension<ProxyPorts>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
     tokio::spawn(async move {
+        let proxy_listen_port = proxy_ports.listen;
+        let proxy_target_port = proxy_ports.target;
+
         let mut sys = System::new_all();
         let node_id = System::host_name()
             .unwrap_or_else(|| "wicklee-sentinel-01".to_string());
@@ -2649,6 +2670,8 @@ async fn handle_metrics(
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_inference_active:  ollama.ollama_inference_active,
                 ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
+                proxy_listen_port,
+                proxy_target_port,
                 ollama_is_probing:        ollama_is_probing_flag,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
@@ -3179,6 +3202,10 @@ async fn main() {
     discovery_txs.insert("llama-box", llamabox_disc_tx);
     process_discovery::start_discovery_loop(discovery_txs, 30);
 
+    // Proxy ports are immutable after startup — compute once before proxy_arc is moved.
+    let proxy_listen = if proxy_arc.is_some() { Some(11434u16) } else { None };
+    let proxy_target = if proxy_arc.is_some() { Some(proxy_cfg.ollama_port) } else { None };
+
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
     let (ollama_metrics, probe_active) = harvester::start_ollama_harvester(
@@ -3224,6 +3251,8 @@ async fn main() {
         Arc::clone(&wes_metrics),
         swap_metrics.clone(),
         Arc::clone(&probe_active),
+        proxy_listen,
+        proxy_target,
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -3382,6 +3411,7 @@ async fn main() {
          .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(axum::extract::Extension(probe_active))
+         .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target }))
          .layer(cors)
     };
     // Suppress unused-variable warning on musl where metrics_store = None:()

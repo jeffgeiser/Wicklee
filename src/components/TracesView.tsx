@@ -28,13 +28,43 @@ import {
 import {
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, EventHistoryRecord } from '../types';
+import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, EventHistoryRecord, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useEventHistory } from '../hooks/useEventHistory';
 
 const isLocalHost =
   window.location.hostname === 'localhost' ||
   window.location.hostname === '127.0.0.1';
+
+// ── Proxy status hook — one-shot fetch from /api/metrics ─────────────────────
+// Proxy config is immutable at runtime (set at agent startup), so a single
+// fetch is sufficient. Returns { proxyActive, listenPort, targetPort }.
+function useProxyStatus() {
+  const [status, setStatus] = useState<{
+    proxyActive: boolean;
+    listenPort: number | null;
+    targetPort: number | null;
+  }>({ proxyActive: false, listenPort: null, targetPort: null });
+
+  useEffect(() => {
+    if (!isLocalHost) return;
+    let cancelled = false;
+    fetch('/api/metrics')
+      .then(r => r.json())
+      .then((data: SentinelMetrics) => {
+        if (cancelled) return;
+        setStatus({
+          proxyActive: data.ollama_proxy_active === true,
+          listenPort:  data.proxy_listen_port ?? null,
+          targetPort:  data.proxy_target_port ?? null,
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  return status;
+}
 
 interface TracesViewProps {
   nodes: NodeAgent[];
@@ -44,7 +74,12 @@ interface TracesViewProps {
 
 // ── Sovereignty Section ────────────────────────────────────────────────────────
 
-const SovereigntySection: React.FC<{ pairingInfo: PairingInfo | null }> = ({ pairingInfo }) => {
+const SovereigntySection: React.FC<{
+  pairingInfo: PairingInfo | null;
+  proxyActive: boolean;
+  proxyListenPort: number | null;
+  proxyTargetPort: number | null;
+}> = ({ pairingInfo, proxyActive, proxyListenPort, proxyTargetPort }) => {
   const { fleetEvents, connectionState } = useFleetStream();
 
   // In Cockpit mode (localhost), pairing state comes from the local agent's /api/pair/status.
@@ -62,10 +97,15 @@ const SovereigntySection: React.FC<{ pairingInfo: PairingInfo | null }> = ({ pai
     .slice(0, 8);
 
   const manifest = [
-    {
+    proxyActive ? {
+      purpose:  'Wicklee Proxy',
+      endpoint: `localhost:${proxyListenPort ?? 11434} → :${proxyTargetPort ?? 11435}`,
+      data:     'Exact tok/s + inference traces (TTFT, TPOT)',
+      status:   'active' as const,
+    } : {
       purpose:  'Ollama inference probe',
       endpoint: 'localhost:11434',
-      data:     'Metric only — tok/s sample (3 tokens)',
+      data:     'Metric only — tok/s sample (20 tokens)',
       status:   'local' as const,
     },
     {
@@ -670,7 +710,12 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
 // ── Local trace table ──────────────────────────────────────────────────────────
 
-const TraceTable: React.FC<{ tenantId: string }> = ({ tenantId }) => {
+const TraceTable: React.FC<{
+  tenantId: string;
+  proxyActive: boolean;
+  proxyListenPort: number | null;
+  proxyTargetPort: number | null;
+}> = ({ tenantId, proxyActive, proxyListenPort, proxyTargetPort }) => {
   const [traces, setTraces]   = useState<TraceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
@@ -773,17 +818,65 @@ const TraceTable: React.FC<{ tenantId: string }> = ({ tenantId }) => {
               ))
             ) : (
               <tr>
-                <td colSpan={6} className="px-6 py-20 text-center">
-                  <div className="flex flex-col items-center justify-center max-w-sm mx-auto">
-                    <div className="w-12 h-12 bg-gray-800/50 rounded-2xl flex items-center justify-center mb-4 border border-white/5">
-                      <Activity className="w-6 h-6 text-gray-500" />
+                <td colSpan={6} className="px-6 py-12 text-center">
+                  {proxyActive ? (
+                    /* Proxy active, just waiting for traffic */
+                    <div className="flex flex-col items-center justify-center max-w-md mx-auto">
+                      <div className="w-12 h-12 bg-green-500/10 rounded-2xl flex items-center justify-center mb-4 border border-green-500/20">
+                        <Activity className="w-6 h-6 text-green-400" />
+                      </div>
+                      <h3 className="text-sm font-bold text-white mb-2">Proxy Active — Waiting for Requests</h3>
+                      <p className="text-xs text-gray-500 leading-relaxed mb-4">
+                        Traces will appear as inference requests flow through the proxy on{' '}
+                        <span className="font-mono text-gray-400">:{proxyListenPort ?? 11434}</span>{' → '}
+                        <span className="font-mono text-gray-400">:{proxyTargetPort ?? 11435}</span>.
+                      </p>
+                      <div className="bg-gray-800/50 border border-white/5 rounded-lg px-4 py-3 w-full text-left">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-1.5">Test it</p>
+                        <code className="text-[11px] font-mono text-gray-400 leading-relaxed block whitespace-pre-wrap break-all">
+{`curl http://localhost:${proxyListenPort ?? 11434}/api/generate \\
+  -d '{"model":"llama3","prompt":"hi","stream":false}'`}
+                        </code>
+                      </div>
                     </div>
-                    <h3 className="text-lg font-bold text-white mb-2">No traces yet</h3>
-                    <p className="text-xs text-gray-500 leading-relaxed">
-                      Inference traces will appear here automatically once the Wicklee agent is running.
-                      Each request is logged with latency, TTFT, and TPOT.
-                    </p>
-                  </div>
+                  ) : (
+                    /* Proxy not active — onboarding guide */
+                    <div className="flex flex-col items-center justify-center max-w-lg mx-auto text-left">
+                      <div className="w-12 h-12 bg-gray-800/50 rounded-2xl flex items-center justify-center mb-4 border border-white/5">
+                        <Activity className="w-6 h-6 text-gray-500" />
+                      </div>
+                      <h3 className="text-sm font-bold text-white mb-1 text-center">Inference Traces require the Wicklee Proxy</h3>
+                      <p className="text-xs text-gray-500 leading-relaxed mb-4 text-center">
+                        The proxy intercepts Ollama requests and logs latency, TTFT, and TPOT for every inference. Without it, the agent uses a lightweight probe for tok/s only.
+                      </p>
+                      <div className="bg-gray-800/30 border border-white/5 rounded-xl p-4 w-full space-y-3">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold">Setup (3 steps)</p>
+                        <div className="space-y-2.5 text-xs text-gray-400">
+                          <div className="flex gap-2.5">
+                            <span className="text-gray-600 font-mono shrink-0">1.</span>
+                            <div>
+                              <span className="text-gray-300">Move Ollama to a different port:</span>
+                              <code className="block font-mono text-[11px] text-gray-500 mt-1 bg-gray-900/50 rounded px-2 py-1">OLLAMA_HOST=127.0.0.1:11435 ollama serve</code>
+                            </div>
+                          </div>
+                          <div className="flex gap-2.5">
+                            <span className="text-gray-600 font-mono shrink-0">2.</span>
+                            <div>
+                              <span className="text-gray-300">Enable the proxy in config:</span>
+                              <code className="block font-mono text-[11px] text-gray-500 mt-1 bg-gray-900/50 rounded px-2 py-1 whitespace-pre">{`[ollama_proxy]\nenabled = true\nollama_port = 11435`}</code>
+                              <p className="text-[10px] text-gray-600 mt-1">
+                                Config: <span className="font-mono">/Library/Application Support/Wicklee/config.toml</span> (macOS) or <span className="font-mono">/etc/wicklee/config.toml</span> (Linux)
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2.5">
+                            <span className="text-gray-600 font-mono shrink-0">3.</span>
+                            <span className="text-gray-300">Restart the Wicklee agent</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </td>
               </tr>
             )}
@@ -1154,11 +1247,12 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
   // Gate on pairingInfo !== null (not on nodeId) so the panels aren't permanently
   // hidden during the brief window before the first API response arrives.
   const nodeId = pairingInfo?.node_id ?? '';
+  const { proxyActive, listenPort: proxyListenPort, targetPort: proxyTargetPort } = useProxyStatus();
 
   return (
     <div className="space-y-8">
-      <SovereigntySection pairingInfo={pairingInfo} />
-      {isLocalHost && <TraceTable tenantId={tenantId} />}
+      <SovereigntySection pairingInfo={pairingInfo} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />
+      {isLocalHost && <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />}
       {/* Phase 4A — Raw Metric History + Agent Health (Cockpit / localhost only) */}
       {isLocalHost && pairingInfo !== null && <MetricHistoryPanel nodeId={nodeId} />}
       {isLocalHost && pairingInfo !== null && <AgentHealthPanel   nodeId={nodeId} />}
