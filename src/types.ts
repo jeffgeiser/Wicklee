@@ -209,6 +209,21 @@ export interface LiveActivityEvent {
   timestamp_ms: number;
   /** Severity level — maps to FleetEvent.type on the frontend */
   level:        'info' | 'warn' | 'error';
+  /** Structured event category for DuckDB filtering/querying.
+   *  Values: "startup", "update", "model_swap", "thermal_change", "error" */
+  event_type?:  string;
+}
+
+/**
+ * A persisted event record returned by GET /api/events/history (agent)
+ * or GET /api/fleet/events/history (cloud).
+ */
+export interface EventHistoryRecord {
+  ts_ms:       number;
+  node_id:     string;
+  level:       string;
+  event_type?: string;
+  message:     string;
 }
 
 /**

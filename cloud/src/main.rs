@@ -150,6 +150,22 @@ struct MetricsPayload {
     /// SSOT — fleet frontend must display this directly, never re-derive.
     #[serde(default)]
     inference_state: Option<String>,
+    // ── Live Activity events (v0.5.16+) ──────────────────────────────────────
+    /// Ephemeral lifecycle events drained from the agent on each broadcast tick.
+    /// Persisted to cloud DuckDB `node_events` for fleet event history.
+    #[serde(default)]
+    live_activities: Vec<LiveActivityEventPayload>,
+}
+
+/// A single Live Activity event as received from the agent's telemetry push.
+#[derive(Deserialize, Serialize, Clone)]
+struct LiveActivityEventPayload {
+    message:      String,
+    timestamp_ms: u64,
+    #[serde(default)]
+    level:        String,
+    #[serde(default)]
+    event_type:   Option<String>,
 }
 
 // ── Auth request / response types ────────────────────────────────────────────
@@ -233,6 +249,17 @@ struct MetricsRow {
     wes_version:      u8,               // incremented when WES formula changes
 }
 
+/// A Live Activity event destined for the cloud DuckDB `node_events` table.
+#[derive(Clone)]
+struct EventRow {
+    ts_ms:      i64,
+    node_id:    String,
+    tenant_id:  String,
+    level:      String,
+    event_type: Option<String>,
+    message:    String,
+}
+
 #[derive(Serialize)]
 struct NodeSummary {
     node_id:      String,
@@ -277,6 +304,9 @@ struct AppState {
     /// Channel to the DuckDB writer task.  try_send drops rows if the writer
     /// falls behind; that's acceptable for telemetry.
     metrics_tx:       mpsc::Sender<MetricsRow>,
+    /// Channel to the DuckDB event writer task.  Persists Live Activity events
+    /// for the fleet event history endpoint.
+    events_tx:        mpsc::Sender<EventRow>,
     /// Shared DuckDB connection for history read queries (wes-history endpoint).
     duck_db:          DuckDb,
 }
@@ -1756,6 +1786,9 @@ async fn handle_telemetry(
     // Derive the DuckDB row BEFORE moving payload into the in-memory map.
     let duck_row = metrics_row_from_payload(&payload, ts);
 
+    // Extract Live Activity events before payload is moved into the map.
+    let live_activities = payload.live_activities.clone();
+
     // Clone for alert evaluation (payload is moved into the map below).
     let metrics_snap: Option<MetricsPayload> = Some(payload.clone());
 
@@ -1774,6 +1807,7 @@ async fn handle_telemetry(
     // then look up tenant_id and enqueue the DuckDB row.
     let db         = state.db.clone();
     let metrics_tx = state.metrics_tx.clone();
+    let events_tx  = state.events_tx.clone();
     let nid        = node_id.clone();
     tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
@@ -1798,6 +1832,18 @@ async fn handle_telemetry(
         ) {
             let row = MetricsRow { tenant_id: tenant_id.clone(), ..duck_row };
             let _ = metrics_tx.try_send(row);
+
+            // Persist any Live Activity events to DuckDB.
+            for ev in &live_activities {
+                let _ = events_tx.try_send(EventRow {
+                    ts_ms:      ev.timestamp_ms as i64,
+                    node_id:    nid.clone(),
+                    tenant_id:  tenant_id.clone(),
+                    level:      if ev.level.is_empty() { "info".to_string() } else { ev.level.clone() },
+                    event_type: ev.event_type.clone(),
+                    message:    ev.message.clone(),
+                });
+            }
 
             // Evaluate alert rules if user is Team+ tier.
             let tier: String = conn.query_row(
@@ -1874,6 +1920,108 @@ async fn handle_fleet(
     }).collect();
 
     Json(FleetResponse { nodes }).into_response()
+}
+
+/// GET /api/fleet/events/history?limit=50&before=<ts_ms>&node_id=<optional>&event_type=<optional>
+///
+/// Returns persisted Live Activity events for the authenticated user's fleet.
+/// Paginated via `before` (exclusive upper bound on ts_ms).  Max 200 per page.
+async fn handle_fleet_events_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    // Authenticate via Clerk JWT → user_id (same pattern as handle_wes_history).
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        require_user(&token, &conn, &clerk_keys)
+    }).await.unwrap();
+
+    let user_id = match user_id {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let limit: i64 = params.get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
+        .min(200);
+    let before: i64 = params.get("before")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(i64::MAX);
+    let node_id_filter = params.get("node_id").cloned();
+    let event_type_filter = params.get("event_type").cloned();
+
+    let duck = state.duck_db.clone();
+    match tokio::task::spawn_blocking(move || {
+        let conn = duck.lock().unwrap();
+
+        // Build WHERE clause dynamically based on optional filters.
+        let mut sql = "SELECT ts_ms, node_id, level, event_type, message FROM node_events
+                       WHERE tenant_id = ?1 AND ts_ms < ?2".to_string();
+        let mut next_param = 3;
+
+        let nid_idx = if node_id_filter.is_some() {
+            sql.push_str(&format!(" AND node_id = ?{next_param}"));
+            let idx = next_param;
+            next_param += 1;
+            Some(idx)
+        } else { None };
+
+        let et_idx = if event_type_filter.is_some() {
+            sql.push_str(&format!(" AND event_type = ?{next_param}"));
+            let idx = next_param;
+            next_param += 1;
+            Some(idx)
+        } else { None };
+
+        sql.push_str(&format!(" ORDER BY ts_ms DESC LIMIT ?{next_param}"));
+
+        let mut stmt = conn.prepare(&sql)?;
+
+        // Bind parameters positionally.
+        let mut p_idx: usize = 1;
+        stmt.raw_bind_parameter(p_idx, &user_id)?;   p_idx += 1;
+        stmt.raw_bind_parameter(p_idx, before)?;      p_idx += 1;
+        if let (Some(_), Some(nid)) = (nid_idx, &node_id_filter) {
+            stmt.raw_bind_parameter(p_idx, nid.as_str())?;  p_idx += 1;
+        }
+        if let (Some(_), Some(et)) = (et_idx, &event_type_filter) {
+            stmt.raw_bind_parameter(p_idx, et.as_str())?;   p_idx += 1;
+        }
+        stmt.raw_bind_parameter(p_idx, limit)?;
+
+        let rows = stmt.query_map([], |row| {
+            let ts_ms: i64 = row.get(0)?;
+            let node_id: String = row.get(1)?;
+            let level: String = row.get(2)?;
+            let event_type: Option<String> = row.get(3)?;
+            let message: String = row.get(4)?;
+            Ok(serde_json::json!({
+                "ts_ms": ts_ms,
+                "node_id": node_id,
+                "level": level,
+                "event_type": event_type,
+                "message": message,
+            }))
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, duckdb::Error>(rows)
+    }).await {
+        Ok(Ok(events)) => Json(serde_json::json!({ "events": events })).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("query failed: {e}") }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("task join failed: {e}") }))).into_response(),
+    }
 }
 
 /// GET /api/fleet/wes-history?node_id=<optional>&range=1h|24h|7d|30d|90d
@@ -2641,10 +2789,23 @@ fn run_duck_migrations(conn: &DuckConn) {
             detail          VARCHAR
         );
 
+        -- ── Node events (30-day retention) ──────────────────────────────
+        CREATE TABLE IF NOT EXISTS node_events (
+            ts_ms       BIGINT  NOT NULL,
+            node_id     VARCHAR NOT NULL,
+            tenant_id   VARCHAR NOT NULL,
+            level       VARCHAR NOT NULL DEFAULT 'info',
+            event_type  VARCHAR,
+            message     VARCHAR NOT NULL,
+            PRIMARY KEY (tenant_id, node_id, ts_ms, message)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_raw_node_ts
             ON metrics_raw  (tenant_id, node_id, ts_ms);
         CREATE INDEX IF NOT EXISTS idx_5min_node_ts
             ON metrics_5min (tenant_id, node_id, ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_node_events_tenant_ts
+            ON node_events  (tenant_id, ts_ms);
     ").expect("DuckDB migrations failed");
 }
 
@@ -2777,6 +2938,25 @@ async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, duck: DuckDb) {
     }
 }
 
+/// Background task: drain the events channel and write to DuckDB immediately.
+/// Events are rare (a few per day per node), so no batching — direct INSERT.
+async fn events_writer_task(mut rx: mpsc::Receiver<EventRow>, duck: DuckDb) {
+    while let Some(ev) = rx.recv().await {
+        let d = duck.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let conn = d.lock().unwrap();
+            if let Err(e) = conn.execute(
+                "INSERT INTO node_events (ts_ms, node_id, tenant_id, level, event_type, message)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT DO NOTHING",
+                duckdb::params![ev.ts_ms, ev.node_id, ev.tenant_id, ev.level, ev.event_type, ev.message],
+            ) {
+                eprintln!("[duck] event write error: {e}");
+            }
+        }).await;
+    }
+}
+
 // ── DuckDB — rollup & maintenance ────────────────────────────────────────────
 
 /// Hourly: aggregate metrics_raw rows older than 24 h into 5-minute buckets,
@@ -2857,10 +3037,18 @@ fn run_rollup(conn: &DuckConn) {
 /// Nightly (3 AM UTC): CHECKPOINT + ANALYZE to compact WAL and update stats.
 /// Separated from the hourly rollup to avoid blocking the Appender writer.
 fn run_nightly_maintenance(conn: &DuckConn) {
+    // Prune node_events older than 30 days.
+    let event_cutoff_ms = (now_ms() as i64) - 30 * 86_400_000;
+    let _ = conn.execute(
+        "DELETE FROM node_events WHERE ts_ms < ?",
+        duckdb::params![event_cutoff_ms],
+    );
+
     conn.execute_batch("
         CHECKPOINT;
         ANALYZE metrics_raw;
         ANALYZE metrics_5min;
+        ANALYZE node_events;
     ").unwrap_or_else(|e| eprintln!("[nightly] maintenance failed: {e}"));
     println!("[nightly] CHECKPOINT + ANALYZE complete");
 }
@@ -3999,6 +4187,7 @@ async fn main() {
     let duck_conn = open_duck_db();
     let duck      = Arc::new(Mutex::new(duck_conn)) as DuckDb;
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsRow>(8_192);
+    let (events_tx,  events_rx)  = mpsc::channel::<EventRow>(1_024);
 
     let state = AppState {
         db:              Arc::new(Mutex::new(conn)),
@@ -4006,11 +4195,15 @@ async fn main() {
         clerk_keys:      clerk_keys.clone(),
         api_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         metrics_tx,
+        events_tx,
         duck_db:         duck.clone(),
     };
 
     // Spawn DuckDB analytics writer (drains channel, batches, flushes every 30 s).
     tokio::spawn(metrics_writer_task(metrics_rx, duck.clone()));
+
+    // Spawn DuckDB event writer (Live Activity events — rare, no batching needed).
+    tokio::spawn(events_writer_task(events_rx, duck.clone()));
 
     // Spawn hourly rollup (raw → 5-min aggregates, prune old raw rows).
     tokio::spawn(rollup_task(duck.clone()));
@@ -4065,8 +4258,9 @@ async fn main() {
         .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",              get(handle_fleet))
         .route("/api/fleet/stream",       get(handle_fleet_stream))
-        .route("/api/fleet/wes-history",      get(handle_wes_history))
-        .route("/api/fleet/metrics-history",  get(handle_metrics_history))
+        .route("/api/fleet/wes-history",          get(handle_wes_history))
+        .route("/api/fleet/metrics-history",      get(handle_metrics_history))
+        .route("/api/fleet/events/history",       get(handle_fleet_events_history))
         // ── Agent API v1 ──────────────────────────────────────────────────────
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))
