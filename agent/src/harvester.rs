@@ -1,4 +1,4 @@
-use crate::{AppleSiliconMetrics, NvidiaMetrics, OllamaMetrics, VllmMetrics};
+use crate::{AppleSiliconMetrics, NvidiaMetrics, OllamaMetrics, VllmMetrics, LlamacppMetrics};
 use crate::proxy::ProxyState;
 use crate::process_discovery;
 use std::sync::{Arc, Mutex};
@@ -584,6 +584,221 @@ pub(crate) fn start_vllm_harvester(
                 eprintln!("[vllm] idle probe → {tps:.1} tok/s");
                 if let Ok(mut g) = shared_probe.lock() {
                     g.vllm_tokens_per_sec = Some(tps);
+                }
+            }
+        }
+    });
+
+    shared
+}
+
+// ── llama.cpp / llama-box harvester ──────────────────────────────────────────
+
+/// Poll llama.cpp's `/health?include_slots` endpoint.
+/// Returns (running, model_name, slots_processing).
+async fn harvest_llamacpp(port: u16) -> (bool, Option<String>, Option<u32>) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(500))
+        .build()
+    {
+        Ok(c)  => c,
+        Err(_) => return (false, None, None),
+    };
+
+    // /health?include_slots returns { "status": "ok", "slots_idle": N, "slots_processing": N }
+    let resp = match client
+        .get(format!("http://127.0.0.1:{port}/health?include_slots"))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return (false, None, None),
+    };
+
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j)  => j,
+        Err(_) => return (true, None, None),
+    };
+
+    let status = json["status"].as_str().unwrap_or("");
+    if status != "ok" {
+        // "loading model", "error", etc. — server is up but not ready.
+        return (true, None, None);
+    }
+
+    let slots_processing = json["slots_processing"]
+        .as_u64()
+        .map(|v| v as u32);
+
+    // Model name: not in /health response. Fetch from /slots (first slot's "model" field).
+    let model_name = match client
+        .get(format!("http://127.0.0.1:{port}/slots"))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            r.json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|arr| {
+                    arr.as_array()?
+                        .first()?
+                        .get("model")?
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
+        }
+        _ => None,
+    };
+
+    (true, model_name, slots_processing)
+}
+
+/// Fires a non-streaming 20-token completions probe against the llama.cpp
+/// OpenAI-compatible API and returns tok/s derived from wall-clock timing.
+///
+/// Mirrors `probe_vllm_tps` semantics: idle sustained throughput baseline.
+async fn probe_llamacpp_tps(client: &reqwest::Client, port: u16, model: &str) -> Option<f32> {
+    let url = format!("http://127.0.0.1:{port}/v1/completions");
+    let t0 = std::time::Instant::now();
+    let resp = match client
+        .post(&url)
+        .json(&serde_json::json!({
+            "model":       model,
+            "prompt":      " ",
+            "max_tokens":  20,
+            "temperature": 0,
+            "stream":      false,
+        }))
+        .send()
+        .await
+    {
+        Ok(r)  => { eprintln!("[llamacpp] probe {url} → HTTP {}", r.status()); r }
+        Err(e) => { eprintln!("[llamacpp] probe {url} → error: {e}"); return None; }
+    };
+    if !resp.status().is_success() { return None; }
+    let elapsed = t0.elapsed().as_secs_f64();
+    if elapsed <= 0.0 { return None; }
+    let text = resp.text().await.ok()?;
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(n) = json["usage"]["completion_tokens"].as_u64() {
+            if n > 0 {
+                let tps = n as f64 / elapsed;
+                if tps > 0.0 { return Some(tps as f32); }
+            }
+        }
+    }
+    None
+}
+
+/// Spawns a 2 s polling loop that watches for llama.cpp via the discovery channel,
+/// then polls the `/health?include_slots` endpoint on the discovered port.
+///
+/// Also spawns a 30 s idle-probe task that fires `probe_llamacpp_tps` when the
+/// scheduler is idle (`slots_processing == 0`) and the GPU is below the
+/// load threshold — the result populates `llamacpp_tokens_per_sec` as the IDLE-SPD
+/// baseline, exactly mirroring the vLLM probe behaviour.
+pub(crate) fn start_llamacpp_harvester(
+    port_rx: process_discovery::PortRx,
+    apple:   Arc<Mutex<AppleSiliconMetrics>>,
+    nvidia:  Arc<Mutex<NvidiaMetrics>>,
+) -> Arc<Mutex<LlamacppMetrics>> {
+    let shared = Arc::new(Mutex::new(LlamacppMetrics::default()));
+
+    // ── Main task: 2 s /health?include_slots poll ────────────────────────────
+    let shared_main = Arc::clone(&shared);
+    let mut port_rx_main = port_rx.clone();
+    tokio::spawn(async move {
+        loop {
+            // Wait until discovery reports llama.cpp/llama-box is running.
+            loop {
+                if port_rx_main.borrow().is_some() { break; }
+                if port_rx_main.changed().await.is_err() { return; }
+            }
+            let port = port_rx_main.borrow().unwrap();
+            eprintln!("[llamacpp] connected on :{port}");
+
+            let mut interval = tokio::time::interval(Duration::from_secs(2));
+
+            loop {
+                interval.tick().await;
+
+                if port_rx_main.has_changed().unwrap_or(false) {
+                    match *port_rx_main.borrow_and_update() {
+                        None => {
+                            eprintln!("[llamacpp] process gone — clearing metrics");
+                            if let Ok(mut g) = shared_main.lock() { *g = LlamacppMetrics::default(); }
+                            break;
+                        }
+                        Some(new_port) if new_port != port => { break; }
+                        _ => {}
+                    }
+                }
+
+                let (running, model, slots) = harvest_llamacpp(port).await;
+                if let Ok(mut g) = shared_main.lock() {
+                    if !running {
+                        *g = LlamacppMetrics::default();
+                    } else {
+                        g.llamacpp_running = true;
+                        if let Some(m) = model { g.llamacpp_model_name = Some(m); }
+                        g.llamacpp_slots_processing = slots;
+                    }
+                }
+            }
+        }
+    });
+
+    // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ──────────
+    let shared_probe = Arc::clone(&shared);
+    tokio::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+
+        // Brief startup delay — gives the main task time to populate model name.
+        tokio::time::sleep(Duration::from_secs(7)).await;
+
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+
+            // Read port and model while idle — bail if not ready.
+            let (port, model) = {
+                let g = match shared_probe.lock() { Ok(g) => g, Err(_) => continue };
+                if !g.llamacpp_running { continue; }
+                if g.llamacpp_slots_processing.map_or(false, |s| s > 0) { continue; }
+                let port  = match *port_rx.borrow() { Some(p) => p, None => continue };
+                let model = match g.llamacpp_model_name.clone() { Some(m) => m, None => continue };
+                (port, model)
+            };
+
+            // Skip when GPU is already under load — same gate as vLLM probe.
+            let gpu_util: Option<f32> = nvidia.lock().ok()
+                .and_then(|g| g.nvidia_gpu_utilization_percent)
+                .or_else(|| apple.lock().ok().and_then(|g| g.gpu_utilization_percent));
+            let has_baseline = shared_probe.lock().ok()
+                .map(|g| g.llamacpp_tokens_per_sec.is_some())
+                .unwrap_or(false);
+            if !has_baseline {
+                eprintln!(
+                    "[llamacpp] no baseline yet — forcing initial probe despite GPU at {:.0}%",
+                    gpu_util.unwrap_or(0.0),
+                );
+            } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+                eprintln!(
+                    "[llamacpp] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
+                    gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
+                );
+                continue;
+            }
+
+            eprintln!("[llamacpp] probing idle tok/s on :{port} model={model}");
+            if let Some(tps) = probe_llamacpp_tps(&client, port, &model).await {
+                eprintln!("[llamacpp] idle probe → {tps:.1} tok/s");
+                if let Ok(mut g) = shared_probe.lock() {
+                    g.llamacpp_tokens_per_sec = Some(tps);
                 }
             }
         }

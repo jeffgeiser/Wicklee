@@ -113,6 +113,15 @@ struct MetricsPayload {
     vllm_cache_usage_perc: Option<f32>,
     #[serde(default)]
     vllm_requests_running: Option<u32>,
+    // llama.cpp / llama-box runtime
+    #[serde(default)]
+    llamacpp_running:          bool,
+    #[serde(default)]
+    llamacpp_model_name:       Option<String>,
+    #[serde(default)]
+    llamacpp_tokens_per_sec:   Option<f32>,
+    #[serde(default)]
+    llamacpp_slots_processing: Option<u32>,
     // ── WES v2 thermal-penalty window ─────────────────────────────────────────
     #[serde(default)]
     penalty_avg:    Option<f32>,

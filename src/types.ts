@@ -142,6 +142,13 @@ export interface SentinelMetrics {
   /** KV cache utilisation 0–100%. Agent multiplies vLLM's 0–1 value by 100. */
   vllm_cache_usage_perc?: number | null;
   vllm_requests_running?: number | null;
+  // llama.cpp / llama-box runtime (absent/false when not running)
+  llamacpp_running?:          boolean;
+  llamacpp_model_name?:       string | null;
+  /** Idle tok/s probe baseline from llama.cpp /v1/completions. Null until first probe. */
+  llamacpp_tokens_per_sec?:   number | null;
+  /** Number of slots currently processing. > 0 = active inference (Tier 1). */
+  llamacpp_slots_processing?: number | null;
   /** Compile-time OS from agent — "macOS" | "Linux" | "Windows". Absent on older agents. */
   os?: string | null;
   /** Compile-time CPU architecture — "x86_64" | "aarch64". Absent on older agents. */
