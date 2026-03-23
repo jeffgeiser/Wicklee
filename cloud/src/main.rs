@@ -34,6 +34,12 @@ type Db = Arc<Mutex<Connection>>;
 type DuckDb = Arc<Mutex<DuckConn>>;
 
 // ── Shared payload shape — must stay in sync with the agent ──────────────────
+//
+// IMPORTANT: Every field the agent's MetricsPayload serializes must appear here.
+// Serde silently drops unknown fields during deserialization — any field missing
+// from this struct is lost before it reaches the in-memory cache and SSE stream.
+// The SSE stream serves `entry.metrics` verbatim; the fleet frontend depends on
+// receiving every field the agent sends.
 
 #[derive(Deserialize, Serialize, Clone)]
 struct MetricsPayload {
@@ -56,6 +62,12 @@ struct MetricsPayload {
     cpu_power_w:                    Option<f32>,
     ecpu_power_w:                   Option<f32>,
     pcpu_power_w:                   Option<f32>,
+    /// GPU-only power from powermetrics "GPU Power:" line.
+    #[serde(default)]
+    apple_gpu_power_w:              Option<f32>,
+    /// Total SoC power: Combined Power (CPU + GPU + ANE). Authoritative for WES.
+    #[serde(default)]
+    apple_soc_power_w:              Option<f32>,
     gpu_utilization_percent:        Option<f32>,
     memory_pressure_percent:        Option<f32>,
     thermal_state:                  Option<String>,
@@ -76,8 +88,20 @@ struct MetricsPayload {
     ollama_quantization:  Option<String>,
     #[serde(default)]
     ollama_tokens_per_second: Option<f32>,
+    /// True when a user request completed within the last 35s (Tier 2 attribution).
+    #[serde(default)]
+    ollama_inference_active: Option<bool>,
+    /// True when the Wicklee transparent proxy is active on :11434.
+    #[serde(default)]
+    ollama_proxy_active: Option<bool>,
+    /// True during probe and 40s afterward — frontend uses for IDLE-SPD display.
+    #[serde(default)]
+    ollama_is_probing: Option<bool>,
     #[serde(default)]
     os: Option<String>,
+    /// CPU architecture: "x86_64" | "aarch64".
+    #[serde(default)]
+    arch: Option<String>,
     // vLLM runtime
     #[serde(default)]
     vllm_running:          bool,
@@ -89,6 +113,34 @@ struct MetricsPayload {
     vllm_cache_usage_perc: Option<f32>,
     #[serde(default)]
     vllm_requests_running: Option<u32>,
+    // ── WES v2 thermal-penalty window ─────────────────────────────────────────
+    #[serde(default)]
+    penalty_avg:    Option<f32>,
+    #[serde(default)]
+    penalty_peak:   Option<f32>,
+    #[serde(default)]
+    thermal_source: Option<String>,
+    #[serde(default)]
+    sample_count:   Option<u32>,
+    #[serde(default)]
+    wes_version:    Option<u8>,
+    // ── Deep Metal expansion (v0.4.30+) ───────────────────────────────────────
+    #[serde(default)]
+    swap_write_mb_s:     Option<f32>,
+    #[serde(default)]
+    clock_throttle_pct:  Option<f32>,
+    #[serde(default)]
+    pcie_link_width:     Option<u32>,
+    #[serde(default)]
+    pcie_link_max_width: Option<u32>,
+    // ── Agent identity + state (v0.5.10+) ─────────────────────────────────────
+    /// Compile-time agent version from Cargo.toml.
+    #[serde(default)]
+    agent_version:   Option<String>,
+    /// Authoritative inference state: "live" | "idle-spd" | "busy" | "idle".
+    /// SSOT — fleet frontend must display this directly, never re-derive.
+    #[serde(default)]
+    inference_state: Option<String>,
 }
 
 // ── Auth request / response types ────────────────────────────────────────────
@@ -2591,7 +2643,10 @@ fn run_duck_migrations(conn: &DuckConn) {
 
 fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
     let tok_s   = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
-    let watts   = m.nvidia_power_draw_w.or(m.cpu_power_w);
+    // Power priority: NVIDIA board power → Apple SoC (Combined CPU+GPU+ANE) → cpu_power_w fallback.
+    // apple_soc_power_w is the correct total power for Apple Silicon WES calculation.
+    // cpu_power_w alone is just the CPU cluster (~0.1W at idle) and produces inflated WES.
+    let watts   = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
     let penalty = thermal_penalty_for(m.thermal_state.as_deref());
 
     let wes_raw = match (tok_s, watts) {
@@ -2614,7 +2669,8 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
         watts,
         wes_raw,
         wes_penalized,
-        thermal_cost_pct: None,          // Phase 4B — requires agent WES v2
+        // Use agent's penalty_avg for thermal cost if available (WES v2).
+        thermal_cost_pct: m.penalty_avg.and_then(|p| if p > 1.0 { Some(((p - 1.0) / p) * 100.0) } else { None }),
         thermal_penalty:  Some(penalty),
         thermal_state:    m.thermal_state.clone(),
         vram_used_mb:     m.nvidia_vram_used_mb.map(|v| v as i32),
@@ -2622,7 +2678,7 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
         mem_pressure_pct: m.memory_pressure_percent,
         gpu_pct,
         cpu_pct:          Some(m.cpu_usage_percent),
-        wes_version:      1,
+        wes_version:      m.wes_version.unwrap_or(1),
     }
 }
 
