@@ -13,6 +13,7 @@
 
 import { computeRawWES, computeWES, thermalCostPct, thermalSourceLabel } from './wes';
 import type { SentinelMetrics } from '../types';
+import { getNodePowerW } from './power';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ export interface BenchmarkReport {
 
 export function buildReportFromLive(node: SentinelMetrics): BenchmarkReport {
   const tps    = node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null;
-  const watts  = node.cpu_power_w ?? node.nvidia_power_draw_w ?? null;
+  const watts  = getNodePowerW(node);
   const rawWes = computeRawWES(tps, watts);
   const penWes = computeWES(tps, watts, node.thermal_state);
   const tcPct  = thermalCostPct(rawWes, penWes);

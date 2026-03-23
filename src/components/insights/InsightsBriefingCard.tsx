@@ -53,6 +53,7 @@ import type { InsightRecentEvent } from '../../lib/insightLifecycle';
 import { useFleetStream } from '../../contexts/FleetStreamContext';
 import type { SentinelMetrics } from '../../types';
 import { computeWES } from '../../utils/wes';
+import { getNodePowerW } from '../../utils/power';
 
 // ── Cloud URL (mirrors App.tsx / APIKeysView.tsx) ─────────────────────────────
 const CLOUD_URL = (() => {
@@ -105,7 +106,7 @@ function patternColor(patternId: string): string {
 
 function computeNodeWes(m: SentinelMetrics): number | null {
   const tps   = m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null;
-  const watts = m.cpu_power_w ?? m.nvidia_power_draw_w ?? null;
+  const watts = getNodePowerW(m);
   if (tps == null || watts == null || tps <= 0 || watts <= 0) return null;
   return computeWES(tps, watts, m.thermal_state);
 }

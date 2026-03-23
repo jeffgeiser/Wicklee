@@ -15,15 +15,15 @@
 import React from 'react';
 import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
+import { getNodePowerW } from '../../../utils/power';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const ONE_HOUR_MS = 60 * 60 * 1_000;
 
-/** Watts to display for idle cost calculation. Apple Silicon uses cpu_power_w,
- *  NVIDIA uses nvidia_power_draw_w. */
+/** Watts to display for idle cost calculation. */
 function idleWatts(node: SentinelMetrics): number | null {
-  return node.cpu_power_w ?? node.nvidia_power_draw_w ?? null;
+  return getNodePowerW(node);
 }
 
 /** Format duration as "Xh Ym". */

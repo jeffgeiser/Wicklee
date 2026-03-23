@@ -15,6 +15,7 @@
 
 import { useRef, useState, useEffect } from 'react';
 import type { SentinelMetrics, FleetEvent, LiveActivityEvent } from '../types';
+import { getNodePowerW } from '../utils/power';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -115,8 +116,7 @@ export function useLocalEvents(
     // Only run when sentinel is live.
     if (sentinel != null) {
       const curThermal = sentinel.thermal_state ?? null;
-      // Prefer apple_soc_power_w (true SoC total) over cpu_power_w for anomaly detection.
-      const curPower   = (sentinel.apple_soc_power_w ?? sentinel.nvidia_power_draw_w ?? sentinel.cpu_power_w) ?? null;
+      const curPower   = getNodePowerW(sentinel);
       const curModel   = sentinel.ollama_active_model ?? null;
 
       // ── 1. CONNECTIVITY ──────────────────────────────────────────────────

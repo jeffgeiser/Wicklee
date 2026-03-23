@@ -3,6 +3,7 @@ import { Cpu, Database, Zap, Activity, MemoryStick, Wind, Thermometer, BotMessag
 import { SentinelMetrics } from '../types';
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from '../utils/wes';
 import { WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
+import { getNodePowerW, hasPowerData } from '../utils/power';
 
 export const thermalColour = (state: string | null) => {
   switch (state?.toLowerCase()) {
@@ -105,8 +106,8 @@ export const HardwareDetailPanel: React.FC<{
 
   // Ollama wattage + WES
   const ollamaTps   = m.ollama_tokens_per_second;
-  const totalPowerW = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
-  const hasPower    = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
+  const totalPowerW = getNodePowerW(m) ?? 0;
+  const hasPower    = hasPowerData(m);
   const wPer1kStr   = ollamaTps != null && ollamaTps > 0 && hasPower
     ? `${((totalPowerW / ollamaTps) * 1000).toFixed(0)} W/1k` : null;
   const wattsStr    = hasPower ? `${totalPowerW.toFixed(1)} W` : null;

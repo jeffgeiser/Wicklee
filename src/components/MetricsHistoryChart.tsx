@@ -20,6 +20,7 @@ import {
 import { Activity, Lock, RefreshCw } from 'lucide-react';
 import { SubscriptionTier, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
+import { getNodePowerW } from '../utils/power';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ const METRIC_CONFIG: Record<MetricKey, {
     color:    '#f59e0b',
     gradId:   'gradWatts',
     getPoint: (p) => p.watts,
-    getLive:  (m) => m.cpu_power_w ?? m.nvidia_power_draw_w ?? null,
+    getLive:  (m) => getNodePowerW(m),
     getP95:   () => null,
     decimals: 1,
     domain:   [0, 'auto'],

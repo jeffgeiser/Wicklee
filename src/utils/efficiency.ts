@@ -7,6 +7,7 @@
 
 import { computeWES, formatWES, wesColorClass, THERMAL_PENALTY } from './wes';
 import type { SentinelMetrics } from '../types';
+import { getNodePowerW, hasPowerData } from './power';
 
 export { computeWES, formatWES, wesColorClass, THERMAL_PENALTY };
 
@@ -161,12 +162,10 @@ export function calculateIdleFleetCostPerDay(
   pueByNodeId: Record<string, number>,
   rateUsdPerKwh = ELECTRICITY_RATE_USD_PER_KWH,
 ): number | null {
-  const withPower = metrics.filter(m =>
-    m.nvidia_power_draw_w != null || m.cpu_power_w != null
-  );
+  const withPower = metrics.filter(m => hasPowerData(m));
   if (withPower.length === 0) return null;
   return withPower.reduce((acc, m) => {
-    const watts = m.nvidia_power_draw_w ?? m.cpu_power_w ?? 0;
+    const watts = getNodePowerW(m) ?? 0;
     const pue   = pueByNodeId[m.node_id] ?? 1.0;
     return acc + watts * pue * 24 * (rateUsdPerKwh / 1000);
   }, 0);

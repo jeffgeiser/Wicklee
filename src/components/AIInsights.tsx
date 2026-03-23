@@ -34,6 +34,7 @@ import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier 
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
 import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
+import { getNodePowerW } from '../utils/power';
 import { buildReportFromLive } from '../utils/benchmarkReport';
 import type { BenchmarkReport } from '../utils/benchmarkReport';
 import BenchmarkReportModal from './BenchmarkReportModal';
@@ -81,7 +82,7 @@ const isLocalHost =
 /** Simple WES from live telemetry (no history — same formula as Overview). */
 function computeNodeWes(m: SentinelMetrics): number | null {
   const tps   = m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null;
-  const watts = m.cpu_power_w ?? m.nvidia_power_draw_w ?? null;
+  const watts = getNodePowerW(m);
   if (tps == null || watts == null || tps <= 0 || watts <= 0) return null;
   return computeWES(tps, watts, m.thermal_state);
 }
@@ -331,7 +332,7 @@ const WesLeaderboardLite: React.FC<{ nodes: SentinelMetrics[] }> = ({ nodes }) =
   const ranked = nodes
     .map(m => {
       const tps   = m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null;
-      const watts = m.cpu_power_w ?? m.nvidia_power_draw_w ?? null;
+      const watts = getNodePowerW(m);
       const wes   = computeNodeWes(m);
       const rawWes = (tps != null && tps > 0 && watts != null && watts > 0)
         ? tps / (watts)
@@ -561,7 +562,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             firstMessageTsRef.current = Date.now();
           }
 
-          const watts = data.cpu_power_w ?? data.nvidia_power_draw_w;
+          const watts = getNodePowerW(data);
           if (watts != null && wattReadingsRef.current.length < 10) {
             wattReadingsRef.current = [...wattReadingsRef.current, watts];
             if (wattReadingsRef.current.length === 10) {
@@ -870,7 +871,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   });
 
   const powerNodes = effectiveNodes.filter(m => {
-    const w   = m.cpu_power_w ?? m.nvidia_power_draw_w ?? null;
+    const w   = getNodePowerW(m);
     const gpu = m.gpu_utilization_percent ?? m.nvidia_gpu_utilization_percent ?? null;
     const baseline = isLocalHost ? sessionBaselineWatts : null;
     return w != null && (
@@ -922,7 +923,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const fleetIdleNodes: SentinelMetrics[] = !isLocalHost
     ? effectiveNodes.filter(n => {
-        const watts      = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+        const watts      = getNodePowerW(n);
         if (watts == null) return false;
         const lastActive = nodeLastActiveMsRef.current[n.node_id];
         if (!lastActive) return false;
@@ -939,7 +940,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   for (const node of effectiveNodes) {
     const tps    = node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null;
-    const watts  = node.cpu_power_w ?? node.nvidia_power_draw_w ?? null;
+    const watts  = getNodePowerW(node);
     const rawWes = computeRawWES(tps, watts);
     const penWes = computeWES(tps, watts, node.thermal_state);
     const tc     = thermalCostPct(rawWes, penWes);
@@ -1059,7 +1060,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const powerReading = fmtWatts(
     effectiveNodes.reduce<number | null>((sum, n) => {
-      const w = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+      const w = getNodePowerW(n);
       if (w == null) return sum;
       return (sum ?? 0) + w;
     }, null),
@@ -1232,7 +1233,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 }
                 // Fleet wattage — sum of all reported draw values
                 const fleetWatts = effectiveNodes.reduce<number | null>((sum, n) => {
-                  const w = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+                  const w = getNodePowerW(n);
                   return w != null ? (sum ?? 0) + w : sum;
                 }, null);
                 // Total node count: prefer fleet registry length; fall back to live count
@@ -1491,7 +1492,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     label="Idle Resource Cost"
                     status={(() => {
                       const w = effectiveNodes.reduce<number | null>((sum, n) => {
-                        const nw = n.cpu_power_w ?? n.nvidia_power_draw_w ?? null;
+                        const nw = getNodePowerW(n);
                         return nw != null ? (sum ?? 0) + nw : sum;
                       }, null);
                       return w != null ? `${w.toFixed(0)}W fleet draw · monitoring` : 'Monitoring idle overhead';
