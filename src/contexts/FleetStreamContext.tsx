@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import type { SentinelMetrics, FleetEvent, FleetNode, FleetStreamState, ConnectionState } from '../types';
+import { getNodePowerW } from '../utils/power';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -208,7 +209,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             if (isNowLive && n.metrics) {
               const curThermal = n.metrics.thermal_state ?? null;
               const curModel   = n.metrics.ollama_active_model ?? null;
-              const curPower   = (n.metrics.nvidia_power_draw_w ?? n.metrics.cpu_power_w) ?? null;
+              const curPower   = getNodePowerW(n.metrics);
 
               const prevThermal = prevThermalRef.current[nodeId];
               const prevModel   = prevModelRef.current[nodeId];

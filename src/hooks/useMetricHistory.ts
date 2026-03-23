@@ -15,6 +15,7 @@
  */
 
 import { useRef, useCallback } from 'react';
+import { getNodePowerW } from '../utils/power';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -93,7 +94,9 @@ export function metricsToSample(
     penalty_avg?:                   number | null;
     memory_pressure_percent?:       number | null;
     gpu_utilization_percent?:       number | null;
+    apple_soc_power_w?:             number | null;
     cpu_power_w?:                   number | null;
+    apple_gpu_power_w?:             number | null;
     nvidia_power_draw_w?:           number | null;
     nvidia_gpu_utilization_percent?: number | null;
     nvidia_vram_used_mb?:           number | null;
@@ -118,7 +121,7 @@ export function metricsToSample(
     ? m.nvidia_vram_total_mb
     : null;
 
-  const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0) || null;
+  const watts = getNodePowerW(m) ?? null;
   const gpuUtil = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
   const tokS    = m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null;
 

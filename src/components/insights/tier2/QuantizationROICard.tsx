@@ -21,6 +21,7 @@ import React from 'react';
 import { Scale } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
 import { computeWES } from '../../../utils/wes';
+import { getNodePowerW } from '../../../utils/power';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -125,7 +126,7 @@ const QuantizationROICard: React.FC<QuantizationROICardProps> = ({ node }) => {
   const copy       = QUANT_COPY[family] ?? QUANT_COPY.Unknown;
 
   const tps    = node.ollama_tokens_per_second ?? null;
-  const watts  = node.cpu_power_w ?? node.nvidia_power_draw_w ?? null;
+  const watts  = getNodePowerW(node);
   const w1k    = tps != null && watts != null && tps > 0 ? (watts / tps) * 1_000 : null;
   const wes    = tps != null && watts != null && tps > 0 && watts > 0
     ? computeWES(tps, watts, node.thermal_state)

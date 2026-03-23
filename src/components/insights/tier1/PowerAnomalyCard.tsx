@@ -15,12 +15,13 @@
 import React from 'react';
 import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
+import { getNodePowerW } from '../../../utils/power';
 
 // ── Power helpers ─────────────────────────────────────────────────────────────
 
 /** Returns the active board/CPU power watts for a node. */
 function currentWatts(node: SentinelMetrics): number | null {
-  return node.cpu_power_w ?? node.nvidia_power_draw_w ?? null;
+  return getNodePowerW(node);
 }
 
 /** Returns the active GPU utilization % for a node. */
