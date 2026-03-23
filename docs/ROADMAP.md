@@ -183,7 +183,7 @@
 - [ ] **Windows Thermal:** WMI thermal data for Windows nodes. Annotated as "estimated" in UI — lowest data quality platform.
 - [ ] **ANE Utilization:** Apple Neural Engine utilization and wattage — the metric Activity Monitor doesn't show.
 - [ ] **macOS CPU Power (sudoless):** Entitlement-based `powermetrics` access without requiring root.
-- [ ] **llama.cpp inference-active harvester (v0.4.39)** — `llama-server` and `llama-box` detected via port discovery since v0.4.37. Inference-active status deferred: needs `GET /health` polling (returns `{"status":"ok","slots_idle":N,"slots_processing":N}`). `slots_processing > 0` = inference active. Add `RuntimeHarvester` entry in `process_discovery.rs`.
+- [x] **llama.cpp inference-active harvester (v0.5.15)** — `llama-server` and `llama-box` detected via port discovery since v0.4.37. Inference-active via `GET /health` polling (`{"slots_idle":N,"slots_processing":N}`). `slots_processing > 0` = Tier 1 (exact) inference detection, same priority as vLLM. Configurable URL (default `localhost:8080`), 2s poll interval. `llama_cpp_*` fields on MetricsPayload with three-way sync (agent → cloud → frontend).
 - [ ] **DuckDB event persistence** — Store Live Activity events in `metrics.db` so the Observability tab can surface historical node lifecycle events (startup, model swaps, thermal transitions, updates). Agent side: append to a `node_events` table on every ring-buffer push. Frontend: Observability tab queries via new `GET /api/events/history?limit=N&before=<ts>` endpoint.
 - [x] **Linux arm64-nvidia build** — `ubuntu-24.04-arm` native runner + CUDA aarch64 NVML headers. Enables DGX Spark and Ampere Altra + NVIDIA installs. install.sh auto-detects and downloads correct binary on all Linux arches.
 

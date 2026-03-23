@@ -6,6 +6,54 @@
 
 ---
 
+## March 23, 2026 — v0.5.10–v0.5.15: Dead Zone Fix, Module Extraction, Inference Traces, llama.cpp Harvester
+
+### v0.5.10 — Dead Zone Fix ✅
+- **Root cause:** Ollama `/api/ps` `expires_at` resets were being attributed to user inference even when caused by the 30s probe. Result: Tier 2 "Live" classification during idle periods (the "Dead Zone").
+- **Fix:** `probe_caused_next_reset` one-shot flag in `OllamaMetrics`. The probe sets it on completion; the harvester consumes it on the first `expires_at` change it sees. This cleanly distinguishes probe-caused resets from real user requests without time-based blackouts.
+- **`InferenceState` enum** replaces raw strings in Rust — `Live`, `IdleSpd`, `Busy`, `Idle`. Serializes to frozen wire values (`"live"`, `"idle-spd"`, `"busy"`, `"idle"`).
+- **8 new unit tests** covering all tier transitions and probe attribution edge cases.
+
+### v0.5.11 — Graceful Shutdown ✅
+- SIGTERM/SIGINT handler flushes in-flight responses and DuckDB WAL.
+- `powermetrics` child process uses `kill_on_drop` — no orphan processes after agent restart.
+
+### v0.5.12 — Module Extraction ✅
+- `main.rs` split into focused modules: `inference.rs`, `harvester.rs`, `proxy.rs`, `cloud_push.rs`, `service.rs`, `diagnostics.rs`.
+- `pub(crate)` visibility for inter-module access. No behavioral changes.
+
+### v0.5.13 — Bootstrap Retry + Install Script Hardening ✅
+- **launchctl race fix:** bootstrap retry loop handles port-release timing after `bootout`.
+- **install.sh bash guard:** detects `dash`/`sh` and re-execs under `bash` for array syntax compatibility.
+- **`--status` power check:** diagnostics now probe powermetrics availability.
+
+### v0.5.14 — Inference Traces ✅
+- Ollama proxy captures done-packet timing → `inference_traces` DuckDB table.
+- `GET /api/traces` endpoint serves trace history to the Observability tab's TracesView.
+- `uuid` crate added for trace ID generation.
+
+### v0.5.15 — llama.cpp Inference-Active Harvester ✅
+- **Tier 1 (Exact) detection** for `llama-server` and `llama-box` via `/health` endpoint polling.
+- Polls configurable `llama_cpp_url` (default `localhost:8080`) every 2s.
+- Parses `{"slots_idle": N, "slots_processing": M}` — `slots_processing > 0` = inference active.
+- New `LlamaCppMetrics` shared state: `llama_cpp_running`, `llama_cpp_model`, `llama_cpp_slots_processing`, `llama_cpp_slots_idle`.
+- `compute_inference_state()` updated: `llama_cpp_slots_processing > 0` is Tier 1 (exact), same priority as vLLM `requests_running > 0`.
+- **Three-way sync maintained:** agent `MetricsPayload` → cloud `MetricsPayload` → frontend `SentinelMetrics` all updated with `llama_cpp_*` fields.
+- 1 new unit test for llama.cpp inference state transition.
+
+### Critical Bugs Found & Fixed
+- **Cloud MetricsPayload missing 20+ fields** — `serde(default)` silently dropped `apple_soc_power_w`, `inference_state`, `agent_version`, `penalty_avg`, etc. Root cause of fleet power/WES divergence for months. Fixed in `cloud/src/main.rs`.
+- **Frontend power calculation** — ~30 callsites used `cpu_power_w` instead of `apple_soc_power_w`. Created `src/utils/power.ts` with `getNodePowerW()` utility, replaced all inline calculations.
+- **Fleet smoothing divergence** — fleet SSE at 2s cadence with 8-sample window = 16s lag. Added `FLEET_ROW_ROLLING_WINDOW=4` and GPU% smoothing in fleet row.
+- **Localhost version display** — DashboardShell read from FleetStreamContext (empty on localhost). Fixed with one-shot `/api/metrics` fetch.
+- **Power cost $0.00** — shows "< $0.01/day" when cost rounds to zero.
+
+### What's Next (Phase 3B remaining)
+1. **DuckDB event persistence** — `node_events` table, `GET /api/events/history`
+2. **Audit Log Export** — exportable pairing and telemetry history
+
+---
+
 ## March 19, 2026 — Sprint 7: Pattern K + L, Deep Metal Charts, Agent CLI Polish (v0.4.30–v0.4.33)
 
 ### New Agent Fields — Deep Metal Expansion ✅
