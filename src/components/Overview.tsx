@@ -1369,9 +1369,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                       : (_ollamaTps ?? _vllmTps);
     const gpuUtil = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
     const tps     = estimateTps(rawCombined, peakTpsMap[m.node_id] ?? null, gpuUtil, m.ollama_inference_active ?? null);
-    const totalW   = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
-    const hasWatts = m.cpu_power_w != null || m.nvidia_power_draw_w != null;
-    const watts    = hasWatts ? totalW : null;
+    // Power priority: apple_soc_power_w (Combined CPU+GPU+ANE) → NVIDIA board power → cpu_power_w fallback.
+    // apple_soc_power_w is the correct total for Apple Silicon WES; cpu_power_w alone is just the CPU cluster.
+    const hasWatts = m.apple_soc_power_w != null || m.nvidia_power_draw_w != null || m.cpu_power_w != null;
+    const watts    = m.apple_soc_power_w != null
+      ? m.apple_soc_power_w
+      : m.nvidia_power_draw_w != null
+        ? m.nvidia_power_draw_w
+        : m.cpu_power_w != null
+          ? (m.cpu_power_w ?? 0) + (m.apple_gpu_power_w ?? 0)
+          : null;
     const ns       = getNodeSettings?.(m.node_id);
     const pue      = ns?.pue ?? 1.0;
     const kwhRate  = ns?.kwhRate ?? fleetKwhRate;
@@ -1475,7 +1482,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     if (fleetTps == null || fleetTps < MIN_COST_TPS) return null;
     if (wattPowerNodes.length === 0) return null;
     const totalPowerW = wattPowerNodes.reduce((acc, m) =>
-      acc + (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0), 0);
+      acc + (m.apple_soc_power_w ?? ((m.cpu_power_w ?? 0) + (m.apple_gpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0))), 0);
     return (totalPowerW / fleetTps) * 1000;
   })();
 
@@ -1518,13 +1525,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Fleet Intelligence — Cost Efficiency + Tokens Per Watt
   // Only over inference-active nodes (tpsNodes) so PUE + rate apply to actual workload.
   const fleetHourlyCostUsd = (() => {
-    const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
+    const powerNodes = tpsNodes.filter(m => m.apple_soc_power_w != null || m.cpu_power_w != null || m.nvidia_power_draw_w != null);
     if (powerNodes.length === 0) return null;
     return powerNodes.reduce((acc, m) => {
       const ns   = getNodeSettings?.(m.node_id);
       const pue  = ns?.pue ?? 1.0;
       const rate = ns?.kwhRate ?? fleetKwhRate;
-      const watts = (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0);
+      const watts = m.apple_soc_power_w ?? ((m.cpu_power_w ?? 0) + (m.apple_gpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0));
       return acc + watts * pue * rate / 1000;
     }, 0);
   })();
@@ -1535,10 +1542,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     : null;
 
   const totalPowerOfTpsNodes = (() => {
-    const powerNodes = tpsNodes.filter(m => m.cpu_power_w != null || m.nvidia_power_draw_w != null);
+    const powerNodes = tpsNodes.filter(m => m.apple_soc_power_w != null || m.cpu_power_w != null || m.nvidia_power_draw_w != null);
     if (powerNodes.length === 0) return null;
     return powerNodes.reduce((acc, m) =>
-      acc + (m.cpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0), 0);
+      acc + (m.apple_soc_power_w ?? ((m.cpu_power_w ?? 0) + (m.apple_gpu_power_w ?? 0) + (m.nvidia_power_draw_w ?? 0))), 0);
   })();
   const tokensPerWattVal = calculateTokensPerWatt(fleetTps, totalPowerOfTpsNodes);
 
