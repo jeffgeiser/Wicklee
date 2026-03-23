@@ -173,7 +173,7 @@
 
 ---
 
-## Phase 3B — Platform Completeness + Public Launch
+## ✅ Phase 3B — Platform Completeness + Public Launch (v0.6.0)
 
 > Goal: close hardware gaps, launch publicly, ship Agent API v1.
 
@@ -187,7 +187,7 @@
 - [x] **DuckDB event persistence (v0.5.16)** — `node_events` table on agent (7-day retention) and cloud (30-day, tenant-isolated). `push_event()` centralized helper writes to both in-memory ring buffer and DuckDB. `GET /api/events/history` (agent) and `GET /api/fleet/events/history` (cloud, JWT-auth). Event History panel in Observability tab with cursor-based pagination. Three-way sync fix: `live_activities` added to cloud MetricsPayload.
 - [x] **Proxy Awareness UI (v0.5.20)** — Dynamic Sovereignty manifest shows proxy status in real-time. Rich traces empty state with 3-step setup guide. `proxy_listen_port` + `proxy_target_port` on MetricsPayload. Port Doctor in `--status` diagnostic warns when runtime port may be wrong.
 - [x] **Port validation (v0.5.18)** — Harvester health-checks discovered port via `/api/version`, falls back to default when API doesn't respond (fixes worker socket misidentification on CPU-only Linux). Install script preserves `cap_sys_ptrace` across upgrades.
-- [ ] **Audit Log Export** — Exportable pairing and telemetry history (`GET /api/export`, CSV/JSON). Permission-checked before write attempt.
+- [x] **Audit Log Export (v0.5.22)** — `GET /api/export` (agent, CSV/JSON) and `GET /api/fleet/export` (cloud, JWT-auth). Unified audit log joining `node_events` + `inference_traces` + `accepted_states`. Actionable error messages for permission/platform issues. Sovereignty manifest shows `config.toml` badge when `[runtime_ports]` override is active.
 - [x] **Linux arm64-nvidia build** — `ubuntu-24.04-arm` native runner + CUDA aarch64 NVML headers. Enables DGX Spark and Ampere Altra + NVIDIA installs. install.sh auto-detects and downloads correct binary on all Linux arches.
 
 ### WES Platform Expansion
