@@ -435,12 +435,47 @@ struct PairingStatusResponse {
 /// A timestamped log entry surfaced in the dashboard Live Activity panel.
 /// Written by background tasks (e.g. self-update) and drained into every
 /// MetricsPayload broadcast on the next 100 ms tick.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct LiveActivityEvent {
     pub(crate) message:      String,
     pub(crate) timestamp_ms: u64,
     /// Frontend style hint: "info" | "warn" | "error"
     pub(crate) level:        &'static str,
+    /// Structured event category for filtering/querying in DuckDB.
+    /// Values: "startup", "update", "model_swap", "thermal_change", "error"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) event_type:   Option<&'static str>,
+}
+
+/// Centralised event emitter: pushes to both in-memory queues (for live WS
+/// broadcast and late-joining browsers) AND persists to DuckDB when available.
+/// Every call site that creates a `LiveActivityEvent` should use this function
+/// instead of manually pushing to `live_events` + `recent_events_log`.
+#[allow(unused_variables)]              // `store` + `node_id` unused on musl
+fn push_event(
+    live_events:       &Mutex<Vec<LiveActivityEvent>>,
+    recent_events_log: &Mutex<std::collections::VecDeque<LiveActivityEvent>>,
+    #[cfg(not(target_env = "musl"))]
+    store:             &Option<store::Store>,
+    node_id:           &str,
+    event:             LiveActivityEvent,
+) {
+    live_events.lock().unwrap().push(event.clone());
+    {
+        let mut log = recent_events_log.lock().unwrap();
+        log.push_back(event.clone());
+        if log.len() > 20 { log.pop_front(); }
+    }
+    #[cfg(not(target_env = "musl"))]
+    if let Some(s) = store {
+        s.write_event(
+            event.timestamp_ms as i64,
+            node_id,
+            event.level,
+            event.event_type,
+            &event.message,
+        );
+    }
 }
 
 /// Response shape of GET https://wicklee.dev/api/agent/version
@@ -2372,6 +2407,43 @@ async fn handle_traces(
     }
 }
 
+// ── Event history endpoint ────────────────────────────────────────────────────
+//
+// GET /api/events/history — paginated, persisted Live Activity events from DuckDB.
+
+#[cfg(not(target_env = "musl"))]
+#[derive(Deserialize)]
+struct EventHistoryQuery {
+    limit:      Option<i64>,
+    before:     Option<i64>,
+    event_type: Option<String>,
+}
+
+#[cfg(not(target_env = "musl"))]
+async fn handle_events_history(
+    axum::extract::Query(q): axum::extract::Query<EventHistoryQuery>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let limit = q.limit.unwrap_or(50).min(200);
+    let before = q.before;
+    let event_type = q.event_type;
+    match tokio::task::spawn_blocking(move || {
+        store.query_events(limit, before, event_type.as_deref())
+    }).await {
+        Ok(Ok(events)) => Json(serde_json::json!({ "events": events })).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("event query failed: {e}"),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task join failed: {e}"),
+        ).into_response(),
+    }
+}
+
 // ── Insight dismiss endpoints ─────────────────────────────────────────────────
 //
 // POST /api/insights/dismiss  — persist a dismiss decision for a pattern.
@@ -2822,7 +2894,11 @@ async fn check_and_apply_update(
             message:      msg.clone(),
             timestamp_ms: now_ms(),
             level:        "info",
+            event_type:   Some("update"),
         };
+        // Manual push here (not push_event) — the process restarts immediately
+        // after, so there is no store handle to persist to.  The event reaches
+        // connected browsers via the next broadcast tick before exit.
         live_events.lock().unwrap().push(event.clone());
         let mut log = recent_events_log.lock().unwrap();
         log.push_back(event);
@@ -3131,19 +3207,6 @@ async fn main() {
     let recent_events_log: Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>> =
         Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(20)));
 
-    // Emit a startup event so the Live Activity feed is immediately populated.
-    {
-        let event = LiveActivityEvent {
-            message:      format!("Agent started · v{}", env!("CARGO_PKG_VERSION")),
-            timestamp_ms: now_ms(),
-            level:        "info",
-        };
-        live_events.lock().unwrap().push(event.clone());
-        let mut log = recent_events_log.lock().unwrap();
-        log.push_back(event);
-        if log.len() > 20 { log.pop_front(); }
-    }
-
     let broadcast_tx          = start_metrics_broadcaster(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
@@ -3252,6 +3315,22 @@ async fn main() {
     #[cfg(target_env = "musl")]
     let metrics_store: Option<()> = None;
 
+    // Emit startup event — placed after store init so the event is persisted
+    // to DuckDB on first write.  Still well before the first broadcast tick.
+    push_event(
+        &live_events,
+        &recent_events_log,
+        #[cfg(not(target_env = "musl"))]
+        &metrics_store,
+        &config.node_id,
+        LiveActivityEvent {
+            message:      format!("Agent started · v{}", env!("CARGO_PKG_VERSION")),
+            timestamp_ms: now_ms(),
+            level:        "info",
+            event_type:   Some("startup"),
+        },
+    );
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -3276,6 +3355,7 @@ async fn main() {
         let r = if let Some(ref st) = metrics_store {
             r.route("/api/history",             get(handle_history))
              .route("/api/traces",              get(handle_traces))
+             .route("/api/events/history",      get(handle_events_history))
              .route("/api/insights/dismiss",    post(handle_dismiss))
              .route("/api/insights/dismissed",  get(handle_dismissed_list))
              .layer(axum::extract::Extension(st.clone()))

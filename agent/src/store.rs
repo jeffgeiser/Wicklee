@@ -263,6 +263,18 @@ pub(crate) struct TraceRecord {
     pub status: i32,
 }
 
+/// A persisted Live Activity event record returned by `query_events`.
+#[derive(Debug, Serialize)]
+pub struct EventRecord {
+    pub ts_ms:      i64,
+    pub timestamp:  String,   // ISO 8601
+    pub node_id:    String,
+    pub level:      String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
+    pub message:    String,
+}
+
 /// A single persisted dismiss record returned by `query_active_dismissals`.
 #[derive(Debug, Serialize)]
 pub struct Dismissal {
@@ -382,6 +394,18 @@ impl Store {
                 eval_duration_ns  BIGINT
             );
 
+            -- Node events: persisted Live Activity events for the Observability tab.
+            -- 7-day retention, pruned alongside metrics.  Composite PK deduplicates
+            -- naturally (same timestamp + node + message = same event).
+            CREATE TABLE IF NOT EXISTS node_events (
+                ts_ms       BIGINT  NOT NULL,
+                node_id     TEXT    NOT NULL,
+                level       TEXT    NOT NULL DEFAULT 'info',
+                event_type  TEXT,
+                message     TEXT    NOT NULL,
+                PRIMARY KEY (ts_ms, node_id, message)
+            );
+
             -- Migrations: add columns introduced after the initial schema.
             -- DuckDB supports ADD COLUMN IF NOT EXISTS — safe to run on every startup.
             ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s    DOUBLE;
@@ -450,9 +474,10 @@ impl Store {
         let min_lookback = now_ms - 7_200_000;     // 2 h of 1-min rows for 1-hr tier
 
         // Retention cutoffs.
-        let raw_cutoff = now_ms - 86_400_000_i64;           // 24 h
-        let min_cutoff = now_ms - 30_i64 * 86_400_000_i64;  // 30 d
-        let hr_cutoff  = now_ms - 90_i64 * 86_400_000_i64;  // 90 d
+        let raw_cutoff   = now_ms - 86_400_000_i64;           // 24 h
+        let min_cutoff   = now_ms - 30_i64 * 86_400_000_i64;  // 30 d
+        let hr_cutoff    = now_ms - 90_i64 * 86_400_000_i64;  // 90 d
+        let event_cutoff = now_ms - 7_i64 * 86_400_000_i64;   // 7 d
 
         let conn = self.0.lock().unwrap();
 
@@ -532,6 +557,7 @@ impl Store {
             DELETE FROM metrics_1min WHERE ts_ms < {min_cutoff};
             DELETE FROM metrics_1hr  WHERE ts_ms < {hr_cutoff};
             DELETE FROM inference_traces WHERE ts_ms < {raw_cutoff};
+            DELETE FROM node_events WHERE ts_ms < {event_cutoff};
         "))?;
 
         Ok(())
@@ -721,6 +747,84 @@ impl Store {
                     ttft:      row.get(5)?,
                     tpot:      row.get(6)?,
                     status:    row.get(7)?,
+                })
+            })?.collect::<Result<_, _>>()?
+        };
+        Ok(rows)
+    }
+
+    // ── Node Events ─────────────────────────────────────────────────────────
+
+    /// Insert one Live Activity event.  Conflicts (same ts_ms + node_id +
+    /// message) are silently discarded — safe on replay or duplicate push.
+    pub fn write_event(
+        &self,
+        ts_ms:      i64,
+        node_id:    &str,
+        level:      &str,
+        event_type: Option<&str>,
+        message:    &str,
+    ) {
+        let res = self.0.lock().unwrap().execute(
+            "INSERT INTO node_events (ts_ms, node_id, level, event_type, message)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (ts_ms, node_id, message) DO NOTHING",
+            params![ts_ms, node_id, level, event_type, message],
+        );
+        if let Err(e) = res {
+            eprintln!("[store] event write error: {e}");
+        }
+    }
+
+    /// Return persisted events, newest-first, with cursor-based pagination.
+    /// `before` is exclusive upper bound on ts_ms; pass `None` for latest.
+    /// `event_type` optionally filters to a single type.
+    pub fn query_events(
+        &self,
+        limit:      i64,
+        before:     Option<i64>,
+        event_type: Option<&str>,
+    ) -> Result<Vec<EventRecord>, duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+        let limit = limit.min(200);
+        let before_ms = before.unwrap_or(i64::MAX);
+
+        let rows: Vec<EventRecord> = if let Some(et) = event_type {
+            let mut stmt = conn.prepare(
+                "SELECT ts_ms, node_id, level, event_type, message
+                 FROM node_events
+                 WHERE ts_ms < ? AND event_type = ?
+                 ORDER BY ts_ms DESC
+                 LIMIT ?",
+            )?;
+            stmt.query_map(params![before_ms, et, limit], |row| {
+                let ts_ms: i64 = row.get(0)?;
+                Ok(EventRecord {
+                    ts_ms,
+                    timestamp: millis_to_iso8601(ts_ms),
+                    node_id:    row.get(1)?,
+                    level:      row.get(2)?,
+                    event_type: row.get(3)?,
+                    message:    row.get(4)?,
+                })
+            })?.collect::<Result<_, _>>()?
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT ts_ms, node_id, level, event_type, message
+                 FROM node_events
+                 WHERE ts_ms < ?
+                 ORDER BY ts_ms DESC
+                 LIMIT ?",
+            )?;
+            stmt.query_map(params![before_ms, limit], |row| {
+                let ts_ms: i64 = row.get(0)?;
+                Ok(EventRecord {
+                    ts_ms,
+                    timestamp: millis_to_iso8601(ts_ms),
+                    node_id:    row.get(1)?,
+                    level:      row.get(2)?,
+                    event_type: row.get(3)?,
+                    message:    row.get(4)?,
                 })
             })?.collect::<Result<_, _>>()?
         };
