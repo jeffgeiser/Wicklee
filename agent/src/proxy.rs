@@ -17,6 +17,11 @@ pub(crate) struct ProxyState {
     pub(crate) last_done_ts:   Mutex<Option<std::time::Instant>>,
     /// Exact tok/s from the most recent done packet.
     pub(crate) exact_tps:      Mutex<Option<f32>>,
+    /// Node ID for trace attribution.
+    pub(crate) node_id: String,
+    /// Channel sender for inference traces — writes to DuckDB via a consumer task.
+    #[cfg(not(target_env = "musl"))]
+    pub(crate) trace_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::store::TraceRow>>,
 }
 
 /// Timeout for individual upstream chunks — if no data arrives for this long,
@@ -48,11 +53,19 @@ pub(crate) async fn proxy_ollama_streaming(
     };
 
     // Extract model name and mark inference as active immediately
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-        // model field optional — Ollama uses last loaded model if absent
-        let _ = v["model"].as_str();
-    }
+    let model = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+        v["model"].as_str().unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
     state.inference_active.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // Trace timing: capture request start and generate a unique trace ID.
+    let req_ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let trace_id = uuid::Uuid::new_v4().to_string();
 
     // Forward to backend Ollama
     let backend_url = format!("http://127.0.0.1:{}{}", state.ollama_port, path);
@@ -92,8 +105,12 @@ pub(crate) async fn proxy_ollama_streaming(
     // Stream response back, inspecting chunks for the done packet
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
     let proxy_state = Arc::clone(&state);
+    let trace_model = model.clone();
+    let trace_id_clone = trace_id.clone();
 
     tokio::spawn(async move {
+        let trace_id = trace_id_clone;
+        let model = trace_model;
         let mut byte_stream = upstream_resp.bytes_stream();
         loop {
             match tokio::time::timeout(CHUNK_TIMEOUT, byte_stream.next()).await {
@@ -114,6 +131,35 @@ pub(crate) async fn proxy_ollama_streaming(
                                                 *proxy_state.exact_tps.lock().unwrap() = Some(tps as f32);
                                                 *proxy_state.last_done_ts.lock().unwrap() =
                                                     Some(std::time::Instant::now());
+                                            }
+
+                                            // Capture per-request timing for inference traces.
+                                            let total_dur    = v["total_duration"].as_u64().unwrap_or(0);
+                                            let prompt_dur   = v["prompt_eval_duration"].as_u64().unwrap_or(0);
+                                            let eval_dur     = v["eval_duration"].as_u64().unwrap_or(0);
+                                            let eval_cnt     = v["eval_count"].as_u64().unwrap_or(0);
+                                            let latency_ms   = (total_dur / 1_000_000) as i64;
+                                            let ttft_ms      = (prompt_dur / 1_000_000) as i64;
+                                            let tpot_ms      = if eval_cnt > 0 {
+                                                (eval_dur as f64 / eval_cnt as f64) / 1_000_000.0
+                                            } else {
+                                                0.0
+                                            };
+
+                                            #[cfg(not(target_env = "musl"))]
+                                            if let Some(ref tx) = proxy_state.trace_tx {
+                                                let _ = tx.send(crate::store::TraceRow {
+                                                    id: trace_id.clone(),
+                                                    ts_ms: req_ts_ms,
+                                                    node_id: proxy_state.node_id.clone(),
+                                                    model: model.clone(),
+                                                    latency_ms,
+                                                    ttft_ms,
+                                                    tpot_ms,
+                                                    status: status.as_u16() as i32,
+                                                    eval_count: Some(eval_cnt as i64),
+                                                    eval_duration_ns: Some(eval_dur as i64),
+                                                });
                                             }
                                         }
                                     }

@@ -23,6 +23,35 @@ use std::sync::{Arc, Mutex};
 use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Convert Unix milliseconds to an ISO 8601 UTC string: `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+/// Hand-rolled to avoid pulling in the chrono crate.
+fn millis_to_iso8601(ms: i64) -> String {
+    let total_secs = ms.div_euclid(1000);
+    let frac_ms    = ms.rem_euclid(1000) as u32;
+
+    // Days since Unix epoch using the civil-from-days algorithm (Howard Hinnant).
+    let mut days  = total_secs.div_euclid(86400) as i64;
+    let day_secs  = total_secs.rem_euclid(86400) as u32;
+    let hh        = day_secs / 3600;
+    let mm        = (day_secs % 3600) / 60;
+    let ss        = day_secs % 60;
+
+    days += 719_468; // shift epoch from 1970-01-01 to 0000-03-01
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let doe = (days - era * 146_097) as u32; // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y   = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp  = (5 * doy + 2) / 153;
+    let d   = doy - (153 * mp + 2) / 5 + 1;
+    let m   = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y   = if m <= 2 { y + 1 } else { y };
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, hh, mm, ss, frac_ms)
+}
+
 // ── Sample ────────────────────────────────────────────────────────────────────
 
 /// A single 1-Hz metric snapshot extracted from a MetricsPayload broadcast frame.
@@ -204,6 +233,36 @@ pub struct HistoryResponse {
     pub samples:    Vec<HistorySample>,
 }
 
+// ── Inference Traces ──────────────────────────────────────────────────────────
+
+/// Internal write struct for an inference trace captured by the Ollama proxy.
+pub(crate) struct TraceRow {
+    pub id: String,
+    pub ts_ms: i64,
+    pub node_id: String,
+    pub model: String,
+    pub latency_ms: i64,
+    pub ttft_ms: i64,
+    pub tpot_ms: f64,
+    pub status: i32,
+    pub eval_count: Option<i64>,
+    pub eval_duration_ns: Option<i64>,
+}
+
+/// JSON-serialisable trace record returned by `GET /api/traces`.
+#[derive(Serialize)]
+pub(crate) struct TraceRecord {
+    pub id: String,
+    pub timestamp: String,        // ISO 8601
+    #[serde(rename = "nodeId")]
+    pub node_id: String,
+    pub model: String,
+    pub latency: i64,             // ms
+    pub ttft: i64,                // ms
+    pub tpot: f64,                // ms/tok
+    pub status: i32,
+}
+
 /// A single persisted dismiss record returned by `query_active_dismissals`.
 #[derive(Debug, Serialize)]
 pub struct Dismissal {
@@ -306,6 +365,21 @@ impl Store {
                 expires_at_ms   BIGINT  NOT NULL,
                 note            TEXT,
                 PRIMARY KEY (pattern_id, node_id)
+            );
+
+            -- Inference traces: per-request timing from the Ollama proxy.
+            -- 24-hour retention, pruned alongside metrics_raw.
+            CREATE TABLE IF NOT EXISTS inference_traces (
+                id                TEXT    PRIMARY KEY,
+                ts_ms             BIGINT  NOT NULL,
+                node_id           TEXT    NOT NULL,
+                model             TEXT    NOT NULL DEFAULT '',
+                latency_ms        BIGINT  NOT NULL,
+                ttft_ms           BIGINT  NOT NULL,
+                tpot_ms           DOUBLE  NOT NULL,
+                status            INTEGER NOT NULL,
+                eval_count        BIGINT,
+                eval_duration_ns  BIGINT
             );
 
             -- Migrations: add columns introduced after the initial schema.
@@ -457,6 +531,7 @@ impl Store {
             DELETE FROM metrics_raw  WHERE ts_ms < {raw_cutoff};
             DELETE FROM metrics_1min WHERE ts_ms < {min_cutoff};
             DELETE FROM metrics_1hr  WHERE ts_ms < {hr_cutoff};
+            DELETE FROM inference_traces WHERE ts_ms < {raw_cutoff};
         "))?;
 
         Ok(())
@@ -566,6 +641,90 @@ impl Store {
             to_ms,
             samples,
         })
+    }
+
+    // ── Inference Traces ───────────────────────────────────────────────────────
+
+    /// Insert one inference trace.  Conflicts (duplicate id) are silently
+    /// discarded — safe if the same done-packet is somehow processed twice.
+    pub fn write_trace(&self, t: &TraceRow) {
+        let res = self.0.lock().unwrap().execute(
+            "INSERT INTO inference_traces
+             (id, ts_ms, node_id, model, latency_ms, ttft_ms, tpot_ms, status,
+              eval_count, eval_duration_ns)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (id) DO NOTHING",
+            params![
+                t.id.as_str(),
+                t.ts_ms,
+                t.node_id.as_str(),
+                t.model.as_str(),
+                t.latency_ms,
+                t.ttft_ms,
+                t.tpot_ms,
+                t.status,
+                t.eval_count,
+                t.eval_duration_ns,
+            ],
+        );
+        if let Err(e) = res {
+            eprintln!("[store] trace write error: {e}");
+        }
+    }
+
+    /// Return recent inference traces, optionally filtered by node_id.
+    /// Results ordered newest-first, capped at `limit` (max 500).
+    pub fn query_traces(
+        &self,
+        node_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<TraceRecord>, duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+        let limit = limit.min(500);
+
+        let rows: Vec<TraceRecord> = if let Some(nid) = node_id {
+            let mut stmt = conn.prepare(
+                "SELECT id, ts_ms, node_id, model, latency_ms, ttft_ms, tpot_ms, status
+                 FROM inference_traces
+                 WHERE node_id = ?
+                 ORDER BY ts_ms DESC
+                 LIMIT ?",
+            )?;
+            stmt.query_map(params![nid, limit], |row| {
+                let ts_ms: i64 = row.get(1)?;
+                Ok(TraceRecord {
+                    id:        row.get(0)?,
+                    timestamp: millis_to_iso8601(ts_ms),
+                    node_id:   row.get(2)?,
+                    model:     row.get(3)?,
+                    latency:   row.get(4)?,
+                    ttft:      row.get(5)?,
+                    tpot:      row.get(6)?,
+                    status:    row.get(7)?,
+                })
+            })?.collect::<Result<_, _>>()?
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, ts_ms, node_id, model, latency_ms, ttft_ms, tpot_ms, status
+                 FROM inference_traces
+                 ORDER BY ts_ms DESC
+                 LIMIT ?",
+            )?;
+            stmt.query_map(params![limit], |row| {
+                let ts_ms: i64 = row.get(1)?;
+                Ok(TraceRecord {
+                    id:        row.get(0)?,
+                    timestamp: millis_to_iso8601(ts_ms),
+                    node_id:   row.get(2)?,
+                    model:     row.get(3)?,
+                    latency:   row.get(4)?,
+                    ttft:      row.get(5)?,
+                    tpot:      row.get(6)?,
+                    status:    row.get(7)?,
+                })
+            })?.collect::<Result<_, _>>()?
+        };
+        Ok(rows)
     }
 
     // ── Insight dismissals ────────────────────────────────────────────────────
