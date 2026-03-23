@@ -93,6 +93,11 @@ pub(crate) struct OllamaMetrics {
     /// This replaces the 10s time-based blackout that caused the Dead Zone.
     #[serde(skip)]
     pub(crate) probe_caused_next_reset: bool,
+    /// API-validated port set by the main harvester after health-checking.
+    /// The probe task reads this instead of port_rx to avoid hitting worker sockets
+    /// that don't serve the Ollama HTTP API (e.g. ollama_llama_server on :34111).
+    #[serde(skip)]
+    pub(crate) validated_port: Option<u16>,
 }
 
 impl OllamaMetrics {
