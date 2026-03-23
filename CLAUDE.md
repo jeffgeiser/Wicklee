@@ -15,6 +15,7 @@ agent/src/              Rust agent (Tokio/Axum, single binary)
   diagnostics.rs        Startup health-check (--status)
   process_discovery.rs  Runtime detection (Ollama, vLLM process scanning)
   store.rs              DuckDB local metrics storage (conditional, not on musl)
+cloud/src/main.rs       Fleet cloud backend (Axum, Railway, SQLite + DuckDB)
 src/                    React 19 frontend (Vite, Tailwind, Recharts)
 docs/                   Architecture spec, roadmap, security, tier definitions
 ```
@@ -48,8 +49,15 @@ Tier hierarchy (first match wins):
 - Tier 2 attribution window: 15s
 - M4 idle board power can read 0.2-0.4W — this is real, not a sensor fault. Do not add minimum-power sanity checks that would discard sub-0.5W readings.
 
-### Wire Format (frozen)
-`MetricsPayload` field names are shared with the cloud backend and React frontend. Do not rename any fields. The `inference_state` string values ("live", "idle-spd", "busy", "idle") are frozen.
+### Wire Format (frozen — three-way sync required)
+`MetricsPayload` exists in three places that MUST stay in sync:
+1. **Agent** — `agent/src/main.rs` `struct MetricsPayload` (the serializer, SSOT)
+2. **Cloud** — `cloud/src/main.rs` `struct MetricsPayload` (the deserializer)
+3. **Frontend** — `src/types.ts` `SentinelMetrics` interface (the TypeScript consumer)
+
+**When adding a new field to the agent's MetricsPayload, you MUST also add it to the cloud struct and the frontend type.** The cloud uses `serde(default)` so missing fields are silently dropped — the field will simply never reach the fleet dashboard or DuckDB history. This silent failure caused the fleet power/WES divergence bug (cloud was missing `apple_soc_power_w` for months).
+
+Field names are frozen — do not rename any fields. The `inference_state` string values ("live", "idle-spd", "busy", "idle") are frozen.
 
 ### Architecture Constraints
 - Single broadcast channel is the SSOT — do not split into separate local/cloud channels
@@ -59,10 +67,27 @@ Tier hierarchy (first match wins):
 - Graceful shutdown via SIGTERM/SIGINT — flushes in-flight responses and DuckDB WAL
 
 ### Config
-- `~/.wicklee/config.toml` — node_id, fleet_url, session_token
+- `/Library/Application Support/Wicklee/config.toml` (macOS) or `/etc/wicklee/config.toml` (Linux) — node_id, fleet_url, session_token
 - Fleet cloud: `wicklee.dev` (not wicklee.app)
 - Agent port: 7700 (default)
 - Proxy port: 11434 (intercepts Ollama, forwards to configured backend port)
+
+## Cloud Backend (Rust — `cloud/src/main.rs`)
+
+Fleet aggregation backend, deployed on Railway. Receives telemetry from agents, stores in SQLite (pairing/users) + DuckDB (metrics history), and serves the fleet dashboard via SSE.
+
+### Data Flow
+```
+Agent (2s push) → POST /api/telemetry → cloud MetricsPayload deserialize
+  → in-memory HashMap<node_id, MetricsEntry> (live cache)
+  → SSE /api/fleet/stream (2s interval, reads from live cache)
+  → Fleet frontend (wicklee.dev)
+```
+
+The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any field dropped at the deserialization step is permanently lost — it never reaches the SSE stream, the fleet frontend, or DuckDB history.
+
+### Power Priority in DuckDB Rows
+`metrics_row_from_payload` resolves watts as: NVIDIA board power → Apple SoC (Combined CPU+GPU+ANE) → cpu_power_w fallback. `apple_soc_power_w` is the correct total for Apple Silicon WES; `cpu_power_w` alone is just the CPU cluster (~0.1W idle).
 
 ## Frontend (React)
 
