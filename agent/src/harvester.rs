@@ -259,6 +259,7 @@ pub(crate) fn start_ollama_harvester(
                     last_probe_end:           prev_state.last_probe_end,
                     last_user_request_ts:     prev_state.last_user_request_ts,
                     probe_caused_next_reset:  prev_state.probe_caused_next_reset,
+                    validated_port:           prev_state.validated_port,
                     ..Default::default()
                 };
 
