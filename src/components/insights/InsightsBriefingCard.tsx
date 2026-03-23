@@ -382,40 +382,55 @@ interface OnsetRowProps {
 }
 
 const OnsetRow: React.FC<OnsetRowProps> = ({ event, count, nodeStatus, nodeThermal }) => {
-  const hasBestNode      = !!event.best_node_id;
-  const peerIsProblematic = hasBestNode && nodeStatus !== 'online' && nodeStatus !== 'unknown';
+  const [expanded, setExpanded] = useState(false);
+  const hasBestNode = !!event.best_node_id;
 
   return (
-    <div className="py-2.5 border-b border-gray-800/50 last:border-0">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 shrink-0">{patternIcon(event.patternId)}</div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className={`text-xs font-semibold ${patternColor(event.patternId)} truncate`}>
-              {event.title}
+    <div className="border-b border-gray-800/50 last:border-0">
+      {/* Collapsed header — always visible */}
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center gap-2.5 py-2.5 text-left group"
+      >
+        <div className="shrink-0">{patternIcon(event.patternId)}</div>
+        <span className={`text-xs font-semibold truncate flex-1 min-w-0 ${patternColor(event.patternId)}`}>
+          {event.title}
+        </span>
+        {count > 1 && (
+          <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700">
+            ×{count} in 24h
+          </span>
+        )}
+        {event.wes_at_onset != null && (
+          <span className="shrink-0 text-[9px] font-mono text-gray-500">
+            WES {event.wes_at_onset.toFixed(0)} at onset
+          </span>
+        )}
+        <span className="shrink-0 text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
+          {event.hostname}
+        </span>
+        <span className="shrink-0 text-[10px] text-gray-600">{fmtEventAge(event.ts)}</span>
+        {event.confidence && (
+          <span className={`shrink-0 text-[9px] font-semibold uppercase tracking-wide ${
+            event.confidence === 'high'     ? 'text-red-400/80'    :
+            event.confidence === 'moderate' ? 'text-amber-400/80'  :
+                                              'text-gray-500'
+          }`}>
+            {event.confidence}
+          </span>
+        )}
+        <ChevronDown className={`shrink-0 w-3 h-3 text-gray-600 group-hover:text-gray-400 transition-transform duration-150 ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+
+      {/* Expanded body */}
+      {expanded && (
+        <div className="pb-2.5 pl-6 space-y-2">
+          <p className="text-[10px] text-gray-500 truncate">{event.hook}</p>
+          {event.recommendation && (
+            <p className="text-[10px] text-gray-400 leading-relaxed">
+              {event.recommendation}
             </p>
-            {count > 1 && (
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700 shrink-0">
-                ×{count} in 24h
-              </span>
-            )}
-            {event.wes_at_onset != null && (
-              <span className="text-[9px] font-mono text-gray-500 shrink-0">
-                WES {event.wes_at_onset.toFixed(0)} at onset
-              </span>
-            )}
-          </div>
-          <p className="text-[10px] text-gray-500 mt-0.5 truncate">
-            {event.hostname} · {event.hook}
-          </p>
-
-          {/* Recommendation text */}
-          <p className="text-[10px] text-gray-400 mt-1.5 leading-relaxed">
-            {event.recommendation}
-          </p>
-
-          {/* Node-availability gate — shown only when a specific peer was named
-              and that peer is no longer in a healthy state at render time.      */}
+          )}
           {hasBestNode && event.best_node_hostname && (
             nodeStatus === 'offline'
               ? <StaleNodeWarning hostname={event.best_node_hostname} />
@@ -424,19 +439,7 @@ const OnsetRow: React.FC<OnsetRowProps> = ({ event, count, nodeStatus, nodeTherm
                 : null
           )}
         </div>
-        <div className="shrink-0 text-right">
-          <p className="text-[10px] text-gray-600">{fmtEventAge(event.ts)}</p>
-          {event.confidence && (
-            <p className={`text-[9px] font-semibold uppercase tracking-wide mt-0.5 ${
-              event.confidence === 'high'     ? 'text-red-400/80'    :
-              event.confidence === 'moderate' ? 'text-amber-400/80'  :
-                                                'text-gray-500'
-            }`}>
-              {event.confidence}
-            </p>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 };
