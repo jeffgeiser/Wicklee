@@ -6,6 +6,52 @@
 
 ---
 
+## March 23, 2026 — v0.5.16–v0.5.20: DuckDB Events, Port Validation, Proxy Awareness, Diagnostic Doctor
+
+### v0.5.16 — DuckDB Event Persistence ✅
+- **Agent:** `node_events` table in `store.rs` with `write_event()`, `query_events()`, 7-day retention. `event_type` field on `LiveActivityEvent`. Centralized `push_event()` helper. `GET /api/events/history` endpoint (paginated, cursor-based).
+- **Cloud:** `live_activities` + `LiveActivityEventPayload` added to cloud `MetricsPayload` (three-way sync fix). `node_events` DuckDB table with tenant isolation, 30-day retention. `events_writer_task` via mpsc channel. `GET /api/fleet/events/history` (JWT-authenticated).
+- **Frontend:** `EventHistoryRecord` interface, `useEventHistory` hook with cursor-based pagination, Event History panel in Observability tab.
+
+### v0.5.16 — UI Fixes ✅
+- **Version display:** `package.json` synced to match `Cargo.toml` — footer no longer shows stale fallback version.
+- **Fleet row height:** Invisible placeholder in TOK/S column idle state prevents row height shifting when IDLE-SPD badge appears/disappears.
+- **Thermal on localhost:** New `Thermal` row in DiagnosticRail (after Board Power) — shows Normal/Fair/Serious/Critical with color coding and penalty multiplier badge.
+
+### v0.5.17 — Probe Diagnostic Logging ✅
+- Added `eprintln!` to both silent skip paths in the Ollama probe (port=None, model=None).
+- `discover_first_ollama_model` now logs failures instead of silently returning `None`.
+- Removed per-scan socket-scan log spam from `process_discovery` (logged on change only).
+
+### v0.5.18 — Ollama Port Validation ✅
+- **Root cause:** Tier 3 socket scan found Ollama worker subprocesses (`ollama_llama_server`) on internal port 34111 — not the API. All API calls returned 404.
+- **Fix:** Harvester health-checks discovered port via `/api/version`. Falls back to default port (11434) when API doesn't respond. Validated port stored in `OllamaMetrics.validated_port` so probe task uses correct port.
+- **Install script:** `cap_sys_ptrace` capability preserved across upgrades (install.sh checks old binary before replacing).
+- **Release workflow:** Nightly release now also updates on version tag pushes (not just main branch).
+
+### v0.5.19 — tok/s Regression Fix ✅
+- **Root cause:** `validated_port` not in the carry-forward list when the harvester rebuilds `OllamaMetrics` every 5s. Zeroed by `..Default::default()`, causing the probe to skip every cycle.
+- **Fix:** One line — `validated_port: prev_state.validated_port` in the struct rebuild.
+
+### v0.5.20 — Proxy Awareness UI + Port Doctor ✅
+- **Proxy Awareness:** Dynamic Sovereignty manifest shows "Wicklee Proxy" (active) or "Ollama inference probe" (inactive) based on real-time agent data. Rich traces empty state with 3-step proxy setup guide (proxy inactive) or curl test command (proxy active, no traces yet). `proxy_listen_port` + `proxy_target_port` on MetricsPayload (three-way sync).
+- **Port Doctor:** `--status` diagnostic warns when runtime detected on default port but API not responding. Suggests `[runtime_ports]` config override.
+- **Discovery hints:** First-scan log for default-port runtimes suggests config override.
+- **Settings cleanup:** Node Configuration section hidden on localhost (cloud-only feature).
+
+### Critical Bugs Found & Fixed
+- **Ollama worker socket discovery (BMC)** — Tier 3 socket scan preferred non-default ports, picking up internal worker sockets instead of the API. Fixed with API health check + default port fallback.
+- **tok/s regression (all Ollama nodes)** — `validated_port` erased every 5s by struct rebuild. Probe skipped permanently, tok/s stayed blank.
+- **Spark vLLM port loss** — `cap_sys_ptrace` stripped by install script replacing the binary. Fixed: install.sh now preserves the capability.
+- **Nightly release stale** — Version tag builds didn't update the nightly release. Install script pulled old version. Fixed: nightly job now runs on both main pushes and tag pushes.
+
+### What's Next (Phase 3B remaining)
+1. **Audit Log Export** — exportable pairing and telemetry history (`GET /api/export`)
+2. **Network & Port Discovery docs** — Hierarchy of Truth, Admin-not-Root guide, Proxy setup
+3. **v0.6.0 — "Sovereignty Release"** tag
+
+---
+
 ## March 23, 2026 — v0.5.10–v0.5.15: Dead Zone Fix, Module Extraction, Inference Traces, llama.cpp Harvester
 
 ### v0.5.10 — Dead Zone Fix ✅
