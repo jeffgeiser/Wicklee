@@ -419,6 +419,57 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     };
   }, [isSignedIn, getToken]);
 
+  // ── Seed fleet events from DuckDB history on initial connect ──────────────
+  const seededRef = useRef(false);
+
+  useEffect(() => {
+    if (isLocalHost || !connected || seededRef.current) return;
+    seededRef.current = true;
+
+    (async () => {
+      try {
+        const jwt = await getToken();
+        if (!jwt) return;
+        const res = await fetch(`${CLOUD_URL}/api/fleet/events/history?limit=50`, {
+          headers: { Authorization: `Bearer ${jwt}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json() as {
+          events: Array<{
+            ts_ms:      number;
+            node_id:    string;
+            level:      string;
+            event_type: string | null;
+            message:    string;
+          }>;
+        };
+        if (!data.events?.length) return;
+
+        const seeded: FleetEvent[] = data.events.map(row => {
+          let type: FleetEvent['type'] = 'node_online';
+          if (row.level === 'error')                    type = 'error';
+          else if (row.event_type === 'model_swap')     type = 'model_swap';
+          else if (row.event_type === 'thermal_change') type = 'thermal_change';
+          else if (row.event_type === 'node_offline')   type = 'node_offline';
+          else if (row.event_type === 'power_anomaly')  type = 'power_anomaly';
+          return {
+            id:       `seed-${row.ts_ms}-${row.node_id}`,
+            ts:       row.ts_ms,
+            type,
+            nodeId:   row.node_id,
+            detail:   row.message,
+          };
+        });
+
+        setFleetEvents(prev => {
+          const existingIds = new Set(prev.map(e => e.id));
+          const fresh = seeded.filter(e => !existingIds.has(e.id));
+          return [...prev, ...fresh].sort((a, b) => b.ts - a.ts).slice(0, MAX_EVENTS);
+        });
+      } catch { /* historical events are best-effort */ }
+    })();
+  }, [connected, getToken]);
+
   // ── 5-second tick for stale detection ──────────────────────────────────────
   const [, setTick] = useState(0);
   useEffect(() => {

@@ -18,13 +18,13 @@ import { appendRecentEvent } from '../../lib/insightLifecycle';
 
 // ── Dismiss helpers ───────────────────────────────────────────────────────────
 
-const DISMISS_RESURFACE_MS = 60 * 60 * 1000;   // resurface after 1h
+export const DISMISS_RESURFACE_MS = 60 * 60 * 1000;   // resurface after 1h
 
 function dismissKey(patternId: string, nodeId: string): string {
   return `obs-dismissed:${patternId}:${nodeId}`;
 }
 
-function readDismissed(patternId: string, nodeId: string): boolean {
+export function readDismissed(patternId: string, nodeId: string): boolean {
   try {
     const raw = localStorage.getItem(dismissKey(patternId, nodeId));
     if (!raw) return false;
@@ -35,7 +35,7 @@ function readDismissed(patternId: string, nodeId: string): boolean {
   }
 }
 
-function writeDismissed(patternId: string, nodeId: string): void {
+export function writeDismissed(patternId: string, nodeId: string): void {
   try {
     localStorage.setItem(
       dismissKey(patternId, nodeId),
@@ -52,7 +52,7 @@ interface ActionBadgeConfig {
   cls:   string;
 }
 
-function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
+export function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
   switch (actionId) {
     case 'rebalance_workload':
       return { label: 'Rebalance Workload', icon: <BarChart2 className="w-2.5 h-2.5" />, cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' };
@@ -73,7 +73,7 @@ function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
   }
 }
 
-const ActionIdBadge: React.FC<{ actionId: ActionId }> = ({ actionId }) => {
+export const ActionIdBadge: React.FC<{ actionId: ActionId }> = ({ actionId }) => {
   const cfg = actionBadgeConfig(actionId);
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[9px] font-semibold uppercase tracking-wider ${cfg.cls}`}>
@@ -85,7 +85,7 @@ const ActionIdBadge: React.FC<{ actionId: ActionId }> = ({ actionId }) => {
 
 // ── Icon + colour mapping by patternId ───────────────────────────────────────
 
-function patternIcon(patternId: string) {
+export function patternIcon(patternId: string) {
   switch (patternId) {
     case 'thermal_drain':        return <Thermometer  className="w-4 h-4 text-amber-400"  />;
     case 'phantom_load':         return <Zap          className="w-4 h-4 text-violet-400" />;
@@ -101,7 +101,7 @@ function patternIcon(patternId: string) {
   }
 }
 
-function hookColor(patternId: string): string {
+export function hookColor(patternId: string): string {
   switch (patternId) {
     case 'thermal_drain':        return 'text-amber-400';
     case 'phantom_load':         return 'text-violet-400';
@@ -119,7 +119,7 @@ function hookColor(patternId: string): string {
 
 // ── CopyButton ────────────────────────────────────────────────────────────────
 
-const CopyButton: React.FC<{ text: string; label: string }> = ({ text, label }) => {
+export const CopyButton: React.FC<{ text: string; label: string }> = ({ text, label }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
@@ -158,7 +158,7 @@ const CopyButton: React.FC<{ text: string; label: string }> = ({ text, label }) 
 
 // ── ConfidenceBar ─────────────────────────────────────────────────────────────
 
-function ConfidenceBar({ insight }: { insight: DetectedInsight }) {
+export function ConfidenceBar({ insight }: { insight: DetectedInsight }) {
   const observedMin = Math.round(insight.observedMs / 60000);
   const requiredMin = Math.round(insight.requiredMs / 60000);
   const pct         = Math.round(insight.confidenceRatio * 100);

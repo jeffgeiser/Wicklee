@@ -65,6 +65,9 @@ import type { HexHiveRow } from './shared/HexHive';
 import WESHistoryChart from './WESHistoryChart';
 import MetricsHistoryChart from './MetricsHistoryChart';
 import ObservationCard from './insights/ObservationCard';
+import AccordionObservationCard from './insights/AccordionObservationCard';
+import CompactMonitoringStrip from './insights/CompactMonitoringStrip';
+import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import InsightsBriefingCard from './insights/InsightsBriefingCard';
 import { useMetricHistory, metricsToSample } from '../hooks/useMetricHistory';
 import { evaluatePatterns } from '../lib/patternEngine';
@@ -1348,31 +1351,17 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </div>
                 ))}
 
-                {/* Dormant monitoring rows — shown for conditions that are NOT latched.
-                    Resolved (hold-period) conditions skip the dormant row since the
-                    card above is still visible. */}
+                {/* Compact monitoring strip — 4-across health grid replacing stacked dormant rows.
+                    Only shows cells for conditions that are NOT latched. */}
                 {(() => {
                   const dormant = [
-                    ...(!thermalLatch.showing ? [{ key: 'thermal', icon: <Thermometer className="w-3.5 h-3.5" />, label: 'Thermal Degradation', reading: thermalReading }] : []),
-                    ...(!powerLatch.showing   ? [{ key: 'power',   icon: <Zap          className="w-3.5 h-3.5" />, label: 'Power Anomaly',       reading: powerReading   }] : []),
-                    ...(!memLatch.showing     ? [{ key: 'mem',     icon: <HardDrive    className="w-3.5 h-3.5" />, label: 'Memory Exhaustion',   reading: memReading     }] : []),
-                    ...(!tcLatch.showing      ? [{ key: 'tc',      icon: <Thermometer  className="w-3.5 h-3.5" />, label: 'Thermal Cost',         reading: tcReading      }] : []),
+                    ...(!thermalLatch.showing ? [{ key: 'thermal', icon: <Thermometer className="w-3.5 h-3.5" />, label: 'Thermal',      reading: thermalReading }] : []),
+                    ...(!powerLatch.showing   ? [{ key: 'power',   icon: <Zap          className="w-3.5 h-3.5" />, label: 'Power',        reading: powerReading   }] : []),
+                    ...(!memLatch.showing     ? [{ key: 'mem',     icon: <HardDrive    className="w-3.5 h-3.5" />, label: 'Memory',       reading: memReading     }] : []),
+                    ...(!tcLatch.showing      ? [{ key: 'tc',      icon: <Thermometer  className="w-3.5 h-3.5" />, label: 'Thermal Cost', reading: tcReading      }] : []),
                   ];
                   if (dormant.length === 0) return null;
-                  return (
-                    <div>
-                      {dormant.map((item, i) => (
-                        <AlertDormantRow
-                          key={item.key}
-                          icon={item.icon}
-                          label={item.label}
-                          reading={item.reading}
-                          isFirst={i === 0}
-                          isLast={i === dormant.length - 1}
-                        />
-                      ))}
-                    </div>
-                  );
+                  return <CompactMonitoringStrip items={dormant} />;
                 })()}
               </div>
 
@@ -1502,12 +1491,19 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               </div>
 
-              {/* Model Fit Score */}
+              {/* Model Fit — compact 2-across mini tiles */}
               <div>
                 {fitNodes.length > 0
-                  ? fitNodes.map(n => (
-                      <ModelFitInsightCard key={n.node_id} node={n} showNodeHeader={fitNodes.length > 1} />
-                    ))
+                  ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        {fitNodes.map(n => {
+                          const fit = computeModelFitScore(n);
+                          return fit ? (
+                            <ModelFitMiniTile key={n.node_id} result={fit} node={n} showNodeHeader={fitNodes.length > 1} />
+                          ) : null;
+                        })}
+                      </div>
+                    )
                   : (
                       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
                         <Target className="w-4 h-4 text-gray-600 shrink-0" />
@@ -1603,47 +1599,75 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   appear dimmed below with a "✓ Resolved" chip.
                   "Clear All Resolved" removes just the held entries so engineers
                   can acknowledge them like an inbox. */}
-              {obsEntries.length > 0 && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <SectionHeader>Observations</SectionHeader>
-                    {obsEntries.some(e => e.resolvedMs !== null) && (
-                      <button
-                        onClick={() => {
-                          // Evict all resolved entries from cache and state
-                          for (const [key, entry] of obsCacheRef.current.entries()) {
-                            if (entry.resolvedMs !== null) obsCacheRef.current.delete(key);
-                          }
-                          setObsEntries(prev => prev.filter(e => e.resolvedMs === null));
-                        }}
-                        className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors -mt-4 mb-4"
-                      >
-                        <CheckCircle className="w-3 h-3" />
-                        Clear resolved
-                      </button>
-                    )}
+              {obsEntries.length > 0 && (() => {
+                // ── Dedup bidirectional patterns ──────────────────────────
+                // fleet_load_imbalance fires per-node (A vs B, B vs A).
+                // Group into one card listing all affected nodes.
+                const deduped: Array<ObsEntry & { groupedNodes?: Array<{ nodeId: string; hostname: string }> }> = [];
+                const byPattern = new Map<string, ObsEntry[]>();
+                for (const e of obsEntries) {
+                  const key = e.insight.patternId;
+                  const arr = byPattern.get(key) ?? [];
+                  arr.push(e);
+                  byPattern.set(key, arr);
+                }
+                for (const [pid, group] of byPattern) {
+                  if (pid === 'fleet_load_imbalance' && group.length >= 2) {
+                    const primary = group.sort((a, b) => b.firstFiredMs - a.firstFiredMs)[0];
+                    deduped.push({
+                      ...primary,
+                      groupedNodes: group.map(e => ({
+                        nodeId:   e.insight.nodeId,
+                        hostname: e.insight.hostname,
+                      })),
+                    });
+                  } else {
+                    deduped.push(...group);
+                  }
+                }
+
+                return (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <SectionHeader>Observations</SectionHeader>
+                      {obsEntries.some(e => e.resolvedMs !== null) && (
+                        <button
+                          onClick={() => {
+                            for (const [key, entry] of obsCacheRef.current.entries()) {
+                              if (entry.resolvedMs !== null) obsCacheRef.current.delete(key);
+                            }
+                            setObsEntries(prev => prev.filter(e => e.resolvedMs === null));
+                          }}
+                          className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors -mt-4 mb-4"
+                        >
+                          <CheckCircle className="w-3 h-3" />
+                          Clear resolved
+                        </button>
+                      )}
+                    </div>
+                    {deduped.map(entry => (
+                      <AccordionObservationCard
+                        key={`${entry.insight.patternId}-${entry.insight.nodeId}`}
+                        insight={{ ...entry.insight, firstFiredMs: entry.firstFiredMs }}
+                        showNodeHeader={effectiveNodes.length > 1}
+                        resolvedMs={entry.resolvedMs}
+                        groupedNodes={entry.groupedNodes}
+                        onDismiss={() => emitFleetEvent({
+                          id:        crypto.randomUUID(),
+                          ts:        Date.now(),
+                          type:      'pattern_dismissed',
+                          nodeId:    entry.insight.nodeId,
+                          hostname:  entry.insight.hostname,
+                          patternId: entry.insight.patternId,
+                          action_id: entry.insight.action_id,
+                          hook:      entry.insight.hook,
+                          detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
+                        })}
+                      />
+                    ))}
                   </div>
-                  {obsEntries.map(entry => (
-                    <ObservationCard
-                      key={`${entry.insight.patternId}-${entry.insight.nodeId}`}
-                      insight={{ ...entry.insight, firstFiredMs: entry.firstFiredMs }}
-                      showNodeHeader={effectiveNodes.length > 1}
-                      resolvedMs={entry.resolvedMs}
-                      onDismiss={() => emitFleetEvent({
-                        id:        crypto.randomUUID(),
-                        ts:        Date.now(),
-                        type:      'pattern_dismissed',
-                        nodeId:    entry.insight.nodeId,
-                        hostname:  entry.insight.hostname,
-                        patternId: entry.insight.patternId,
-                        action_id: entry.insight.action_id,
-                        hook:      entry.insight.hook,
-                        detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
-                      })}
-                    />
-                  ))}
-                </div>
-              )}
+                );
+              })()}
 
               {/* ── Recent Activity — session-scoped alert history ──────────── */}
               {alertLog.length > 0 && (
