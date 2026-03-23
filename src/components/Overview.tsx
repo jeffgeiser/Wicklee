@@ -8,7 +8,7 @@ import { getNodePowerW, hasPowerData } from '../utils/power';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
-import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
+import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { useLocalEvents } from '../hooks/useLocalEvents';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
@@ -287,9 +287,10 @@ interface NodeRowProps {
 const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, restricted = false, onUpgrade }) => {
   const isOnline = m !== null;
 
-  // Rolling-average smoothing (5-sample window, display-layer only).
-  // Buffers are reset synchronously when the node transitions offline.
-  const { pushOne, resetAll } = useNodeRollingMetrics();
+  // Rolling-average smoothing for fleet rows. Fleet SSE arrives at 2s cadence
+  // (vs 100ms for local WS), so we use FLEET_ROW_ROLLING_WINDOW (4 samples = 8s)
+  // instead of the default 8-sample window (which would be 16s at 2s cadence).
+  const { pushOne, resetAll } = useNodeRollingMetrics(isLocalHost ? NODE_ROLLING_WINDOW : FLEET_ROW_ROLLING_WINDOW);
   const wasOnlineRef = useRef(true);
   if (!isOnline && wasOnlineRef.current) resetAll();
   wasOnlineRef.current = isOnline;
@@ -463,9 +464,12 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     ? (totalPowerW / tps!) * 1000
     : null;
   // GPU% — Apple Silicon via IOKit/AGX, NVIDIA via NVML
-  const gpuPct = isOnline
+  // GPU% — smoothed through the same rolling buffer as watts/tps to dampen
+  // probe residency spikes (IOKit GPU% can spike to 45-60% during the 20-token probe).
+  const gpuRaw = isOnline
     ? (m!.nvidia_gpu_utilization_percent ?? m!.gpu_utilization_percent ?? null)
     : null;
+  const gpuPct = pushOne('gpu', gpuRaw, tsMs) ?? gpuRaw;
   const gpuPctDisplay = gpuPct != null ? Math.round(gpuPct) : null;
 
   const V = `text-xs font-telin ${!isOnline ? 'text-gray-400 dark:text-gray-600' : ''}`;

@@ -18,6 +18,15 @@ import { useRef } from 'react';
 export const NODE_ROLLING_WINDOW  = 8;
 export const FLEET_ROLLING_WINDOW = 12;
 
+/**
+ *  FLEET_ROW_ROLLING_WINDOW (4) — per-node row metrics on the fleet dashboard.
+ *    SSE frames arrive at 2s cadence (vs 100ms for local WS), so using the
+ *    same 8-sample window would create a 16s lag. 4 samples × 2s = 8s —
+ *    similar convergence feel to the localhost's 8 × 100ms = 0.8s window
+ *    while still dampening single-frame probe spikes.
+ */
+export const FLEET_ROW_ROLLING_WINDOW = 4;
+
 /** @deprecated use NODE_ROLLING_WINDOW or FLEET_ROLLING_WINDOW */
 const ROLLING_WINDOW = NODE_ROLLING_WINDOW;
 
@@ -67,7 +76,8 @@ export function useRollingBuffer(window: number = NODE_ROLLING_WINDOW) {
  * pushOne(key, value, tsMs) — same semantics as useRollingBuffer.push
  * resetAll()               — clear all three buffers (call on node offline).
  */
-export function useNodeRollingMetrics() {
+export function useNodeRollingMetrics(window: number = ROLLING_WINDOW) {
+  const windowRef = useRef(window);
   const stateRef = useRef<{
     tps:   { buf: number[]; lastTs: number };
     watts: { buf: number[]; lastTs: number };
@@ -83,12 +93,13 @@ export function useNodeRollingMetrics() {
     value: number | null | undefined,
     tsMs = 0,
   ): number | null {
+    const w = windowRef.current;
     const s = stateRef.current[key];
     if (value != null && isFinite(value)) {
       if (!(tsMs > 0 && tsMs <= s.lastTs)) {
         if (tsMs > 0) s.lastTs = tsMs;
         s.buf =
-          s.buf.length < ROLLING_WINDOW
+          s.buf.length < w
             ? [...s.buf, value]
             : [...s.buf.slice(1), value];
       }
