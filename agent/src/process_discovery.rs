@@ -411,6 +411,7 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
         // If a scan takes longer than the interval (unlikely), skip missed ticks
         // rather than firing a burst of back-to-back scans.
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut first_scan = true;
 
         loop {
             ticker.tick().await;
@@ -426,11 +427,20 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
                 if *tx.borrow() != new_val {
                     let _ = tx.send(new_val);
                     match new_val {
-                        Some(p) => eprintln!("[discovery] {name} → :{p}"),
-                        None    => eprintln!("[discovery] {name} not running"),
+                        Some(p) => {
+                            let spec = RUNTIME_SPECS.iter().find(|s| s.name == *name);
+                            let is_default = spec.map_or(false, |s| p == s.default_port);
+                            if is_default && first_scan {
+                                eprintln!("[discovery] {name} → :{p} (default port — if {name} uses a non-default port, set [runtime_ports] {name} = <port> in config.toml)");
+                            } else {
+                                eprintln!("[discovery] {name} → :{p}");
+                            }
+                        }
+                        None => eprintln!("[discovery] {name} not running"),
                     }
                 }
             }
+            first_scan = false;
         }
     });
 }

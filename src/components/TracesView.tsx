@@ -875,6 +875,13 @@ const TraceTable: React.FC<{
                           </div>
                         </div>
                       </div>
+                      <div className="bg-gray-800/20 border border-white/5 rounded-xl p-4 w-full mt-3">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">Non-default runtime port?</p>
+                        <p className="text-[11px] text-gray-500 leading-relaxed mb-2">
+                          If your inference runtime uses a custom port, add it to config so the agent connects to the right endpoint:
+                        </p>
+                        <code className="block font-mono text-[11px] text-gray-500 bg-gray-900/50 rounded px-2 py-1 whitespace-pre">{`[runtime_ports]\nvllm = 18010      # or ollama = 11435`}</code>
+                      </div>
                     </div>
                   )}
                 </td>

@@ -10,6 +10,18 @@ use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 // Runs once at boot. Prints a clean bordered summary to stdout showing only
 // what is relevant on this platform. Silent absence means N/A — no SKIP lines.
 
+/// Returns the platform-specific config.toml path for use in diagnostic hints.
+fn config_path_hint() -> &'static str {
+    #[cfg(target_os = "macos")]
+    { "/Library/Application Support/Wicklee/config.toml" }
+    #[cfg(target_os = "linux")]
+    { "/etc/wicklee/config.toml" }
+    #[cfg(target_os = "windows")]
+    { "%ProgramData%\\Wicklee\\config.toml" }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    { "config.toml" }
+}
+
 pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16, cfg_ref: &WickleeConfig) {
     // Format one 48-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
     let row = |key: &str, val: &str| -> String {
@@ -190,8 +202,12 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             .build()
             .unwrap_or_default();
 
-        // Ollama
-        if let Some(&port) = discovered.get("ollama") {
+        // Ollama — check config override first, then process scan
+        let ollama_cfg_port  = cfg_ref.runtime_ports.as_ref().and_then(|r| r.ollama);
+        let ollama_auto_port = discovered.get("ollama").copied();
+        let ollama_port      = ollama_cfg_port.or(ollama_auto_port);
+        let ollama_source    = if ollama_cfg_port.is_some() { "config.toml" } else { "auto" };
+        if let Some(port) = ollama_port {
             let model_hint = async {
                 let resp = client
                     .get(format!("http://127.0.0.1:{port}/api/ps"))
@@ -199,32 +215,55 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                 let json: serde_json::Value = resp.json().await.ok()?;
                 let name = json["models"].as_array()?.first()?["name"].as_str()?.to_string();
                 Some(format!("{} loaded", name))
-            }.await.unwrap_or_else(|| "running (no model loaded)".to_string());
-            println!("{}", row("Ollama", &format!(":{port} · {model_hint}")));
+            }.await;
+
+            let api_ok = model_hint.is_some();
+            let hint = model_hint.unwrap_or_else(|| "running (no model loaded)".to_string());
+            println!("{}", row("Ollama", &format!(":{port} ({ollama_source}) · {hint}")));
+
+            // Port Doctor: API returned 404 on a non-default port = worker socket
+            if !api_ok && ollama_cfg_port.is_none() && port != 11434 {
+                println!("  ⚠️  Ollama process found on :{port} but API returned 404.");
+                println!("     This is likely an internal worker socket, not the API.");
+                println!("     The agent will auto-fallback to :11434 at runtime.");
+            }
         } else {
             println!("{}", row("Ollama", "not running"));
         }
 
-        // vLLM — check config override first, then process scan
+        // vLLM — check config override first, then process scan.
+        // Port Doctor: when auto-discovered on the default port (:8000) and the API
+        // doesn't respond, warn the user — they likely need a config override.
         let vllm_cfg_port  = cfg_ref.runtime_ports.as_ref().and_then(|r| r.vllm);
         let vllm_auto_port = discovered.get("vllm").copied();
         let vllm_port      = vllm_cfg_port.or(vllm_auto_port);
-        let vllm_source    = if vllm_cfg_port.is_some() { " (config)" } else { "" };
+        let vllm_source    = if vllm_cfg_port.is_some() { "config.toml" } else { "auto" };
         if let Some(port) = vllm_port {
             let up = client
                 .get(format!("http://127.0.0.1:{port}/health"))
                 .send().await
                 .map(|r| r.status().is_success())
                 .unwrap_or(false);
-            println!("{}", row("vLLM", &format!(":{port}{vllm_source} · {}", if up { "healthy" } else { "starting up" })));
+            let status_str = if up { "healthy" } else { "starting up" };
+            println!("{}", row("vLLM", &format!(":{port} ({vllm_source}) · {status_str}")));
+
+            // Port Doctor: default port + API not responding = likely wrong port
+            if !up && vllm_cfg_port.is_none() && port == 8000 {
+                println!("  ⚠️  vLLM detected but API not responding on :8000.");
+                println!("     If vLLM uses a non-default port, add to config:");
+                let cfg_path = config_path_hint();
+                println!("     {cfg_path}");
+                println!("       [runtime_ports]");
+                println!("       vllm = 18010");
+            }
         } else {
             println!("{}", row("vLLM", "not detected  →  set runtime_ports.vllm in config"));
-            // On Linux, a cross-user vLLM process (e.g. owned by a service account)
-            // can be auto-discovered without any config by granting cap_sys_ptrace.
-            // Print the hint so operators know how to enable zero-config detection.
             #[cfg(target_os = "linux")]
             println!("       hint: sudo setcap cap_sys_ptrace+ep $(which wicklee)  # zero-config cross-user detection");
         }
+
+        // Ollama Port Doctor: same check for Ollama on default port
+        // (already handled above via the health check in the port validation harvester)
     }
 
     println!("{bot}");
