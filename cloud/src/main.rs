@@ -98,6 +98,8 @@ struct MetricsPayload {
     proxy_listen_port: Option<u16>,
     #[serde(default)]
     proxy_target_port: Option<u16>,
+    #[serde(default)]
+    runtime_port_overrides: Option<String>,
     /// True during probe and 40s afterward — frontend uses for IDLE-SPD display.
     #[serde(default)]
     ollama_is_probing: Option<bool>,
@@ -2025,6 +2027,109 @@ async fn handle_fleet_events_history(
             Json(serde_json::json!({ "error": format!("query failed: {e}") }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("task join failed: {e}") }))).into_response(),
+    }
+}
+
+/// GET /api/fleet/export?format=csv|json&from=<ts_ms>&to=<ts_ms>&limit=10000&node_id=<optional>
+///
+/// Export fleet node events as CSV or JSON. JWT-authenticated, tenant-isolated.
+async fn handle_fleet_export(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        require_user(&token, &conn, &clerk_keys)
+    }).await.unwrap();
+
+    let user_id = match user_id {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+    let from_ms: i64 = params.get("from").and_then(|v| v.parse().ok()).unwrap_or(now_ms - 24 * 60 * 60 * 1000);
+    let to_ms: i64   = params.get("to").and_then(|v| v.parse().ok()).unwrap_or(now_ms);
+    let limit: i64   = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(10_000).min(50_000);
+    let format        = params.get("format").map(|s| s.as_str()).unwrap_or("csv").to_string();
+    let node_filter   = params.get("node_id").cloned();
+
+    let duck = state.duck_db.clone();
+    let events = match tokio::task::spawn_blocking(move || {
+        let conn = duck.lock().unwrap();
+        let mut sql = "SELECT ts_ms, node_id, level, event_type, message FROM node_events
+                       WHERE tenant_id = ?1 AND ts_ms >= ?2 AND ts_ms <= ?3".to_string();
+        if node_filter.is_some() { sql.push_str(" AND node_id = ?5"); }
+        sql.push_str(" ORDER BY ts_ms DESC LIMIT ?4");
+
+        let mut stmt = conn.prepare(&sql)?;
+        stmt.raw_bind_parameter(1, &user_id)?;
+        stmt.raw_bind_parameter(2, from_ms)?;
+        stmt.raw_bind_parameter(3, to_ms)?;
+        stmt.raw_bind_parameter(4, limit)?;
+        if let Some(ref nid) = node_filter {
+            stmt.raw_bind_parameter(5, nid.as_str())?;
+        }
+
+        let rows = stmt.query_map([], |row| {
+            let ts_ms: i64 = row.get(0)?;
+            let ts_str = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
+            Ok(serde_json::json!({
+                "ts_ms": ts_ms,
+                "timestamp": ts_str,
+                "record_type": "event",
+                "node_id": row.get::<_, String>(1)?,
+                "level": row.get::<_, String>(2)?,
+                "event_type": row.get::<_, Option<String>>(3)?,
+                "message": row.get::<_, String>(4)?,
+            }))
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, duckdb::Error>(rows)
+    }).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Export failed: {e}") }))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task join failed: {e}") }))).into_response(),
+    };
+
+    if format == "json" {
+        let body = serde_json::to_string_pretty(&events).unwrap_or_default();
+        (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"wicklee-fleet-export.json\"")],
+            body,
+        ).into_response()
+    } else {
+        let mut csv = String::from("timestamp,record_type,node_id,level,event_type,message\n");
+        for e in &events {
+            csv.push_str(&format!("{},{},{},{},{},{}\n",
+                e["timestamp"].as_str().unwrap_or(""),
+                "event",
+                e["node_id"].as_str().unwrap_or(""),
+                e["level"].as_str().unwrap_or(""),
+                e["event_type"].as_str().unwrap_or(""),
+                e["message"].as_str().unwrap_or("").replace(',', ";"),
+            ));
+        }
+        (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"wicklee-fleet-export.csv\"")],
+            csv,
+        ).into_response()
     }
 }
 
@@ -4265,6 +4370,7 @@ async fn main() {
         .route("/api/fleet/wes-history",          get(handle_wes_history))
         .route("/api/fleet/metrics-history",      get(handle_metrics_history))
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
+        .route("/api/fleet/export",               get(handle_fleet_export))
         // ── Agent API v1 ──────────────────────────────────────────────────────
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))

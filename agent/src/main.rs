@@ -293,6 +293,9 @@ struct MetricsPayload {
     /// Port the proxy forwards to (the real Ollama port, e.g. 11435). None when proxy is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     proxy_target_port: Option<u16>,
+    /// Comma-separated runtime names with [runtime_ports] config overrides (e.g. "vllm" or "ollama,vllm").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_port_overrides: Option<String>,
     /// True during the agent's 30s background probe AND for 40 s afterward.
     /// Frontend uses this to show IDLE-SPD instead of LIVE during probe activity —
     /// the probe fires a real Ollama request which would otherwise look like a user session.
@@ -2101,6 +2104,7 @@ fn start_metrics_broadcaster(
     probe_active:          Arc<std::sync::atomic::AtomicBool>,
     proxy_listen_port:     Option<u16>,
     proxy_target_port:     Option<u16>,
+    runtime_port_overrides: Option<String>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -2188,6 +2192,7 @@ fn start_metrics_broadcaster(
                 ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
                 proxy_listen_port,
                 proxy_target_port,
+                runtime_port_overrides: runtime_port_overrides.clone(),
                 ollama_is_probing:        ollama_is_probing_flag,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
@@ -2479,6 +2484,126 @@ async fn handle_events_history(
     }
 }
 
+// ── Audit Log Export ─────────────────────────────────────────────────────────
+//
+// GET /api/export — download a unified audit log (events + traces + dismissals)
+// as CSV or JSON. Joins all three DuckDB audit tables into flat records.
+
+#[cfg(not(target_env = "musl"))]
+#[derive(Deserialize)]
+struct ExportQuery {
+    format: Option<String>,   // "csv" (default) or "json"
+    from:   Option<i64>,      // start ts_ms (default: 24h ago)
+    to:     Option<i64>,      // end ts_ms (default: now)
+    limit:  Option<i64>,      // max records (default: 10000, max: 50000)
+}
+
+#[cfg(not(target_env = "musl"))]
+async fn handle_export(
+    axum::extract::Query(q): axum::extract::Query<ExportQuery>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+) -> impl IntoResponse {
+    use axum::http::{StatusCode, header};
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let from_ms = q.from.unwrap_or(now_ms - 24 * 60 * 60 * 1000);
+    let to_ms   = q.to.unwrap_or(now_ms);
+    let limit   = q.limit.unwrap_or(10_000).min(50_000);
+    let format  = q.format.as_deref().unwrap_or("csv");
+
+    let records = match tokio::task::spawn_blocking(move || {
+        store.export_audit_log(from_ms, to_ms, limit)
+    }).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            let msg = format!("{e}");
+            if msg.contains("Permission denied") {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "Database access denied. Run: sudo chown -R $USER /etc/wicklee/"
+                    })),
+                ).into_response();
+            }
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Export failed: {msg}") })),
+            ).into_response();
+        }
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task join failed: {e}") })),
+        ).into_response(),
+    };
+
+    let node_id = System::host_name().unwrap_or_else(|| "node".to_string());
+    // Simple date string from system time — no chrono needed.
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = secs / 86400;
+    // Rough year/month/day — good enough for filenames.
+    let y = 1970 + days / 365;
+    let d = days % 365;
+    let m = d / 30 + 1;
+    let day = d % 30 + 1;
+    let date = format!("{y}-{m:02}-{day:02}");
+    let filename = format!("wicklee-audit-{node_id}-{date}");
+
+    if format == "json" {
+        let body = serde_json::to_string_pretty(&records).unwrap_or_default();
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CONTENT_DISPOSITION, &format!("attachment; filename=\"{filename}.json\"")),
+            ],
+            body,
+        ).into_response()
+    } else {
+        // CSV
+        let mut csv = String::from("timestamp,record_type,node_id,level,event_type,message,model,latency_ms,ttft_ms,tpot_ms\n");
+        for r in &records {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{},{},{},{}\n",
+                r.timestamp,
+                r.record_type,
+                csv_escape(&r.node_id),
+                r.level,
+                r.event_type.as_deref().unwrap_or(""),
+                csv_escape(&r.message),
+                r.model.as_deref().unwrap_or(""),
+                r.latency_ms.map(|v| format!("{v:.1}")).unwrap_or_default(),
+                r.ttft_ms.map(|v| format!("{v:.1}")).unwrap_or_default(),
+                r.tpot_ms.map(|v| format!("{v:.1}")).unwrap_or_default(),
+            ));
+        }
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                (header::CONTENT_DISPOSITION, &format!("attachment; filename=\"{filename}.csv\"")),
+            ],
+            csv,
+        ).into_response()
+    }
+}
+
+/// Escape a string for CSV: wrap in double quotes if it contains commas,
+/// quotes, or newlines. Double any existing double quotes.
+#[cfg(not(target_env = "musl"))]
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
 // ── Insight dismiss endpoints ─────────────────────────────────────────────────
 //
 // POST /api/insights/dismiss  — persist a dismiss decision for a pattern.
@@ -2594,11 +2719,12 @@ async fn handle_tags() -> Json<TagsResponse> {
     })
 }
 
-/// Immutable proxy port config, set once at startup.
+/// Immutable proxy + runtime port config, set once at startup.
 #[derive(Clone)]
 struct ProxyPorts {
     listen: Option<u16>,
     target: Option<u16>,
+    runtime_overrides: Option<String>,
 }
 
 async fn handle_metrics(
@@ -2619,6 +2745,7 @@ async fn handle_metrics(
     tokio::spawn(async move {
         let proxy_listen_port = proxy_ports.listen;
         let proxy_target_port = proxy_ports.target;
+        let runtime_port_overrides = proxy_ports.runtime_overrides;
 
         let mut sys = System::new_all();
         let node_id = System::host_name()
@@ -2692,6 +2819,7 @@ async fn handle_metrics(
                 ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
                 proxy_listen_port,
                 proxy_target_port,
+                runtime_port_overrides: runtime_port_overrides.clone(),
                 ollama_is_probing:        ollama_is_probing_flag,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second: ollama.ollama_tokens_per_second,
@@ -3222,9 +3350,16 @@ async fn main() {
     discovery_txs.insert("llama-box", llamabox_disc_tx);
     process_discovery::start_discovery_loop(discovery_txs, 30);
 
-    // Proxy ports are immutable after startup — compute once before proxy_arc is moved.
+    // Proxy ports and runtime overrides are immutable after startup — compute once.
     let proxy_listen = if proxy_arc.is_some() { Some(11434u16) } else { None };
     let proxy_target = if proxy_arc.is_some() { Some(proxy_cfg.ollama_port) } else { None };
+    let runtime_overrides: Option<String> = {
+        let rp = config.runtime_ports.as_ref();
+        let mut names = Vec::new();
+        if rp.and_then(|r| r.ollama).is_some() { names.push("ollama"); }
+        if rp.and_then(|r| r.vllm).is_some()   { names.push("vllm"); }
+        if names.is_empty() { None } else { Some(names.join(",")) }
+    };
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
@@ -3273,6 +3408,7 @@ async fn main() {
         Arc::clone(&probe_active),
         proxy_listen,
         proxy_target,
+        runtime_overrides.clone(),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -3410,6 +3546,7 @@ async fn main() {
             r.route("/api/history",             get(handle_history))
              .route("/api/traces",              get(handle_traces))
              .route("/api/events/history",      get(handle_events_history))
+             .route("/api/export",              get(handle_export))
              .route("/api/insights/dismiss",    post(handle_dismiss))
              .route("/api/insights/dismissed",  get(handle_dismissed_list))
              .layer(axum::extract::Extension(st.clone()))
@@ -3431,7 +3568,7 @@ async fn main() {
          .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(axum::extract::Extension(probe_active))
-         .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target }))
+         .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target, runtime_overrides: runtime_overrides }))
          .layer(cors)
     };
     // Suppress unused-variable warning on musl where metrics_store = None:()

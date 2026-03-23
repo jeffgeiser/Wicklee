@@ -125,6 +125,8 @@ export interface SentinelMetrics {
   proxy_listen_port?: number | null;
   /** Port the proxy forwards to (the real Ollama port, e.g. 11435). Null when disabled. */
   proxy_target_port?: number | null;
+  /** Comma-separated list of runtime names with config.toml port overrides (e.g. "vllm" or "ollama,vllm"). */
+  runtime_port_overrides?: string | null;
   /** True during the agent's 30s background probe AND for 40 s afterward (covering the
    * /api/ps expiry window). When true, show IDLE-SPD instead of LIVE — the probe
    * fires a real Ollama request which would otherwise appear as a user session. */
@@ -228,6 +230,21 @@ export interface EventHistoryRecord {
   level:       string;
   event_type?: string;
   message:     string;
+}
+
+/** Unified audit record combining events, traces, and dismissals. */
+export interface AuditLogRecord {
+  ts_ms:       number;
+  timestamp:   string;
+  record_type: 'event' | 'trace' | 'dismissal';
+  node_id:     string;
+  level:       string;
+  event_type?: string;
+  message:     string;
+  model?:      string;
+  latency_ms?: number;
+  ttft_ms?:    number;
+  tpot_ms?:    number;
 }
 
 /**
