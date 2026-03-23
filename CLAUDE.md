@@ -37,7 +37,7 @@ Four states: `Live`, `IdleSpd`, `Busy`, `Idle`. Evaluated once per broadcast tic
 
 Tier hierarchy (first match wins):
 - **Tier 1 (Exact):** vLLM active request count > 0
-- **Tier 2 (Attribution):** `/api/ps` expires_at change attributed to user (not probe) within 15s
+- **Tier 2 (Attribution):** `/api/ps` expires_at change attributed to user (not probe) within 15s. The `probe_caused_next_reset` one-shot flag in `OllamaMetrics` is what distinguishes probe-caused resets from user requests — the probe sets it on completion, the harvester consumes it on the first expires_at change it sees. Do not replace this with a time-based blackout (that was the Dead Zone bug).
 - **Tier 3 (Physics):** GPU residency > 20%, SoC power > 8W, ANE power > 0.5W, or NVIDIA power > 40W
 
 ### Hardware Ground Truth (do not change these thresholds)
@@ -46,6 +46,7 @@ Tier hierarchy (first match wins):
 - powermetrics sampling window: 5000ms (shorter windows miss inter-token idles)
 - `recent_probe` window: 30s (matches probe interval)
 - Tier 2 attribution window: 15s
+- M4 idle board power can read 0.2-0.4W — this is real, not a sensor fault. Do not add minimum-power sanity checks that would discard sub-0.5W readings.
 
 ### Wire Format (frozen)
 `MetricsPayload` field names are shared with the cloud backend and React frontend. Do not rename any fields. The `inference_state` string values ("live", "idle-spd", "busy", "idle") are frozen.
@@ -75,7 +76,7 @@ Tier hierarchy (first match wins):
 
 ### Key Patterns
 - WebSocket to `localhost:7700/ws` for real-time metrics
-- `inference_state` field from agent is the SSOT — no frontend re-computation
+- `inference_state` field from agent is the SSOT — no frontend re-computation. The fleet frontend (Overview.tsx on wicklee.dev) must use this field directly. Any client-side logic that infers live/idle from `ollama_inference_active` or `gpu_utilization_percent` will diverge from the agent's classification and must be removed.
 - Local mode (unpaired) vs Fleet mode (paired) — gates AI Key Vault + Team Management
 - Graceful fallback: if agent unavailable, show "Disconnected" with setup guide link
 
