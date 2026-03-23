@@ -382,7 +382,7 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
                 if let Some(sp) = socket_port_for_pid(*pid) {
                     if sp != spec.default_port {
                         // Non-default → this is the main server, not a worker.
-                        eprintln!("[discovery] {name} → :{sp} (socket scan, pid {pid})");
+                        // (Logged only by the discovery loop on change, not per-scan.)
                         result = sp;
                         break;
                     }
