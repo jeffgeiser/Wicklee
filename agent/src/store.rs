@@ -891,4 +891,90 @@ impl Store {
         )?;
         Ok(())
     }
+
+    // ── Audit Log Export ──────────────────────────────────────────────────────
+
+    /// Export a unified audit log joining events, traces, and dismissals.
+    /// Returns flat records sorted newest-first, capped at `limit`.
+    pub fn export_audit_log(
+        &self,
+        from_ms: i64,
+        to_ms:   i64,
+        limit:   i64,
+    ) -> Result<Vec<AuditRecord>, duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+        let limit = limit.min(50_000);
+
+        let mut stmt = conn.prepare(
+            "SELECT ts_ms, record_type, node_id, level, event_type, message,
+                    model, latency_ms, ttft_ms, tpot_ms
+             FROM (
+                SELECT ts_ms, 'event' AS record_type, node_id, level, event_type, message,
+                       NULL AS model, NULL AS latency_ms, NULL AS ttft_ms, NULL AS tpot_ms
+                FROM node_events
+                WHERE ts_ms >= ? AND ts_ms <= ?
+
+                UNION ALL
+
+                SELECT ts_ms, 'trace' AS record_type, node_id, 'info' AS level,
+                       'inference' AS event_type, model AS message,
+                       model, latency_ms, ttft_ms, tpot_ms
+                FROM inference_traces
+                WHERE ts_ms >= ? AND ts_ms <= ?
+
+                UNION ALL
+
+                SELECT dismissed_at_ms AS ts_ms, 'dismissal' AS record_type,
+                       node_id, 'info' AS level, 'dismiss' AS event_type,
+                       pattern_id || COALESCE(': ' || note, '') AS message,
+                       NULL, NULL, NULL, NULL
+                FROM accepted_states
+             )
+             ORDER BY ts_ms DESC
+             LIMIT ?",
+        )?;
+
+        let rows = stmt.query_map(
+            params![from_ms, to_ms, from_ms, to_ms, limit],
+            |row| {
+                let ts_ms: i64 = row.get(0)?;
+                Ok(AuditRecord {
+                    ts_ms,
+                    timestamp:   millis_to_iso8601(ts_ms),
+                    record_type: row.get(1)?,
+                    node_id:     row.get(2)?,
+                    level:       row.get(3)?,
+                    event_type:  row.get(4)?,
+                    message:     row.get(5)?,
+                    model:       row.get(6)?,
+                    latency_ms:  row.get(7)?,
+                    ttft_ms:     row.get(8)?,
+                    tpot_ms:     row.get(9)?,
+                })
+            },
+        )?.collect::<Result<_, _>>()?;
+
+        Ok(rows)
+    }
+}
+
+/// Flat audit record combining events, traces, and dismissals.
+#[derive(serde::Serialize)]
+pub struct AuditRecord {
+    pub ts_ms:       i64,
+    pub timestamp:   String,
+    pub record_type: String,
+    pub node_id:     String,
+    pub level:       String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type:  Option<String>,
+    pub message:     String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model:       Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms:  Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_ms:     Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tpot_ms:     Option<f64>,
 }

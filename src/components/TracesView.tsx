@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Database, Clock, RefreshCw, Filter, Activity,
+  Database, Clock, RefreshCw, Filter, Activity, Download,
   Shield, Lock, Globe, Radio,
   ArrowUpRight, CheckCircle,
   Cpu, Zap, Server, AlertTriangle,
@@ -44,7 +44,8 @@ function useProxyStatus() {
     proxyActive: boolean;
     listenPort: number | null;
     targetPort: number | null;
-  }>({ proxyActive: false, listenPort: null, targetPort: null });
+    runtimeOverrides: string | null;
+  }>({ proxyActive: false, listenPort: null, targetPort: null, runtimeOverrides: null });
 
   useEffect(() => {
     if (!isLocalHost) return;
@@ -57,6 +58,7 @@ function useProxyStatus() {
           proxyActive: data.ollama_proxy_active === true,
           listenPort:  data.proxy_listen_port ?? null,
           targetPort:  data.proxy_target_port ?? null,
+          runtimeOverrides: data.runtime_port_overrides ?? null,
         });
       })
       .catch(() => {});
@@ -79,7 +81,8 @@ const SovereigntySection: React.FC<{
   proxyActive: boolean;
   proxyListenPort: number | null;
   proxyTargetPort: number | null;
-}> = ({ pairingInfo, proxyActive, proxyListenPort, proxyTargetPort }) => {
+  runtimeOverrides: string | null;
+}> = ({ pairingInfo, proxyActive, proxyListenPort, proxyTargetPort, runtimeOverrides }) => {
   const { fleetEvents, connectionState } = useFleetStream();
 
   // In Cockpit mode (localhost), pairing state comes from the local agent's /api/pair/status.
@@ -238,7 +241,7 @@ const SovereigntySection: React.FC<{
             Outbound Connection Manifest
           </p>
           <div className="divide-y divide-gray-800/60">
-            {manifest.map(row => (
+            {manifest.map((row, idx) => (
               <div key={row.purpose} className="py-3 first:pt-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -251,6 +254,11 @@ const SovereigntySection: React.FC<{
                       }`}>
                         {row.status}
                       </span>
+                      {idx === 0 && runtimeOverrides && (
+                        <span className="inline-flex px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-blue-500/10 text-blue-400">
+                          config.toml
+                        </span>
+                      )}
                     </div>
                     <p className="font-mono text-[11px] text-gray-500 mt-0.5">{row.endpoint}</p>
                     <p className="text-[11px] text-gray-600 mt-0.5">{row.data}</p>
@@ -1173,13 +1181,33 @@ const EventHistoryPanel: React.FC = () => {
           <h3 className="text-sm font-semibold text-gray-300">Event History</h3>
           <span className="text-[10px] text-gray-600 font-mono ml-1">node_events · 7d</span>
         </div>
-        <button
-          onClick={refresh}
-          className="p-1 rounded hover:bg-gray-800 transition-colors"
-          title="Refresh"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <a
+            href="/api/export?format=csv"
+            download=""
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+            title="Download audit log as CSV"
+          >
+            <Download className="w-3 h-3" />
+            <span>CSV</span>
+          </a>
+          <a
+            href="/api/export?format=json"
+            download=""
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+            title="Download audit log as JSON"
+          >
+            <Download className="w-3 h-3" />
+            <span>JSON</span>
+          </a>
+          <button
+            onClick={refresh}
+            className="p-1 rounded hover:bg-gray-800 transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {/* Error */}
@@ -1254,11 +1282,11 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
   // Gate on pairingInfo !== null (not on nodeId) so the panels aren't permanently
   // hidden during the brief window before the first API response arrives.
   const nodeId = pairingInfo?.node_id ?? '';
-  const { proxyActive, listenPort: proxyListenPort, targetPort: proxyTargetPort } = useProxyStatus();
+  const { proxyActive, listenPort: proxyListenPort, targetPort: proxyTargetPort, runtimeOverrides } = useProxyStatus();
 
   return (
     <div className="space-y-8">
-      <SovereigntySection pairingInfo={pairingInfo} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />
+      <SovereigntySection pairingInfo={pairingInfo} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} runtimeOverrides={runtimeOverrides} />
       {isLocalHost && <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />}
       {/* Phase 4A — Raw Metric History + Agent Health (Cockpit / localhost only) */}
       {isLocalHost && pairingInfo !== null && <MetricHistoryPanel nodeId={nodeId} />}
