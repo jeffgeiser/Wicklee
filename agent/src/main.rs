@@ -2314,6 +2314,39 @@ async fn handle_history(
     }
 }
 
+// ── /api/traces ──────────────────────────────────────────────────────────────
+// Returns recent inference traces from the local DuckDB store.
+// Query parameters: node_id (optional), limit (optional, default 100, max 500).
+
+#[cfg(not(target_env = "musl"))]
+#[derive(serde::Deserialize)]
+struct TracesQuery {
+    node_id: Option<String>,
+    limit: Option<i64>,
+}
+
+#[cfg(not(target_env = "musl"))]
+async fn handle_traces(
+    axum::extract::Query(q): axum::extract::Query<TracesQuery>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let limit = q.limit.unwrap_or(100).min(500);
+    let node_id_owned = q.node_id;
+    match tokio::task::spawn_blocking(move || store.query_traces(node_id_owned.as_deref(), limit)).await {
+        Ok(Ok(traces)) => Json(traces).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("trace query failed: {e}"),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task join failed: {e}"),
+        ).into_response(),
+    }
+}
+
 // ── Insight dismiss endpoints ─────────────────────────────────────────────────
 //
 // POST /api/insights/dismiss  — persist a dismiss decision for a pattern.
@@ -2929,6 +2962,11 @@ async fn main() {
     // ollama_port (default 11435). If :11434 is unavailable (Ollama still there),
     // fall back to Phase A /api/ps polling with a clear log message.
     let proxy_cfg = config.ollama_proxy.clone().unwrap_or_default();
+
+    // Channel for proxy → store inference trace writes.
+    #[cfg(not(target_env = "musl"))]
+    let (trace_tx, trace_rx) = tokio::sync::mpsc::unbounded_channel::<store::TraceRow>();
+
     let proxy_arc: Option<Arc<ProxyState>> = if proxy_cfg.enabled {
         match tokio::net::TcpListener::bind("127.0.0.1:11434").await {
             Ok(proxy_listener) => {
@@ -2942,6 +2980,9 @@ async fn main() {
                     inference_active: std::sync::atomic::AtomicBool::new(false),
                     last_done_ts:     Mutex::new(None),
                     exact_tps:        Mutex::new(None),
+                    node_id:          config.node_id.clone(),
+                    #[cfg(not(target_env = "musl"))]
+                    trace_tx:         Some(trace_tx.clone()),
                 });
                 let ps_clone = Arc::clone(&ps);
                 let proxy_app = axum::Router::new()
@@ -3126,6 +3167,20 @@ async fn main() {
                     });
                 }
 
+                // Trace writer — receives traces from the proxy and persists to DuckDB.
+                {
+                    let store_clone = s.clone();
+                    let mut rx = trace_rx;
+                    tokio::spawn(async move {
+                        while let Some(trace) = rx.recv().await {
+                            let st = store_clone.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                st.write_trace(&trace);
+                            }).await;
+                        }
+                    });
+                }
+
                 Some(s)
             }
             Err(e) => {
@@ -3162,6 +3217,7 @@ async fn main() {
         #[cfg(not(target_env = "musl"))]
         let r = if let Some(ref st) = metrics_store {
             r.route("/api/history",             get(handle_history))
+             .route("/api/traces",              get(handle_traces))
              .route("/api/insights/dismiss",    post(handle_dismiss))
              .route("/api/insights/dismissed",  get(handle_dismissed_list))
              .layer(axum::extract::Extension(st.clone()))

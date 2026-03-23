@@ -231,7 +231,7 @@
 > Settings → Integrations — not Observability tab content. The tab is sovereign and
 > requires no external sink.
 
-- [x] **Inference Traces (TracesView):** DuckDB-backed trace table, scoped to agent-local `metrics.db`. Always localhost-only — traces never transit the cloud backend (sovereignty boundary). Primary evidence surface for "why did this recommendation fire?".
+- [x] **Inference Traces (TracesView):** DuckDB-backed trace table, scoped to agent-local `metrics.db`. Always localhost-only — traces never transit the cloud backend (sovereignty boundary). Primary evidence surface for "why did this recommendation fire?". Frontend TracesView.tsx shipped earlier; agent `GET /api/traces` endpoint + `inference_traces` DuckDB table + proxy-derived timing capture shipped in v0.5.14.
 - [x] **Sovereignty Audit section:** Telemetry destination card (fleet URL or "local only"), outbound connection manifest (Ollama probe / fleet telemetry / Clerk auth — with active/inactive status and data-type label per row), connection event log from FleetStreamContext (node_online/offline events, live pulse). Two sub-lists: what IS transmitted (CPU/GPU metrics, WES, model name) vs what NEVER leaves (inference content, prompts, responses). Replaces the old HostedPlaceholder on cloud dashboard — the trust case is explicit at wicklee.dev. **Copy fix (Mar 19):** Three-branch copy — Cockpit "this machine", Cloud-connected "each node", Cloud-no-nodes neutral placeholder. `isPaired` in cloud now derived from `connectionState` (fleet SSE), not `pairingInfo.status` (local agent handshake only). Fixes "LOCAL ONLY" badge shown incorrectly at wicklee.dev when nodes were connected.
 - [ ] **Audit Log Export (Free):** Exportable pairing and telemetry history.
 
