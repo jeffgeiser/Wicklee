@@ -1,4 +1,4 @@
-use crate::{AppleSiliconMetrics, NvidiaMetrics, OllamaMetrics, VllmMetrics};
+use crate::{AppleSiliconMetrics, NvidiaMetrics, OllamaMetrics, VllmMetrics, LlamacppMetrics};
 
 /// Platform-independent sensor bundle. All fields are Option — absent sensors
 /// are skipped. No platform #[cfg] branches in the state machine itself.
@@ -17,7 +17,8 @@ pub(crate) struct HardwareSignals {
     // Runtime presence — gates Tier 3 to prevent false LIVE from non-AI workloads
     pub(crate) ai_runtime_loaded: bool,      // ollama_running || vllm_running
     // Tier 1 exact
-    pub(crate) vllm_requests: Option<u32>,
+    pub(crate) vllm_requests:     Option<u32>,
+    pub(crate) llamacpp_requests: Option<u32>,
     // Tier 2 attribution
     pub(crate) probe_active:         bool,
     pub(crate) last_user_request_ts: Option<std::time::Instant>,
@@ -34,6 +35,7 @@ pub(crate) fn read_hardware_signals(
     nvidia:       &NvidiaMetrics,
     ollama:       &OllamaMetrics,
     vllm:         &VllmMetrics,
+    llamacpp:     &LlamacppMetrics,
     probe_active: &std::sync::atomic::AtomicBool,
 ) -> HardwareSignals {
     HardwareSignals {
@@ -43,8 +45,9 @@ pub(crate) fn read_hardware_signals(
         nvidia_gpu_pct:       nvidia.nvidia_gpu_utilization_percent,
         nvidia_vram_mb:       nvidia.nvidia_vram_used_mb,
         nvidia_power_w:       nvidia.nvidia_power_draw_w,
-        ai_runtime_loaded:    ollama.ollama_running || vllm.vllm_running,
+        ai_runtime_loaded:    ollama.ollama_running || vllm.vllm_running || llamacpp.llamacpp_running,
         vllm_requests:        vllm.vllm_requests_running,
+        llamacpp_requests:    llamacpp.llamacpp_slots_processing,
         probe_active:         probe_active.load(std::sync::atomic::Ordering::Acquire),
         last_user_request_ts: ollama.last_user_request_ts,
         recent_probe:         ollama.recent_probe_baseline(),
@@ -93,13 +96,16 @@ impl std::fmt::Display for InferenceState {
 /// from sensors every tick so it self-corrects on agent restart and sensor dropout.
 ///
 /// Hierarchy (first match wins):
-///   Live      Tier 1: vLLM exact count, or Tier 2: attributed user request, or Tier 3: physics
+///   Live      Tier 1: vLLM/llama.cpp exact count, or Tier 2: attributed user request, or Tier 3: physics
 ///   IdleSpd   Probe recently completed — fresh baseline visible
 ///   Busy      Hardware loaded, no AI runtime
 ///   Idle      Silicon at rest
 pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     // ── Tier 1: Exact runtime counts (zero heuristic) ────────────────────────
     if s.vllm_requests.map_or(false, |r| r > 0) {
+        return InferenceState::Live;
+    }
+    if s.llamacpp_requests.map_or(false, |r| r > 0) {
         return InferenceState::Live;
     }
 
@@ -174,6 +180,7 @@ mod tests {
             nvidia_power_w:       None,
             ai_runtime_loaded:    false,
             vllm_requests:        None,
+            llamacpp_requests:    None,
             probe_active:         false,
             last_user_request_ts: None,
             recent_probe:         false,
@@ -286,7 +293,17 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Test 8: ANE power > 0.5W → LIVE (ai_specific path) ─────────────────
+    // ── Test 8: llama.cpp slots_processing > 0 → LIVE unconditionally (Tier 1)
+    #[test]
+    fn llamacpp_requests_is_live() {
+        let s = HardwareSignals {
+            llamacpp_requests: Some(1),
+            ..idle_signals()
+        };
+        assert_eq!(compute_inference_state(&s), InferenceState::Live);
+    }
+
+    // ── Test 9: ANE power > 0.5W → LIVE (ai_specific path) ─────────────────
     #[test]
     fn ane_power_is_live() {
         let s = HardwareSignals {

@@ -127,6 +127,16 @@ pub(crate) struct VllmMetrics {
     pub(crate) vllm_requests_running: Option<u32>,
 }
 
+// llama.cpp / llama-box runtime metrics — populated when llama-server is detected.
+// All fields are Option/bool-default so the payload serialises cleanly when absent.
+#[derive(Serialize, Clone, Default)]
+pub(crate) struct LlamacppMetrics {
+    pub(crate) llamacpp_running:          bool,
+    pub(crate) llamacpp_model_name:       Option<String>,
+    pub(crate) llamacpp_tokens_per_sec:   Option<f32>,
+    pub(crate) llamacpp_slots_processing: Option<u32>,
+}
+
 // NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
 // All fields are Option so the payload serialises cleanly as null on other platforms.
 #[derive(Serialize, Clone, Default)]
@@ -268,6 +278,15 @@ struct MetricsPayload {
     vllm_cache_usage_perc: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vllm_requests_running: Option<u32>,
+    // llama.cpp / llama-box runtime (null/false when not running)
+    #[serde(default)]
+    llamacpp_running:          bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    llamacpp_model_name:       Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    llamacpp_tokens_per_sec:   Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    llamacpp_slots_processing: Option<u32>,
     /// Compile-time OS — "macOS" | "Linux" | "Windows". Cannot be inferred incorrectly.
     os: String,
     /// Compile-time CPU architecture — "x86_64" | "aarch64". Constant across the process lifetime.
@@ -2009,6 +2028,7 @@ fn start_metrics_broadcaster(
     rapl_metrics:          Arc<Mutex<Option<f32>>>,
     linux_thermal_metrics: Arc<Mutex<Option<LinuxThermalResult>>>,
     vllm_metrics:          Arc<Mutex<VllmMetrics>>,
+    llamacpp_metrics:      Arc<Mutex<LlamacppMetrics>>,
     live_events:           Arc<Mutex<Vec<LiveActivityEvent>>>,
     wes_metrics:           Arc<Mutex<WesMetrics>>,
     swap_metrics:          SwapMetrics,
@@ -2048,6 +2068,7 @@ fn start_metrics_broadcaster(
             let nvidia        = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let ollama        = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let vllm          = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let llamacpp      = llamacpp_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
@@ -2062,7 +2083,7 @@ fn start_metrics_broadcaster(
             // Compute before struct literal so we can borrow `ollama` without
             // conflicting with the field moves (Option<String> fields are not Copy).
             let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
-            let hw = read_hardware_signals(&apple, &nvidia, &ollama, &vllm, &probe_active);
+            let hw = read_hardware_signals(&apple, &nvidia, &ollama, &vllm, &llamacpp, &probe_active);
             let inference_state_val = compute_inference_state(&hw).to_string();
 
             let payload = MetricsPayload {
@@ -2105,6 +2126,10 @@ fn start_metrics_broadcaster(
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,
+                llamacpp_running:          llamacpp.llamacpp_running,
+                llamacpp_model_name:       llamacpp.llamacpp_model_name,
+                llamacpp_tokens_per_sec:   llamacpp.llamacpp_tokens_per_sec,
+                llamacpp_slots_processing: llamacpp.llamacpp_slots_processing,
                 os: {
                     #[cfg(target_os = "macos")]   { "macOS".to_string() }
                     #[cfg(target_os = "linux")]   { "Linux".to_string() }
@@ -2469,6 +2494,7 @@ async fn handle_metrics(
     axum::extract::Extension(rapl_metrics):          axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
     axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<LinuxThermalResult>>>>,
     axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
+    axum::extract::Extension(llamacpp_metrics):      axum::extract::Extension<Arc<Mutex<LlamacppMetrics>>>,
     axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
     axum::extract::Extension(swap_metrics):          axum::extract::Extension<SwapMetrics>,
     axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
@@ -2505,12 +2531,13 @@ async fn handle_metrics(
             let nvidia        = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let ollama        = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let vllm          = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+            let llamacpp      = llamacpp_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let swap_mb_s     = swap_metrics.read();
             let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
-            let hw = read_hardware_signals(&apple, &nvidia, &ollama, &vllm, &probe_active);
+            let hw = read_hardware_signals(&apple, &nvidia, &ollama, &vllm, &llamacpp, &probe_active);
             let inference_state_val = compute_inference_state(&hw).to_string();
 
             let payload = MetricsPayload {
@@ -2553,6 +2580,10 @@ async fn handle_metrics(
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,
+                llamacpp_running:          llamacpp.llamacpp_running,
+                llamacpp_model_name:       llamacpp.llamacpp_model_name,
+                llamacpp_tokens_per_sec:   llamacpp.llamacpp_tokens_per_sec,
+                llamacpp_slots_processing: llamacpp.llamacpp_slots_processing,
                 os: {
                     #[cfg(target_os = "macos")]   { "macOS".to_string() }
                     #[cfg(target_os = "linux")]   { "Linux".to_string() }
@@ -3018,8 +3049,13 @@ async fn main() {
     // processes every 30 s and sends Some(port) / None into each channel.
     // Harvesters receive their channel and react to changes automatically —
     // no hardcoded ports, no restart required when a runtime changes port.
-    let (ollama_port_tx, ollama_port_rx) = watch::channel(None::<u16>);
-    let (vllm_port_tx,   vllm_port_rx)   = watch::channel(None::<u16>);
+    let (ollama_port_tx,   ollama_port_rx)   = watch::channel(None::<u16>);
+    let (vllm_port_tx,     vllm_port_rx)     = watch::channel(None::<u16>);
+    // llama.cpp and llama-box are different binaries with the same API.
+    // Both discovery entries feed into a single merged watch channel.
+    let (llamacpp_port_tx, llamacpp_port_rx) = watch::channel(None::<u16>);
+    let (llamacpp_disc_tx, llamacpp_disc_rx) = watch::channel(None::<u16>);
+    let (llamabox_disc_tx, llamabox_disc_rx) = watch::channel(None::<u16>);
 
     // Seed channels: config overrides take precedence over process auto-detection.
     // Config overrides are used when the runtime runs as a different OS user and
@@ -3028,10 +3064,28 @@ async fn main() {
     let rp = config.runtime_ports.as_ref();
     let ollama_cfg = rp.and_then(|r| r.ollama);
     let vllm_cfg   = rp.and_then(|r| r.vllm);
-    let ollama_port = ollama_cfg.or_else(|| initial.get("ollama").copied());
-    let vllm_port   = vllm_cfg  .or_else(|| initial.get("vllm").copied());
-    if let Some(p) = ollama_port { let _ = ollama_port_tx.send(Some(p)); }
-    if let Some(p) = vllm_port   { let _ = vllm_port_tx.send(Some(p)); }
+    let ollama_port   = ollama_cfg.or_else(|| initial.get("ollama").copied());
+    let vllm_port     = vllm_cfg  .or_else(|| initial.get("vllm").copied());
+    let llamacpp_port = initial.get("llamacpp").copied().or_else(|| initial.get("llama-box").copied());
+    if let Some(p) = ollama_port   { let _ = ollama_port_tx.send(Some(p)); }
+    if let Some(p) = vllm_port     { let _ = vllm_port_tx.send(Some(p)); }
+    if let Some(p) = llamacpp_port { let _ = llamacpp_port_tx.send(Some(p)); }
+
+    // Merge llamacpp + llama-box discovery into the single harvester channel.
+    {
+        let merged_tx = llamacpp_port_tx;
+        tokio::spawn(async move {
+            let mut rx_cpp = llamacpp_disc_rx;
+            let mut rx_box = llamabox_disc_rx;
+            loop {
+                tokio::select! {
+                    Ok(()) = rx_cpp.changed() => { let _ = merged_tx.send(*rx_cpp.borrow()); }
+                    Ok(()) = rx_box.changed() => { let _ = merged_tx.send(*rx_box.borrow()); }
+                    else => break,
+                }
+            }
+        });
+    }
 
     // Start the background discovery loop (30 s interval).
     // Runtimes with a TOML config override are excluded from the loop —
@@ -3040,6 +3094,8 @@ async fn main() {
     let mut discovery_txs: std::collections::HashMap<&str, _> = Default::default();
     if ollama_cfg.is_none() { discovery_txs.insert("ollama", ollama_port_tx); }
     if vllm_cfg.is_none()   { discovery_txs.insert("vllm",   vllm_port_tx);   }
+    discovery_txs.insert("llamacpp",  llamacpp_disc_tx);
+    discovery_txs.insert("llama-box", llamabox_disc_tx);
     process_discovery::start_discovery_loop(discovery_txs, 30);
 
     let apple_metrics         = start_metrics_harvester();
@@ -3053,6 +3109,7 @@ async fn main() {
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
     let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
+    let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
 
     // WES v2 — 2 s thermal-penalty sampler (30-sample rolling window).
     // Must start after the platform harvesters above so it has data to read.
@@ -3094,6 +3151,7 @@ async fn main() {
         Arc::clone(&rapl_metrics),
         Arc::clone(&linux_thermal_metrics),
         Arc::clone(&vllm_metrics),
+        Arc::clone(&llamacpp_metrics),
         Arc::clone(&live_events),
         Arc::clone(&wes_metrics),
         swap_metrics.clone(),
@@ -3233,6 +3291,7 @@ async fn main() {
          .layer(axum::extract::Extension(rapl_metrics))
          .layer(axum::extract::Extension(linux_thermal_metrics))
          .layer(axum::extract::Extension(vllm_metrics))
+         .layer(axum::extract::Extension(llamacpp_metrics))
          .layer(axum::extract::Extension(wes_metrics))
          .layer(axum::extract::Extension(swap_metrics))
          .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
