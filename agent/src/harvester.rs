@@ -16,15 +16,25 @@ const GPU_LOAD_THRESHOLD_PCT: f32 = 40.0;
 /// auto-load the returned model when the subsequent /api/generate probe arrives.
 /// This is identical behaviour to a user's first request on a fresh Ollama session.
 async fn discover_first_ollama_model(client: &reqwest::Client, port: u16) -> Option<String> {
-    let resp = client
-        .get(format!("http://127.0.0.1:{port}/api/tags"))
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() { return None; }
+    let url = format!("http://127.0.0.1:{port}/api/tags");
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[ollama] /api/tags on :{port} failed: {e}");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        eprintln!("[ollama] /api/tags on :{port} → HTTP {}", resp.status());
+        return None;
+    }
     let json: serde_json::Value = resp.json().await.ok()?;
-    let name = json["models"]
-        .as_array()?
+    let models = json["models"].as_array();
+    if models.map_or(true, |m| m.is_empty()) {
+        eprintln!("[ollama] /api/tags on :{port} — no models installed");
+        return None;
+    }
+    let name = models?
         .first()?
         .get("name")?
         .as_str()?
@@ -303,7 +313,10 @@ pub(crate) fn start_ollama_harvester(
                 interval.tick().await;
 
                 // Read the current port — skip if Ollama isn't running.
-                let Some(port) = *port_rx.borrow() else { continue; };
+                let Some(port) = *port_rx.borrow() else {
+                    eprintln!("[ollama] probe skip — port_rx is None (discovery hasn't found Ollama yet)");
+                    continue;
+                };
 
                 // Model resolution order:
                 //   1. Currently loaded model from /api/ps  (preferred — already warm)
@@ -318,7 +331,10 @@ pub(crate) fn start_ollama_harvester(
                 } else {
                     discover_first_ollama_model(&probe_client, port).await
                 };
-                let Some(model) = model else { continue; };
+                let Some(model) = model else {
+                    eprintln!("[ollama] probe skip — no model found (not loaded + /api/tags empty) on :{port}");
+                    continue;
+                };
 
                 // Read current GPU utilisation — NVIDIA takes priority, fall back to
                 // Apple Silicon. None means no GPU sensor available (CPU-only node).
