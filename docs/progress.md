@@ -50,11 +50,13 @@
 - **Nightly release stale** — Version tag builds didn't update the nightly release. Install script pulled old version. Fixed: nightly job now runs on both main pushes and tag pushes.
 - **vLLM/llama.cpp tok/s invisible in fleet** — IDLE-SPD gate was Ollama-only. Spark showed 32 tok/s locally but `—` in fleet dashboard.
 
-### What's Next (Phase 3B remaining → v0.6.0)
-1. **Audit Log Export** — exportable pairing and telemetry history (`GET /api/export`)
-2. **Sovereignty manifest "user-defined" badge** — show `(config.toml)` source in Sovereignty manifest when `[runtime_ports]` override is active
-3. **Network & Port Discovery docs** — Hierarchy of Truth, Admin-not-Root guide, Proxy Wiretap setup
-4. **v0.6.0 — "Sovereignty Release"** tag
+### v0.5.22 — Audit Log Export + Sovereignty Badge ✅
+- **Agent:** `GET /api/export?format=csv|json` — unified audit log joining `node_events`, `inference_traces`, and `accepted_states`. Time range + limit params. CSV with Content-Disposition for browser download. Actionable error: "sudo chown" on permission denied, platform hint on musl.
+- **Cloud:** `GET /api/fleet/export` — JWT-authenticated, tenant-isolated. Exports fleet `node_events` as CSV/JSON.
+- **Frontend:** CSV and JSON download buttons in Event History panel. `AuditLogRecord` interface.
+- **Sovereignty badge:** Blue `config.toml` badge in manifest when `[runtime_ports]` override is active. `runtime_port_overrides` field on MetricsPayload (three-way sync).
+
+### Phase 3B Complete → v0.6.0 "Sovereignty Release" 🏷️
 
 ---
 
