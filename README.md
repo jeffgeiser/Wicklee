@@ -13,7 +13,7 @@ Wicklee is a single Rust binary that installs on any inference node — Ollama, 
 **macOS &amp; Linux:**
 
 ```bash
-curl -fsSL https://wicklee.dev/install.sh | sh
+curl -fsSL https://wicklee.dev/install.sh | bash
 ```
 
 **Windows (PowerShell):**

@@ -203,37 +203,56 @@ pub(crate) async fn install_service() {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status().await;
-        // Give the kernel ~500 ms to release port 7700 after the old process exits.
-        // Without this pause the bootstrap can race the previous process's TCP teardown.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let status = tokio::process::Command::new("launchctl")
-            .args(["bootstrap", "system", plist_path])
-            .status().await;
-        match status {
-            Ok(s) if s.success() => {
-                // Brief pause so launchd can start the process before we verify.
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                // Confirm the service is actually running (guards against launchd throttle).
-                let running = tokio::process::Command::new("launchctl")
-                    .args(["list", "dev.wicklee.agent"])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status().await
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                println!("✓ Wicklee Sentinel installed as a launchd service.");
-                println!("  Starts automatically on boot (runs as root).");
-                println!("  Plist: {plist_path}");
-                println!("  Logs:  /var/log/wicklee.log");
-                println!("  To remove: sudo wicklee --uninstall-service");
-                if !running {
-                    eprintln!("warning: service registered but not yet visible in launchctl list.");
-                    eprintln!("         If http://localhost:7700 is unreachable, run:");
-                    eprintln!("         sudo launchctl start dev.wicklee.agent");
+        // Give the kernel time to release port 7700 after the old process exits.
+        // The install script may have already done a bootout seconds ago, but launchd's
+        // internal label deregistration can lag behind the process exit. 1500ms covers
+        // the observed worst case (the previous 500ms was insufficient when install.sh
+        // had already hammered launchctl, causing "error 5: Input/output error").
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        // Bootstrap with retry — launchd label deregistration is asynchronous and
+        // can race even after the sleep above. Retry up to 3 times with 1s backoff.
+        let mut bootstrap_ok = false;
+        for attempt in 0..3u32 {
+            let status = tokio::process::Command::new("launchctl")
+                .args(["bootstrap", "system", plist_path])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status().await;
+            match status {
+                Ok(s) if s.success() => { bootstrap_ok = true; break; }
+                Ok(_) if attempt < 2 => {
+                    eprintln!("  launchctl bootstrap attempt {} failed, retrying…", attempt + 1);
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
+                Ok(s) => {
+                    eprintln!("error: launchctl bootstrap failed after 3 attempts (last status: {s})");
+                    eprintln!("       The service plist is installed — try manually:");
+                    eprintln!("       sudo launchctl bootstrap system {plist_path}");
+                }
+                Err(e) => { eprintln!("error: launchctl: {e}"); break; }
             }
-            Ok(s) => eprintln!("error: launchctl bootstrap exited with status {s}"),
-            Err(e) => eprintln!("error: launchctl: {e}"),
+        }
+        if bootstrap_ok {
+            // Brief pause so launchd can start the process before we verify.
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            // Confirm the service is actually running (guards against launchd throttle).
+            let running = tokio::process::Command::new("launchctl")
+                .args(["list", "dev.wicklee.agent"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status().await
+                .map(|s| s.success())
+                .unwrap_or(false);
+            println!("✓ Wicklee Sentinel installed as a launchd service.");
+            println!("  Starts automatically on boot (runs as root).");
+            println!("  Plist: {plist_path}");
+            println!("  Logs:  /var/log/wicklee.log");
+            println!("  To remove: sudo wicklee --uninstall-service");
+            if !running {
+                eprintln!("warning: service registered but not yet visible in launchctl list.");
+                eprintln!("         If http://localhost:7700 is unreachable, run:");
+                eprintln!("         sudo launchctl start dev.wicklee.agent");
+            }
         }
     }
 

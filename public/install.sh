@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 
-# Guard: must run under bash (not dash/sh, which is the default on Debian/Ubuntu)
+# Guard: must run under bash (not dash/sh, which is the default on Debian/Ubuntu).
+# When piped via `curl | sh`, $0 is "/usr/bin/sh" (the interpreter), not a script
+# file — so `exec bash "$0"` would try to execute the sh binary, producing
+# "cannot execute binary file". Instead, re-download and pipe into bash.
 if [ -z "${BASH_VERSION:-}" ]; then
   if command -v bash >/dev/null 2>&1; then
-    exec bash "$0" "$@"
+    if [ -f "$0" ] && [ "$0" != "/usr/bin/sh" ] && [ "$0" != "/bin/sh" ]; then
+      exec bash "$0" "$@"
+    else
+      # Piped invocation (curl | sh) — re-fetch and pipe into bash
+      exec bash -c "$(curl -fsSL https://wicklee.dev/install.sh)" bash "$@"
+    fi
   else
     echo "Wicklee installer requires bash. Please install bash and retry."
     exit 1
