@@ -202,12 +202,12 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
               <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
                 <p className="text-zinc-500 whitespace-nowrap"># macOS &amp; Linux</p>
-                <p className="text-white whitespace-nowrap">curl -fsSL https://wicklee.dev/install.sh | sh</p>
+                <p className="text-white whitespace-nowrap">curl -fsSL https://wicklee.dev/install.sh | bash</p>
                 <p className="text-zinc-500 whitespace-nowrap"># Then: sudo wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
               </div>
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText('curl -fsSL https://wicklee.dev/install.sh | sh');
+                  navigator.clipboard.writeText('curl -fsSL https://wicklee.dev/install.sh | bash');
                   setCopiedMac(true);
                   setTimeout(() => setCopiedMac(false), 2000);
                 }}

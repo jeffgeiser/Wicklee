@@ -65,14 +65,37 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
         }
 
         // powermetrics → CPU power draw (requires root)
-        match tokio::process::Command::new("powermetrics")
-            .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
-            .output().await
-        {
-            Ok(out) if out.status.success() =>
-                platform_rows.push(row("Power", "powermetrics  ✓  (root)")),
-            _ =>
-                platform_rows.push(row("Power", "powermetrics needs root for cpu_power_w")),
+        // When --status is run as a non-root user, powermetrics will fail — but
+        // the LaunchDaemon runs as root and CAN collect power data. Check the
+        // live daemon's metrics endpoint first; only report the problem if both
+        // the daemon and local powermetrics are unavailable.
+        let daemon_has_power = async {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build().ok()?;
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/api/metrics"))
+                .send().await.ok()?;
+            let json: serde_json::Value = resp.json().await.ok()?;
+            // apple_soc_power_w is populated only when powermetrics succeeds
+            json.get("apple_soc_power_w")
+                .and_then(|v| v.as_f64())
+                .filter(|&w| w > 0.0)
+        }.await;
+        if daemon_has_power.is_some() {
+            let watts = daemon_has_power.unwrap();
+            platform_rows.push(row("Power", &format!("{watts:.1}W  (powermetrics via daemon)")));
+        } else {
+            // Daemon not running or not reporting power — try direct
+            match tokio::process::Command::new("powermetrics")
+                .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
+                .output().await
+            {
+                Ok(out) if out.status.success() =>
+                    platform_rows.push(row("Power", "powermetrics  ✓  (root)")),
+                _ =>
+                    platform_rows.push(row("Power", "run with sudo for power data, or check daemon")),
+            }
         }
     }
 

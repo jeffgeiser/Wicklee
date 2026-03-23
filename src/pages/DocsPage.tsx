@@ -203,7 +203,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               <p>Downloads the agent and starts a live session immediately. Telemetry appears in the local dashboard — no service registration, no commitment. Start here.</p>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
-                <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | sh</Code>
+                <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | bash</Code>
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Windows (PowerShell)</p>
@@ -260,14 +260,14 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               <p className="mb-3">The install script handles everything automatically — it stops any running instance before swapping the binary, so upgrades are one command:</p>
               <div className="mb-4">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">The easy way (v0.4.36+)</p>
-                <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | sh</Code>
+                <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | bash</Code>
               </div>
               <p className="mb-3 text-gray-400">If you see a version mismatch banner or <span className="font-mono text-xs text-gray-300">Port 7700 is busy</span>, run the manual recovery sequence:</p>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Manual recovery</p>
                 <Code lang="shell">{`sudo wicklee --uninstall-service   # stop and remove the daemon
 sudo pkill -9 wicklee              # clear any ghost processes
-curl -fsSL https://wicklee.dev/install.sh | sh
+curl -fsSL https://wicklee.dev/install.sh | bash
 sudo wicklee --install-service     # re-install as daemon`}</Code>
               </div>
             </div>
