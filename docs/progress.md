@@ -39,16 +39,22 @@
 - **Discovery hints:** First-scan log for default-port runtimes suggests config override.
 - **Settings cleanup:** Node Configuration section hidden on localhost (cloud-only feature).
 
+### v0.5.21 — vLLM/llama.cpp IDLE-SPD Fix ✅
+- **Root cause:** The inference state machine's IDLE-SPD gate only checked `ollama.recent_probe_baseline()`. vLLM and llama.cpp probes set tok/s correctly, but `inference_state` stayed `"idle"` because `recent_probe` was always `false` for non-Ollama runtimes. Fleet frontend shows `—` when state is `idle`.
+- **Fix:** Added `last_probe_end` + `recent_probe_baseline()` to `VllmMetrics` and `LlamacppMetrics`. `HardwareSignals.recent_probe` now ORs all three: `ollama || vllm || llamacpp`.
+
 ### Critical Bugs Found & Fixed
 - **Ollama worker socket discovery (BMC)** — Tier 3 socket scan preferred non-default ports, picking up internal worker sockets instead of the API. Fixed with API health check + default port fallback.
 - **tok/s regression (all Ollama nodes)** — `validated_port` erased every 5s by struct rebuild. Probe skipped permanently, tok/s stayed blank.
 - **Spark vLLM port loss** — `cap_sys_ptrace` stripped by install script replacing the binary. Fixed: install.sh now preserves the capability.
 - **Nightly release stale** — Version tag builds didn't update the nightly release. Install script pulled old version. Fixed: nightly job now runs on both main pushes and tag pushes.
+- **vLLM/llama.cpp tok/s invisible in fleet** — IDLE-SPD gate was Ollama-only. Spark showed 32 tok/s locally but `—` in fleet dashboard.
 
-### What's Next (Phase 3B remaining)
+### What's Next (Phase 3B remaining → v0.6.0)
 1. **Audit Log Export** — exportable pairing and telemetry history (`GET /api/export`)
-2. **Network & Port Discovery docs** — Hierarchy of Truth, Admin-not-Root guide, Proxy setup
-3. **v0.6.0 — "Sovereignty Release"** tag
+2. **Sovereignty manifest "user-defined" badge** — show `(config.toml)` source in Sovereignty manifest when `[runtime_ports]` override is active
+3. **Network & Port Discovery docs** — Hierarchy of Truth, Admin-not-Root guide, Proxy Wiretap setup
+4. **v0.6.0 — "Sovereignty Release"** tag
 
 ---
 
