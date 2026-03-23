@@ -1,7 +1,7 @@
 /**
  * TracesView — Observability tab
  *
- * Five sections:
+ * Six sections:
  *   1. Sovereignty — always visible (cloud + local). Telemetry destination,
  *      outbound connection manifest, and live connection event log.
  *   2. Request Traces — localhost only. DuckDB-backed trace table with
@@ -11,7 +11,9 @@
  *      in AIInsights.
  *   4. Agent Health — localhost only. Phase 4A: harvester status, SSE
  *      connection health, DuckDB write-path availability.
- *   5. Dismissal Log — localhost only. Sprint 6: all active accepted_states
+ *   5. Event History — localhost only. Phase 3B: persisted Live Activity events
+ *      from agent DuckDB (node_events table). 7-day retention, paginated.
+ *   6. Dismissal Log — localhost only. Sprint 6: all active accepted_states
  *      rows from agent DuckDB. Audit trail for dismissed pattern insights.
  */
 
@@ -26,8 +28,9 @@ import {
 import {
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse } from '../types';
+import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, EventHistoryRecord } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
+import { useEventHistory } from '../hooks/useEventHistory';
 
 const isLocalHost =
   window.location.hostname === 'localhost' ||
@@ -1032,6 +1035,118 @@ const DismissalLogPanel: React.FC = () => {
   );
 };
 
+// ── Event History Panel ──────────────────────────────────────────────────────
+// Persisted Live Activity events from the agent's DuckDB (node_events table).
+// 7-day retention. Cockpit-only — same gate as Agent Health and Metric History.
+
+const EVENT_TYPE_COLORS: Record<string, string> = {
+  startup:        'text-green-400',
+  update:         'text-blue-400',
+  model_swap:     'text-indigo-400',
+  thermal_change: 'text-amber-400',
+  error:          'text-red-400',
+};
+
+const LEVEL_DOT: Record<string, string> = {
+  info:  'bg-gray-400',
+  warn:  'bg-amber-400',
+  error: 'bg-red-400',
+};
+
+function relativeTime(tsMs: number): string {
+  const delta = Date.now() - tsMs;
+  if (delta < 60_000) return 'just now';
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
+  return `${Math.floor(delta / 86_400_000)}d ago`;
+}
+
+const EventHistoryPanel: React.FC = () => {
+  const { events, loading, error, hasMore, loadMore, refresh } = useEventHistory({ limit: 30 });
+
+  return (
+    <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-5">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Clock className="w-4 h-4 text-cyan-400" />
+          <h3 className="text-sm font-semibold text-gray-300">Event History</h3>
+          <span className="text-[10px] text-gray-600 font-mono ml-1">node_events · 7d</span>
+        </div>
+        <button
+          onClick={refresh}
+          className="p-1 rounded hover:bg-gray-800 transition-colors"
+          title="Refresh"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-2 text-amber-400 text-xs mb-3">
+          <AlertTriangle className="w-3.5 h-3.5" />
+          <span>Failed to load event history: {error}</span>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && !error && events.length === 0 && (
+        <p className="text-xs text-gray-600 text-center py-4">
+          No events recorded yet. Events persist to DuckDB on agent startup, updates, and
+          lifecycle changes.
+        </p>
+      )}
+
+      {/* Event list */}
+      {events.length > 0 && (
+        <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+          {events.map((ev, i) => (
+            <div key={`${ev.ts_ms}-${i}`}
+              className="flex items-start gap-2.5 py-1.5 px-2 rounded hover:bg-gray-800/50 transition-colors"
+            >
+              {/* Level dot */}
+              <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${LEVEL_DOT[ev.level] ?? 'bg-gray-500'}`} />
+
+              {/* Content */}
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-gray-300 leading-snug truncate">{ev.message}</p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-[10px] text-gray-600 font-mono">{relativeTime(ev.ts_ms)}</span>
+                  {ev.event_type && (
+                    <span className={`text-[10px] font-mono ${EVENT_TYPE_COLORS[ev.event_type] ?? 'text-gray-500'}`}>
+                      {ev.event_type}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Load more */}
+      {hasMore && events.length > 0 && (
+        <button
+          onClick={loadMore}
+          disabled={loading}
+          className="mt-3 w-full text-[11px] text-gray-500 hover:text-gray-400 py-1.5 rounded border border-gray-800 hover:border-gray-700 transition-colors"
+        >
+          {loading ? 'Loading…' : 'Load older events'}
+        </button>
+      )}
+
+      {/* Footer */}
+      {events.length > 0 && (
+        <p className="text-[11px] text-gray-700 leading-relaxed mt-3">
+          Stored in <span className="font-mono text-gray-600">node_events</span> table ·{' '}
+          agent-local <span className="font-mono text-gray-600">metrics.db</span> · 7-day retention.
+        </p>
+      )}
+    </div>
+  );
+};
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo }) => {
@@ -1047,6 +1162,8 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
       {/* Phase 4A — Raw Metric History + Agent Health (Cockpit / localhost only) */}
       {isLocalHost && pairingInfo !== null && <MetricHistoryPanel nodeId={nodeId} />}
       {isLocalHost && pairingInfo !== null && <AgentHealthPanel   nodeId={nodeId} />}
+      {/* Phase 3B — Event History (Cockpit / localhost only) */}
+      {isLocalHost && pairingInfo !== null && <EventHistoryPanel />}
       {/* Sprint 6 — Dismissal Log (Cockpit / localhost only) */}
       {isLocalHost && pairingInfo !== null && <DismissalLogPanel />}
     </div>
