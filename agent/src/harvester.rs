@@ -173,7 +173,46 @@ pub(crate) fn start_ollama_harvester(
                 // Park until discovery sends an update (Some or None).
                 if port_rx_main.changed().await.is_err() { return; }
             }
-            let port = port_rx_main.borrow().unwrap();
+            let discovered_port = port_rx_main.borrow().unwrap();
+
+            // Validate the discovered port: the Tier 3 socket scan can pick up
+            // internal worker-process sockets (e.g. ollama_llama_server on :34111)
+            // that don't serve the Ollama HTTP API.  Hit /api/version as a quick
+            // health check; if it fails, fall back to the runtime's default port.
+            let port = {
+                let check_url = format!("http://127.0.0.1:{discovered_port}/api/version");
+                let api_ok = client.get(&check_url).send().await
+                    .map(|r| r.status().is_success()).unwrap_or(false);
+                if api_ok {
+                    discovered_port
+                } else {
+                    let default_port: u16 = 11434;
+                    if discovered_port == default_port {
+                        // Already tried default — nothing to fall back to.
+                        eprintln!("[ollama] API not responding on :{default_port} — will retry");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue; // back to outer wait loop
+                    }
+                    let fallback_url = format!("http://127.0.0.1:{default_port}/api/version");
+                    let fallback_ok = client.get(&fallback_url).send().await
+                        .map(|r| r.status().is_success()).unwrap_or(false);
+                    if fallback_ok {
+                        eprintln!(
+                            "[ollama] :{discovered_port} is a worker socket (API returned 404), \
+                             using default :{default_port}",
+                        );
+                        default_port
+                    } else {
+                        eprintln!(
+                            "[ollama] API not responding on :{discovered_port} or :{default_port} — will retry"
+                        );
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue; // back to outer wait loop
+                    }
+                }
+            };
+            // Store validated port so the probe task can read it.
+            if let Ok(mut g) = shared_main.lock() { g.validated_port = Some(port); }
             let base = format!("http://127.0.0.1:{port}");
             eprintln!("[ollama] connected on :{port}");
 
@@ -312,9 +351,11 @@ pub(crate) fn start_ollama_harvester(
             loop {
                 interval.tick().await;
 
-                // Read the current port — skip if Ollama isn't running.
-                let Some(port) = *port_rx.borrow() else {
-                    eprintln!("[ollama] probe skip — port_rx is None (discovery hasn't found Ollama yet)");
+                // Read the API-validated port from shared state (set by the main
+                // harvester after health-checking). This avoids hitting internal
+                // worker sockets that don't serve the Ollama HTTP API.
+                let Some(port) = shared_probe.lock().ok().and_then(|g| g.validated_port) else {
+                    // Main harvester hasn't validated a port yet — skip this cycle.
                     continue;
                 };
 
