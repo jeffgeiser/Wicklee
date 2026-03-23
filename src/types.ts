@@ -121,6 +121,10 @@ export interface SentinelMetrics {
    * When true, tok/s comes from done-packet eval_count/eval_duration (exact),
    * not the 30-second synthetic probe. Frontend shows "live" not "live estimate". */
   ollama_proxy_active?: boolean | null;
+  /** Port the proxy listens on (e.g. 11434). Null/undefined when proxy is disabled. */
+  proxy_listen_port?: number | null;
+  /** Port the proxy forwards to (the real Ollama port, e.g. 11435). Null when disabled. */
+  proxy_target_port?: number | null;
   /** True during the agent's 30s background probe AND for 40 s afterward (covering the
    * /api/ps expiry window). When true, show IDLE-SPD instead of LIVE — the probe
    * fires a real Ollama request which would otherwise appear as a user session. */

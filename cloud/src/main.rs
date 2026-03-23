@@ -94,6 +94,10 @@ struct MetricsPayload {
     /// True when the Wicklee transparent proxy is active on :11434.
     #[serde(default)]
     ollama_proxy_active: Option<bool>,
+    #[serde(default)]
+    proxy_listen_port: Option<u16>,
+    #[serde(default)]
+    proxy_target_port: Option<u16>,
     /// True during probe and 40s afterward — frontend uses for IDLE-SPD display.
     #[serde(default)]
     ollama_is_probing: Option<bool>,
