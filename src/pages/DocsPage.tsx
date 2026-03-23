@@ -103,6 +103,7 @@ const NAV = [
   { id: 'quickstart',  label: 'Quick Start' },
   { id: 'cli',         label: 'CLI Reference' },
   { id: 'wes',         label: 'WES Score' },
+  { id: 'states',      label: 'Node States' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'api',         label: 'Agent API v1' },
   { id: 'config',      label: 'Configuration' },
@@ -216,15 +217,25 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">2</span>
-                <p className="font-semibold text-white text-sm">Full hardware metrics — run with sudo <span className="text-gray-500 font-normal">(Linux only)</span></p>
+                <p className="font-semibold text-white text-sm">Full hardware metrics — elevated access</p>
               </div>
-              <p>On Linux, CPU power draw (RAPL) and some thermal sensors require elevated access. Running with <code className="font-mono text-xs text-gray-300">sudo</code> unlocks these — you'll see WATTS and full thermal state in the dashboard instead of dashes.</p>
+              <p>Some hardware sensors require elevated access to report full data:</p>
+              <div className="space-y-2 text-sm">
+                <div>
+                  <p className="text-white font-medium">Linux</p>
+                  <p className="text-gray-400">CPU power draw (RAPL) and some thermal sensors need root. Run <code className="font-mono text-xs text-gray-300">sudo wicklee</code> or install as a service (step 3) to unlock WATTS and full thermal state.</p>
+                </div>
+                <div>
+                  <p className="text-white font-medium">macOS</p>
+                  <p className="text-gray-400">GPU utilization and thermal state are read via IOKit without root. However, <strong className="text-gray-300">SoC power draw</strong> (CPU + GPU + ANE combined power, used for WES and Cost/1K) requires <code className="font-mono text-xs text-gray-300">powermetrics</code>, which needs root. Install as a system service (step 3) to get full power metrics — the LaunchDaemon runs as root automatically.</p>
+                </div>
+              </div>
               <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Linux</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Linux (one-off)</p>
                 <Code lang="shell">sudo wicklee</Code>
               </div>
               <NoteBox>
-                macOS does not require <code className="font-mono text-xs text-gray-300">sudo</code> — the agent reads Apple Silicon power, GPU, and thermal data directly via IOKit without elevated permissions.
+                On both platforms, the recommended path is step 3 (<code className="font-mono text-xs text-gray-300">--install-service</code>) — it handles root access automatically via launchd/systemd and starts on every boot.
               </NoteBox>
             </div>
 
@@ -487,8 +498,8 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                     </tr>
                     <tr>
                       <Td><span className="font-medium text-white">Throughput label</span></Td>
-                      <Td mono>LIVE · IDLE-SPD · BUSY</Td>
-                      <Td><strong className="text-gray-300">LIVE</strong>: active inference (tok/s &gt; 0). <strong className="text-gray-300">IDLE-SPD</strong>: online, no inference — idle-speed baseline. <strong className="text-gray-300">BUSY</strong>: GPU loaded, no inference (non-inference workload).</Td>
+                      <Td mono>LIVE · IDLE-SPD · BUSY · IDLE</Td>
+                      <Td>Four states from the agent's inference state machine. See <a href="#states" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Node States</a> for full definitions. Tok/s values with a <code className="text-gray-300 font-mono text-xs">~</code> prefix are probe baselines, not live measurements.</Td>
                     </tr>
                     <tr>
                       <Td><span className="font-medium text-white">Display smoothing</span></Td>
@@ -540,6 +551,98 @@ WES Version:     2
                 The WES Trend chart (Mission Control, Pro+) also includes a per-node <strong className="text-white">Export</strong> button that snapshots the most recent history point from the selected time window.
               </p>
             </div>
+          </Section>
+
+          {/* ── Node States ── */}
+          <Section
+            id="states"
+            icon={<Zap className="w-5 h-5" />}
+            accent="border-emerald-500/20"
+            title="Node States — Inference Detection"
+          >
+            <p>
+              Every Wicklee node reports an <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">inference_state</code> field that classifies what the hardware is doing right now. This field is computed once per second by the agent's state machine and is the <strong className="text-white">single source of truth</strong> — the dashboard displays it directly and never re-computes it.
+            </p>
+
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <Th>State</Th>
+                    <Th>Badge</Th>
+                    <Th>Meaning</Th>
+                    <Th>Tok/s display</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td mono>live</Td>
+                    <Td><span className="text-green-400 font-medium">LIVE</span></Td>
+                    <Td>User inference confirmed — model is actively generating tokens for a real request.</Td>
+                    <Td>Live-measured tok/s (green, no tilde)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>idle-spd</Td>
+                    <Td><span className="text-gray-400 font-medium">IDLE-SPD</span></Td>
+                    <Td>Runtime loaded, no active inference. The agent runs a lightweight probe to measure the hardware's baseline throughput — this is the node's <em>capacity</em>, not current workload.</Td>
+                    <Td>Probe baseline tok/s (gray, with <code className="text-gray-300 font-mono text-xs">~</code> tilde)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>busy</Td>
+                    <Td><span className="text-amber-400 font-medium">BUSY</span></Td>
+                    <Td>Significant GPU or power activity, but no inference runtime detected — the hardware is doing non-inference work (rendering, training, compilation).</Td>
+                    <Td>Last known probe baseline (amber)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>idle</Td>
+                    <Td><span className="text-gray-600 font-medium">IDLE</span></Td>
+                    <Td>No inference runtime loaded, no significant GPU activity. The node is available but not running any AI workload.</Td>
+                    <Td>— (no value)</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-gray-950 border border-emerald-500/20 rounded-xl p-5">
+              <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-3">How inference is detected — three-tier hierarchy</p>
+              <p className="text-xs text-gray-400 leading-relaxed mb-3">
+                The agent evaluates three tiers of evidence every second. The first tier that fires wins — higher tiers are more precise and take priority.
+              </p>
+              <div className="space-y-3">
+                <div className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-[10px] font-bold text-emerald-400">1</span>
+                  <div>
+                    <p className="text-sm text-white font-medium">Exact — runtime API</p>
+                    <p className="text-xs text-gray-400 mt-0.5">vLLM reports active request count via its Prometheus endpoint. If <code className="text-gray-300 font-mono text-xs">requests_running &gt; 0</code>, the node is LIVE — no ambiguity.</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-[10px] font-bold text-emerald-400">2</span>
+                  <div>
+                    <p className="text-sm text-white font-medium">Attribution — Ollama activity tracking</p>
+                    <p className="text-xs text-gray-400 mt-0.5">When Ollama's <code className="text-gray-300 font-mono text-xs">/api/ps</code> shows a model expiry change that can be attributed to a user request (not the agent's own probe), the node is LIVE for 15 seconds. A one-shot flag (<code className="text-gray-300 font-mono text-xs">probe_caused_next_reset</code>) prevents the probe from being mistaken for user activity.</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-[10px] font-bold text-emerald-400">3</span>
+                  <div>
+                    <p className="text-sm text-white font-medium">Physics — hardware sensors</p>
+                    <p className="text-xs text-gray-400 mt-0.5">When no runtime API is available, the agent reads GPU utilization, SoC power, ANE power, and NVIDIA board power directly. If these exceed idle thresholds while a runtime is loaded, the node is LIVE. A saturated-GPU override ({'≥'}75%) bypasses the post-probe cooldown window — probe-driven GPU residency never exceeds ~60% on Apple Silicon, so 75%+ can only be real inference.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-2">The tilde convention</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Tok/s values prefixed with <code className="text-amber-300 font-mono">~</code> are <strong className="text-gray-300">baseline estimates</strong> from the agent's periodic throughput probe — not live measurements from an active request. The probe sends a short 20-token generation to measure the hardware's current capacity. When inference is active (LIVE state), the tilde disappears and the value reflects real-time measured throughput.
+              </p>
+            </div>
+
+            <NoteBox>
+              The <code className="font-mono text-xs text-gray-300">inference_state</code> field is frozen in the wire format — the agent sends it identically to the local WebSocket dashboard and the fleet cloud backend. The fleet dashboard must display this value directly and never attempt to re-derive it from other fields like <code className="font-mono text-xs text-gray-300">gpu_utilization_percent</code> or <code className="font-mono text-xs text-gray-300">ollama_inference_active</code>.
+            </NoteBox>
           </Section>
 
           {/* ── Pattern Intelligence ── */}
