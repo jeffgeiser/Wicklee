@@ -642,6 +642,7 @@ pub(crate) fn start_vllm_harvester(
                 eprintln!("[vllm] idle probe → {tps:.1} tok/s");
                 if let Ok(mut g) = shared_probe.lock() {
                     g.vllm_tokens_per_sec = Some(tps);
+                    g.last_probe_end = Some(std::time::Instant::now());
                 }
             }
         }
@@ -857,6 +858,7 @@ pub(crate) fn start_llamacpp_harvester(
                 eprintln!("[llamacpp] idle probe → {tps:.1} tok/s");
                 if let Ok(mut g) = shared_probe.lock() {
                     g.llamacpp_tokens_per_sec = Some(tps);
+                    g.last_probe_end = Some(std::time::Instant::now());
                 }
             }
         }

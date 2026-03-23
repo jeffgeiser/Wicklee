@@ -50,7 +50,9 @@ pub(crate) fn read_hardware_signals(
         llamacpp_requests:    llamacpp.llamacpp_slots_processing,
         probe_active:         probe_active.load(std::sync::atomic::Ordering::Acquire),
         last_user_request_ts: ollama.last_user_request_ts,
-        recent_probe:         ollama.recent_probe_baseline(),
+        recent_probe:         ollama.recent_probe_baseline()
+                              || vllm.recent_probe_baseline()
+                              || llamacpp.recent_probe_baseline(),
     }
 }
 

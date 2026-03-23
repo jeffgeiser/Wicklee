@@ -130,6 +130,16 @@ pub(crate) struct VllmMetrics {
     pub(crate) vllm_tokens_per_sec:   Option<f32>,
     pub(crate) vllm_cache_usage_perc: Option<f32>,
     pub(crate) vllm_requests_running: Option<u32>,
+    /// Set when the 30s idle probe completes. Used for IDLE-SPD display state.
+    #[serde(skip)]
+    pub(crate) last_probe_end: Option<std::time::Instant>,
+}
+
+impl VllmMetrics {
+    /// True for 30 s after the probe completes — mirrors OllamaMetrics::recent_probe_baseline().
+    pub(crate) fn recent_probe_baseline(&self) -> bool {
+        self.last_probe_end.map_or(false, |t| t.elapsed().as_secs() < 30)
+    }
 }
 
 // llama.cpp / llama-box runtime metrics — populated when llama-server is detected.
@@ -140,6 +150,16 @@ pub(crate) struct LlamacppMetrics {
     pub(crate) llamacpp_model_name:       Option<String>,
     pub(crate) llamacpp_tokens_per_sec:   Option<f32>,
     pub(crate) llamacpp_slots_processing: Option<u32>,
+    /// Set when the 30s idle probe completes. Used for IDLE-SPD display state.
+    #[serde(skip)]
+    pub(crate) last_probe_end: Option<std::time::Instant>,
+}
+
+impl LlamacppMetrics {
+    /// True for 30 s after the probe completes — mirrors OllamaMetrics::recent_probe_baseline().
+    pub(crate) fn recent_probe_baseline(&self) -> bool {
+        self.last_probe_end.map_or(false, |t| t.elapsed().as_secs() < 30)
+    }
 }
 
 // NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
