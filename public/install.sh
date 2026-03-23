@@ -91,6 +91,19 @@ curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" \
 
 chmod +x "$TMP"
 
+# ── Preserve Linux capabilities ──────────────────────────────────────────────
+# The install replaces the binary, which strips filesystem capabilities.
+# If the old binary had cap_sys_ptrace (for cross-user runtime discovery),
+# remember it so we can re-apply after the copy.
+HAD_PTRACE_CAP=false
+if [[ "$OS_TAG" == "linux" ]] && command -v getcap &>/dev/null; then
+  if [[ -f "${INSTALL_DIR}/${BIN_NAME}" ]]; then
+    if getcap "${INSTALL_DIR}/${BIN_NAME}" 2>/dev/null | grep -q cap_sys_ptrace; then
+      HAD_PTRACE_CAP=true
+    fi
+  fi
+fi
+
 # ── Ghost-Kill preflight ─────────────────────────────────────────────────────
 # Stop any running wicklee instance before swapping the binary.
 # Prevents "port 7700 already in use" when the new binary first starts.
@@ -140,6 +153,13 @@ if [[ -w "$INSTALL_DIR" ]]; then
 else
   echo "  Installing to ${INSTALL_PATH} (sudo required)…"
   sudo cp "$TMP" "$INSTALL_TMP" && sudo mv "$INSTALL_TMP" "$INSTALL_PATH"
+fi
+
+# ── Re-apply Linux capabilities ──────────────────────────────────────────────
+if [[ "$HAD_PTRACE_CAP" == "true" ]]; then
+  sudo setcap cap_sys_ptrace+ep "$INSTALL_PATH" 2>/dev/null \
+    && dim "  Restored cap_sys_ptrace (cross-user runtime discovery)." \
+    || dim "  Warning: could not restore cap_sys_ptrace — run: sudo setcap cap_sys_ptrace+ep $INSTALL_PATH"
 fi
 
 # ── Service update ────────────────────────────────────────────────────────────
