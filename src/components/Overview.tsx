@@ -1831,7 +1831,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* 8. FLEET / NODE POWER COST */}
         <InsightTile
           label={isLocalMode ? 'Node Power Cost' : 'Fleet Power Cost'}
-          value={idleFleetCostPerDay != null ? `$${idleFleetCostPerDay.toFixed(2)}/day` : '—'}
+          value={idleFleetCostPerDay != null
+            ? idleFleetCostPerDay > 0 && idleFleetCostPerDay < 0.01
+              ? '< $0.01/day'
+              : `$${idleFleetCostPerDay.toFixed(2)}/day`
+            : '—'}
           valueCls={idleFleetCostPerDay == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={idleFleetCostPerDay != null
             ? isLocalMode
