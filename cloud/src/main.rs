@@ -3312,6 +3312,14 @@ fn run_duck_migrations(conn: &DuckConn) {
     let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN wes_version UTINYINT NOT NULL DEFAULT 1;");
     let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN wes_version_count UTINYINT NOT NULL DEFAULT 1;");
     let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN agent_version VARCHAR;");
+
+    // ── Diagnostic: log actual column count so schema drift is visible ──
+    if let Ok(mut stmt) = conn.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'metrics_raw' ORDER BY ordinal_position") {
+        if let Ok(cols) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            let names: Vec<String> = cols.filter_map(|r| r.ok()).collect();
+            eprintln!("[duck] metrics_raw schema: {} columns — {:?}", names.len(), names);
+        }
+    }
 }
 
 // ── DuckDB — derive MetricsRow from inbound telemetry ────────────────────────
@@ -3360,19 +3368,29 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
 
 // ── DuckDB — batch writer ─────────────────────────────────────────────────────
 
-/// Flush a batch of MetricsRow into metrics_raw using the DuckDB Appender
-/// (10-20× faster than prepared statements for bulk inserts).
+/// Flush a batch of MetricsRow into metrics_raw using explicit INSERT statements.
+/// Slower than the DuckDB Appender but immune to schema drift from ALTER TABLE
+/// migrations that change the column order or count on an existing database file.
 /// Call only from spawn_blocking — DuckDB Connection is !Sync.
 fn flush_batch(conn: &DuckConn, batch: &[MetricsRow]) {
     if batch.is_empty() { return; }
 
-    let mut app = match conn.appender("metrics_raw") {
-        Ok(a)  => a,
-        Err(e) => { eprintln!("[duck] appender open failed: {e}"); return; }
+    let mut stmt = match conn.prepare(
+        "INSERT INTO metrics_raw (
+            node_id, ts_ms, tenant_id, tok_s, watts, wes_raw, wes_penalized,
+            thermal_cost_pct, thermal_penalty, thermal_state,
+            vram_used_mb, vram_total_mb, mem_pressure_pct, gpu_pct, cpu_pct,
+            inference_state, wes_version, agent_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("[duck] INSERT prepare failed: {e}"); return; }
     };
 
+    let mut ok = 0usize;
+    let mut fail = 0usize;
     for row in batch {
-        let _ = app.append_row(duckdb::params![
+        match stmt.execute(duckdb::params![
             row.node_id.as_str(),
             row.ts_ms,
             row.tenant_id.as_str(),
@@ -3391,11 +3409,13 @@ fn flush_batch(conn: &DuckConn, batch: &[MetricsRow]) {
             row.inference_state.as_deref(),
             row.wes_version,
             Option::<&str>::None, // agent_version — Phase 4B
-        ]);
+        ]) {
+            Ok(_)  => ok += 1,
+            Err(_) => fail += 1,
+        }
     }
-
-    if let Err(e) = app.flush() {
-        eprintln!("[duck] appender flush failed ({} rows dropped): {e}", batch.len());
+    if fail > 0 {
+        eprintln!("[duck] INSERT batch: {ok} ok, {fail} failed (of {} total)", batch.len());
     }
 }
 
