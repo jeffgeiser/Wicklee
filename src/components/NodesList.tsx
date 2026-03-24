@@ -22,9 +22,9 @@ const isLocalHost =
 // Fixed column widths — no responsive hiding.
 // Container is overflow-x: auto so the table scrolls horizontally on narrow
 // viewports rather than collapsing or hiding columns.
-// Columns: SELECT(40) | NODE ID(100) | IDENTITY(220) | OS(80) | MEMORY(120) |
-//          CONNECTIVITY(110) | UPTIME(90) | VERSION(80) | COVERAGE(120) | SPACER(1fr)
-const MGMT_GRID_CLS = 'grid gap-x-3 items-center [grid-template-columns:40px_100px_220px_80px_120px_110px_90px_80px_120px_1fr]';
+// Columns: SELECT(40) | NODE(140) | IDENTITY(1fr) | OS(80) | MEMORY(130) |
+//          CONNECTIVITY(110) | UPTIME(90) | VERSION(80) | COVERAGE(100)
+const MGMT_GRID_CLS = 'grid gap-x-4 items-center [grid-template-columns:40px_140px_1fr_80px_130px_110px_90px_80px_100px]';
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
