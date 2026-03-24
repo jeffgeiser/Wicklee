@@ -8,7 +8,7 @@ interface EventFeedProps {
 
 const DEFAULT_VISIBLE = 5;
 
-const fmtAgo = (ts: number): string => {
+export const fmtAgo = (ts: number): string => {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60)   return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -21,7 +21,7 @@ interface EventMeta {
   cls: string;
 }
 
-function eventMeta(ev: FleetEvent): EventMeta {
+export function eventMeta(ev: FleetEvent): EventMeta {
   switch (ev.type) {
     case 'node_online':
       return {
