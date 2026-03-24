@@ -76,6 +76,10 @@ interface TracesViewProps {
   pairingInfo: PairingInfo | null;
   getToken?: () => Promise<string | null>;
   subscriptionTier?: SubscriptionTier;
+  /** Cross-nav params from Insights → Observability (node_id + time filter). */
+  navParams?: import('../types').ObservabilityNavParams;
+  /** Called after nav params are consumed to clear stale state. */
+  onNavConsumed?: () => void;
 }
 
 // ── Sovereignty Section ────────────────────────────────────────────────────────
@@ -1537,8 +1541,10 @@ const EVENT_TYPE_BADGE: Record<string, string> = {
 const FleetEventTimeline: React.FC<{
   nodes: NodeAgent[];
   getToken: () => Promise<string | null>;
-}> = ({ nodes, getToken }) => {
-  const [selectedNode, setSelectedNode] = useState<string>('');
+  /** Pre-select a node via cross-nav from Insights tab. */
+  initialNodeId?: string;
+}> = ({ nodes, getToken, initialNodeId }) => {
+  const [selectedNode, setSelectedNode] = useState<string>(initialNodeId ?? '');
   const [selectedType, setSelectedType] = useState<string>('');
   const [token, setToken] = useState<string | null>(null);
   const [tokenReady, setTokenReady] = useState(false);
@@ -1730,9 +1736,11 @@ const FleetMetricsMini: React.FC<{
   nodes: NodeAgent[];
   getToken: () => Promise<string | null>;
   subscriptionTier: SubscriptionTier;
-}> = ({ nodes, getToken, subscriptionTier }) => {
+  /** Pre-select a node via cross-nav from Insights tab. */
+  initialNodeId?: string;
+}> = ({ nodes, getToken, subscriptionTier, initialNodeId }) => {
   const [range, setRange] = useState<FleetMetricRange>('1h');
-  const [selectedNode, setSelectedNode] = useState<string>('');
+  const [selectedNode, setSelectedNode] = useState<string>(initialNodeId ?? '');
   const [data, setData] = useState<FleetMetricsNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1946,12 +1954,21 @@ const FleetMetricsMini: React.FC<{
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo, getToken, subscriptionTier }) => {
+const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo, getToken, subscriptionTier, navParams, onNavConsumed }) => {
   // node_id is always populated once pairingInfo loads from /api/pair/status.
   // Gate on pairingInfo !== null (not on nodeId) so the panels aren't permanently
   // hidden during the brief window before the first API response arrives.
   const nodeId = pairingInfo?.node_id ?? '';
   const { proxyActive, listenPort: proxyListenPort, targetPort: proxyTargetPort, runtimeOverrides } = useProxyStatus();
+
+  // Consume nav params after mount so they don't persist on tab re-visits.
+  useEffect(() => {
+    if (navParams && onNavConsumed) {
+      // Delay slightly so child components can read the initial value.
+      const id = setTimeout(onNavConsumed, 500);
+      return () => clearTimeout(id);
+    }
+  }, [navParams, onNavConsumed]);
 
   return (
     <div className="space-y-8">
@@ -1960,8 +1977,8 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
         <>
           <FleetSovereigntyGuard />
           <TelemetryInspector nodes={_nodes} />
-          {getToken && <FleetEventTimeline nodes={_nodes} getToken={getToken} />}
-          {getToken && subscriptionTier && <FleetMetricsMini nodes={_nodes} getToken={getToken} subscriptionTier={subscriptionTier} />}
+          {getToken && <FleetEventTimeline nodes={_nodes} getToken={getToken} initialNodeId={navParams?.nodeId} />}
+          {getToken && subscriptionTier && <FleetMetricsMini nodes={_nodes} getToken={getToken} subscriptionTier={subscriptionTier} initialNodeId={navParams?.nodeId} />}
         </>
       )}
 

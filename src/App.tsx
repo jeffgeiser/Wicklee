@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { version } from '../package.json';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/clerk-react';
-import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier } from './types';
+import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import Sidebar from './components/Sidebar';
@@ -143,6 +143,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
+  const [observabilityNav, setObservabilityNav] = useState<ObservabilityNavParams | undefined>(undefined);
   const [nodes, setNodes] = useState<NodeAgent[]>([]);
   // True until the first /api/fleet fetch settles (or Clerk hasn't loaded yet).
   // Prevents EmptyFleetState from flashing on page refresh while auth resolves.
@@ -380,7 +381,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} cloudUrl={isLocalHost ? undefined : CLOUD_URL} onNodesRemoved={handleNodeAdded} />;
       case DashboardTab.TRACES:
-        return <TracesView nodes={nodes} tenantId={currentTenant.id} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} subscriptionTier={permissions.subscriptionTier} />;
+        return <TracesView nodes={nodes} tenantId={currentTenant.id} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} subscriptionTier={permissions.subscriptionTier} navParams={observabilityNav} onNavConsumed={() => setObservabilityNav(undefined)} />;
       case DashboardTab.SCAFFOLDING:
         return permissions.canViewScaffolding ? <ScaffoldingView /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.AI_INSIGHTS:
@@ -392,7 +393,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
             getToken={getToken}
             historyDays={permissions.historyDays}
             subscriptionTier={permissions.subscriptionTier}
-            onNavigateToObservability={() => setActiveTab(DashboardTab.TRACES)}
+            onNavigateToObservability={(params?: ObservabilityNavParams) => {
+              setObservabilityNav(params);
+              setActiveTab(DashboardTab.TRACES);
+            }}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
