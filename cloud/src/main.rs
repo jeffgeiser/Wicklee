@@ -33,6 +33,17 @@ type Db = Arc<Mutex<Connection>>;
 /// the metrics_writer_task channel — direct handler access is not needed.
 type DuckDb = Arc<Mutex<DuckConn>>;
 
+/// Lock the DuckDB mutex, recovering from a poisoned state.
+/// If a prior holder panicked (poisoning the mutex), we still acquire the
+/// inner connection — DuckDB is process-safe and the connection remains valid.
+/// This prevents a single task panic from cascading to every DuckDB consumer.
+fn duck_lock(duck: &DuckDb) -> std::sync::MutexGuard<'_, DuckConn> {
+    duck.lock().unwrap_or_else(|poisoned| {
+        eprintln!("[duck] WARNING: mutex was poisoned by a prior panic — recovering");
+        poisoned.into_inner()
+    })
+}
+
 // ── Shared payload shape — must stay in sync with the agent ──────────────────
 //
 // IMPORTANT: Every field the agent's MetricsPayload serializes must appear here.
@@ -1838,7 +1849,9 @@ async fn handle_telemetry(
             |r| r.get::<_, String>(0),
         ) {
             let row = MetricsRow { tenant_id: tenant_id.clone(), ..duck_row };
-            let _ = metrics_tx.try_send(row);
+            if let Err(e) = metrics_tx.try_send(row) {
+                eprintln!("[telemetry] metrics_tx send failed for {nid}: {e} — DuckDB pipeline may be broken");
+            }
 
             // Persist any Live Activity events to DuckDB.
             for ev in &live_activities {
@@ -1970,7 +1983,7 @@ async fn handle_fleet_events_history(
 
     let duck = state.duck_db.clone();
     match tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
 
         // Row mapper closure reused across all query branches.
         let map_row = |r: &duckdb::Row| Ok(serde_json::json!({
@@ -2052,7 +2065,7 @@ async fn handle_fleet_observations(
 
     let duck = state.duck_db.clone();
     match tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
 
         let map_row = |r: &duckdb::Row| Ok(serde_json::json!({
             "id":             r.get::<_, String>(0)?,
@@ -2133,7 +2146,7 @@ async fn handle_acknowledge_observation(
     let duck = state.duck_db.clone();
     let now = now_ms() as i64;
     match tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
         let updated = conn.execute(
             "UPDATE fleet_observations SET state = 'acknowledged', ack_at_ms = ?1
              WHERE id = ?2 AND tenant_id = ?3 AND state = 'open'",
@@ -2188,7 +2201,7 @@ async fn handle_fleet_export(
 
     let duck = state.duck_db.clone();
     let events = match tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
         let base = "SELECT ts_ms, node_id, level, event_type, message FROM node_events
                     WHERE tenant_id = ?1 AND ts_ms >= ?2 AND ts_ms <= ?3";
         let map_row = |r: &duckdb::Row| {
@@ -2371,7 +2384,7 @@ async fn handle_wes_history(
     let since_ms = now - lookback_ms;
 
     let nodes_data: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
         let mut out = Vec::new();
 
         for (node_id, hostname) in &target_nodes {
@@ -2568,7 +2581,7 @@ async fn handle_metrics_history(
     let since_ms = now - lookback_ms;
 
     let nodes_data: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
         let mut out = Vec::new();
 
         for (node_id, hostname) in &target_nodes {
@@ -2711,7 +2724,7 @@ async fn handle_fleet_duty(
     let since_ms = now_ms() as i64 - lookback_ms;
 
     let result = tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
         let sql_conn = db2.lock().unwrap();
 
         // Get target nodes
@@ -3012,7 +3025,7 @@ async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
     // Diagnostic: check DuckDB metrics_raw freshness
     let duck = state.duck_db.clone();
     let diag = tokio::task::spawn_blocking(move || {
-        let conn = duck.lock().unwrap();
+        let conn = duck_lock(&duck);
         let latest_ts: Option<i64> = conn.query_row(
             "SELECT MAX(ts_ms) FROM metrics_raw", [], |r| r.get(0),
         ).ok();
@@ -3400,7 +3413,7 @@ async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, duck: DuckDb) {
                             let batch = std::mem::take(&mut buffer);
                             let d = duck.clone();
                             tokio::task::spawn_blocking(move || {
-                                flush_batch(&d.lock().unwrap(), &batch);
+                                flush_batch(&duck_lock(&d), &batch);
                             }).await.ok();
                         }
                     }
@@ -3411,7 +3424,7 @@ async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, duck: DuckDb) {
                     let batch = std::mem::take(&mut buffer);
                     let d = duck.clone();
                     tokio::task::spawn_blocking(move || {
-                        flush_batch(&d.lock().unwrap(), &batch);
+                        flush_batch(&duck_lock(&d), &batch);
                     }).await.ok();
                 }
             }
@@ -3422,7 +3435,7 @@ async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, duck: DuckDb) {
     if !buffer.is_empty() {
         let d = duck.clone();
         tokio::task::spawn_blocking(move || {
-            flush_batch(&d.lock().unwrap(), &buffer);
+            flush_batch(&duck_lock(&d), &buffer);
         }).await.ok();
     }
 }
@@ -3433,7 +3446,7 @@ async fn events_writer_task(mut rx: mpsc::Receiver<EventRow>, duck: DuckDb) {
     while let Some(ev) = rx.recv().await {
         let d = duck.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            let conn = d.lock().unwrap();
+            let conn = duck_lock(&d);
             if let Err(e) = conn.execute(
                 "INSERT INTO node_events (ts_ms, node_id, tenant_id, level, event_type, message)
                  VALUES (?, ?, ?, ?, ?, ?)
@@ -3559,7 +3572,7 @@ async fn rollup_task(duck: DuckDb) {
     tokio::time::sleep(Duration::from_secs(60)).await;
     {
         let d = duck.clone();
-        tokio::task::spawn_blocking(move || run_rollup(&d.lock().unwrap())).await.ok();
+        tokio::task::spawn_blocking(move || run_rollup(&duck_lock(&d))).await.ok();
     }
 
     let mut interval = tokio::time::interval(Duration::from_secs(3600));
@@ -3569,7 +3582,7 @@ async fn rollup_task(duck: DuckDb) {
         interval.tick().await;
         let d = duck.clone();
         tokio::task::spawn_blocking(move || {
-            run_rollup(&d.lock().unwrap());
+            run_rollup(&duck_lock(&d));
         }).await.ok();
     }
 }
@@ -3592,7 +3605,7 @@ async fn nightly_task(duck: DuckDb) {
         tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
         let d = duck.clone();
         tokio::task::spawn_blocking(move || {
-            run_nightly_maintenance(&d.lock().unwrap());
+            run_nightly_maintenance(&duck_lock(&d));
         }).await.ok();
     }
 }
@@ -4220,7 +4233,7 @@ async fn node_offline_alert_task(state: AppState) {
             let tid = tenant_id.clone();
             let cutoff = (now_ms() as i64) - 3_600_000; // 1 hour ago
             let already_exists = tokio::task::spawn_blocking(move || {
-                let conn = duck.lock().unwrap();
+                let conn = duck_lock(&duck);
                 conn.query_row(
                     "SELECT 1 FROM node_events WHERE tenant_id = ? AND node_id = ? AND event_type = 'node_offline' AND ts_ms > ? LIMIT 1",
                     duckdb::params![tid, nid, cutoff],
@@ -4247,7 +4260,7 @@ async fn node_offline_alert_task(state: AppState) {
                 let minutes = elapsed / 60_000;
                 let now_i64 = now_ms() as i64;
                 let _ = tokio::task::spawn_blocking(move || {
-                    let conn = duck2.lock().unwrap();
+                    let conn = duck_lock(&duck2);
                     conn.execute(
                         "INSERT INTO fleet_observations
                          (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
@@ -4281,7 +4294,7 @@ async fn node_offline_alert_task(state: AppState) {
             let tid = tenant_id.clone();
             let now_i64 = now_ms() as i64;
             let _ = tokio::task::spawn_blocking(move || {
-                let conn = duck.lock().unwrap();
+                let conn = duck_lock(&duck);
                 conn.execute(
                     "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = ?
                      WHERE tenant_id = ? AND node_id = ? AND alert_type = 'node_offline' AND state = 'open'",
@@ -4386,7 +4399,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
             baseline_refresh_counter = 0;
             let duck = state.duck_db.clone();
             if let Ok(baselines) = tokio::task::spawn_blocking(move || {
-                let conn = duck.lock().unwrap();
+                let conn = duck_lock(&duck);
                 let cutoff = (now as i64) - 86_400_000; // 24h ago
                 let mut stmt = conn.prepare(
                     "SELECT node_id, AVG(wes_penalized) FROM metrics_raw
@@ -4611,7 +4624,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 let now_i64 = now as i64;
 
                 let _ = tokio::task::spawn_blocking(move || {
-                    let conn = duck.lock().unwrap();
+                    let conn = duck_lock(&duck);
                     conn.execute(
                         "INSERT INTO fleet_observations
                          (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
@@ -4679,7 +4692,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                     let now_i64 = now as i64;
                     let obs_id2 = obs_id.clone();
                     let _ = tokio::task::spawn_blocking(move || {
-                        let conn = duck.lock().unwrap();
+                        let conn = duck_lock(&duck);
                         conn.execute(
                             "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = ?1
                              WHERE id = ?2 AND state = 'open'",
