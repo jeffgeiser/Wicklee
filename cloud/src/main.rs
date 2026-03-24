@@ -2139,13 +2139,16 @@ async fn handle_wes_history(
     let node_id_filter = params.get("node_id").cloned();
 
     // (lookback_ms, bucket_ms, use_raw_table)
+    // 1h + 24h use metrics_raw (2-day retention) to ensure data is always
+    // visible even before the hourly rollup populates metrics_5min.
+    // 7d+ use metrics_5min for efficiency (rollup aggregates older data).
     let (lookback_ms, bucket_ms, use_raw): (i64, i64, bool) = match range.as_str() {
         "1h"  => (3_600_000,      60_000,    true),
-        "24h" => (86_400_000,     300_000,   false),
+        "24h" => (86_400_000,     300_000,   true),
         "7d"  => (604_800_000,    1_800_000, false),
         "30d" => (2_592_000_000,  7_200_000, false),
         "90d" => (7_776_000_000,  21_600_000, false),
-        _     => (86_400_000,     300_000,   false),
+        _     => (86_400_000,     300_000,   true),
     };
 
     // 1. Authenticate
@@ -2313,13 +2316,15 @@ async fn handle_metrics_history(
     let range          = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
     let node_id_filter = params.get("node_id").cloned();
 
+    // 1h + 24h query metrics_raw directly (2-day retention) so data is
+    // visible immediately. 7d+ use metrics_5min rollup aggregates.
     let (lookback_ms, bucket_ms, use_raw): (i64, i64, bool) = match range.as_str() {
         "1h"  => (3_600_000,      60_000,    true),
-        "24h" => (86_400_000,     300_000,   false),
+        "24h" => (86_400_000,     300_000,   true),
         "7d"  => (604_800_000,    1_800_000, false),
         "30d" => (2_592_000_000,  7_200_000, false),
         "90d" => (7_776_000_000,  21_600_000, false),
-        _     => (86_400_000,     300_000,   false),
+        _     => (86_400_000,     300_000,   true),
     };
 
     // Authenticate
@@ -3291,11 +3296,19 @@ fn run_nightly_maintenance(conn: &DuckConn) {
     println!("[nightly] CHECKPOINT + ANALYZE complete");
 }
 
-/// Hourly rollup background task.
+/// Hourly rollup background task.  Runs once on startup (after 60s warm-up
+/// to let the first telemetry frames land), then every hour.
 async fn rollup_task(duck: DuckDb) {
+    // Wait 60s for initial telemetry to arrive, then run first rollup.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    {
+        let d = duck.clone();
+        tokio::task::spawn_blocking(move || run_rollup(&d.lock().unwrap())).await.ok();
+    }
+
     let mut interval = tokio::time::interval(Duration::from_secs(3600));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    interval.tick().await; // skip immediate first tick — wait a full hour
+    interval.tick().await; // consume the immediate first tick
     loop {
         interval.tick().await;
         let d = duck.clone();
