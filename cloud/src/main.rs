@@ -1994,7 +1994,8 @@ async fn handle_fleet_events_history(
 
         let mut stmt = conn.prepare(&sql)?;
 
-        // Bind parameters positionally.
+        // Bind parameters positionally using raw_bind_parameter, then
+        // iterate with raw_query (NOT query_map which resets bindings).
         let mut p_idx: usize = 1;
         stmt.raw_bind_parameter(p_idx, &user_id)?;   p_idx += 1;
         stmt.raw_bind_parameter(p_idx, before)?;      p_idx += 1;
@@ -2006,20 +2007,22 @@ async fn handle_fleet_events_history(
         }
         stmt.raw_bind_parameter(p_idx, limit)?;
 
-        let rows = stmt.query_map([], |row| {
+        let mut result_rows = stmt.raw_query();
+        let mut rows: Vec<serde_json::Value> = Vec::new();
+        while let Some(row) = result_rows.next()? {
             let ts_ms: i64 = row.get(0)?;
             let node_id: String = row.get(1)?;
             let level: String = row.get(2)?;
             let event_type: Option<String> = row.get(3)?;
             let message: String = row.get(4)?;
-            Ok(serde_json::json!({
+            rows.push(serde_json::json!({
                 "ts_ms": ts_ms,
                 "node_id": node_id,
                 "level": level,
                 "event_type": event_type,
                 "message": message,
-            }))
-        })?.collect::<Result<Vec<_>, _>>()?;
+            }));
+        }
         Ok::<_, duckdb::Error>(rows)
     }).await {
         Ok(Ok(events)) => Json(serde_json::json!({ "events": events })).into_response(),
@@ -2082,10 +2085,12 @@ async fn handle_fleet_export(
             stmt.raw_bind_parameter(5, nid.as_str())?;
         }
 
-        let rows = stmt.query_map([], |row| {
+        let mut result_rows = stmt.raw_query();
+        let mut rows: Vec<serde_json::Value> = Vec::new();
+        while let Some(row) = result_rows.next()? {
             let ts_ms: i64 = row.get(0)?;
             let ts_str = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
-            Ok(serde_json::json!({
+            rows.push(serde_json::json!({
                 "ts_ms": ts_ms,
                 "timestamp": ts_str,
                 "record_type": "event",
@@ -2093,8 +2098,8 @@ async fn handle_fleet_export(
                 "level": row.get::<_, String>(2)?,
                 "event_type": row.get::<_, Option<String>>(3)?,
                 "message": row.get::<_, String>(4)?,
-            }))
-        })?.collect::<Result<Vec<_>, _>>()?;
+            }));
+        }
         Ok::<_, duckdb::Error>(rows)
     }).await {
         Ok(Ok(r)) => r,
