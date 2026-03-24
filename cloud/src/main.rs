@@ -2513,8 +2513,8 @@ async fn handle_fleet_duty(
     let db         = state.db.clone();
     let user_id: Option<String> = tokio::task::spawn_blocking(move || {
         let conn = db.lock().unwrap();
-        resolve_user_from_jwt(&conn, &token, &clerk_keys)
-    }).await.unwrap_or(None);
+        require_user(&token, &conn, &clerk_keys)
+    }).await.unwrap();
 
     let user_id = match user_id {
         Some(uid) => uid,
@@ -2522,7 +2522,7 @@ async fn handle_fleet_duty(
             Json(serde_json::json!({ "error": "Invalid token" }))).into_response(),
     };
 
-    let duck   = state.duck.clone();
+    let duck   = state.duck_db.clone();
     let db2    = state.db.clone();
     let since_ms = now_ms() as i64 - lookback_ms;
 
