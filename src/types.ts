@@ -314,7 +314,12 @@ export interface FleetEvent {
     | 'pattern_dismissed'
     // ── Sprint 6 ──────────────────────────────────────────────────────────
     /** Operator clicked "Never show again" — writes to metrics.db audit trail. */
-    | 'pattern_dismissed_permanent';
+    | 'pattern_dismissed_permanent'
+    // ── Fleet observations (server-side Phase 4B alerts) ─────────────────
+    | 'zombied_engine'
+    | 'thermal_redline'
+    | 'oom_warning'
+    | 'wes_cliff';
   nodeId: string;
   hostname?: string;
   /** Human-readable transition detail, e.g. "Normal → Serious" or "phi3:mini → llama3:8b" */
