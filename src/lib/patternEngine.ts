@@ -1247,11 +1247,20 @@ function evaluatePatternI(
 
   const recent = history.slice(-PATTERN_I_MIN_SAMPLES);
 
-  // Requires dense penalty_avg coverage — metric only present in WES v2+ agents
+  // Requires dense penalty_avg coverage — metric only present in WES v2+ agents.
+  // penalty_avg is a raw multiplier: 1.0 = no penalty, 1.75 = serious throttle.
+  // Convert to efficiency loss fraction: loss = 1 - (1/multiplier).
+  //   multiplier 1.0  → 0% loss
+  //   multiplier 1.25 → 20% loss
+  //   multiplier 1.75 → 43% loss
+  //   multiplier 2.0  → 50% loss
   const penaltySamples = nonNull(recent.map(s => s.penalty_avg));
   if (penaltySamples.length < Math.ceil(PATTERN_I_MIN_SAMPLES * 0.7)) return null;
 
-  const avgPenalty = mean(penaltySamples);
+  const avgMultiplier = mean(penaltySamples);
+  // A multiplier of 1.0 means zero loss — skip early.
+  if (avgMultiplier <= 1.0) return null;
+  const avgPenalty = 1 - (1 / avgMultiplier); // fraction of WES lost (0.0 – 0.5)
   if (avgPenalty < PATTERN_I_PENALTY_THRESH) return null;
 
   // Inference must be active
@@ -1286,17 +1295,17 @@ function evaluatePatternI(
   const observedMs   = recent.length * SAMPLE_INTERVAL_MS;
   const ratio        = Math.min(observedMs / PATTERN_I_MIN_WINDOW_MS, 1);
 
-  // WES impact: if we had no penalty, WES would be higher
+  // WES impact: if we had no penalty, WES would be multiplier× higher
   const recentWes     = nonNull(recent.map(s => s.wes_score));
   const avgWes        = recentWes.length > 0 ? mean(recentWes) : null;
-  const impliedMaxWes = avgWes != null ? (avgWes / (1 - avgPenalty)).toFixed(0) : null;
+  const impliedMaxWes = avgWes != null ? (avgWes * avgMultiplier).toFixed(0) : null;
 
   return {
     patternId:       PATTERN_I_ID,
     nodeId,
     hostname,
     title:           'Efficiency Penalty Drag',
-    hook:            `${penaltyPct}% WES penalty · ${avgTokS.toFixed(1)} tok/s headroom being lost`,
+    hook:            `${penaltyPct}% WES penalty · ${(avgTokS * (avgMultiplier - 1)).toFixed(1)} tok/s headroom being lost`,
     body:            `${hostname} is sustaining a ${penaltyPct}% WES efficiency penalty over the ` +
                      `last ${Math.round(observedMs / 60000)} min despite Normal thermals, ` +
                      `active GPU utilization, and no memory saturation. ` +
