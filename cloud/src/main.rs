@@ -3824,39 +3824,64 @@ fn deliver_alert(
 
 // ── Alerting — node offline interval task ────────────────────────────────────
 
-/// Runs every 60 seconds. Fires `node_offline` alerts for nodes not seen in
-/// the last 5 minutes, but only once per outage (stateful via alert_events).
+/// Runs every 60 seconds.  Detects node offline/online transitions and writes
+/// events to the DuckDB `node_events` table (visible in Fleet Event Timeline).
+/// Also fires `node_offline` alerts for Team+ users with configured rules.
 async fn node_offline_alert_task(state: AppState) {
+    // In-memory set of nodes we've already marked offline this process lifetime.
+    // Prevents duplicate "offline" events on every 60-second tick.
+    let mut known_offline: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     interval.tick().await; // skip immediate first tick
     loop {
         interval.tick().await;
         let state2 = state.clone();
-        tokio::task::spawn_blocking(move || {
+        let mut offline_snapshot = known_offline.clone();
+        let (new_offline, new_online) = tokio::task::spawn_blocking(move || {
             let conn = state2.db.lock().unwrap();
             let now  = now_ms();
             let offline_threshold_ms = 5 * 60_000_u64; // 5 minutes
+            let mut went_offline: Vec<(String, String, String, u64)> = Vec::new(); // (user_id, node_id, tenant_id, elapsed)
+            let mut came_online:  Vec<(String, String, String)> = Vec::new();      // (user_id, node_id, tenant_id)
 
             // Load all user_id → node_id pairs with their last_seen timestamps.
-            let nodes: Vec<(String, String, u64)> = {
+            let nodes: Vec<(String, String, u64, String)> = {
                 let mut stmt = match conn.prepare(
-                    "SELECT user_id, wk_id, last_seen FROM nodes WHERE user_id IS NOT NULL"
-                ) { Ok(s) => s, Err(_) => return };
+                    "SELECT n.user_id, n.wk_id, n.last_seen
+                     FROM nodes n WHERE n.user_id IS NOT NULL"
+                ) { Ok(s) => s, Err(_) => return (vec![], vec![]) };
                 match stmt.query_map([], |r| Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, i64>(2).map(|v| v as u64)?,
+                    r.get::<_, String>(0)?, // tenant_id = user_id
                 ))) {
                     Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                    Err(_)   => return,
+                    Err(_)   => return (vec![], vec![]),
                 }
             };
 
-            for (user_id, node_id, last_seen) in nodes {
-                let elapsed = now.saturating_sub(last_seen);
-                if elapsed < offline_threshold_ms { continue; }
+            for (user_id, node_id, last_seen, tenant_id) in &nodes {
+                let elapsed = now.saturating_sub(*last_seen);
 
-                // Check subscription tier — alerting is Team+.
+                if elapsed >= offline_threshold_ms {
+                    // Node is offline
+                    if !offline_snapshot.contains(node_id) {
+                        went_offline.push((user_id.clone(), node_id.clone(), tenant_id.clone(), elapsed));
+                        offline_snapshot.insert(node_id.clone());
+                    }
+                } else {
+                    // Node is online — check if it was previously offline (recovery)
+                    if offline_snapshot.remove(node_id) {
+                        came_online.push((user_id.clone(), node_id.clone(), tenant_id.clone()));
+                    }
+                }
+            }
+
+            // ── Fire alerts for nodes that just went offline ──────────────
+            for (user_id, node_id, _tenant_id, elapsed) in &went_offline {
+                // Check subscription tier — alerting delivery is Team+.
                 let tier: Option<String> = conn.query_row(
                     "SELECT subscription_tier FROM users WHERE id = ?1",
                     params![user_id],
@@ -3864,7 +3889,6 @@ async fn node_offline_alert_task(state: AppState) {
                 ).ok();
                 if !is_team_or_above(tier.as_deref().unwrap_or("community")) { continue; }
 
-                // Load node_offline rules for this user.
                 let rules: Vec<(String, String, String)> = {
                     let mut stmt = match conn.prepare(
                         "SELECT ar.id, nc.channel_type, nc.config_json
@@ -3886,7 +3910,6 @@ async fn node_offline_alert_task(state: AppState) {
                 };
 
                 for (rule_id, channel_type, config_json) in rules {
-                    // Only fire once per outage — skip if open alert already exists.
                     let open: Option<String> = conn.query_row(
                         "SELECT id FROM alert_events
                          WHERE rule_id = ?1 AND node_id = ?2 AND resolved_at IS NULL
@@ -3898,7 +3921,7 @@ async fn node_offline_alert_task(state: AppState) {
 
                     let minutes = elapsed / 60_000;
                     let detail  = format!("Node has not reported telemetry in *{minutes} minutes*.");
-                    let fired   = deliver_alert(&channel_type, &config_json, &node_id, "node_offline", &detail, false);
+                    let fired   = deliver_alert(&channel_type, &config_json, node_id, "node_offline", &detail, false);
                     if fired {
                         let event_id = Uuid::new_v4().to_string();
                         let _ = conn.execute(
@@ -3910,7 +3933,53 @@ async fn node_offline_alert_task(state: AppState) {
                     }
                 }
             }
-        }).await.ok();
+
+            // ── Resolve open alerts for nodes that came back online ───────
+            for (user_id, node_id, _tenant_id) in &came_online {
+                let tier: Option<String> = conn.query_row(
+                    "SELECT subscription_tier FROM users WHERE id = ?1",
+                    params![user_id],
+                    |r| r.get(0),
+                ).ok();
+                if !is_team_or_above(tier.as_deref().unwrap_or("community")) { continue; }
+
+                // Resolve all open node_offline alert events for this node.
+                let _ = conn.execute(
+                    "UPDATE alert_events SET resolved_at = ?1
+                     WHERE node_id = ?2 AND resolved_at IS NULL",
+                    params![now as i64, node_id],
+                );
+                println!("[alerts] node_online — resolved alerts for {node_id}");
+            }
+
+            (went_offline, came_online)
+        }).await.unwrap_or_default();
+
+        // ── Persist offline/online events to DuckDB (visible in Fleet Event Timeline) ──
+        for (_user_id, node_id, tenant_id, elapsed) in &new_offline {
+            let minutes = elapsed / 60_000;
+            let _ = state.events_tx.try_send(EventRow {
+                ts_ms:      now_ms() as i64,
+                node_id:    node_id.clone(),
+                tenant_id:  tenant_id.clone(),
+                level:      "error".into(),
+                event_type: Some("node_offline".into()),
+                message:    format!("Node offline — no telemetry received for {minutes}m"),
+            });
+            known_offline.insert(node_id.clone());
+        }
+
+        for (_user_id, node_id, tenant_id) in &new_online {
+            let _ = state.events_tx.try_send(EventRow {
+                ts_ms:      now_ms() as i64,
+                node_id:    node_id.clone(),
+                tenant_id:  tenant_id.clone(),
+                level:      "info".into(),
+                event_type: Some("node_online".into()),
+                message:    "Node back online — telemetry resumed".into(),
+            });
+            known_offline.remove(node_id);
+        }
     }
 }
 

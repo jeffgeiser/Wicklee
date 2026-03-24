@@ -1520,7 +1520,7 @@ const TelemetryInspector: React.FC<{ nodes: NodeAgent[] }> = ({ nodes }) => {
 
 // ── Section 3: Fleet Event Timeline ───────────────────────────────────────────
 
-const EVENT_TYPE_FILTERS = ['startup', 'update', 'model_swap', 'thermal_change', 'error'] as const;
+const EVENT_TYPE_FILTERS = ['startup', 'update', 'model_swap', 'thermal_change', 'node_offline', 'node_online', 'error'] as const;
 const EVENT_LEVEL_DOT: Record<string, string> = {
   info: 'bg-gray-400', warn: 'bg-amber-400', error: 'bg-red-500',
 };
@@ -1529,6 +1529,8 @@ const EVENT_TYPE_BADGE: Record<string, string> = {
   update: 'text-blue-400 bg-blue-500/10',
   model_swap: 'text-cyan-400 bg-cyan-500/10',
   thermal_change: 'text-amber-400 bg-amber-500/10',
+  node_offline: 'text-red-400 bg-red-500/10',
+  node_online: 'text-emerald-400 bg-emerald-500/10',
   error: 'text-red-400 bg-red-500/10',
 };
 
