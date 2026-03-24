@@ -1875,7 +1875,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {/* 7. FLEET MEMORY PRESSURE — system/VRAM utilisation across online nodes */}
         <InsightTile
-          label={isLocalMode ? 'Node Memory' : 'Fleet Memory'}
+          label={
+            <MetricTooltip
+              metricId="fleet-mem"
+              name="Fleet Memory Pressure"
+              oneLiner="Aggregate memory utilisation across all online nodes. Uses NVIDIA VRAM for GPU nodes and system RAM for CPU-only nodes."
+              ranges={[
+                { threshold: '< 60%', color: 'green', label: 'Healthy · room for larger models or batches' },
+                { threshold: '60–80%', color: 'amber', label: 'Moderate · watch for eviction on busy nodes' },
+                { threshold: '> 80%', color: 'red', label: 'Critical · risk of OOM or model eviction' },
+              ]}
+            >
+              {isLocalMode ? 'Node Memory' : 'Fleet Memory'}
+            </MetricTooltip>
+          }
           value={fleetMemPressure != null ? `${fleetMemPressure}%` : '—'}
           valueCls={fleetMemPressure == null ? 'text-gray-400 dark:text-gray-600'
             : fleetMemPressure > 80 ? 'text-red-400'
@@ -1894,7 +1907,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {/* 8. INFERENCE DUTY CYCLE — % of session time with active inference */}
         <InsightTile
-          label={isLocalMode ? 'Node Duty' : 'Fleet Duty'}
+          label={
+            <MetricTooltip
+              metricId="fleet-duty"
+              name="Inference Duty Cycle"
+              oneLiner="Percentage of this browser session where at least one node was actively generating tokens. Resets on page reload. Reflects real utilisation — not capacity."
+              ranges={[
+                { threshold: '> 50%', color: 'green', label: 'High utilisation · fleet is earning its keep' },
+                { threshold: '10–50%', color: 'amber', label: 'Moderate · typical for interactive workloads' },
+                { threshold: '< 10%', color: 'gray', label: 'Low · fleet is mostly idle this session' },
+              ]}
+            >
+              {isLocalMode ? 'Node Duty' : 'Fleet Duty'}
+            </MetricTooltip>
+          }
           value={dutyPct != null ? `${dutyPct}%` : '—'}
           valueCls={dutyPct == null ? 'text-gray-400 dark:text-gray-600'
             : dutyPct > 50 ? undefined
