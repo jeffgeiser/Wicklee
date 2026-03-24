@@ -2015,6 +2015,142 @@ async fn handle_fleet_events_history(
     }
 }
 
+/// GET /api/fleet/observations?state=open|resolved|acknowledged|all&node_id=<optional>&limit=50
+///
+/// Returns fleet observations from DuckDB. JWT-authenticated, tenant-isolated.
+/// Observations are stateful alert records with severity and lifecycle state.
+async fn handle_fleet_observations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        require_user(&token, &conn, &clerk_keys)
+    }).await.unwrap();
+
+    let user_id = match user_id {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let limit: i64 = params.get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
+        .min(200);
+    let state_filter = params.get("state").cloned().unwrap_or_else(|| "open".into());
+    let node_id_filter = params.get("node_id").cloned();
+
+    let duck = state.duck_db.clone();
+    match tokio::task::spawn_blocking(move || {
+        let conn = duck.lock().unwrap();
+
+        let map_row = |r: &duckdb::Row| Ok(serde_json::json!({
+            "id":             r.get::<_, String>(0)?,
+            "node_id":        r.get::<_, String>(1)?,
+            "alert_type":     r.get::<_, String>(2)?,
+            "severity":       r.get::<_, String>(3)?,
+            "state":          r.get::<_, String>(4)?,
+            "title":          r.get::<_, String>(5)?,
+            "detail":         r.get::<_, String>(6)?,
+            "context_json":   r.get::<_, Option<String>>(7)?,
+            "fired_at_ms":    r.get::<_, i64>(8)?,
+            "resolved_at_ms": r.get::<_, Option<i64>>(9)?,
+            "ack_at_ms":      r.get::<_, Option<i64>>(10)?,
+        }));
+
+        let base = "SELECT id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms, resolved_at_ms, ack_at_ms FROM fleet_observations WHERE tenant_id = ?1";
+
+        let rows = match (state_filter.as_str(), &node_id_filter) {
+            ("all", Some(nid)) => {
+                let sql = format!("{base} AND node_id = ?2 ORDER BY fired_at_ms DESC LIMIT ?3");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, nid, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            ("all", None) => {
+                let sql = format!("{base} ORDER BY fired_at_ms DESC LIMIT ?2");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            (st, Some(nid)) => {
+                let sql = format!("{base} AND state = ?2 AND node_id = ?3 ORDER BY fired_at_ms DESC LIMIT ?4");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, st, nid, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            (st, None) => {
+                let sql = format!("{base} AND state = ?2 ORDER BY fired_at_ms DESC LIMIT ?3");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, st, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+        };
+        Ok::<_, duckdb::Error>(rows)
+    }).await {
+        Ok(Ok(obs)) => Json(serde_json::json!({ "observations": obs })).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("query failed: {e}") }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("task join failed: {e}") }))).into_response(),
+    }
+}
+
+/// POST /api/fleet/observations/:id/acknowledge
+///
+/// Manually acknowledge an open observation (sets state='acknowledged', ack_at_ms=now).
+/// JWT-authenticated, tenant-isolated.
+async fn handle_acknowledge_observation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(obs_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db = state.db.clone();
+    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        require_user(&token, &conn, &clerk_keys)
+    }).await.unwrap();
+
+    let user_id = match user_id {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let duck = state.duck_db.clone();
+    let now = now_ms() as i64;
+    match tokio::task::spawn_blocking(move || {
+        let conn = duck.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE fleet_observations SET state = 'acknowledged', ack_at_ms = ?1
+             WHERE id = ?2 AND tenant_id = ?3 AND state = 'open'",
+            duckdb::params![now, obs_id, user_id],
+        )?;
+        Ok::<_, duckdb::Error>(updated)
+    }).await {
+        Ok(Ok(n)) if n > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(Ok(_)) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Observation not found or already resolved" }))).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("update failed: {e}") }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("task join failed: {e}") }))).into_response(),
+    }
+}
+
 /// GET /api/fleet/export?format=csv|json&from=<ts_ms>&to=<ts_ms>&limit=10000&node_id=<optional>
 ///
 /// Export fleet node events as CSV or JSON. JWT-authenticated, tenant-isolated.
@@ -3042,6 +3178,38 @@ fn run_duck_migrations(conn: &DuckConn) {
             ON node_events  (tenant_id, ts_ms);
     ").expect("DuckDB migrations failed");
 
+    // ── Fleet observations (Phase 4B — stateful alert triage) ──────────
+    //
+    // Separate from node_events (flat log): observations are stateful records
+    // with severity, open/resolved/acknowledged lifecycle, and structured
+    // context JSON for the Triage tab.
+    //
+    // State machine:
+    //   state = 'open'         → condition is actively firing
+    //   state = 'resolved'     → condition cleared (auto-resolved by evaluator)
+    //   state = 'acknowledged' → operator dismissed via UI (manual)
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS fleet_observations (
+            id              VARCHAR   NOT NULL,
+            tenant_id       VARCHAR   NOT NULL,
+            node_id         VARCHAR   NOT NULL,
+            alert_type      VARCHAR   NOT NULL,
+            severity        VARCHAR   NOT NULL DEFAULT 'warning',
+            state           VARCHAR   NOT NULL DEFAULT 'open',
+            title           VARCHAR   NOT NULL,
+            detail          VARCHAR   NOT NULL,
+            context_json    VARCHAR,
+            fired_at_ms     BIGINT    NOT NULL,
+            resolved_at_ms  BIGINT,
+            ack_at_ms       BIGINT,
+            PRIMARY KEY (tenant_id, node_id, alert_type, fired_at_ms)
+        );
+        CREATE INDEX IF NOT EXISTS idx_observations_tenant_state
+            ON fleet_observations (tenant_id, state, fired_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_observations_node
+            ON fleet_observations (tenant_id, node_id, fired_at_ms);
+    ").expect("fleet_observations migration failed");
+
     // ── Additive column migrations (idempotent — silently ignored if column exists) ──
     let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN inference_state VARCHAR;");
     let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN inference_duty_pct FLOAT;");
@@ -3287,11 +3455,18 @@ fn run_nightly_maintenance(conn: &DuckConn) {
         duckdb::params![event_cutoff_ms],
     );
 
+    // Prune resolved/acknowledged observations older than 30 days.
+    let _ = conn.execute(
+        "DELETE FROM fleet_observations WHERE state != 'open' AND fired_at_ms < ?",
+        duckdb::params![event_cutoff_ms],
+    );
+
     conn.execute_batch("
         CHECKPOINT;
         ANALYZE metrics_raw;
         ANALYZE metrics_5min;
         ANALYZE node_events;
+        ANALYZE fleet_observations;
     ").unwrap_or_else(|e| eprintln!("[nightly] maintenance failed: {e}"));
     println!("[nightly] CHECKPOINT + ANALYZE complete");
 }
@@ -3983,6 +4158,419 @@ async fn node_offline_alert_task(state: AppState) {
     }
 }
 
+// ── Phase 4B — Fleet Alert Evaluator (Essential Four) ─────────────────────────
+
+/// Per-node ring buffer for sustained-threshold checks.
+/// Stores the last N evaluation ticks (60s each) worth of metric snapshots.
+struct NodeRingBuffer {
+    /// Circular buffer of (timestamp_ms, inference_state, thermal_state, mem_pressure_pct, wes_penalized).
+    entries: Vec<(u64, Option<String>, Option<String>, Option<f32>, Option<f32>)>,
+    head: usize,
+    len: usize,
+}
+
+impl NodeRingBuffer {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: vec![(0, None, None, None, None); capacity],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, ts_ms: u64, inf_state: Option<String>, thermal: Option<String>, mem_pct: Option<f32>, wes: Option<f32>) {
+        self.entries[self.head] = (ts_ms, inf_state, thermal, mem_pct, wes);
+        self.head = (self.head + 1) % self.entries.len();
+        if self.len < self.entries.len() {
+            self.len += 1;
+        }
+    }
+
+    /// Returns the number of consecutive recent ticks (from newest backward) where the predicate holds.
+    fn consecutive_ticks<F: Fn(&(u64, Option<String>, Option<String>, Option<f32>, Option<f32>)) -> bool>(&self, pred: F) -> usize {
+        let mut count = 0;
+        for i in 0..self.len {
+            let idx = (self.head + self.entries.len() - 1 - i) % self.entries.len();
+            if pred(&self.entries[idx]) {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        count
+    }
+}
+
+/// Observation severity — maps to card color in the Triage tab.
+#[allow(dead_code)]
+enum ObsSeverity {
+    Warning,
+    Critical,
+}
+
+impl ObsSeverity {
+    fn as_str(&self) -> &'static str {
+        match self { Self::Warning => "warning", Self::Critical => "critical" }
+    }
+}
+
+/// Runs every 60 seconds.  Evaluates the Essential Four alert conditions against
+/// the live in-memory metrics cache.  Uses per-node ring buffers for "sustained"
+/// threshold checks.  Writes to both `node_events` (flat log for timeline) and
+/// `fleet_observations` (stateful for triage).
+///
+/// Essential Four:
+///   1. Zombied Engine — inference_state == "busy" sustained >10min → critical
+///   2. Thermal Redline — thermal_state == "Critical" sustained >2min → critical
+///   3. OOM Warning — memory_pressure_percent > 95% sustained >1min → warning
+///   4. WES Cliff — current WES < 50% of 24h baseline → warning
+async fn fleet_alert_evaluator_task(state: AppState) {
+    // Per-node ring buffers — 15 ticks × 60s = 15 minutes of history.
+    let mut ring_buffers: HashMap<String, NodeRingBuffer> = HashMap::new();
+
+    // Track which observations are currently open per (node_id, alert_type).
+    // Value = observation ID.  Prevents duplicate fires on every tick.
+    let mut open_observations: HashMap<(String, String), String> = HashMap::new();
+
+    // Cache 24h WES baselines per node (refreshed every 10 ticks = 10 min).
+    let mut wes_baselines: HashMap<String, f32> = HashMap::new();
+    let mut baseline_refresh_counter: u32 = 0;
+
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    interval.tick().await; // skip immediate first tick
+    // Wait 120s on startup for telemetry + ring buffers to fill.
+    tokio::time::sleep(Duration::from_secs(120)).await;
+
+    loop {
+        interval.tick().await;
+        let now = now_ms();
+
+        // ── Refresh 24h WES baselines every 10 min ───────────────────────────
+        baseline_refresh_counter += 1;
+        if baseline_refresh_counter >= 10 || wes_baselines.is_empty() {
+            baseline_refresh_counter = 0;
+            let duck = state.duck_db.clone();
+            if let Ok(baselines) = tokio::task::spawn_blocking(move || {
+                let conn = duck.lock().unwrap();
+                let cutoff = (now as i64) - 86_400_000; // 24h ago
+                let mut stmt = conn.prepare(
+                    "SELECT node_id, AVG(wes_penalized) FROM metrics_raw
+                     WHERE ts_ms > ? AND wes_penalized IS NOT NULL
+                     GROUP BY node_id"
+                )?;
+                let rows: Vec<(String, f32)> = stmt.query_map(duckdb::params![cutoff], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)? as f32))
+                })?.filter_map(|r| r.ok()).collect();
+                Ok::<_, duckdb::Error>(rows)
+            }).await.unwrap_or(Err(duckdb::Error::InvalidQuery)) {
+                wes_baselines.clear();
+                for (nid, avg) in baselines {
+                    wes_baselines.insert(nid, avg);
+                }
+            }
+        }
+
+        // ── Snapshot current metrics from live cache ─────────────────────────
+        let snapshot: Vec<(String, MetricsPayload)> = {
+            let cache = state.metrics.read().unwrap();
+            cache.iter()
+                .filter_map(|(nid, entry)| {
+                    // Only consider nodes with recent telemetry (< 5 min).
+                    if now.saturating_sub(entry.last_seen_ms) > 300_000 { return None; }
+                    entry.metrics.as_ref().map(|m| (nid.clone(), m.clone()))
+                })
+                .collect()
+        };
+
+        // ── Evaluate each node ───────────────────────────────────────────────
+        struct PendingObs {
+            node_id:    String,
+            alert_type: String,
+            severity:   ObsSeverity,
+            title:      String,
+            detail:     String,
+            context:    serde_json::Value,
+        }
+        let mut to_fire: Vec<PendingObs> = Vec::new();
+        let mut to_resolve: Vec<(String, String)> = Vec::new(); // (node_id, alert_type)
+
+        for (node_id, m) in &snapshot {
+            // Update ring buffer for this node.
+            let ring = ring_buffers
+                .entry(node_id.clone())
+                .or_insert_with(|| NodeRingBuffer::new(15));
+
+            let mem_pct = m.memory_pressure_percent;
+            let wes = {
+                let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
+                let tok_s = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
+                match (tok_s, watts) {
+                    (Some(t), Some(w)) if w > 0.0 => {
+                        let penalty = thermal_penalty_for(m.thermal_state.as_deref());
+                        Some(t / (w * penalty) * 10.0)
+                    }
+                    _ => None,
+                }
+            };
+            ring.push(now, m.inference_state.clone(), m.thermal_state.clone(), mem_pct, wes);
+
+            // ── 1. Zombied Engine: busy >10min (10 consecutive ticks) → critical ──
+            {
+                let alert_type = "zombied_engine";
+                let busy_ticks = ring.consecutive_ticks(|e| e.1.as_deref() == Some("busy"));
+                let threshold = 10; // 10 × 60s = 10 min
+                let is_firing = busy_ticks >= threshold;
+                let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
+
+                if is_firing && !is_open {
+                    to_fire.push(PendingObs {
+                        node_id: node_id.clone(),
+                        alert_type: alert_type.into(),
+                        severity: ObsSeverity::Critical,
+                        title: "Zombied Engine Detected".into(),
+                        detail: format!("Inference state has been 'busy' for >{} minutes without completing. The engine may be deadlocked.", busy_ticks),
+                        context: serde_json::json!({
+                            "inference_state": "busy",
+                            "sustained_minutes": busy_ticks,
+                            "active_model": m.ollama_active_model.as_deref().or(m.vllm_model_name.as_deref()),
+                        }),
+                    });
+                } else if !is_firing && is_open {
+                    to_resolve.push((node_id.clone(), alert_type.into()));
+                }
+            }
+
+            // ── 2. Thermal Redline: thermal_state == "Critical" >2min (2 ticks) → critical ──
+            {
+                let alert_type = "thermal_redline";
+                let critical_ticks = ring.consecutive_ticks(|e| e.2.as_deref() == Some("Critical"));
+                let threshold = 2; // 2 × 60s = 2 min
+                let is_firing = critical_ticks >= threshold;
+                let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
+
+                if is_firing && !is_open {
+                    to_fire.push(PendingObs {
+                        node_id: node_id.clone(),
+                        alert_type: alert_type.into(),
+                        severity: ObsSeverity::Critical,
+                        title: "Thermal Redline — Critical Temperature".into(),
+                        detail: format!("Thermal state has been Critical for >{} minutes. Hardware throttling is active.", critical_ticks),
+                        context: serde_json::json!({
+                            "thermal_state": "Critical",
+                            "sustained_minutes": critical_ticks,
+                            "gpu_temp_c": m.nvidia_gpu_temp_c,
+                        }),
+                    });
+                } else if !is_firing && is_open {
+                    to_resolve.push((node_id.clone(), alert_type.into()));
+                }
+            }
+
+            // ── 3. OOM Warning: memory_pressure > 95% >1min (1 tick) → warning ──
+            {
+                let alert_type = "oom_warning";
+                let oom_ticks = ring.consecutive_ticks(|e| e.3.map_or(false, |p| p > 95.0));
+                let threshold = 1;
+                let is_firing = oom_ticks >= threshold;
+                let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
+
+                if is_firing && !is_open {
+                    let pct = mem_pct.unwrap_or(0.0);
+                    to_fire.push(PendingObs {
+                        node_id: node_id.clone(),
+                        alert_type: alert_type.into(),
+                        severity: ObsSeverity::Warning,
+                        title: "Memory Pressure Critical — OOM Risk".into(),
+                        detail: format!("Memory pressure at {:.1}% — system is at risk of OOM. Consider evicting idle models.", pct),
+                        context: serde_json::json!({
+                            "memory_pressure_pct": pct,
+                            "used_memory_mb": m.used_memory_mb,
+                            "total_memory_mb": m.total_memory_mb,
+                            "active_model": m.ollama_active_model.as_deref().or(m.vllm_model_name.as_deref()),
+                        }),
+                    });
+                } else if !is_firing && is_open {
+                    to_resolve.push((node_id.clone(), alert_type.into()));
+                }
+            }
+
+            // ── 4. WES Cliff: current WES < 50% of 24h baseline → warning ──
+            {
+                let alert_type = "wes_cliff";
+                if let (Some(current_wes), Some(&baseline)) = (wes, wes_baselines.get(node_id)) {
+                    let is_firing = baseline > 0.0 && current_wes < baseline * 0.5;
+                    let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
+
+                    if is_firing && !is_open {
+                        to_fire.push(PendingObs {
+                            node_id: node_id.clone(),
+                            alert_type: alert_type.into(),
+                            severity: ObsSeverity::Warning,
+                            title: "WES Cliff — Efficiency Collapse".into(),
+                            detail: format!("WES dropped to {:.1} (24h baseline: {:.1}). Efficiency has fallen below 50% of normal.", current_wes, baseline),
+                            context: serde_json::json!({
+                                "current_wes": current_wes,
+                                "baseline_wes_24h": baseline,
+                                "drop_pct": ((baseline - current_wes) / baseline * 100.0) as i32,
+                                "thermal_state": m.thermal_state,
+                            }),
+                        });
+                    } else if !is_firing && is_open {
+                        to_resolve.push((node_id.clone(), alert_type.into()));
+                    }
+                }
+            }
+        }
+
+        // ── Also auto-resolve observations for nodes that are no longer online ──
+        let online_nodes: HashSet<String> = snapshot.iter().map(|(nid, _)| nid.clone()).collect();
+        let stale_keys: Vec<(String, String)> = open_observations.keys()
+            .filter(|(nid, _)| !online_nodes.contains(nid))
+            .cloned()
+            .collect();
+        for _key in stale_keys {
+            // Don't auto-resolve for offline nodes — they'll get a node_offline observation instead.
+            // Just clean up the in-memory tracking; the DuckDB row stays open.
+        }
+
+        // ── Write observations to DuckDB ─────────────────────────────────────
+        if !to_fire.is_empty() || !to_resolve.is_empty() {
+            // Resolve tenant_ids for affected nodes.
+            let affected_nodes: HashSet<String> = to_fire.iter().map(|o| o.node_id.clone())
+                .chain(to_resolve.iter().map(|(nid, _)| nid.clone()))
+                .collect();
+
+            let db = state.db.clone();
+            let tenant_map: HashMap<String, String> = tokio::task::spawn_blocking(move || {
+                let conn = db.lock().unwrap();
+                let mut map = HashMap::new();
+                for nid in &affected_nodes {
+                    if let Ok(uid) = conn.query_row(
+                        "SELECT user_id FROM nodes WHERE wk_id = ?1 AND user_id IS NOT NULL",
+                        params![nid],
+                        |r| r.get::<_, String>(0),
+                    ) {
+                        map.insert(nid.clone(), uid);
+                    }
+                }
+                map
+            }).await.unwrap_or_default();
+
+            // Fire new observations.
+            for obs in &to_fire {
+                let tenant_id = match tenant_map.get(&obs.node_id) {
+                    Some(t) => t.clone(),
+                    None => continue,
+                };
+
+                let obs_id = Uuid::new_v4().to_string();
+                let duck = state.duck_db.clone();
+                let obs_id2 = obs_id.clone();
+                let node_id = obs.node_id.clone();
+                let alert_type = obs.alert_type.clone();
+                let severity = obs.severity.as_str().to_owned();
+                let title = obs.title.clone();
+                let detail = obs.detail.clone();
+                let context_str = serde_json::to_string(&obs.context).unwrap_or_default();
+                let tenant_id2 = tenant_id.clone();
+                let now_i64 = now as i64;
+
+                let _ = tokio::task::spawn_blocking(move || {
+                    let conn = duck.lock().unwrap();
+                    conn.execute(
+                        "INSERT INTO fleet_observations
+                         (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
+                         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+                         ON CONFLICT DO NOTHING",
+                        duckdb::params![obs_id2, tenant_id2, node_id, alert_type, severity, title, detail, context_str, now_i64],
+                    )
+                }).await;
+
+                // Also write to node_events for the Fleet Event Timeline.
+                let _ = state.events_tx.try_send(EventRow {
+                    ts_ms:      now as i64,
+                    node_id:    obs.node_id.clone(),
+                    tenant_id:  tenant_id.clone(),
+                    level:      if matches!(obs.severity, ObsSeverity::Critical) { "error" } else { "warning" }.into(),
+                    event_type: Some(obs.alert_type.clone()),
+                    message:    obs.title.clone(),
+                });
+
+                // Deliver to notification channels (Team+ only).
+                let db2 = state.db.clone();
+                let node_id3 = obs.node_id.clone();
+                let alert_type3 = obs.alert_type.clone();
+                let detail3 = obs.detail.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = db2.lock().unwrap();
+                    let tier: Option<String> = conn.query_row(
+                        "SELECT subscription_tier FROM users WHERE id = ?1",
+                        params![tenant_id],
+                        |r| r.get(0),
+                    ).ok();
+                    if !is_team_or_above(tier.as_deref().unwrap_or("community")) { return; }
+
+                    // Find matching alert rules for this event type.
+                    let rules: Vec<(String, String)> = {
+                        let mut stmt = match conn.prepare(
+                            "SELECT nc.channel_type, nc.config_json
+                             FROM alert_rules ar
+                             JOIN notification_channels nc ON nc.id = ar.channel_id
+                             WHERE ar.user_id = ?1
+                               AND ar.event_type = ?2
+                               AND ar.enabled = 1
+                               AND (ar.node_id IS NULL OR ar.node_id = ?3)"
+                        ) { Ok(s) => s, Err(_) => return };
+                        match stmt.query_map(params![tenant_id, alert_type3, node_id3], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        }) {
+                            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                            Err(_) => return,
+                        }
+                    };
+                    for (ch_type, config_json) in rules {
+                        deliver_alert(&ch_type, &config_json, &node_id3, &alert_type3, &detail3, false);
+                    }
+                });
+
+                open_observations.insert((obs.node_id.clone(), obs.alert_type.clone()), obs_id);
+                println!("[evaluator] 🔴 {} fired for {}", obs.alert_type, obs.node_id);
+            }
+
+            // Resolve cleared observations.
+            for (node_id, alert_type) in &to_resolve {
+                if let Some(obs_id) = open_observations.remove(&(node_id.clone(), alert_type.clone())) {
+                    let duck = state.duck_db.clone();
+                    let now_i64 = now as i64;
+                    let obs_id2 = obs_id.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let conn = duck.lock().unwrap();
+                        conn.execute(
+                            "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = ?1
+                             WHERE id = ?2 AND state = 'open'",
+                            duckdb::params![now_i64, obs_id2],
+                        )
+                    }).await;
+
+                    // Write resolution event to timeline.
+                    if let Some(tenant_id) = tenant_map.get(node_id) {
+                        let _ = state.events_tx.try_send(EventRow {
+                            ts_ms:      now as i64,
+                            node_id:    node_id.clone(),
+                            tenant_id:  tenant_id.clone(),
+                            level:      "info".into(),
+                            event_type: Some(format!("{alert_type}_resolved")),
+                            message:    format!("{} condition cleared", alert_type.replace('_', " ")),
+                        });
+                    }
+
+                    println!("[evaluator] ✅ {} resolved for {}", alert_type, node_id);
+                }
+            }
+        }
+    }
+}
+
 // ── Alerting — CRUD handlers ──────────────────────────────────────────────────
 
 /// POST /api/alerts/channels — create a notification channel (Slack or email).
@@ -4534,6 +5122,10 @@ async fn main() {
     // Spawn node-offline alert task (checks every 60 s; fires once per outage).
     tokio::spawn(node_offline_alert_task(state.clone()));
 
+    // Spawn fleet alert evaluator (Essential Four: Zombied Engine, Thermal
+    // Redline, OOM Warning, WES Cliff — 60 s cadence with ring-buffer history).
+    tokio::spawn(fleet_alert_evaluator_task(state.clone()));
+
     // Refresh JWKS every 6 hours to pick up Clerk key rotations.
     if let Some(url) = jwks_url {
         tokio::spawn(async move {
@@ -4583,6 +5175,9 @@ async fn main() {
         .route("/api/fleet/duty",                 get(handle_fleet_duty))
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
         .route("/api/fleet/export",               get(handle_fleet_export))
+        // ── Fleet Observations (Phase 4B — stateful alert triage) ────────────
+        .route("/api/fleet/observations",            get(handle_fleet_observations))
+        .route("/api/fleet/observations/:id/acknowledge", post(handle_acknowledge_observation))
         // ── Agent API v1 ──────────────────────────────────────────────────────
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))

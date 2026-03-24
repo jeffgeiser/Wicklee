@@ -232,6 +232,32 @@ export interface EventHistoryRecord {
   message:     string;
 }
 
+/**
+ * Server-side fleet observation from the cloud alert evaluator.
+ * Returned by GET /api/fleet/observations.
+ */
+export interface FleetObservation {
+  id:             string;
+  node_id:        string;
+  alert_type:     string;
+  severity:       'warning' | 'critical';
+  state:          'open' | 'resolved' | 'acknowledged';
+  title:          string;
+  detail:         string;
+  context_json:   string | null;
+  fired_at_ms:    number;
+  resolved_at_ms: number | null;
+  ack_at_ms:      number | null;
+}
+
+/** Parameters for cross-navigating to the Observability tab with a pre-set filter. */
+export interface ObservabilityNavParams {
+  /** Pre-select this node in the metric history panel. */
+  nodeId?: string;
+  /** Center the time window around this timestamp (ms). */
+  centerMs?: number;
+}
+
 /** Unified audit record combining events, traces, and dismissals. */
 export interface AuditLogRecord {
   ts_ms:       number;
