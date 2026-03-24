@@ -1438,16 +1438,23 @@ const TelemetryInspector: React.FC<{ nodes: NodeAgent[] }> = ({ nodes }) => {
           <div className="px-5 py-3 flex items-center justify-between border-b border-gray-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
               {allNodes.length > 1 && (
-                <select
-                  value={nodeId ?? ''}
-                  onChange={e => setSelectedNode(e.target.value || null)}
-                  className="text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-gray-300 appearance-none cursor-pointer"
-                >
-                  {allNodes.map(n => {
-                    const hasLive = !!allNodeMetrics[n.id];
-                    return <option key={n.id} value={n.id}>{n.hostname || n.id}{hasLive ? '' : ' (offline)'}</option>;
-                  })}
-                </select>
+                <div className="relative">
+                  <select
+                    value={nodeId ?? ''}
+                    onChange={e => setSelectedNode(e.target.value || null)}
+                    className="text-xs bg-gray-800 border border-gray-700 rounded-lg pl-3 pr-7 py-1.5 text-gray-200 cursor-pointer appearance-none focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/20 transition-colors"
+                  >
+                    {allNodes.map(n => {
+                      const hasLive = !!allNodeMetrics[n.id];
+                      return (
+                        <option key={n.id} value={n.id} className="bg-gray-800 text-gray-200 py-1">
+                          {n.hostname || n.id}{hasLive ? '' : ' (offline)'}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                </div>
               )}
               {nodeId && <span className="text-[10px] font-mono text-gray-500">{nodeId}</span>}
             </div>

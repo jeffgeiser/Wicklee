@@ -4131,16 +4131,57 @@ async fn node_offline_alert_task(state: AppState) {
         }).await.unwrap_or_default();
 
         // ── Persist offline/online events to DuckDB (visible in Fleet Event Timeline) ──
+        // Dedup: skip if a node_offline event was already written for this node
+        // within the last hour (guards against process restarts on Railway).
         for (_user_id, node_id, tenant_id, elapsed) in &new_offline {
-            let minutes = elapsed / 60_000;
-            let _ = state.events_tx.try_send(EventRow {
-                ts_ms:      now_ms() as i64,
-                node_id:    node_id.clone(),
-                tenant_id:  tenant_id.clone(),
-                level:      "error".into(),
-                event_type: Some("node_offline".into()),
-                message:    format!("Node offline — no telemetry received for {minutes}m"),
-            });
+            let duck = state.duck_db.clone();
+            let nid = node_id.clone();
+            let tid = tenant_id.clone();
+            let cutoff = (now_ms() as i64) - 3_600_000; // 1 hour ago
+            let already_exists = tokio::task::spawn_blocking(move || {
+                let conn = duck.lock().unwrap();
+                conn.query_row(
+                    "SELECT 1 FROM node_events WHERE tenant_id = ? AND node_id = ? AND event_type = 'node_offline' AND ts_ms > ? LIMIT 1",
+                    duckdb::params![tid, nid, cutoff],
+                    |_| Ok(true),
+                ).unwrap_or(false)
+            }).await.unwrap_or(false);
+
+            if !already_exists {
+                let minutes = elapsed / 60_000;
+                let _ = state.events_tx.try_send(EventRow {
+                    ts_ms:      now_ms() as i64,
+                    node_id:    node_id.clone(),
+                    tenant_id:  tenant_id.clone(),
+                    level:      "error".into(),
+                    event_type: Some("node_offline".into()),
+                    message:    format!("Node offline — no telemetry received for {minutes}m"),
+                });
+
+                // Also write a fleet_observation for the Triage tab.
+                let duck2 = state.duck_db.clone();
+                let obs_id = Uuid::new_v4().to_string();
+                let nid2 = node_id.clone();
+                let tid2 = tenant_id.clone();
+                let minutes = elapsed / 60_000;
+                let now_i64 = now_ms() as i64;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let conn = duck2.lock().unwrap();
+                    conn.execute(
+                        "INSERT INTO fleet_observations
+                         (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
+                         VALUES (?, ?, ?, 'node_offline', 'critical', 'open', ?, ?, ?, ?)
+                         ON CONFLICT DO NOTHING",
+                        duckdb::params![
+                            obs_id, tid2, nid2,
+                            "Node Offline",
+                            format!("Node has not reported telemetry in {minutes} minutes."),
+                            format!(r#"{{"elapsed_minutes":{minutes}}}"#),
+                            now_i64,
+                        ],
+                    )
+                }).await;
+            }
             known_offline.insert(node_id.clone());
         }
 
@@ -4153,6 +4194,19 @@ async fn node_offline_alert_task(state: AppState) {
                 event_type: Some("node_online".into()),
                 message:    "Node back online — telemetry resumed".into(),
             });
+            // Auto-resolve any open node_offline observation for this node.
+            let duck = state.duck_db.clone();
+            let nid = node_id.clone();
+            let tid = tenant_id.clone();
+            let now_i64 = now_ms() as i64;
+            let _ = tokio::task::spawn_blocking(move || {
+                let conn = duck.lock().unwrap();
+                conn.execute(
+                    "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = ?
+                     WHERE tenant_id = ? AND node_id = ? AND alert_type = 'node_offline' AND state = 'open'",
+                    duckdb::params![now_i64, tid, nid],
+                )
+            }).await;
             known_offline.remove(node_id);
         }
     }

@@ -25,7 +25,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
-  TrendingDown, Database, Scale, Cpu, Globe, Shield,
+  TrendingDown, Database, Cpu, Globe, Shield,
   Activity, Layers, CheckCircle, ChevronDown, History, Clock,
   Copy, Check, Server, Radio, FileText,
 } from 'lucide-react';
@@ -55,7 +55,7 @@ import ModelEvictionCard   from './insights/tier2/ModelEvictionCard';
 import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 
 // Tier 2 cards (cont.)
-import QuantizationROICard from './insights/tier2/QuantizationROICard';
+import SiliconFitAudit from './insights/tier2/SiliconFitAudit';
 
 // Gate & layout components
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
@@ -1823,29 +1823,30 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               </div>
 
-              {/* Quantization ROI — moved up as "Live Intelligence" slot */}
+              {/* Silicon Fit Audit — live model/silicon efficiency analysis */}
               {canViewInsight(10) && effectiveNodes.length > 0 ? (
-                <QuantizationROICard
+                <SiliconFitAudit
                   node={effectiveNodes[0]}
                   nodes={effectiveNodes}
+                  onNavigateToPerformance={() => setActiveTab('performance')}
                 />
               ) : canViewInsight(10) ? (
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
-                  <Scale className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                  <Cpu className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                   <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Quantization ROI</p>
-                    <p className="text-xs text-gray-700 mt-0.5">No model loaded — load a model to see efficiency metrics.</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Silicon Fit Audit</p>
+                    <p className="text-xs text-gray-700 mt-0.5">No model loaded — load a model to see silicon fit analysis.</p>
                   </div>
                 </div>
               ) : (
                 <InsightsTeaseCard
-                  title="Quantization ROI"
-                  icon={<Scale className="w-3.5 h-3.5" />}
+                  title="Silicon Fit Audit"
+                  icon={<Cpu className="w-3.5 h-3.5" />}
                   tierRequired="team"
-                  upgradeCopy="Compare quantizations over time on Team →"
+                  upgradeCopy="View detailed benchmarks on Team →"
                   liveContent={
                     <p className="text-xs text-gray-600">
-                      Live efficiency metrics available — load a model to see tok/s and W/1K TKN.
+                      Live efficiency metrics available — load a model to see silicon fit analysis.
                     </p>
                   }
                 />
