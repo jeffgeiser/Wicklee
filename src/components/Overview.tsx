@@ -1063,6 +1063,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   // Inference duty cycle — rolling tracker (hooks must be before any early returns)
   const dutyRef = useRef<{ live: number; total: number }>({ live: 0, total: 0 });
+  const sessionStartRef = useRef(Date.now());
 
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
@@ -1528,8 +1529,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const wattPer1k = (() => {
     if (fleetTps == null || fleetTps < MIN_COST_TPS) return null;
     if (wattPowerNodes.length === 0) return null;
-    const totalPowerW = wattPowerNodes.reduce((acc, m) =>
-      acc + (getNodePowerW(m) ?? 0), 0);
+    const totalPowerW = wattPowerNodes.reduce((acc, m) => {
+      const ns = getNodeSettings?.(m.node_id);
+      return acc + (getNodePowerW(m) ?? 0) + (ns?.systemIdleW ?? 0);
+    }, 0);
     return (totalPowerW / fleetTps) * 1000;
   })();
 
@@ -1553,7 +1556,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       const ns = getNodeSettings?.(m.node_id);
       const pue = ns?.pue ?? 1.0;
       const rate = ns?.kwhRate ?? fleetKwhRate;
-      const watts = getNodePowerW(m) ?? 0;
+      const watts = (getNodePowerW(m) ?? 0) + (ns?.systemIdleW ?? 0);
       return acc + watts * pue * 24 * (rate / 1000);
     }, 0);
   })();
@@ -1571,7 +1574,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       const ns   = getNodeSettings?.(m.node_id);
       const pue  = ns?.pue ?? 1.0;
       const rate = ns?.kwhRate ?? fleetKwhRate;
-      const watts = getNodePowerW(m) ?? 0;
+      const watts = (getNodePowerW(m) ?? 0) + (ns?.systemIdleW ?? 0);
       return acc + watts * pue * rate / 1000;
     }, 0);
   })();
@@ -1927,7 +1930,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             : dutyPct > 10 ? 'text-amber-400'
             : 'text-gray-500'}
           sub={dutyRef.current.total > 0
-            ? `${Math.round(dutyRef.current.total / 60)}m observed this session`
+            ? (() => {
+                const elapsedMin = Math.round((Date.now() - sessionStartRef.current) / 60000);
+                return elapsedMin < 1 ? '< 1m observed' : `${elapsedMin}m observed this session`;
+              })()
             : 'collecting…'}
           icon={Activity}
           iconCls={dutyPct != null && dutyPct > 50 ? 'text-emerald-400'

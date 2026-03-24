@@ -260,10 +260,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const monthlyCost100W = (100 / 1000) * effPue * 24 * 30.4 * effKwh;
 
   // ── Column clear state ─────────────────────────────────────────────────────
-  const [confirmClear, setConfirmClear] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
-  const [successField, setSuccessField] = useState<'kwhRate' | 'currency' | 'pue' | null>(null);
+  type ClearableField = 'kwhRate' | 'currency' | 'pue' | 'systemIdleW';
+  const [confirmClear, setConfirmClear] = useState<ClearableField | null>(null);
+  const [successField, setSuccessField] = useState<ClearableField | null>(null);
 
-  const handleClearField = (field: 'kwhRate' | 'currency' | 'pue') => {
+  const handleClearField = (field: ClearableField) => {
     if (confirmClear === field) {
       clearAllOverridesForField(field);
       setConfirmClear(null);
@@ -274,9 +275,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const confirmText = (field: 'kwhRate' | 'currency' | 'pue') => {
-    if (field === 'kwhRate')  return `Reset all kWh overrides? Nodes will use ${currSymbol}${settings.fleet.kwhRate}/kWh.`;
-    if (field === 'currency') return `Reset all currency overrides? Nodes will use ${settings.fleet.currency}.`;
+  const confirmText = (field: ClearableField) => {
+    if (field === 'kwhRate')      return `Reset all kWh overrides? Nodes will use ${currSymbol}${settings.fleet.kwhRate}/kWh.`;
+    if (field === 'currency')     return `Reset all currency overrides? Nodes will use ${settings.fleet.currency}.`;
+    if (field === 'systemIdleW')  return `Reset all Idle W overrides? Nodes will use 0 W.`;
     return `Reset all PUE overrides? Nodes will use PUE ${settings.fleet.pue.toFixed(1)}.`;
   };
 
@@ -502,6 +504,19 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         successField={successField}
                         confirmText={confirmText('pue')}
                         onConfirm={() => handleClearField('pue')}
+                        onCancel={() => setConfirmClear(null)}
+                      />
+                    </th>
+                    <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">
+                      <div title="System idle power at the wall (watts). Added to accelerator power for cost estimates.">Idle W</div>
+                      <ClearColumnButton
+                        label="Reset"
+                        field="systemIdleW"
+                        align="right"
+                        confirmClear={confirmClear}
+                        successField={successField}
+                        confirmText={confirmText('systemIdleW')}
+                        onConfirm={() => handleClearField('systemIdleW')}
                         onCancel={() => setConfirmClear(null)}
                       />
                     </th>
@@ -1104,11 +1119,13 @@ const AlertsSection: React.FC<{
 
 // ── Clear-column button with inline confirm ───────────────────────────────────
 
+type ClearableFieldType = 'kwhRate' | 'currency' | 'pue' | 'systemIdleW';
+
 const ClearColumnButton: React.FC<{
   label: string;
-  field: 'kwhRate' | 'currency' | 'pue';
-  confirmClear: 'kwhRate' | 'currency' | 'pue' | null;
-  successField: 'kwhRate' | 'currency' | 'pue' | null;
+  field: ClearableFieldType;
+  confirmClear: ClearableFieldType | null;
+  successField: ClearableFieldType | null;
   confirmText: string;
   align?: 'left' | 'right';
   onConfirm: () => void;
@@ -1153,14 +1170,16 @@ const NodeOverrideRow: React.FC<{
   fleetSettings: FleetSettings;
   onOverride: (patch: Partial<NodeOverride>) => void;
 }> = ({ node, eff, ov, fleetSettings, onOverride }) => {
-  const [kwhDraft, setKwhDraft] = useState(ov.kwhRate?.toString() ?? '');
-  const [pueDraft,  setPueDraft] = useState(ov.pue?.toString()  ?? '');
+  const [kwhDraft,  setKwhDraft]  = useState(ov.kwhRate?.toString() ?? '');
+  const [pueDraft,  setPueDraft]  = useState(ov.pue?.toString()  ?? '');
+  const [idleDraft, setIdleDraft] = useState(ov.systemIdleW?.toString() ?? '');
 
   React.useEffect(() => { setKwhDraft(ov.kwhRate?.toString() ?? ''); }, [ov.kwhRate]);
   React.useEffect(() => { setPueDraft(ov.pue?.toString()  ?? ''); }, [ov.pue]);
+  React.useEffect(() => { setIdleDraft(ov.systemIdleW?.toString() ?? ''); }, [ov.systemIdleW]);
 
-  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | null>(null);
-  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc') => {
+  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | null>(null);
+  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc' | 'idle') => {
     setSavedCell(cell);
     setTimeout(() => setSavedCell(c => c === cell ? null : c), 1500);
   };
@@ -1177,6 +1196,13 @@ const NodeOverrideRow: React.FC<{
     if (pueDraft === '') { onOverride({ pue: undefined }); flashSaved('pue'); }
     else if (!isNaN(v) && v >= 1.0 && v <= 3.0) { onOverride({ pue: v }); flashSaved('pue'); }
     else { setPueDraft(ov.pue?.toString() ?? ''); }
+  };
+
+  const commitIdle = () => {
+    const v = parseFloat(idleDraft);
+    if (idleDraft === '') { onOverride({ systemIdleW: undefined }); flashSaved('idle'); }
+    else if (!isNaN(v) && v >= 0) { onOverride({ systemIdleW: v }); flashSaved('idle'); }
+    else { setIdleDraft(ov.systemIdleW?.toString() ?? ''); }
   };
 
   const valCls  = (active: boolean) => active ? 'text-gray-900 dark:text-white' : 'text-gray-400 dark:text-gray-500';
@@ -1270,6 +1296,23 @@ const NodeOverrideRow: React.FC<{
             onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
             placeholder={fleetSettings.pue.toFixed(1)}
             className={`${cellBase} text-right tabular-nums ${valCls(eff.pueOverride)}`}
+          />
+        </div>
+      </td>
+
+      {/* Idle W — system idle power at the wall */}
+      <td className="px-3 py-3 text-right">
+        <div className="flex items-center justify-end gap-1.5">
+          {savedCell === 'idle' && <SavedMark />}
+          <input
+            type="number" min="0" step="1"
+            value={idleDraft}
+            onChange={e => setIdleDraft(e.target.value)}
+            onBlur={commitIdle}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder="0"
+            title="System idle power at the wall (watts)"
+            className={`${cellBase} text-right tabular-nums ${valCls(eff.systemIdleWOverride)}`}
           />
         </div>
       </td>
