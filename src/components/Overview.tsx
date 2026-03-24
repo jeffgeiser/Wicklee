@@ -1366,6 +1366,38 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? (localWiredLimitMb / 1024).toFixed(1)
     : null;
 
+  // ── Fleet Memory Pressure — system RAM utilisation across all online nodes ──
+  const fleetMemPressure = (() => {
+    let totalUsedMb = 0;
+    let totalCapMb  = 0;
+    for (const m of effectiveMetrics) {
+      // Prefer NVIDIA VRAM for GPU nodes, system RAM otherwise
+      if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0 && m.nvidia_vram_used_mb != null) {
+        totalUsedMb += m.nvidia_vram_used_mb;
+        totalCapMb  += m.nvidia_vram_total_mb;
+      } else {
+        totalUsedMb += m.total_memory_mb - m.available_memory_mb;
+        totalCapMb  += m.total_memory_mb;
+      }
+    }
+    return totalCapMb > 0 ? Math.round((totalUsedMb / totalCapMb) * 100) : null;
+  })();
+
+  // ── Inference Duty Cycle — % of recent ticks where any node was "live" ──
+  const dutyRef = useRef<{ live: number; total: number }>({ live: 0, total: 0 });
+  useEffect(() => {
+    const anyLive = effectiveMetrics.some(m => m.inference_state === 'live');
+    dutyRef.current.total += 1;
+    if (anyLive) dutyRef.current.live += 1;
+    // Cap at ~3600 ticks (~1 hour at 1Hz SSE) to keep it a rolling-ish window
+    if (dutyRef.current.total > 3600) {
+      dutyRef.current.live  = Math.round(dutyRef.current.live  * 0.5);
+      dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
+    }
+  }, [effectiveMetrics]);
+  const dutyPct = dutyRef.current.total > 0
+    ? Math.round((dutyRef.current.live / dutyRef.current.total) * 100) : null;
+
   // Tile 4 — FLEET NODES: online / total
   // fleetTotalCount — all registered nodes (single source via useFleetCounts)
   // fleetLiveCount  — set below, after reachableNodeIds is computed
@@ -1812,8 +1844,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           label={
             <MetricTooltip
               metricId="w-1k"
-              name="W/1K TKN — Wattage Per 1K Tokens"
-              oneLiner="Watts of sustained power draw per 1,000 tok/s of fleet throughput. Lower = more efficient."
+              name="W/1K TKN — Accelerator Power Per 1K Tokens"
+              oneLiner="Accelerator watts per 1,000 tok/s. Measures SoC power (Apple), GPU board power (NVIDIA), or CPU package power (x86). Does not include system idle draw — configure a power offset in Settings for full wall-power estimates."
             >
               Wattage / 1k Tkn
             </MetricTooltip>
@@ -1823,50 +1855,49 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           sub={wattPowerNodes.length > 0
             ? `${wattPowerNodes.length} node${wattPowerNodes.length !== 1 ? 's' : ''} · per 1k tokens`
             : 'per 1k tokens'}
+          sub2={idleFleetCostPerDay != null
+            ? idleFleetCostPerDay > 0 && idleFleetCostPerDay < 0.01
+              ? 'est < $0.01/day'
+              : `est $${idleFleetCostPerDay.toFixed(2)}/day`
+            : undefined}
           icon={Zap}
           iconCls="text-emerald-400"
         />
 
-        {/* 7. COST / 1M TOKENS — shown per-million so operators can compare directly
-            against cloud API pricing (e.g. GPT-4o at ~$5/1M) without mental arithmetic. */}
+        {/* 7. FLEET MEMORY PRESSURE — system/VRAM utilisation across online nodes */}
         <InsightTile
-          label={
-            <MetricTooltip
-              metricId="cost-1k"
-              name="COST / 1M TOKENS"
-              oneLiner="Dollar cost of 1 million tokens based on your configured kWh rate."
-            >
-              Cost / 1M Tokens
-            </MetricTooltip>
-          }
-          value={(() => {
-              if (displayCostPer1k == null) return '—';
-              const per1M = displayCostPer1k * 1000;
-              if (per1M < 0.001) return '< $0.001';
-              return `$${per1M.toFixed(3)}`;
-            })()}
-          valueCls={displayCostPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={`at $${fleetKwhRate}/kWh`}
-          icon={DollarSign}
-          iconCls="text-cyan-400"
+          label={isLocalMode ? 'Node Memory' : 'Fleet Memory'}
+          value={fleetMemPressure != null ? `${fleetMemPressure}%` : '—'}
+          valueCls={fleetMemPressure == null ? 'text-gray-400 dark:text-gray-600'
+            : fleetMemPressure > 80 ? 'text-red-400'
+            : fleetMemPressure > 60 ? 'text-amber-400'
+            : undefined}
+          sub={effectiveMetrics.length > 0
+            ? isLocalMode
+              ? `${(effectiveMetrics[0]?.available_memory_mb / 1024).toFixed(1)} GB free`
+              : `${effectiveMetrics.length} node${effectiveMetrics.length !== 1 ? 's' : ''} reporting`
+            : 'no data'}
+          icon={Database}
+          iconCls={fleetMemPressure != null && fleetMemPressure > 80 ? 'text-red-400'
+            : fleetMemPressure != null && fleetMemPressure > 60 ? 'text-amber-400'
+            : 'text-indigo-400'}
         />
 
-        {/* 8. FLEET / NODE POWER COST */}
+        {/* 8. INFERENCE DUTY CYCLE — % of session time with active inference */}
         <InsightTile
-          label={isLocalMode ? 'Node Power Cost' : 'Fleet Power Cost'}
-          value={idleFleetCostPerDay != null
-            ? idleFleetCostPerDay > 0 && idleFleetCostPerDay < 0.01
-              ? '< $0.01/day'
-              : `$${idleFleetCostPerDay.toFixed(2)}/day`
-            : '—'}
-          valueCls={idleFleetCostPerDay == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={idleFleetCostPerDay != null
-            ? isLocalMode
-              ? `PUE ${avgPue.toFixed(1)} · 24h estimate`
-              : `${idlePowerNodes.length} node${idlePowerNodes.length !== 1 ? 's' : ''} reporting · PUE ${avgPue.toFixed(1)}`
-            : 'no power data'}
-          icon={DollarSign}
-          iconCls="text-gray-400 dark:text-gray-500"
+          label={isLocalMode ? 'Node Duty' : 'Fleet Duty'}
+          value={dutyPct != null ? `${dutyPct}%` : '—'}
+          valueCls={dutyPct == null ? 'text-gray-400 dark:text-gray-600'
+            : dutyPct > 50 ? undefined
+            : dutyPct > 10 ? 'text-amber-400'
+            : 'text-gray-500'}
+          sub={dutyRef.current.total > 0
+            ? `${Math.round(dutyRef.current.total / 60)}m observed this session`
+            : 'collecting…'}
+          icon={Activity}
+          iconCls={dutyPct != null && dutyPct > 50 ? 'text-emerald-400'
+            : dutyPct != null && dutyPct > 10 ? 'text-amber-400'
+            : 'text-gray-500'}
         />
 
       </div>
