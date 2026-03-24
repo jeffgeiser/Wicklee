@@ -767,10 +767,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       const existing = cache.get(key);
       const isNew    = !existing;
 
+      // Preserve resolvedMs if the pattern was already in hold (flickering condition).
+      // Only clear resolvedMs for genuinely new patterns. This prevents noisy conditions
+      // from resetting the OBS_HOLD_MS countdown on every re-fire cycle.
       cache.set(key, {
         insight:      result,
         firstFiredMs: existing?.firstFiredMs ?? nowMs2,
-        resolvedMs:   null,   // still firing — clear any prior resolved timestamp
+        resolvedMs:   isNew ? null : (existing?.resolvedMs ?? null),
       });
 
       // ── Onset event (Live Activity Feed + localStorage buffer) ────────────

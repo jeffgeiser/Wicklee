@@ -6,13 +6,16 @@ import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW, hasPowerData } from '../utils/power';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
-import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
+import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
+import { useFleetObservations } from '../hooks/useFleetObservations';
+import type { FleetObservation } from '../hooks/useFleetObservations';
+import SiliconFitAudit from './insights/tier2/SiliconFitAudit';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { useLocalEvents } from '../hooks/useLocalEvents';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
-import EventFeed from './EventFeed';
+import EventFeed, { eventMeta, fmtAgo as fmtEventAgo } from './EventFeed';
 import MetricTooltip from './MetricTooltip';
 import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
@@ -92,6 +95,8 @@ interface OverviewProps {
   fleetKwhRate?: number;
   /** Auth token getter for cloud API calls (fleet duty endpoint). */
   getToken?: () => Promise<string | null>;
+  /** Cross-nav to Observability tab with optional node pre-filter. */
+  onNavigateToObservability?: (params?: ObservabilityNavParams) => void;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -1018,7 +1023,7 @@ const DiagnosticRail: React.FC<{
 };
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = 0.12, getToken }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = 0.12, getToken, onNavigateToObservability }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -1028,6 +1033,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     transport: cloudTransport,
     connectionState,
   } = useFleetStream();
+
+  // ── Server-side fleet observations (de-spammed Live Activity) ─────────────
+  const { observations: serverObservations } = useFleetObservations({
+    getToken,
+    state: 'open',
+    skip: isLocalMode,
+  });
 
   // Local-only state (used when isLocalHost for WS/SSE to the local agent)
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
@@ -2242,345 +2254,179 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           </div>
         )
       ) : (
-      // ── Fleet Intelligence — full analytics section (cloud / Mission Control only)
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <div className="flex items-center gap-2 mb-5">
-          <BrainCircuit className="w-4 h-4 text-indigo-400" />
-          <h3 className="text-sm font-semibold text-gray-200">Fleet Intelligence</h3>
-          {hasPerNodePueDiversity && (
-            <span
-              className="flex items-center gap-1 text-[10px] text-gray-500 cursor-default"
-              title="WES scores reflect per-node PUE settings. Nodes in different locations may have different facility overhead applied."
-            >
-              <Info size={11} className="text-gray-600 shrink-0" />
-              per-node PUE
-            </span>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4">
-
-          {/* ── Left: Inference Density Map ─────────────────────────────────── */}
-          <div className="bg-gray-800/50 border border-gray-700/40 rounded-xl flex flex-col">
-            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none px-4 pt-4">
-              Inference Density
-            </p>
-            <HexHive rows={nodeRows} />
-            <p className="text-[9px] text-gray-600 px-4 pb-3 leading-tight">
-              Amber pulse = active · gray = idle · red = throttling
-            </p>
-          </div>
-
-          {/* ── Right: 5 metric cards ────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 gap-3">
-
-            {/* 1. Cost Efficiency — shown per million tokens so sovereign fleet costs are legible
-                (sovereign inference is typically sub-cent / 1k, making 1k the wrong display unit).
-                displayCostPer1kNew is already smoothed; ×1000 gives per-1M without a second buffer. */}
-            {(() => {
-              const displayCostPer1M = displayCostPer1kNew != null ? displayCostPer1kNew * 1000 : null;
-              // Never show $0.000 — if rounds to zero at 3 dp, show < $0.001
-              const costStr = displayCostPer1M == null
-                ? '—'
-                : displayCostPer1M < 0.001
-                ? '< $0.001'
-                : `$${displayCostPer1M.toFixed(3)}`;
-              return (
-                <FleetCard
-                  label={
-                    <MetricTooltip
-                      metricId="cost-efficiency"
-                      name="COST EFFICIENCY — $/1M Tokens"
-                      oneLiner="Fleet-level cost per million tokens at current draw and throughput."
-                    >
-                      Cost Efficiency
-                    </MetricTooltip>
-                  }
-                  sub={
-                    <p className="text-[10px] text-gray-600 leading-tight">
-                      {displayCostPer1M != null
-                        ? `est. from current draw · ${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''}`
-                        : 'no active inference'}
-                    </p>
-                  }
-                >
-                  <p className={`text-xl font-bold font-telin leading-none ${displayCostPer1M != null ? 'text-cyan-400' : 'text-gray-600'}`}>
-                    {costStr}
+      // ── Fleet Intelligence — Mission Control (cloud only)
+      //    Layout: KPI Hero Row → Analysis Mid-Grid → Audit Footer
+      <div className="space-y-4">
+        {/* ═══ KPI Hero Row — 3-column top-level KPIs ═══════════════════════ */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* 1. Cost Efficiency */}
+          {(() => {
+            const displayCostPer1M = displayCostPer1kNew != null ? displayCostPer1kNew * 1000 : null;
+            const costStr = displayCostPer1M == null
+              ? '—'
+              : displayCostPer1M < 0.001
+              ? '< $0.001'
+              : `$${displayCostPer1M.toFixed(3)}`;
+            return (
+              <FleetCard
+                label={
+                  <MetricTooltip
+                    metricId="cost-efficiency"
+                    name="COST EFFICIENCY — $/1M Tokens"
+                    oneLiner="Fleet-level cost per million tokens at current draw and throughput."
+                  >
+                    Cost Efficiency
+                  </MetricTooltip>
+                }
+                sub={
+                  <p className="text-[10px] text-gray-600 leading-tight">
+                    {displayCostPer1M != null
+                      ? `est. from current draw · ${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''}`
+                      : 'no active inference'}
                   </p>
-                  {displayCostPer1M != null && <p className="text-[10px] text-gray-500 mt-0.5">/1M tokens</p>}
-                </FleetCard>
-              );
-            })()}
-
-            {/* 2. Fleet Avg WES
-                Fleet Avg WES stays here permanently as a live aggregate (Intelligence = "Now").
-                Phase 4A: ranked leaderboard with trend lines and regression detection moves to Insights tab.
-                Do not migrate the live aggregate — only the historical/interpretive layer goes to Insights. */}
-            <FleetCard
-              label={
-                <MetricTooltip
-                  metricId="fleet-avg-wes"
-                  name="FLEET AVG WES"
-                  oneLiner="Average WES score across all online nodes."
-                  ranges={[
-                    { threshold: '> 10', color: 'green', label: 'Excellent fleet efficiency' },
-                    { threshold: '1–10', color: 'amber', label: 'Good · typical GPU fleet' },
-                    { threshold: '< 1',  color: 'red',   label: 'Poor · thermal or CPU inference' },
-                  ]}
-                >
-                  Fleet Avg WES
-                </MetricTooltip>
-              }
-              sub={
-                <p className="text-[10px] text-gray-600">
-                  {displayFleetAvgWES != null ? `avg across ${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''}` : 'no active inference'}
-                </p>
-              }
-            >
-              <p
-                className={`text-xl font-bold font-telin leading-none ${wesColorClass(displayFleetAvgWES)}`}
-                title={displayFleetAvgWES != null && displayFleetAvgWES < 10
-                  ? (() => {
-                      const firstRanked = rankedWES[0];
-                      const m = effectiveMetrics.find(x => x.node_id === firstRanked?.nodeId);
-                      const w = firstRanked?.watts;
-                      return wesBreakdownTitle(firstRanked?.tps ?? null, w ?? null, firstRanked?.thermalState ?? null, m?.chip_name ?? m?.gpu_name ?? null, firstRanked?.rawWes ?? null, firstRanked?.wes ?? null, firstRanked?.thermalSource ?? null);
-                    })()
-                  : WES_TOOLTIP}
+                }
               >
-                {formatWES(displayFleetAvgWES)}
-              </p>
-            </FleetCard>
-
-            {/* 3. Tokens Per Watt — uses same formula as Fleet Status TOK/W column:
-                tps ÷ watts. Inputs are smoothed fleet-total values so this
-                matches what the per-node column rows would sum to on a single-node setup. */}
-            <FleetCard
-              label={
-                <MetricTooltip
-                  metricId="tokens-per-watt"
-                  name="TOKENS PER WATT (Fleet)"
-                  oneLiner="Fleet-wide energy efficiency — tok/s per watt across all nodes."
-                >
-                  Tokens Per Watt
-                </MetricTooltip>
-              }
-              sub={
-                <p className="text-[10px] text-gray-600 leading-tight">
-                  {displayTokPerKW != null
-                    ? `${tpsNodes.length} node${tpsNodes.length !== 1 ? 's' : ''} · fleet inference efficiency`
-                    : 'no active inference'}
+                <p className={`text-xl font-bold font-telin leading-none ${displayCostPer1M != null ? 'text-cyan-400' : 'text-gray-600'}`}>
+                  {costStr}
                 </p>
-              }
-            >
-              <p className={`text-xl font-bold font-telin leading-none ${displayTokPerKW != null ? 'text-emerald-400' : 'text-gray-600'}`}>
-                {displayTokPerKW != null ? displayTokPerKW.toFixed(1) : '—'}
+                {displayCostPer1M != null && <p className="text-[10px] text-gray-500 mt-0.5">/1M tokens</p>}
+              </FleetCard>
+            );
+          })()}
+
+          {/* 2. Fleet Avg WES */}
+          <FleetCard
+            label={
+              <MetricTooltip
+                metricId="fleet-avg-wes"
+                name="FLEET AVG WES"
+                oneLiner="Average WES score across all online nodes."
+                ranges={[
+                  { threshold: '> 10', color: 'green', label: 'Excellent fleet efficiency' },
+                  { threshold: '1–10', color: 'amber', label: 'Good · typical GPU fleet' },
+                  { threshold: '< 1',  color: 'red',   label: 'Poor · thermal or CPU inference' },
+                ]}
+              >
+                Fleet Avg WES
+              </MetricTooltip>
+            }
+            sub={
+              <p className="text-[10px] text-gray-600">
+                {displayFleetAvgWES != null ? `avg across ${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''}` : 'no active inference'}
               </p>
-              {displayTokPerKW != null && <p className="text-[10px] text-gray-500 mt-0.5">tok/W</p>}
-            </FleetCard>
+            }
+          >
+            <p
+              className={`text-xl font-bold font-telin leading-none ${wesColorClass(displayFleetAvgWES)}`}
+              title={displayFleetAvgWES != null && displayFleetAvgWES < 10
+                ? (() => {
+                    const firstRanked = rankedWES[0];
+                    const m = effectiveMetrics.find(x => x.node_id === firstRanked?.nodeId);
+                    const w = firstRanked?.watts;
+                    return wesBreakdownTitle(firstRanked?.tps ?? null, w ?? null, firstRanked?.thermalState ?? null, m?.chip_name ?? m?.gpu_name ?? null, firstRanked?.rawWes ?? null, firstRanked?.wes ?? null, firstRanked?.thermalSource ?? null);
+                  })()
+                : WES_TOOLTIP}
+            >
+              {formatWES(displayFleetAvgWES)}
+            </p>
+          </FleetCard>
 
-            {/* 4. Thermal Diversity */}
-            <FleetCard label="Thermal Diversity">
-              {effectiveMetrics.length === 0 ? (
-                <p className="text-sm font-telin text-gray-600">—</p>
-              ) : allNormal ? (
-                <div className="flex items-center gap-1.5">
-                  <Check size={12} className="text-green-400 shrink-0" />
-                  <p className="text-sm font-telin text-green-400">All Normal</p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  {Object.entries(thermalCounts).map(([state, count]) => {
-                    const isBad = ['serious', 'critical'].includes(state.toLowerCase());
-                    const cls   = isBad ? 'text-red-400' : ['fair', 'elevated'].includes(state.toLowerCase()) ? 'text-amber-400' : 'text-green-400';
-                    return (
-                      <div key={state} className="flex items-center gap-1.5">
-                        {isBad && <AlertTriangle size={9} className="text-red-400 shrink-0" />}
-                        <p className={`text-xs font-telin font-semibold ${cls}`}>
-                          {count} {state}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </FleetCard>
-
-            {/* 4b. Idle Fleet Cost */}
-            {(() => {
-              const idleNodes = effectiveMetrics.filter(n => {
-                const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
-                const watts = getNodePowerW(n);
-                return watts != null && (tps == null || tps <= 0);
-              });
-
-              if (idleNodes.length === 0) return null;
-
-              const idleCosts = idleNodes.map(n => {
-                const ns    = getNodeSettings?.(n.node_id) ?? { pue: 1.0, kwhRate: fleetKwhRate };
-                const watts = getNodePowerW(n) ?? 0;
-                return {
-                  hostname:  n.hostname ?? n.node_id,
-                  dailyCost: watts * ns.pue * 24 * (ns.kwhRate / 1000),
-                };
-              });
-
-              const fleetDailyTotal = idleCosts.reduce((sum, n) => sum + n.dailyCost, 0);
-
-              return (
-                <FleetCard
-                  label="Idle Fleet Cost"
-                  sub={
-                    <p className="text-[10px] text-gray-600 leading-tight">
-                      {idleNodes.length} idle node{idleNodes.length !== 1 ? 's' : ''} · est. electricity
-                    </p>
-                  }
-                >
-                  <div className="space-y-1 w-full">
-                    {idleCosts.map((n, i) => (
-                      <div key={i} className="flex items-center justify-between gap-2 min-w-0">
-                        <span className="text-xs text-gray-500 truncate flex-1 min-w-0">{n.hostname}</span>
-                        <span className="font-telin text-xs text-amber-400 shrink-0">
-                          ${n.dailyCost.toFixed(2)}/day
-                        </span>
-                      </div>
-                    ))}
-                    {idleCosts.length > 1 && (
-                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-700/50">
-                        <span className="text-[10px] text-gray-600 uppercase tracking-widest">Total</span>
-                        <span className="font-telin text-xs text-amber-400">${fleetDailyTotal.toFixed(2)}/day</span>
-                      </div>
-                    )}
-                  </div>
-                </FleetCard>
-              );
-            })()}
-
-            {/* 5. Node Cost / 1M — half-width, pairs with Best Route Now below */}
-            {costEntries.some(e => e.costPer1mRaw != null || e.tps == null || e.tps <= 0) && (
-              <FleetCard label="Node Cost / 1M Tokens">
-                {(() => {
-                  const active = costEntries
-                    .filter(e => e.tps != null && e.tps > 0)
-                    .sort((a, b) => {
-                      // Nodes with cost data first (cheapest → most expensive), then no-power-data nodes
-                      if (a.costPer1m != null && b.costPer1m != null) return a.costPer1m - b.costPer1m;
-                      if (a.costPer1m != null) return -1;
-                      if (b.costPer1m != null) return 1;
-                      return 0;
-                    });
-                  const idle = costEntries.filter(e => e.tps == null || e.tps <= 0);
-
-                  if (active.length === 0 && idle.length === 0) {
-                    return <p className="text-sm font-telin text-gray-600">— no nodes online</p>;
-                  }
-
+          {/* 3. Thermal Diversity */}
+          <FleetCard label="Thermal Diversity">
+            {effectiveMetrics.length === 0 ? (
+              <p className="text-sm font-telin text-gray-600">—</p>
+            ) : allNormal ? (
+              <div className="flex items-center gap-1.5">
+                <Check size={12} className="text-green-400 shrink-0" />
+                <p className="text-sm font-telin text-green-400">All Normal</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                {Object.entries(thermalCounts).map(([state, count]) => {
+                  const isBad = ['serious', 'critical'].includes(state.toLowerCase());
+                  const cls   = isBad ? 'text-red-400' : ['fair', 'elevated'].includes(state.toLowerCase()) ? 'text-amber-400' : 'text-green-400';
                   return (
-                    <div className="space-y-1.5 w-full">
-                      {active.map((e, i) => {
-                        const isChampion = i === 0 && e.costPer1m != null;
-                        const costStr    = e.costPer1m == null
-                          ? '— no power data'
-                          : e.costPer1m < 0.01
-                          ? '< $0.01'
-                          : `$${e.costPer1m.toFixed(2)}`;
-                        const costCls    = e.costPer1m == null
-                          ? 'text-gray-600'
-                          : isChampion
-                          ? 'text-green-400'
-                          : 'text-cyan-400';
-                        return (
-                          <div key={e.nodeId} className="flex items-center gap-2 min-w-0">
-                            <span className="text-[9px] uppercase tracking-widest text-gray-500 w-4 shrink-0 text-right">
-                              {e.costPer1m != null ? `${i + 1}.` : '—'}
-                            </span>
-                            <span className="text-xs font-bold font-telin text-gray-200 truncate flex-1 min-w-0">
-                              {e.hostname !== e.nodeId ? e.hostname : e.nodeId}
-                            </span>
-                            <span className={`text-xs font-telin font-semibold shrink-0 ${costCls}`}>
-                              {costStr}
-                            </span>
-                            {e.costPer1m != null && (
-                              <span className="text-[10px] text-gray-600 shrink-0">/1M</span>
-                            )}
-                            {e.tps != null && (
-                              <span className="text-[10px] font-telin text-gray-500 shrink-0 w-16 text-right">
-                                {e.tps.toFixed(1)} tok/s
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                      {idle.length > 0 && (
-                        <div className={`${active.length > 0 ? 'border-t border-gray-800 pt-1.5 mt-1' : ''} space-y-1`}>
-                          {idle.map(e => (
-                            <div key={e.nodeId} className="flex items-center gap-2 min-w-0">
-                              <span className="text-[9px] uppercase tracking-widest text-gray-700 w-4 shrink-0">—</span>
-                              <span className="text-xs font-telin text-gray-600 truncate flex-1 min-w-0">
-                                {e.hostname !== e.nodeId ? e.hostname : e.nodeId}
-                              </span>
-                              <span className="text-[10px] font-telin text-gray-700 shrink-0">idle</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                    <div key={state} className="flex items-center gap-1.5">
+                      {isBad && <AlertTriangle size={9} className="text-red-400 shrink-0" />}
+                      <p className={`text-xs font-telin font-semibold ${cls}`}>
+                        {count} {state}
+                      </p>
                     </div>
                   );
-                })()}
-              </FleetCard>
+                })}
+              </div>
             )}
+          </FleetCard>
+        </div>
 
-            {/* 6. Best Route Now — half-width, pairs with Node Cost / 1M */}
+        {/* ═══ Analysis Mid-Grid — 2-column ═══════════════════════════════════ */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* ── Left: Inference Density + Silicon Fit Audit ────────────────── */}
+          <div className="space-y-3">
+            <div className="bg-slate-900/50 border border-gray-700/40 rounded-xl flex flex-col">
+              <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none px-4 pt-4">
+                Inference Density
+              </p>
+              <HexHive rows={nodeRows} />
+              <p className="text-[9px] text-gray-600 px-4 pb-3 leading-tight">
+                Amber pulse = active · gray = idle · red = throttling
+              </p>
+            </div>
+            {effectiveMetrics.length > 0 && (
+              <SiliconFitAudit
+                node={effectiveMetrics[0]}
+                nodes={effectiveMetrics}
+              />
+            )}
+          </div>
+
+          {/* ── Right: Best Route Now + Live Activity (observations) ───────── */}
+          <div className="space-y-3">
+            {/* Best Route Now — plain English routing targets */}
             <FleetCard label="Best Route Now">
               {activeEntries.length === 0 ? (
                 <p className="text-sm font-telin text-gray-600">— no active inference</p>
               ) : activeEntries.length === 1 ? (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">→</span>
-                  <span className="text-sm font-bold font-telin text-gray-200">{activeEntries[0].nodeId}</span>
+                  <button onClick={() => onNavigateToObservability?.({ nodeId: activeEntries[0].nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{activeEntries[0].hostname || activeEntries[0].nodeId}</button>
                   <span className="text-xs text-gray-500">(only active node)</span>
                 </div>
               ) : sameNode && bestCostNode == null ? (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">→</span>
-                  <span className="text-sm font-bold font-telin text-gray-200">{bestLatNode!.nodeId}</span>
+                  <button onClick={() => onNavigateToObservability?.({ nodeId: bestLatNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestLatNode!.hostname || bestLatNode!.nodeId}</button>
                   <span className="text-[10px] text-green-400">Best for latency and efficiency</span>
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  {/* Latency route */}
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Latency</span>
                     <span className="text-xs text-gray-400">→</span>
-                    <span className="text-sm font-bold font-telin text-gray-200">{bestLatNode!.nodeId}</span>
+                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestLatNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestLatNode!.hostname || bestLatNode!.nodeId}</button>
                     <span className="text-xs font-telin text-green-400 ml-auto">{bestLatNode!.tps!.toFixed(1)} tok/s</span>
                   </div>
-                  {/* Efficiency route */}
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Efficiency</span>
                     <span className="text-xs text-gray-400">→</span>
-                    <span className="text-sm font-bold font-telin text-gray-200">{bestEffNode!.nodeId}</span>
+                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestEffNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestEffNode!.hostname || bestEffNode!.nodeId}</button>
                     <div className="ml-auto flex flex-col items-end gap-0">
                       <span className={`text-xs font-telin ${wesColorClass(bestEffNode!.wes)}`}>WES {formatWES(bestEffNode!.wes)}</span>
                       {bestEffNode!.tcPct > 0 && (
-                        <span className="text-[9px] font-telin text-amber-400/70" title={`${bestEffNode!.tcPct}% of potential efficiency lost to thermal throttling`}>
-                          -{bestEffNode!.tcPct}% thermal
-                        </span>
+                        <span className="text-[9px] font-telin text-amber-400/70">-{bestEffNode!.tcPct}% thermal</span>
                       )}
                     </div>
                   </div>
-                  {/* Cost route — always shown when ≥2 active nodes have power data */}
                   {bestCostNode != null && activeCostEntries.length >= 2 && (
                     <div className="flex items-center gap-2">
                       <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Cost</span>
                       <span className="text-xs text-gray-400">→</span>
-                      <span className="text-sm font-bold font-telin text-gray-200">{bestCostNode.nodeId}</span>
+                      <button onClick={() => onNavigateToObservability?.({ nodeId: bestCostNode.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestCostNode.hostname || bestCostNode.nodeId}</button>
                       <span className="text-xs font-telin text-cyan-400 ml-auto">
                         {bestCostNode.costPer1m! < 0.01 ? '< $0.01' : `$${bestCostNode.costPer1m!.toFixed(2)}`}/1M
                       </span>
                     </div>
                   )}
-                  {/* Delta line */}
                   {(tpsDelta != null || wesDelta != null) && (
                     <p className="text-[10px] text-gray-600 pt-0.5">
                       {tpsDelta != null && `tok/s delta: ${tpsDelta.toFixed(1)}×`}
@@ -2592,7 +2438,159 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               )}
             </FleetCard>
 
+            {/* Live Activity — de-spammed: fleet observations (open only) */}
+            <div className="bg-slate-900/50 border border-gray-700/40 rounded-xl flex flex-col overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Terminal className="w-3.5 h-3.5 text-blue-400" />
+                  <h3 className="font-semibold text-xs text-gray-200">Live Activity</h3>
+                </div>
+                {serverObservations.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                    </span>
+                    <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Live</span>
+                  </div>
+                )}
+              </div>
+              <div className="p-3 space-y-1.5 max-h-[320px] overflow-y-auto">
+                {serverObservations.length === 0 && activeEvents.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8 text-center">
+                    <Terminal className="w-6 h-6 text-gray-700 mb-2" />
+                    <p className="text-xs text-gray-600">No active alerts</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Server-side observations (Essential Four + node_offline) — de-duped */}
+                    {serverObservations.map(obs => {
+                      const isCritical = obs.severity === 'critical';
+                      const nodeHost = effectiveMetrics.find(n => n.node_id === obs.node_id)?.hostname ?? obs.node_id;
+                      return (
+                        <div key={obs.id} className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-800/50 transition-colors">
+                          <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${isCritical ? 'bg-red-500 animate-pulse' : 'bg-amber-500'}`} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline gap-2 flex-wrap">
+                              <span className="font-telin text-xs font-bold text-gray-200 truncate">{nodeHost}</span>
+                              <span className={`text-xs font-medium ${isCritical ? 'text-red-400' : 'text-amber-400'}`}>
+                                {obs.title}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-gray-500 mt-0.5 line-clamp-1">{obs.detail}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* Client-side events (connectivity, model swaps, thermal changes) — max 5 */}
+                    {activeEvents
+                      .filter(ev => !['pattern_onset', 'pattern_resolved', 'pattern_dismissed', 'pattern_dismissed_permanent'].includes(ev.type))
+                      .slice(0, 5)
+                      .map(ev => {
+                        const { icon, label, cls } = eventMeta(ev);
+                        return (
+                          <div key={ev.id} className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-800/50 transition-colors">
+                            {icon}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-baseline gap-2 flex-wrap">
+                                <span className="font-telin text-xs font-bold text-gray-200 truncate">{ev.hostname ?? ev.nodeId}</span>
+                                <span className={`text-xs font-medium ${cls}`}>{label}</span>
+                              </div>
+                              <p className="text-[10px] text-gray-400 font-telin mt-0.5">{fmtAgo(ev.ts)}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </>
+                )}
+              </div>
+            </div>
           </div>
+        </div>
+
+        {/* ═══ Audit Footer — Node Cost / 1M Tokens + Idle Fleet Cost ════════ */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {costEntries.some(e => e.costPer1mRaw != null || e.tps == null || e.tps <= 0) && (
+            <FleetCard label="Node Cost / 1M Tokens">
+              {(() => {
+                const active = costEntries
+                  .filter(e => e.tps != null && e.tps > 0)
+                  .sort((a, b) => {
+                    if (a.costPer1m != null && b.costPer1m != null) return a.costPer1m - b.costPer1m;
+                    if (a.costPer1m != null) return -1;
+                    if (b.costPer1m != null) return 1;
+                    return 0;
+                  });
+                const idle = costEntries.filter(e => e.tps == null || e.tps <= 0);
+                if (active.length === 0 && idle.length === 0) {
+                  return <p className="text-sm font-telin text-gray-600">— no nodes online</p>;
+                }
+                return (
+                  <div className="space-y-1.5 w-full">
+                    {active.map((e, i) => {
+                      const isChampion = i === 0 && e.costPer1m != null;
+                      const costStr = e.costPer1m == null ? '— no power data' : e.costPer1m < 0.01 ? '< $0.01' : `$${e.costPer1m.toFixed(2)}`;
+                      const costCls = e.costPer1m == null ? 'text-gray-600' : isChampion ? 'text-green-400' : 'text-cyan-400';
+                      return (
+                        <div key={e.nodeId} className="flex items-center gap-2 min-w-0">
+                          <span className="text-[9px] uppercase tracking-widest text-gray-500 w-4 shrink-0 text-right">{e.costPer1m != null ? `${i + 1}.` : '—'}</span>
+                          <span className="text-xs font-bold font-telin text-gray-200 truncate flex-1 min-w-0">{e.hostname !== e.nodeId ? e.hostname : e.nodeId}</span>
+                          <span className={`text-xs font-telin font-semibold shrink-0 ${costCls}`}>{costStr}</span>
+                          {e.costPer1m != null && <span className="text-[10px] text-gray-600 shrink-0">/1M</span>}
+                          {e.tps != null && <span className="text-[10px] font-telin text-gray-500 shrink-0 w-16 text-right">{e.tps.toFixed(1)} tok/s</span>}
+                        </div>
+                      );
+                    })}
+                    {idle.length > 0 && (
+                      <div className={`${active.length > 0 ? 'border-t border-gray-800 pt-1.5 mt-1' : ''} space-y-1`}>
+                        {idle.map(e => (
+                          <div key={e.nodeId} className="flex items-center gap-2 min-w-0">
+                            <span className="text-[9px] uppercase tracking-widest text-gray-700 w-4 shrink-0">—</span>
+                            <span className="text-xs font-telin text-gray-600 truncate flex-1 min-w-0">{e.hostname !== e.nodeId ? e.hostname : e.nodeId}</span>
+                            <span className="text-[10px] font-telin text-gray-700 shrink-0">idle</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </FleetCard>
+          )}
+
+          {/* Idle Fleet Cost */}
+          {(() => {
+            const idleNodes = effectiveMetrics.filter(n => {
+              const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
+              const watts = getNodePowerW(n);
+              return watts != null && (tps == null || tps <= 0);
+            });
+            if (idleNodes.length === 0) return null;
+            const idleCosts = idleNodes.map(n => {
+              const ns    = getNodeSettings?.(n.node_id) ?? { pue: 1.0, kwhRate: fleetKwhRate };
+              const watts = getNodePowerW(n) ?? 0;
+              return { hostname: n.hostname ?? n.node_id, dailyCost: watts * ns.pue * 24 * (ns.kwhRate / 1000) };
+            });
+            const fleetDailyTotal = idleCosts.reduce((sum, n) => sum + n.dailyCost, 0);
+            return (
+              <FleetCard label="Idle Fleet Cost" sub={<p className="text-[10px] text-gray-600 leading-tight">{idleNodes.length} idle node{idleNodes.length !== 1 ? 's' : ''} · est. electricity</p>}>
+                <div className="space-y-1 w-full">
+                  {idleCosts.map((n, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-xs text-gray-500 truncate flex-1 min-w-0">{n.hostname}</span>
+                      <span className="font-telin text-xs text-amber-400 shrink-0">${n.dailyCost.toFixed(2)}/day</span>
+                    </div>
+                  ))}
+                  {idleCosts.length > 1 && (
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-700/50">
+                      <span className="text-[10px] text-gray-600 uppercase tracking-widest">Total</span>
+                      <span className="font-telin text-xs text-amber-400">${fleetDailyTotal.toFixed(2)}/day</span>
+                    </div>
+                  )}
+                </div>
+              </FleetCard>
+            );
+          })()}
         </div>
       </div>
       )} {/* end isLocalMode ternary — Fleet Intelligence / Fleet Preview CTA */}
