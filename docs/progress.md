@@ -6,6 +6,60 @@
 
 ---
 
+## March 24, 2026 — Cloud Observability Fleet-First Redesign + Duty Cycle + Alerting Foundation
+
+### Cloud Observability Tab — 4 Fleet-First Sections ✅
+Complete redesign of the cloud Observability tab at wicklee.dev. Localhost (Cockpit) unchanged.
+
+- **Section 1: Live Sovereignty Guard** — real-time connection manifest from SSE stream. Per-node status dots (green < 10s, amber < 30s, red > 30s stale). Pulsing "LIVE" badge. Data boundary strip: "N nodes connected · telemetry only · inference content never transmitted".
+- **Section 2: Telemetry Inspector** — collapsible sovereignty proof panel. Shows actual SSE field values grouped by category ([SYNCED] in green vs [LOCAL_ONLY] struck-through). Copy JSON export for audit docs. Node selector shows all registered nodes (not just SSE-active).
+- **Section 3: Fleet Event Timeline** — paginated events from DuckDB `node_events` (30-day retention). Node dropdown + event type filter chips (startup, update, model_swap, thermal_change, node_offline, node_online, error). Authenticated CSV/JSON export via Blob URL. Cursor-based pagination.
+- **Section 4: Fleet Metric History** — compact 2×2 mini-chart grid (Tok/s, Power, GPU Util, Mem Pressure). Tier-gated range selector (1H/24H/7D/30D). Node pill selectors matching MetricsHistoryChart design. Adaptive X-axis labels (HH:MM:SS for 1H, HH:MM for 24H, M/D HH:MM for 7D+). Client-side CSV export.
+
+### Inference Duty Cycle in Cloud DuckDB ✅
+- `inference_state VARCHAR` persisted to `metrics_raw` on every 2s telemetry frame
+- `inference_duty_pct FLOAT` computed during 5-min rollup (% of samples where state = 'live')
+- New `GET /api/fleet/duty?range=1h|24h|7d|30d` endpoint — fleet-wide + per-node duty
+- Overview tile reads 24h duty from DuckDB server-side (60s refresh), replacing ephemeral client-side tick counter
+
+### Per-Node Idle Wattage Offset ✅
+- Settings UI: per-node idle power offset (W) configurable in fleet settings
+- Factored into cost/day calculation across all tiles
+
+### Node Offline/Online Events ✅
+- Cloud `node_offline_alert_task` now writes `node_offline` + `node_online` events to DuckDB `node_events`
+- In-memory `known_offline` set prevents duplicate events per 60s tick
+- Node recovery detection: auto-resolves open `alert_events` when node resumes telemetry
+- Debounced: 5-minute offline threshold, must sustain one full tick cycle online for recovery event
+
+### Critical Fixes
+- **24h graphs empty** — `metrics_5min` only populated by hourly rollup of data >24h old. Changed 24h range to query `metrics_raw` directly (2-day retention, bucketed at query time). Same fix for WES history endpoint.
+- **Auth race on Fleet Event Timeline** — `useEventHistory` hook fired before JWT resolved, got 401. Added `skip` option to hook + JWT refresh every 50s.
+- **Telemetry Inspector missing nodes** — was using `Object.values(allNodeMetrics)` (SSE-only). Switched to registered `nodes` prop from SQLite.
+- **Rollup startup delay** — rollup task skipped immediate first tick, waited full hour. Added 60s warm-up then immediate first rollup.
+- **Cloud compile fix** — `resolve_user_from_jwt` → `require_user`, `state.duck` → `state.duck_db`
+
+### Phase 4 Alerting Architecture (Designed — Implementation Next)
+Full alerting system designed with "Forensic Loop" flow:
+1. **Detection** — `fleet_alert_evaluator_task` (60s cloud background task)
+2. **Notification** — `deliver_alert()` (webhook / email / Slack)
+3. **Persistence** — DuckDB `node_events` + new `fleet_observations` table
+4. **Discovery** — Triage tab shows open observations as severity cards
+5. **Investigation** — Observability tab cross-nav with pre-set node/time filters
+6. **Resolution** — Auto-resolve when condition clears + manual acknowledge
+
+**Essential Four Alert Triggers:**
+| # | Alert | Condition | Priority |
+|---|---|---|---|
+| 1 | Zombied Engine | `inference_state == "busy"` sustained >10min | Critical |
+| 2 | Thermal Redline | `thermal_state == "Critical"` sustained >2min | Critical |
+| 3 | OOM Warning | `memory_pressure > 95%` sustained >1min | Warning |
+| 4 | WES Cliff | WES < 50% of 24h rolling baseline | Warning |
+| 5 | Node Offline | No telemetry >5min (✅ shipped) | Critical |
+| 6 | Node Back Online | Recovery from offline (✅ shipped) | Info |
+
+---
+
 ## March 23, 2026 — v0.5.16–v0.5.20: DuckDB Events, Port Validation, Proxy Awareness, Diagnostic Doctor
 
 ### v0.5.16 — DuckDB Event Persistence ✅
