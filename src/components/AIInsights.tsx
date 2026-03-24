@@ -508,6 +508,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const [now, setNow]                     = useState(() => Date.now());
   const [activeTab, setActiveTab]         = useState<InsightsTab>('triage');
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
+  /** Shared node selection for WES + Metrics history charts */
+  const [perfNodeId, setPerfNodeId] = useState<string | null>(null);
 
   // Power baseline (Cockpit only)
   const wattReadingsRef        = useRef<number[]>([]);
@@ -1748,6 +1750,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   getToken={getToken}
                   historyDays={historyDays}
                   subscriptionTier={subscriptionTier}
+                  selectedNodeId={perfNodeId}
+                  onNodeSelect={setPerfNodeId}
                 />
               )}
 
@@ -1757,6 +1761,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   getToken={getToken}
                   historyDays={historyDays}
                   subscriptionTier={subscriptionTier}
+                  selectedNodeId={perfNodeId}
+                  onNodeSelect={setPerfNodeId}
                 />
               )}
 
