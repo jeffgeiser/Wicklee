@@ -1057,6 +1057,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // hook count doesn't grow with fleet size (hooks must be called unconditionally).
   const nodeCostBufsRef = useRef<Map<string, { buf: number[]; lastTs: number }>>(new Map());
 
+  // Inference duty cycle — rolling tracker. Hook declared here (unconditional), read later.
+  const dutyRef = useRef<{ live: number; total: number }>({ live: 0, total: 0 });
+
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
   const transport = isLocalHost ? localTransport : cloudTransport;
@@ -1265,6 +1268,18 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? (sentinel ? [sentinel] : [])
     : liveMetrics.filter(m => !restrictedIds.has(m.node_id));
 
+  // Inference duty cycle effect — update rolling counter on each metrics tick
+  useEffect(() => {
+    const anyLive = effectiveMetrics.some(m => m.inference_state === 'live');
+    dutyRef.current.total += 1;
+    if (anyLive) dutyRef.current.live += 1;
+    // Cap at ~3600 ticks (~1 hour at 1Hz SSE) to keep it a rolling-ish window
+    if (dutyRef.current.total > 3600) {
+      dutyRef.current.live  = Math.round(dutyRef.current.live  * 0.5);
+      dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
+    }
+  }, [effectiveMetrics]);
+
   // Tile 1 — THROUGHPUT: ∑ estimated tok/s across inference-active nodes (Ollama + vLLM).
   // Both runtimes are not mutually exclusive — a node can run both simultaneously.
   // tpsNodes includes nodes with a live raw reading OR a peak+GPU estimate (covers lockup case).
@@ -1384,17 +1399,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   })();
 
   // ── Inference Duty Cycle — % of recent ticks where any node was "live" ──
-  const dutyRef = useRef<{ live: number; total: number }>({ live: 0, total: 0 });
-  useEffect(() => {
-    const anyLive = effectiveMetrics.some(m => m.inference_state === 'live');
-    dutyRef.current.total += 1;
-    if (anyLive) dutyRef.current.live += 1;
-    // Cap at ~3600 ticks (~1 hour at 1Hz SSE) to keep it a rolling-ish window
-    if (dutyRef.current.total > 3600) {
-      dutyRef.current.live  = Math.round(dutyRef.current.live  * 0.5);
-      dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
-    }
-  }, [effectiveMetrics]);
+  // (dutyRef declared at top with other hooks; effect + read are here for locality)
   const dutyPct = dutyRef.current.total > 0
     ? Math.round((dutyRef.current.live / dutyRef.current.total) * 100) : null;
 
