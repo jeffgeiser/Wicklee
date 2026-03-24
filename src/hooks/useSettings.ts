@@ -45,6 +45,7 @@ export interface NodeOverride {
   currency?: CurrencyCode;
   pue?: number;
   locationLabel?: string;
+  systemIdleW?: number;
 }
 
 export interface WickleeSettings {
@@ -58,9 +59,11 @@ export interface NodeEffectiveSettings {
   currency: CurrencyCode;
   pue: number;
   locationLabel: string;
+  systemIdleW: number;
   kwhRateOverride: boolean;
   currencyOverride: boolean;
   pueOverride: boolean;
+  systemIdleWOverride: boolean;
   hasAnyOverride: boolean;
 }
 
@@ -153,7 +156,7 @@ export function useSettings() {
   }, [persist]);
 
   const clearAllOverridesForField = useCallback(
-    (field: 'kwhRate' | 'currency' | 'pue') => {
+    (field: 'kwhRate' | 'currency' | 'pue' | 'systemIdleW') => {
       setSettings(prev => {
         const nodes = { ...prev.nodes };
         Object.keys(nodes).forEach(id => {
@@ -179,14 +182,16 @@ export function useSettings() {
       const kwhRate         = ov.kwhRate  ?? fl.kwhRate;
       const currency        = ov.currency ?? fl.currency;
       const pue             = ov.pue      ?? fl.pue;
-      const kwhRateOverride  = ov.kwhRate  != null && ov.kwhRate  !== fl.kwhRate;
-      const currencyOverride = ov.currency != null && ov.currency !== fl.currency;
-      const pueOverride      = ov.pue      != null && ov.pue      !== fl.pue;
+      const systemIdleW     = ov.systemIdleW ?? 0;
+      const kwhRateOverride      = ov.kwhRate     != null && ov.kwhRate  !== fl.kwhRate;
+      const currencyOverride     = ov.currency    != null && ov.currency !== fl.currency;
+      const pueOverride          = ov.pue         != null && ov.pue      !== fl.pue;
+      const systemIdleWOverride  = ov.systemIdleW != null && ov.systemIdleW > 0;
       return {
-        kwhRate, currency, pue,
+        kwhRate, currency, pue, systemIdleW,
         locationLabel: ov.locationLabel ?? '',
-        kwhRateOverride, currencyOverride, pueOverride,
-        hasAnyOverride: kwhRateOverride || currencyOverride || pueOverride,
+        kwhRateOverride, currencyOverride, pueOverride, systemIdleWOverride,
+        hasAnyOverride: kwhRateOverride || currencyOverride || pueOverride || systemIdleWOverride,
       };
     },
     [settings],
