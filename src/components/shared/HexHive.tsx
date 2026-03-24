@@ -1,5 +1,5 @@
 /**
- * HexHive — Inference Density Map
+ * HexHive — Node Vitals Map
  *
  * One hex per node. State drives color + glow:
  *   Active inference  → amber pulse
@@ -9,10 +9,10 @@
  *
  * Used in:
  *   Overview.tsx          — Fleet Intelligence panel (Community+)
- *   AIInsights.tsx        — Section 1 Health Indicators (Community+)
+ *   AIInsights.tsx        — Performance tab Node Vitals (Community+)
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { SentinelMetrics } from '../../types';
 import { computeWES } from '../../utils/wes';
 import { getNodePowerW } from '../../utils/power';
@@ -24,7 +24,13 @@ export interface HexHiveRow {
   lastSeenMs?: number;
 }
 
-const HexHive: React.FC<{ rows: HexHiveRow[] }> = ({ rows }) => {
+interface HexHiveProps {
+  rows: HexHiveRow[];
+  /** Optional click handler for a specific node. Used by Node Vitals to open per-node benchmark. */
+  onNodeClick?: (node: SentinelMetrics) => void;
+}
+
+const HexHive: React.FC<HexHiveProps> = ({ rows, onNodeClick }) => {
   if (rows.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[140px]">
@@ -77,11 +83,21 @@ const HexHive: React.FC<{ rows: HexHiveRow[] }> = ({ rows }) => {
               status,
               wes != null ? `WES ${wes.toFixed(1)}` : null,
               `Thermal: ${thermal}`,
+              onNodeClick ? 'Click for benchmark' : null,
             ].filter(Boolean).join(' · ');
 
+            const clickable = onNodeClick && m != null;
+
             return (
-              <div key={entry.nodeId} className="flex flex-col items-center gap-1 group relative">
-                <div style={{ filter: glow }}>
+              <div
+                key={entry.nodeId}
+                className={`flex flex-col items-center gap-1 group relative ${clickable ? 'cursor-pointer' : ''}`}
+                onClick={clickable ? () => onNodeClick(m) : undefined}
+              >
+                <div
+                  style={{ filter: glow }}
+                  className={clickable ? 'transition-transform group-hover:scale-110' : ''}
+                >
                   <div
                     className={`w-11 h-[50px] ${hexBg} ${isActive && !throttling ? 'animate-pulse' : ''}`}
                     style={{ clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)' }}

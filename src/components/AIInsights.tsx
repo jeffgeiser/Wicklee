@@ -1709,7 +1709,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       </button>
                     )}
                   </div>
-                  <HexHive rows={hiveRows} />
+                  <HexHive rows={hiveRows} onNodeClick={(node) => setBenchmarkReport(buildReportFromLive(node))} />
                 </div>
 
               </div>

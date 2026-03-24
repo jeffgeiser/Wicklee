@@ -17,7 +17,8 @@ import { getNodePowerW } from './power';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const WICKLEE_VERSION = 'v0.4.36';
+/** Fallback version when node.agent_version is unavailable (legacy agents). */
+const WICKLEE_VERSION_FALLBACK = 'v0.6.0';
 
 // ── Report type ───────────────────────────────────────────────────────────────
 
@@ -73,7 +74,7 @@ export function buildReportFromLive(node: SentinelMetrics): BenchmarkReport {
 
   return {
     generatedAt:    new Date().toISOString(),
-    wickleeVersion: WICKLEE_VERSION,
+    wickleeVersion: node.agent_version ? `v${node.agent_version}` : WICKLEE_VERSION_FALLBACK,
     nodeId:         node.node_id,
     hostname:       node.hostname ?? null,
     hardware:       node.gpu_name ?? node.chip_name ?? null,
@@ -106,7 +107,7 @@ export function buildReportFromHistory(opts: {
   const tcPct = thermalCostPct(opts.rawWes, opts.penalizedWes);
   return {
     generatedAt:    new Date().toISOString(),
-    wickleeVersion: WICKLEE_VERSION,
+    wickleeVersion: WICKLEE_VERSION_FALLBACK,
     nodeId:         opts.nodeId,
     hostname:       opts.hostname,
     hardware:       null,
