@@ -22,6 +22,8 @@ interface UseEventHistoryOptions {
   isFleet?: boolean;
   /** Auth token for fleet mode. */
   token?: string;
+  /** Skip fetching (e.g. while waiting for auth token). */
+  skip?: boolean;
 }
 
 interface UseEventHistoryReturn {
@@ -84,10 +86,11 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
     }
   }, [limit, opts.eventType, opts.nodeId, opts.token, isFleet]);
 
-  // Initial load
+  // Initial load (skipped while waiting for auth)
   useEffect(() => {
+    if (opts.skip) return;
     fetchPage();
-  }, [fetchPage]);
+  }, [fetchPage, opts.skip]);
 
   const loadMore = useCallback(() => {
     if (events.length > 0 && hasMore && !loading) {

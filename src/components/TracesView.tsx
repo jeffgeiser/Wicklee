@@ -1536,9 +1536,16 @@ const FleetEventTimeline: React.FC<{
   const [selectedNode, setSelectedNode] = useState<string>('');
   const [selectedType, setSelectedType] = useState<string>('');
   const [token, setToken] = useState<string | null>(null);
+  const [tokenReady, setTokenReady] = useState(false);
 
-  // Resolve token on mount
-  useEffect(() => { getToken().then(setToken); }, [getToken]);
+  // Resolve token on mount — also refresh every 50s to avoid JWT expiry (Clerk tokens last ~60s)
+  useEffect(() => {
+    let cancelled = false;
+    const resolve = () => getToken().then(t => { if (!cancelled) { setToken(t); setTokenReady(true); } });
+    resolve();
+    const iv = setInterval(resolve, 50_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [getToken]);
 
   const { events, loading, error, hasMore, loadMore, refresh } = useEventHistory({
     isFleet: true,
@@ -1546,6 +1553,7 @@ const FleetEventTimeline: React.FC<{
     eventType: selectedType || undefined,
     nodeId: selectedNode || undefined,
     limit: 50,
+    skip: !tokenReady, // Don't fetch until auth token is resolved
   });
 
   // Authenticated export download
@@ -1718,7 +1726,7 @@ const FleetMetricsMini: React.FC<{
   getToken: () => Promise<string | null>;
   subscriptionTier: SubscriptionTier;
 }> = ({ nodes, getToken, subscriptionTier }) => {
-  const [range, setRange] = useState<FleetMetricRange>('24h');
+  const [range, setRange] = useState<FleetMetricRange>('1h');
   const [selectedNode, setSelectedNode] = useState<string>('');
   const [data, setData] = useState<FleetMetricsNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1821,15 +1829,28 @@ const FleetMetricsMini: React.FC<{
               );
             })}
           </div>
-          {/* Node selector */}
-          <select
-            value={selectedNode}
-            onChange={e => setSelectedNode(e.target.value)}
-            className="text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-gray-300 appearance-none cursor-pointer"
-          >
-            <option value="">All Nodes</option>
-            {nodes.map(n => <option key={n.id} value={n.id}>{n.hostname || n.id}</option>)}
-          </select>
+          {/* Node selector — pill buttons matching MetricsHistoryChart pattern */}
+          <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-1">
+            <button
+              onClick={() => setSelectedNode('')}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-medium whitespace-nowrap transition-colors ${
+                !selectedNode ? 'bg-gray-800 text-white' : 'text-gray-600 hover:text-gray-400'
+              }`}
+            >
+              All Nodes
+            </button>
+            {nodes.map(n => (
+              <button
+                key={n.id}
+                onClick={() => setSelectedNode(n.id)}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-medium whitespace-nowrap transition-colors ${
+                  selectedNode === n.id ? 'bg-gray-800 text-white' : 'text-gray-600 hover:text-gray-400'
+                }`}
+              >
+                {n.hostname || n.id}
+              </button>
+            ))}
+          </div>
           {/* CSV export */}
           {chartPoints.length > 0 && (
             <button onClick={handleCsvExport} className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors" title="Export CSV">
