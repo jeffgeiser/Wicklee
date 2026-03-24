@@ -16,6 +16,8 @@ interface UseEventHistoryOptions {
   limit?: number;
   /** Filter by event_type (e.g. "startup", "update"). */
   eventType?: string;
+  /** Filter by node_id. */
+  nodeId?: string;
   /** If true, fetch from wicklee.dev fleet endpoint; else localhost agent. */
   isFleet?: boolean;
   /** Auth token for fleet mode. */
@@ -51,6 +53,7 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       params.set('limit', String(limit));
       if (before != null) params.set('before', String(before));
       if (opts.eventType)  params.set('event_type', opts.eventType);
+      if (opts.nodeId)     params.set('node_id', opts.nodeId);
 
       const baseUrl = isFleet ? '' : 'http://localhost:7700';
       const path    = isFleet ? '/api/fleet/events/history' : '/api/events/history';
@@ -79,7 +82,7 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
     } finally {
       setLoading(false);
     }
-  }, [limit, opts.eventType, opts.token, isFleet]);
+  }, [limit, opts.eventType, opts.nodeId, opts.token, isFleet]);
 
   // Initial load
   useEffect(() => {
