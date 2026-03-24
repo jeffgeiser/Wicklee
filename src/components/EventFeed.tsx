@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check, Clock, Flame, Target } from 'lucide-react';
+import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check, Clock, Flame, Target, Activity } from 'lucide-react';
 import { FleetEvent } from '../types';
 
 interface EventFeedProps {
@@ -96,6 +96,12 @@ function eventMeta(ev: FleetEvent): EventMeta {
         icon: <Target className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />,
         label: ev.detail ? `fit: ${ev.detail}` : 'fit score changed',
         cls: 'text-blue-400',
+      };
+    default:
+      return {
+        icon: <Activity className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? (ev.type as string),
+        cls: 'text-gray-400',
       };
   }
 }
