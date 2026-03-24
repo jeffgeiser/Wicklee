@@ -1971,58 +1971,39 @@ async fn handle_fleet_events_history(
     match tokio::task::spawn_blocking(move || {
         let conn = duck.lock().unwrap();
 
-        // Build WHERE clause dynamically based on optional filters.
-        let mut sql = "SELECT ts_ms, node_id, level, event_type, message FROM node_events
-                       WHERE tenant_id = ?1 AND ts_ms < ?2".to_string();
-        let mut next_param = 3;
+        // Row mapper closure reused across all query branches.
+        let map_row = |r: &duckdb::Row| Ok(serde_json::json!({
+            "ts_ms":      r.get::<_, i64>(0)?,
+            "node_id":    r.get::<_, String>(1)?,
+            "level":      r.get::<_, String>(2)?,
+            "event_type": r.get::<_, Option<String>>(3)?,
+            "message":    r.get::<_, String>(4)?,
+        }));
 
-        let nid_idx = if node_id_filter.is_some() {
-            sql.push_str(&format!(" AND node_id = ?{next_param}"));
-            let idx = next_param;
-            next_param += 1;
-            Some(idx)
-        } else { None };
-
-        let et_idx = if event_type_filter.is_some() {
-            sql.push_str(&format!(" AND event_type = ?{next_param}"));
-            let idx = next_param;
-            next_param += 1;
-            Some(idx)
-        } else { None };
-
-        sql.push_str(&format!(" ORDER BY ts_ms DESC LIMIT ?{next_param}"));
-
-        let mut stmt = conn.prepare(&sql)?;
-
-        // Bind parameters positionally using raw_bind_parameter, then
-        // iterate with raw_query (NOT query_map which resets bindings).
-        let mut p_idx: usize = 1;
-        stmt.raw_bind_parameter(p_idx, &user_id)?;   p_idx += 1;
-        stmt.raw_bind_parameter(p_idx, before)?;      p_idx += 1;
-        if let (Some(_), Some(nid)) = (nid_idx, &node_id_filter) {
-            stmt.raw_bind_parameter(p_idx, nid.as_str())?;  p_idx += 1;
-        }
-        if let (Some(_), Some(et)) = (et_idx, &event_type_filter) {
-            stmt.raw_bind_parameter(p_idx, et.as_str())?;   p_idx += 1;
-        }
-        stmt.raw_bind_parameter(p_idx, limit)?;
-
-        let mut result_rows = stmt.raw_query();
-        let mut rows: Vec<serde_json::Value> = Vec::new();
-        while let Some(row) = result_rows.next()? {
-            let ts_ms: i64 = row.get(0)?;
-            let node_id: String = row.get(1)?;
-            let level: String = row.get(2)?;
-            let event_type: Option<String> = row.get(3)?;
-            let message: String = row.get(4)?;
-            rows.push(serde_json::json!({
-                "ts_ms": ts_ms,
-                "node_id": node_id,
-                "level": level,
-                "event_type": event_type,
-                "message": message,
-            }));
-        }
+        // Use fixed SQL per filter combination to avoid raw_bind_parameter issues.
+        let base = "SELECT ts_ms, node_id, level, event_type, message FROM node_events WHERE tenant_id = ?1 AND ts_ms < ?2";
+        let rows = match (&node_id_filter, &event_type_filter) {
+            (Some(nid), Some(et)) => {
+                let sql = format!("{base} AND node_id = ?3 AND event_type = ?4 ORDER BY ts_ms DESC LIMIT ?5");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, nid, et, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            (Some(nid), None) => {
+                let sql = format!("{base} AND node_id = ?3 ORDER BY ts_ms DESC LIMIT ?4");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, nid, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            (None, Some(et)) => {
+                let sql = format!("{base} AND event_type = ?3 ORDER BY ts_ms DESC LIMIT ?4");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, et, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            (None, None) => {
+                let sql = format!("{base} ORDER BY ts_ms DESC LIMIT ?3");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+        };
         Ok::<_, duckdb::Error>(rows)
     }).await {
         Ok(Ok(events)) => Json(serde_json::json!({ "events": events })).into_response(),
@@ -2071,35 +2052,33 @@ async fn handle_fleet_export(
     let duck = state.duck_db.clone();
     let events = match tokio::task::spawn_blocking(move || {
         let conn = duck.lock().unwrap();
-        let mut sql = "SELECT ts_ms, node_id, level, event_type, message FROM node_events
-                       WHERE tenant_id = ?1 AND ts_ms >= ?2 AND ts_ms <= ?3".to_string();
-        if node_filter.is_some() { sql.push_str(" AND node_id = ?5"); }
-        sql.push_str(" ORDER BY ts_ms DESC LIMIT ?4");
-
-        let mut stmt = conn.prepare(&sql)?;
-        stmt.raw_bind_parameter(1, &user_id)?;
-        stmt.raw_bind_parameter(2, from_ms)?;
-        stmt.raw_bind_parameter(3, to_ms)?;
-        stmt.raw_bind_parameter(4, limit)?;
-        if let Some(ref nid) = node_filter {
-            stmt.raw_bind_parameter(5, nid.as_str())?;
-        }
-
-        let mut result_rows = stmt.raw_query();
-        let mut rows: Vec<serde_json::Value> = Vec::new();
-        while let Some(row) = result_rows.next()? {
-            let ts_ms: i64 = row.get(0)?;
+        let base = "SELECT ts_ms, node_id, level, event_type, message FROM node_events
+                    WHERE tenant_id = ?1 AND ts_ms >= ?2 AND ts_ms <= ?3";
+        let map_row = |r: &duckdb::Row| {
+            let ts_ms: i64 = r.get(0)?;
             let ts_str = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
-            rows.push(serde_json::json!({
+            Ok(serde_json::json!({
                 "ts_ms": ts_ms,
                 "timestamp": ts_str,
                 "record_type": "event",
-                "node_id": row.get::<_, String>(1)?,
-                "level": row.get::<_, String>(2)?,
-                "event_type": row.get::<_, Option<String>>(3)?,
-                "message": row.get::<_, String>(4)?,
-            }));
-        }
+                "node_id": r.get::<_, String>(1)?,
+                "level": r.get::<_, String>(2)?,
+                "event_type": r.get::<_, Option<String>>(3)?,
+                "message": r.get::<_, String>(4)?,
+            }))
+        };
+        let rows = match &node_filter {
+            Some(nid) => {
+                let sql = format!("{base} AND node_id = ?4 ORDER BY ts_ms DESC LIMIT ?5");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, from_ms, to_ms, nid, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            None => {
+                let sql = format!("{base} ORDER BY ts_ms DESC LIMIT ?4");
+                conn.prepare(&sql)?.query_map(duckdb::params![user_id, from_ms, to_ms, limit], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+        };
         Ok::<_, duckdb::Error>(rows)
     }).await {
         Ok(Ok(r)) => r,
