@@ -671,7 +671,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
                 </div>
               </div>
             )}
-            <div key={activeTab}>{renderContent()}</div>
+            <div>{renderContent()}</div>
           </div>
         </div>
 
