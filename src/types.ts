@@ -278,6 +278,7 @@ export interface FleetEvent {
     | 'keep_warm_taken'
     | 'thermal_degradation_confirmed'
     | 'fit_score_changed'
+    | 'idle_resource_warning'
     // ── Pattern engine lifecycle events (Sprint 4) ─────────────────────────
     /** Pattern crossed moderate/high confidence — suppressed for ONSET_SUPPRESSION_MS (15m). */
     | 'pattern_onset'

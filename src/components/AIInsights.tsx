@@ -346,16 +346,31 @@ const Section2NominalRow: React.FC<{
   icon: React.ReactNode;
   label: string;
   status: string;
-}> = ({ icon, label, status }) => (
-  <div className="bg-gray-900 border border-gray-800 rounded-2xl px-4 h-14 flex items-center gap-3">
-    <span className="text-gray-600 shrink-0">{icon}</span>
-    <div className="flex-1 min-w-0">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">{label}</p>
-      <p className="text-xs text-gray-700 mt-0.5">{status}</p>
+  /** Timestamp (ms) of the last time this condition fired. Shows "Last warning: Xm ago" */
+  lastFiredMs?: number | null;
+  /** Detail string for the last-fired line (e.g. model name, node hostname) */
+  lastFiredDetail?: string | null;
+}> = ({ icon, label, status, lastFiredMs, lastFiredDetail }) => {
+  const ago = lastFiredMs != null ? Math.max(0, Math.round((Date.now() - lastFiredMs) / 60000)) : null;
+  const agoText = ago != null
+    ? ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`
+    : null;
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 flex items-center gap-3">
+      <span className="text-gray-600 shrink-0">{icon}</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">{label}</p>
+        <p className="text-xs text-gray-700 mt-0.5">{status}</p>
+        {agoText && (
+          <p className="text-[10px] text-gray-600 mt-0.5 italic">
+            Last warning: {agoText}{lastFiredDetail ? ` · ${lastFiredDetail}` : ''}
+          </p>
+        )}
+      </div>
+      <div className="w-1.5 h-1.5 rounded-full bg-green-500/40 animate-pulse shrink-0" />
     </div>
-    <div className="w-1.5 h-1.5 rounded-full bg-green-500/40 animate-pulse shrink-0" />
-  </div>
-);
+  );
+};
 
 // ── WES Leaderboard (lite) ────────────────────────────────────────────────────
 
@@ -544,7 +559,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   // Transition tracking for FleetEvent emissions
   const prevThermalFiringRef  = useRef(false);
-  const prevEvictionActiveRef = useRef(false);
+  const prevEvictionActiveRef  = useRef(false);
+  const lastEvictionFiredRef   = useRef<number | null>(null);
+  const lastEvictionDetailRef  = useRef<string | null>(null);
+  const prevIdleActiveRef      = useRef(false);
+  const lastIdleFiredRef       = useRef<number | null>(null);
+  const lastIdleDetailRef      = useRef<string | null>(null);
   const prevFitModelRef       = useRef<string | null>(null);
 
   // ── Per-node activity tracking for Mission Control (fleet) ────────────────
@@ -1156,6 +1176,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     if (!isLocalHost) return;
     const now = Date.now();
     if (tier2EvictionActive && !prevEvictionActiveRef.current && m) {
+      lastEvictionFiredRef.current  = now;
+      lastEvictionDetailRef.current = `${m.ollama_active_model ?? 'model'} on ${m.hostname ?? m.node_id}`;
       emitFleetEvent({
         id:       `${now}-eviction`,
         ts:       now,
@@ -1168,6 +1190,25 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     prevEvictionActiveRef.current = tier2EvictionActive;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tier2EvictionActive, isLocalHost]);
+
+  useEffect(() => {
+    if (!isLocalHost) return;
+    const now = Date.now();
+    if (tier2IdleActive && !prevIdleActiveRef.current && m) {
+      lastIdleFiredRef.current  = now;
+      lastIdleDetailRef.current = m.hostname ?? m.node_id;
+      emitFleetEvent({
+        id:       `${now}-idle-cost`,
+        ts:       now,
+        type:     'idle_resource_warning',
+        nodeId:   m.node_id,
+        hostname: m.hostname ?? m.node_id,
+        detail:   `Idle for ${Math.round((now - lastActiveTsMs) / 60000)}m`,
+      });
+    }
+    prevIdleActiveRef.current = tier2IdleActive;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier2IdleActive, isLocalHost]);
 
   const fitModelKey = effectiveNodes.map(n => n.ollama_active_model ?? '').join(',');
   useEffect(() => {
@@ -1508,7 +1549,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     </div>
                   ) : (
                     <Section2NominalRow icon={<Cpu className="w-4 h-4" />} label="Model Eviction"
-                      status={m?.ollama_active_model ? `${m.ollama_active_model} active — no eviction predicted` : 'No model loaded'} />
+                      status={m?.ollama_active_model ? `${m.ollama_active_model} active — no eviction predicted` : 'No model loaded'}
+                      lastFiredMs={lastEvictionFiredRef.current} lastFiredDetail={lastEvictionDetailRef.current} />
                   )
                 ) : fleetEvictionNodes.length > 0 ? (
                   <div className="space-y-3">
@@ -1521,7 +1563,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </div>
                 ) : (
                   <Section2NominalRow icon={<Cpu className="w-4 h-4" />} label="Model Eviction"
-                    status={effectiveNodes.some(n => n.ollama_active_model) ? 'Models active — no eviction predicted' : 'No models loaded'} />
+                    status={effectiveNodes.some(n => n.ollama_active_model) ? 'Models active — no eviction predicted' : 'No models loaded'}
+                    lastFiredMs={lastEvictionFiredRef.current} lastFiredDetail={lastEvictionDetailRef.current} />
                 )}
 
                 {canViewInsight(6) ? (
@@ -1531,7 +1574,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                         <IdleResourceCard node={m} lastActiveTsMs={lastActiveTsMs} kwhRate={localSettings.kwhRate} pue={localSettings.pue} />
                       </div>
                     ) : (
-                      <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected" />
+                      <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected"
+                        lastFiredMs={lastIdleFiredRef.current} lastFiredDetail={lastIdleDetailRef.current} />
                     )
                   ) : fleetIdleNodes.length > 0 ? (
                     <div className="space-y-3">
@@ -1545,7 +1589,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       })}
                     </div>
                   ) : (
-                    <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected" />
+                    <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected"
+                      lastFiredMs={lastIdleFiredRef.current} lastFiredDetail={lastIdleDetailRef.current} />
                   )
                 ) : (
                   <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost"
