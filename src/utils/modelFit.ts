@@ -37,13 +37,34 @@ export interface FitResult {
 /**
  * Compute the Model-to-Hardware Fit Score for a node.
  *
+ * Supports all runtimes: Ollama, vLLM, and llama.cpp.
+ *
  * Returns null when:
- *   - No Ollama model is loaded (ollama_model_size_gb is null/absent)
+ *   - No model is loaded on any runtime
  *   - Required memory fields are unavailable (NVIDIA node with null vram_used)
  *   - Total memory is zero or negative (malformed payload)
  */
 export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
-  const modelSizeGb = node.ollama_model_size_gb ?? null;
+  // Ollama provides explicit model size; vLLM/llama.cpp don't — estimate from VRAM used.
+  let modelSizeGb = node.ollama_model_size_gb ?? null;
+  const hasVllmModel      = !!node.vllm_model_name;
+  const hasLlamaCppModel  = !!node.llamacpp_model_name;
+
+  // If Ollama has no model but vLLM or llama.cpp is active, estimate model size from VRAM.
+  // On NVIDIA GPUs, the loaded model dominates VRAM — used VRAM is a reasonable proxy.
+  if (modelSizeGb == null && (hasVllmModel || hasLlamaCppModel)) {
+    const vramUsedMb = node.nvidia_vram_used_mb ?? null;
+    if (vramUsedMb != null && vramUsedMb > 0) {
+      modelSizeGb = vramUsedMb / 1024;
+    } else {
+      // Non-NVIDIA runtime (llama.cpp on CPU) — use 50% of used system RAM as estimate
+      const usedSystemMb = node.total_memory_mb - node.available_memory_mb;
+      if (usedSystemMb > 0) {
+        modelSizeGb = (usedSystemMb * 0.5) / 1024;
+      }
+    }
+  }
+
   if (modelSizeGb == null) return null;
 
   const totalMemMb   = node.total_memory_mb;

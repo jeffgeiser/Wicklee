@@ -12,8 +12,10 @@
  *   AIInsights.tsx        — Section 1 Health Indicators (Community+)
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { SentinelMetrics } from '../../types';
+import { computeWES } from '../../utils/wes';
+import { getNodePowerW } from '../../utils/power';
 
 export interface HexHiveRow {
   nodeId:    string;
@@ -59,12 +61,31 @@ const HexHive: React.FC<{ rows: HexHiveRow[] }> = ({ rows }) => {
               : isActive              ? 'drop-shadow(0 0 8px rgba(245,158,11,0.55))'
               :                         'none';
 
+            // Compute WES for tooltip
+            const watts = m ? getNodePowerW(m) : null;
+            const wes = (m && tps != null && tps > 0 && watts != null && watts > 0)
+              ? computeWES(tps, watts, m.thermal_state)
+              : null;
+            const status = !isOnline ? 'Offline'
+              : throttling           ? 'Throttled'
+              : isActive             ? 'Active'
+              :                        'Idle';
+            const thermal = m?.thermal_state ?? 'Unknown';
+
+            const tooltipText = [
+              entry.hostname || entry.nodeId,
+              status,
+              wes != null ? `WES ${wes.toFixed(1)}` : null,
+              `Thermal: ${thermal}`,
+            ].filter(Boolean).join(' · ');
+
             return (
-              <div key={entry.nodeId} className="flex flex-col items-center gap-1">
+              <div key={entry.nodeId} className="flex flex-col items-center gap-1 group relative">
                 <div style={{ filter: glow }}>
                   <div
                     className={`w-11 h-[50px] ${hexBg} ${isActive && !throttling ? 'animate-pulse' : ''}`}
                     style={{ clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)' }}
+                    title={tooltipText}
                   />
                 </div>
                 <p className="text-[8px] font-telin text-gray-500 truncate max-w-[44px] text-center leading-none">

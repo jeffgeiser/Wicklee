@@ -28,7 +28,10 @@ interface ModelFitMiniTileProps {
 }
 
 const ModelFitMiniTile: React.FC<ModelFitMiniTileProps> = ({ result, node, showNodeHeader = false }) => {
-  const modelName = node.ollama_active_model ?? 'Unknown model';
+  const modelName = node.ollama_active_model
+    ?? node.vllm_model_name
+    ?? node.llamacpp_model_name
+    ?? 'Unknown model';
 
   // Memory bar segments as % of totalGb
   const usedGb      = result.totalGb - result.headroomGb;

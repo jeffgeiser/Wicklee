@@ -5,9 +5,7 @@ import {
 } from 'recharts';
 import { TrendingUp, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier } from '../types';
-import { buildReportFromHistory } from '../utils/benchmarkReport';
-import BenchmarkReportModal from './BenchmarkReportModal';
-import type { BenchmarkReport } from '../utils/benchmarkReport';
+// benchmarkReport imports removed — CSV export replaces modal
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -49,7 +47,7 @@ const RANGE_CONFIG: Record<TimeRange, {
   historyMin: number;    // historyDays required
   fmtTs:      (ms: number) => string;
 }> = {
-  '1h':  { label: '1H',  minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+  '1h':  { label: '1H',  minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) },
   '24h': { label: '24H', minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
   '7d':  { label: '7D',  minTier: 'pro',        historyMin: 7,  fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
   '30d': { label: '30D', minTier: 'team',       historyMin: 30, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
@@ -93,7 +91,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState<string | null>(null);
   const [lastFetch,    setLastFetch]    = useState(0);
-  const [exportReport, setExportReport] = useState<BenchmarkReport | null>(null);
+  // exportReport state removed — CSV export replaces modal
 
   const fetchHistory = useCallback(async (r: TimeRange) => {
     setLoading(true);
@@ -141,34 +139,32 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     p => p.raw_wes != null && p.penalized_wes != null && p.raw_wes > p.penalized_wes + 0.001
   );
 
-  // ── Export handler ────────────────────────────────────────────────────────
+  // ── CSV export handler ──────────────────────────────────────────────────
 
-  const handleExport = () => {
-    if (!selectedNode || !hasData) return;
-    // Use the most recent point with valid WES data
-    const lastPoint = [...selectedNode.points].reverse().find(
-      p => p.penalized_wes != null || p.raw_wes != null
-    );
-    if (!lastPoint) return;
-    const report = buildReportFromHistory({
-      nodeId:       selectedNode.node_id,
-      hostname:     selectedNode.hostname,
-      rawWes:       lastPoint.raw_wes,
-      penalizedWes: lastPoint.penalized_wes,
-      thermalState: lastPoint.thermal_state,
-      tsMs:         lastPoint.ts_ms,
-      range,
-    });
-    setExportReport(report);
-  };
+  const handleCsvDownload = useCallback(async () => {
+    if (!selectedNode) return;
+    try {
+      const token = await getToken();
+      const exportUrl = `${CLOUD_URL}/api/fleet/export?format=csv&node_id=${encodeURIComponent(selectedNode.node_id)}`;
+      const res = await fetch(exportUrl, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `wicklee-${selectedNode.node_id}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch { /* best-effort */ }
+  }, [selectedNode, getToken]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <>
-    {exportReport && (
-      <BenchmarkReportModal report={exportReport} onClose={() => setExportReport(null)} />
-    )}
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
 
       {/* Header */}
@@ -186,15 +182,15 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Export benchmark report — only when data is loaded */}
+          {/* CSV export — only when data is loaded */}
           {hasData && (
             <button
-              onClick={handleExport}
-              title="Export benchmark report"
+              onClick={handleCsvDownload}
+              title="Download CSV export"
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-800 dark:hover:bg-gray-800 transition-colors"
             >
               <FileDown className="w-3.5 h-3.5" />
-              Export
+              CSV
             </button>
           )}
 
@@ -302,7 +298,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       {!loading && !error && hasData && (
         <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartPoints} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <ComposedChart data={chartPoints} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} syncId="perf-charts">
               <defs>
                 <linearGradient id="gradWES" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.25} />
@@ -322,6 +318,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
                 axisLine={false}
                 tickLine={false}
                 interval="preserveStartEnd"
+                minTickGap={60}
               />
               <YAxis
                 stroke="#6b7280"
@@ -401,7 +398,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
     </div>
-    </>
   );
 };
 
