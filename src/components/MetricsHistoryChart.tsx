@@ -17,7 +17,7 @@ import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { Activity, Lock, RefreshCw } from 'lucide-react';
+import { Activity, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { getNodePowerW } from '../utils/power';
@@ -149,6 +149,9 @@ interface Props {
   getToken:         () => Promise<string | null>;
   historyDays:      number;
   subscriptionTier: SubscriptionTier;
+  /** External node selection — syncs with WESHistoryChart */
+  selectedNodeId?: string | null;
+  onNodeSelect?:   (nodeId: string) => void;
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -181,11 +184,21 @@ const MetricTooltip: React.FC<{
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const MetricsHistoryChart: React.FC<Props> = ({ getToken, historyDays, subscriptionTier }) => {
-  const [range,      setRange]      = useState<TimeRange>('24h');
+const MetricsHistoryChart: React.FC<Props> = ({
+  getToken, historyDays, subscriptionTier,
+  selectedNodeId: externalSelectedId,
+  onNodeSelect: externalOnNodeSelect,
+}) => {
+  const [range,      setRange]      = useState<TimeRange>('1h');
   const [metric,     setMetric]     = useState<MetricKey>('tok_s');
   const [nodes,      setNodes]      = useState<MetricsNode[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
+
+  const selectedId = externalSelectedId ?? internalSelectedId;
+  const setSelectedId = (id: string) => {
+    if (externalOnNodeSelect) externalOnNodeSelect(id);
+    else setInternalSelectedId(id);
+  };
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState<string | null>(null);
   const [lastFetch,  setLastFetch]  = useState(0);
@@ -205,11 +218,11 @@ const MetricsHistoryChart: React.FC<Props> = ({ getToken, historyDays, subscript
       const data           = await res.json();
       const fetched: MetricsNode[] = data.nodes ?? [];
       setNodes(fetched);
-      setSelectedId(prev =>
-        fetched.some(n => n.node_id === prev)
-          ? prev
-          : (fetched.find(n => n.points.length > 0)?.node_id ?? fetched[0]?.node_id ?? null)
-      );
+      const currentId = externalSelectedId ?? internalSelectedId;
+      if (!currentId || !fetched.some(n => n.node_id === currentId)) {
+        const newId = fetched.find(n => n.points.length > 0)?.node_id ?? fetched[0]?.node_id ?? null;
+        if (newId) setSelectedId(newId);
+      }
       setLastFetch(Date.now());
     } catch {
       setError('Network error — check connection');
@@ -247,6 +260,25 @@ const MetricsHistoryChart: React.FC<Props> = ({ getToken, historyDays, subscript
   const ago = lastFetch > 0
     ? Math.round((Date.now() - lastFetch) / 1000)
     : null;
+
+  // ── CSV export — build from in-memory chart data ──────────────────────
+  const handleCsvDownload = useCallback(() => {
+    if (!node || node.points.length === 0) return;
+    const header = 'timestamp,tok_s,watts,gpu_pct,mem_pct';
+    const rows = node.points.map(p =>
+      `${new Date(p.ts_ms).toISOString()},${p.tok_s ?? ''},${p.watts ?? ''},${p.gpu_pct ?? ''},${p.mem_pct ?? ''}`
+    );
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `wicklee-metrics-${node.hostname || node.node_id}-${range}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [node, range]);
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
@@ -291,6 +323,16 @@ const MetricsHistoryChart: React.FC<Props> = ({ getToken, historyDays, subscript
               );
             })}
           </div>
+          {hasData && (
+            <button
+              onClick={handleCsvDownload}
+              title="Download CSV"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              CSV
+            </button>
+          )}
           <button
             onClick={() => fetchHistory(range)}
             className="p-1.5 rounded-lg text-gray-600 hover:text-gray-400 hover:bg-gray-800 transition-colors"

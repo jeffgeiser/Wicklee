@@ -47,7 +47,7 @@ const RANGE_CONFIG: Record<TimeRange, {
   historyMin: number;    // historyDays required
   fmtTs:      (ms: number) => string;
 }> = {
-  '1h':  { label: '1H',  minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) },
+  '1h':  { label: '1H',  minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
   '24h': { label: '24H', minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
   '7d':  { label: '7D',  minTier: 'pro',        historyMin: 7,  fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
   '30d': { label: '30D', minTier: 'team',       historyMin: 30, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
@@ -76,6 +76,9 @@ interface WESHistoryChartProps {
   historyDays: number;
   /** Subscription tier for upgrade copy */
   subscriptionTier: SubscriptionTier;
+  /** External node selection — syncs with MetricsHistoryChart */
+  selectedNodeId?: string | null;
+  onNodeSelect?:   (nodeId: string) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -84,10 +87,19 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   getToken,
   historyDays,
   subscriptionTier,
+  selectedNodeId: externalSelectedId,
+  onNodeSelect: externalOnNodeSelect,
 }) => {
-  const [range,        setRange]        = useState<TimeRange>('24h');
+  const [range,        setRange]        = useState<TimeRange>('1h');
   const [nodes,        setNodes]        = useState<WESNode[]>([]);
-  const [selectedId,   setSelectedId]   = useState<string | null>(null);
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
+
+  // Use external selection if provided, otherwise internal
+  const selectedId = externalSelectedId ?? internalSelectedId;
+  const setSelectedId = (id: string) => {
+    if (externalOnNodeSelect) externalOnNodeSelect(id);
+    else setInternalSelectedId(id);
+  };
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState<string | null>(null);
   const [lastFetch,    setLastFetch]    = useState(0);
@@ -109,11 +121,13 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       const data = await res.json();
       const fetched: WESNode[] = data.nodes ?? [];
       setNodes(fetched);
-      // Auto-select first node with data, or first node overall
+      // Auto-select first node with data if nothing selected yet
       const withData = fetched.find(n => n.points.length > 0);
-      setSelectedId(prev =>
-        fetched.some(n => n.node_id === prev) ? prev : (withData?.node_id ?? fetched[0]?.node_id ?? null)
-      );
+      const currentId = externalSelectedId ?? internalSelectedId;
+      if (!currentId || !fetched.some(n => n.node_id === currentId)) {
+        const newId = withData?.node_id ?? fetched[0]?.node_id ?? null;
+        if (newId) setSelectedId(newId);
+      }
       setLastFetch(Date.now());
     } catch (e) {
       setError('Failed to load history');
@@ -139,28 +153,25 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     p => p.raw_wes != null && p.penalized_wes != null && p.raw_wes > p.penalized_wes + 0.001
   );
 
-  // ── CSV export handler ──────────────────────────────────────────────────
+  // ── CSV export — build from in-memory chart data ────────────────────────
 
-  const handleCsvDownload = useCallback(async () => {
-    if (!selectedNode) return;
-    try {
-      const token = await getToken();
-      const exportUrl = `${CLOUD_URL}/api/fleet/export?format=csv&node_id=${encodeURIComponent(selectedNode.node_id)}`;
-      const res = await fetch(exportUrl, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `wicklee-${selectedNode.node_id}-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch { /* best-effort */ }
-  }, [selectedNode, getToken]);
+  const handleCsvDownload = useCallback(() => {
+    if (!selectedNode || selectedNode.points.length === 0) return;
+    const header = 'timestamp,raw_wes,penalized_wes,thermal_state';
+    const rows = selectedNode.points.map(p =>
+      `${new Date(p.ts_ms).toISOString()},${p.raw_wes ?? ''},${p.penalized_wes ?? ''},${p.thermal_state ?? ''}`
+    );
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `wicklee-wes-${selectedNode.hostname || selectedNode.node_id}-${range}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [selectedNode, range]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
