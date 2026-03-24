@@ -780,11 +780,19 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       // Only fires when:
       //   1. This is a genuinely new pattern (not a re-eval of an already-active one).
       //   2. Confidence is moderate or high — 'building' patterns are silent.
-      //   3. The onset suppression window (15m) has elapsed since the last onset
-      //      for this patternId+nodeId pair (prevents churn on borderline conditions).
+      //   3. Per-node suppression: ONSET_SUPPRESSION_MS has elapsed for this patternId+nodeId.
+      //   4. Fleet-wide suppression: same patternId hasn't fired on ANY node in the
+      //      last 60s — prevents 3 nodes from spamming the same pattern simultaneously.
       if (isNew && result.confidence !== 'building') {
         const lastOnsetMs = patternOnsetMapRef.current.get(key) ?? 0;
-        if (nowMs2 - lastOnsetMs >= ONSET_SUPPRESSION_MS) {
+        // Fleet-wide: check if this patternId fired on ANY node in the last 60s
+        const FLEET_COALESCE_MS = 60_000;
+        const fleetKey = `fleet:${result.patternId}`;
+        const lastFleetOnsetMs = patternOnsetMapRef.current.get(fleetKey) ?? 0;
+        const perNodeOk = nowMs2 - lastOnsetMs >= ONSET_SUPPRESSION_MS;
+        const fleetOk  = nowMs2 - lastFleetOnsetMs >= FLEET_COALESCE_MS;
+
+        if (perNodeOk && fleetOk) {
           const nodeWes = fleetSummaries.find(s => s.nodeId === result.nodeId)?.currentWes ?? null;
 
           emitFleetEvent({
@@ -818,6 +826,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
           });
 
           patternOnsetMapRef.current.set(key, nowMs2);
+          patternOnsetMapRef.current.set(fleetKey, nowMs2);
         }
       }
     }

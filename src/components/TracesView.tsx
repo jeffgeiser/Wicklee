@@ -1438,22 +1438,25 @@ const TelemetryInspector: React.FC<{ nodes: NodeAgent[] }> = ({ nodes }) => {
           <div className="px-5 py-3 flex items-center justify-between border-b border-gray-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
               {allNodes.length > 1 && (
-                <div className="relative">
-                  <select
-                    value={nodeId ?? ''}
-                    onChange={e => setSelectedNode(e.target.value || null)}
-                    className="text-xs bg-gray-800 border border-gray-700 rounded-lg pl-3 pr-7 py-1.5 text-gray-200 cursor-pointer appearance-none focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/20 transition-colors"
-                  >
-                    {allNodes.map(n => {
-                      const hasLive = !!allNodeMetrics[n.id];
-                      return (
-                        <option key={n.id} value={n.id} className="bg-gray-800 text-gray-200 py-1">
-                          {n.hostname || n.id}{hasLive ? '' : ' (offline)'}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                <div className="flex flex-wrap gap-1">
+                  {allNodes.map(n => {
+                    const hasLive = !!allNodeMetrics[n.id];
+                    const isSelected = nodeId === n.id;
+                    return (
+                      <button
+                        key={n.id}
+                        onClick={() => setSelectedNode(n.id)}
+                        className={`text-[10px] font-mono px-2.5 py-1 rounded-md border transition-colors ${
+                          isSelected
+                            ? 'bg-gray-700 border-cyan-500/40 text-gray-200'
+                            : 'bg-transparent border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                        }`}
+                      >
+                        {n.hostname || n.id}
+                        {!hasLive && <span className="text-gray-600 ml-1">(offline)</span>}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
               {nodeId && <span className="text-[10px] font-mono text-gray-500">{nodeId}</span>}

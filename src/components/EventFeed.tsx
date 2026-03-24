@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check, Clock, Flame, Target, Activity } from 'lucide-react';
+import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check, Clock, Flame, Target, Activity, TrendingDown, Gauge, MemoryStick, AlertTriangle } from 'lucide-react';
 import { FleetEvent } from '../types';
 
 interface EventFeedProps {
@@ -96,6 +96,49 @@ export function eventMeta(ev: FleetEvent): EventMeta {
         icon: <Target className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />,
         label: ev.detail ? `fit: ${ev.detail}` : 'fit score changed',
         cls: 'text-blue-400',
+      };
+    case 'pattern_onset':
+      return {
+        icon: <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'pattern detected',
+        cls: 'text-amber-400',
+      };
+    case 'pattern_resolved':
+      return {
+        icon: <Check className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'pattern resolved',
+        cls: 'text-green-400',
+      };
+    case 'pattern_dismissed':
+      return {
+        icon: <Check className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'pattern dismissed',
+        cls: 'text-gray-500',
+      };
+    // Fleet observations (server-side alerts)
+    case 'zombied_engine':
+      return {
+        icon: <Gauge className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'zombied engine detected',
+        cls: 'text-red-400',
+      };
+    case 'thermal_redline':
+      return {
+        icon: <Thermometer className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'thermal redline',
+        cls: 'text-red-400',
+      };
+    case 'oom_warning':
+      return {
+        icon: <MemoryStick className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'memory pressure critical',
+        cls: 'text-amber-400',
+      };
+    case 'wes_cliff':
+      return {
+        icon: <TrendingDown className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'WES efficiency drop',
+        cls: 'text-amber-400',
       };
     default:
       return {
