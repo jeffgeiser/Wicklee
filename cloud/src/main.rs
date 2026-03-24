@@ -3008,8 +3008,46 @@ async fn handle_fleet_stream(
 }
 
 /// GET /health — trivial liveness probe, no DB dependency.
-async fn handle_health() -> StatusCode {
-    StatusCode::OK
+async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
+    // Diagnostic: check DuckDB metrics_raw freshness
+    let duck = state.duck_db.clone();
+    let diag = tokio::task::spawn_blocking(move || {
+        let conn = duck.lock().unwrap();
+        let latest_ts: Option<i64> = conn.query_row(
+            "SELECT MAX(ts_ms) FROM metrics_raw", [], |r| r.get(0),
+        ).ok();
+        let count_1h: Option<i64> = {
+            let cutoff = (now_ms() as i64) - 3_600_000;
+            conn.query_row(
+                "SELECT COUNT(*) FROM metrics_raw WHERE ts_ms >= ?", duckdb::params![cutoff], |r| r.get(0),
+            ).ok()
+        };
+        let count_24h: Option<i64> = {
+            let cutoff = (now_ms() as i64) - 86_400_000;
+            conn.query_row(
+                "SELECT COUNT(*) FROM metrics_raw WHERE ts_ms >= ?", duckdb::params![cutoff], |r| r.get(0),
+            ).ok()
+        };
+        let obs_open: Option<i64> = conn.query_row(
+            "SELECT COUNT(*) FROM fleet_observations WHERE state = 'open'", [], |r| r.get(0),
+        ).ok();
+        (latest_ts, count_1h, count_24h, obs_open)
+    }).await.unwrap_or((None, None, None, None));
+
+    let now = now_ms() as i64;
+    let age_s = diag.0.map(|ts| (now - ts) / 1000);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "now_ms": now,
+        "metrics_raw": {
+            "latest_ts_ms": diag.0,
+            "latest_age_s": age_s,
+            "rows_1h": diag.1,
+            "rows_24h": diag.2,
+        },
+        "fleet_observations_open": diag.3,
+    })).into_response()
 }
 
 /// GET /api/agent/version?platform=<platform>
@@ -3251,7 +3289,7 @@ fn run_duck_migrations(conn: &DuckConn) {
             ON fleet_observations (tenant_id, state, fired_at_ms);
         CREATE INDEX IF NOT EXISTS idx_observations_node
             ON fleet_observations (tenant_id, node_id, fired_at_ms);
-    ").expect("fleet_observations migration failed");
+    ").unwrap_or_else(|e| eprintln!("[duck] fleet_observations migration failed (non-fatal): {e}"));
 
     // ── Additive column migrations (idempotent — silently ignored if column exists) ──
     let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN inference_state VARCHAR;");
