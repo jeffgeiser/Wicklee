@@ -252,6 +252,7 @@ struct MetricsRow {
     mem_pressure_pct: Option<f32>,
     gpu_pct:          Option<f32>,
     cpu_pct:          Option<f32>,
+    inference_state:  Option<String>,    // "live" | "idle-spd" | "busy" | "idle"
     wes_version:      u8,               // incremented when WES formula changes
 }
 
@@ -2395,7 +2396,8 @@ async fn handle_metrics_history(
                             NULL::DOUBLE           AS tok_s_p95,
                             AVG(watts)            AS watts,
                             AVG(gpu_pct)          AS gpu_pct,
-                            AVG(mem_pressure_pct) AS mem_pct
+                            AVG(mem_pressure_pct) AS mem_pct,
+                            (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::DOUBLE / COUNT(*)::DOUBLE * 100.0) AS duty_pct
                      FROM metrics_raw
                      WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
                      GROUP BY bucket ORDER BY bucket",
@@ -2409,9 +2411,10 @@ async fn handle_metrics_history(
                         r.get::<_, Option<f64>>(3)?,
                         r.get::<_, Option<f64>>(4)?,
                         r.get::<_, Option<f64>>(5)?,
+                        r.get::<_, Option<f64>>(6)?,
                     ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
                 }) {
-                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem)| {
+                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
                         serde_json::json!({
                             "ts_ms":      ts,
                             "tok_s":      toks,
@@ -2419,6 +2422,7 @@ async fn handle_metrics_history(
                             "watts":      w,
                             "gpu_pct":    gpu,
                             "mem_pct":    mem,
+                            "duty_pct":   duty,
                         })
                     }).collect(),
                     None => vec![],
@@ -2431,7 +2435,8 @@ async fn handle_metrics_history(
                             AVG(tok_s_p95)            AS tok_s_p95,
                             AVG(watts_avg)            AS watts,
                             AVG(gpu_pct_avg)          AS gpu_pct,
-                            AVG(mem_pressure_pct_avg) AS mem_pct
+                            AVG(mem_pressure_pct_avg) AS mem_pct,
+                            AVG(inference_duty_pct)   AS duty_pct
                      FROM metrics_5min
                      WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
                      GROUP BY bucket ORDER BY bucket",
@@ -2445,9 +2450,10 @@ async fn handle_metrics_history(
                         r.get::<_, Option<f64>>(3)?,
                         r.get::<_, Option<f64>>(4)?,
                         r.get::<_, Option<f64>>(5)?,
+                        r.get::<_, Option<f64>>(6)?,
                     ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
                 }) {
-                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem)| {
+                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
                         serde_json::json!({
                             "ts_ms":      ts,
                             "tok_s":      toks,
@@ -2455,6 +2461,7 @@ async fn handle_metrics_history(
                             "watts":      w,
                             "gpu_pct":    gpu,
                             "mem_pct":    mem,
+                            "duty_pct":   duty,
                         })
                     }).collect(),
                     None => vec![],
@@ -2472,6 +2479,133 @@ async fn handle_metrics_history(
     }).await.unwrap_or_default();
 
     Json(serde_json::json!({ "range": range, "nodes": nodes_data })).into_response()
+}
+
+/// GET /api/fleet/duty?range=1h|24h|7d|30d
+///
+/// Returns the fleet-wide inference duty cycle — the percentage of time at least
+/// one node was actively generating tokens ("live" state).
+///
+/// Response: { "range": "24h", "duty_pct": 42.5, "total_samples": 1234, "live_samples": 525,
+///             "nodes": [{ "node_id", "hostname", "duty_pct" }] }
+async fn handle_fleet_duty(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let range = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
+
+    let (lookback_ms, use_raw): (i64, bool) = match range.as_str() {
+        "1h"  => (3_600_000,     true),
+        "24h" => (86_400_000,    false),
+        "7d"  => (604_800_000,   false),
+        "30d" => (2_592_000_000, false),
+        _     => (86_400_000,    false),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let db         = state.db.clone();
+    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
+        let conn = db.lock().unwrap();
+        resolve_user_from_jwt(&conn, &token, &clerk_keys)
+    }).await.unwrap_or(None);
+
+    let user_id = match user_id {
+        Some(uid) => uid,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid token" }))).into_response(),
+    };
+
+    let duck   = state.duck.clone();
+    let db2    = state.db.clone();
+    let since_ms = now_ms() as i64 - lookback_ms;
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = duck.lock().unwrap();
+        let sql_conn = db2.lock().unwrap();
+
+        // Get target nodes
+        let mut node_stmt = sql_conn.prepare("SELECT id, hostname FROM nodes WHERE user_id = ?1").ok()?;
+        let target_nodes: Vec<(String, Option<String>)> = node_stmt.query_map(
+            params![user_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        ).ok()?.filter_map(|r| r.ok()).collect();
+
+        if target_nodes.is_empty() { return Some(serde_json::json!({ "range": range, "duty_pct": null, "total_samples": 0, "live_samples": 0, "nodes": [] })); }
+
+        let mut per_node = Vec::new();
+        let mut total_all: i64 = 0;
+        let mut live_all: i64 = 0;
+
+        for (nid, hostname) in &target_nodes {
+            let (total, live) = if use_raw {
+                let sql = format!(
+                    "SELECT COUNT(*) AS total,
+                            SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END) AS live_count
+                     FROM metrics_raw
+                     WHERE tenant_id = '{}' AND node_id = '{}' AND ts_ms >= {}",
+                    user_id, nid, since_ms
+                );
+                conn.prepare(&sql).ok().and_then(|mut s| {
+                    s.query_row([], |r| Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                    ))).ok()
+                }).unwrap_or((0, 0))
+            } else {
+                // For longer ranges, use metrics_5min: weighted average of duty_pct × sample_count
+                let sql = format!(
+                    "SELECT COALESCE(SUM(sample_count), 0) AS total,
+                            COALESCE(SUM(inference_duty_pct * sample_count / 100.0), 0)::BIGINT AS live_count
+                     FROM metrics_5min
+                     WHERE tenant_id = '{}' AND node_id = '{}' AND ts_ms >= {}",
+                    user_id, nid, since_ms
+                );
+                conn.prepare(&sql).ok().and_then(|mut s| {
+                    s.query_row([], |r| Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                    ))).ok()
+                }).unwrap_or((0, 0))
+            };
+
+            let duty_pct = if total > 0 { Some((live as f64 / total as f64) * 100.0) } else { None };
+            let display_hostname = hostname.clone().unwrap_or_else(|| nid.clone());
+            per_node.push(serde_json::json!({
+                "node_id":  nid,
+                "hostname": display_hostname,
+                "duty_pct": duty_pct.map(|d| (d * 10.0).round() / 10.0),
+            }));
+            total_all += total;
+            live_all  += live;
+        }
+
+        let fleet_duty = if total_all > 0 {
+            Some(((live_all as f64 / total_all as f64) * 1000.0).round() / 10.0)
+        } else {
+            None
+        };
+
+        Some(serde_json::json!({
+            "range":         range,
+            "duty_pct":      fleet_duty,
+            "total_samples": total_all,
+            "live_samples":  live_all,
+            "nodes":         per_node,
+        }))
+    }).await.unwrap_or(None);
+
+    match result {
+        Some(data) => Json(data).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Query failed" }))).into_response(),
+    }
 }
 
 /// POST /api/pair/activate — user enters 6-digit code from their terminal to link the node.
@@ -2843,6 +2977,7 @@ fn run_duck_migrations(conn: &DuckConn) {
             mem_pressure_pct FLOAT,
             gpu_pct          FLOAT,
             cpu_pct          FLOAT,
+            inference_state  VARCHAR,
             wes_version      UTINYINT  NOT NULL DEFAULT 1,
             agent_version    VARCHAR,
             PRIMARY KEY (tenant_id, node_id, ts_ms)
@@ -2866,6 +3001,7 @@ fn run_duck_migrations(conn: &DuckConn) {
             mem_pressure_pct_avg FLOAT,
             mem_pressure_pct_max FLOAT,
             gpu_pct_avg          FLOAT,
+            inference_duty_pct   FLOAT,
             sample_count         USMALLINT NOT NULL DEFAULT 0,
             wes_version          UTINYINT  NOT NULL DEFAULT 1,
             wes_version_count    UTINYINT  NOT NULL DEFAULT 1,
@@ -2900,6 +3036,10 @@ fn run_duck_migrations(conn: &DuckConn) {
         CREATE INDEX IF NOT EXISTS idx_node_events_tenant_ts
             ON node_events  (tenant_id, ts_ms);
     ").expect("DuckDB migrations failed");
+
+    // ── Additive column migrations (idempotent — silently ignored if column exists) ──
+    let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN inference_state VARCHAR;");
+    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN inference_duty_pct FLOAT;");
 }
 
 // ── DuckDB — derive MetricsRow from inbound telemetry ────────────────────────
@@ -2941,6 +3081,7 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
         mem_pressure_pct: m.memory_pressure_percent,
         gpu_pct,
         cpu_pct:          Some(m.cpu_usage_percent),
+        inference_state:  m.inference_state.clone(),
         wes_version:      m.wes_version.unwrap_or(1),
     }
 }
@@ -2975,6 +3116,7 @@ fn flush_batch(conn: &DuckConn, batch: &[MetricsRow]) {
             row.mem_pressure_pct,
             row.gpu_pct,
             row.cpu_pct,
+            row.inference_state.as_deref(),
             row.wes_version,
             Option::<&str>::None, // agent_version — Phase 4B
         ]);
@@ -3069,6 +3211,7 @@ fn run_rollup(conn: &DuckConn) {
             watts_avg, wes_raw_avg, wes_penalized_avg, wes_penalized_min,
             thermal_cost_pct_avg, thermal_cost_pct_max, thermal_state_worst,
             mem_pressure_pct_avg, mem_pressure_pct_max, gpu_pct_avg,
+            inference_duty_pct,
             sample_count, wes_version, wes_version_count, agent_version
         )
         SELECT
@@ -3096,6 +3239,8 @@ fn run_rollup(conn: &DuckConn) {
             AVG(mem_pressure_pct)              AS mem_pressure_pct_avg,
             MAX(mem_pressure_pct)              AS mem_pressure_pct_max,
             AVG(gpu_pct)                       AS gpu_pct_avg,
+            -- Inference duty: % of samples in this 5-min bucket where the node was "live"
+            (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::FLOAT / COUNT(*)::FLOAT * 100.0) AS inference_duty_pct,
             COUNT(*)::USMALLINT                AS sample_count,
             MAX(wes_version)                   AS wes_version,
             COUNT(DISTINCT wes_version)::UTINYINT AS wes_version_count,
@@ -4353,6 +4498,7 @@ async fn main() {
         .route("/api/fleet/stream",       get(handle_fleet_stream))
         .route("/api/fleet/wes-history",          get(handle_wes_history))
         .route("/api/fleet/metrics-history",      get(handle_metrics_history))
+        .route("/api/fleet/duty",                 get(handle_fleet_duty))
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
         .route("/api/fleet/export",               get(handle_fleet_export))
         // ── Agent API v1 ──────────────────────────────────────────────────────

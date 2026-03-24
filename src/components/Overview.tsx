@@ -71,6 +71,14 @@ function estimateTps(
 // Controls Cockpit vs Mission Control rendering mode. Never derived from runtime auth state.
 const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
 
+// ── Cloud URL (same derivation as MetricsHistoryChart) ──────────────────────
+const CLOUD_URL = (() => {
+  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
+  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  if (v === '/') return '';
+  return v.startsWith('http') ? v : `https://${v}`;
+})();
+
 interface OverviewProps {
   nodes: NodeAgent[];
   /** True while the initial /api/fleet fetch is in-flight. Suppresses EmptyFleetState flash on refresh. */
@@ -82,6 +90,8 @@ interface OverviewProps {
   onUpgrade?: () => void;
   getNodeSettings?: (nodeId: string) => { pue: number; kwhRate: number; currency: string };
   fleetKwhRate?: number;
+  /** Auth token getter for cloud API calls (fleet duty endpoint). */
+  getToken?: () => Promise<string | null>;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -1008,7 +1018,7 @@ const DiagnosticRail: React.FC<{
 };
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = 0.12 }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = 0.12, getToken }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -1061,9 +1071,34 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // hook count doesn't grow with fleet size (hooks must be called unconditionally).
   const nodeCostBufsRef = useRef<Map<string, { buf: number[]; lastTs: number }>>(new Map());
 
-  // Inference duty cycle — rolling tracker (hooks must be before any early returns)
+  // Inference duty cycle — client-side rolling tracker (localhost fallback).
+  // On cloud, server-side duty from /api/fleet/duty takes priority.
   const dutyRef = useRef<{ live: number; total: number }>({ live: 0, total: 0 });
-  const sessionStartRef = useRef(Date.now());
+  const [serverDutyPct, setServerDutyPct] = useState<number | null>(null);
+  const [serverDutyRange, setServerDutyRange] = useState<string>('');
+
+  // Fetch server-side duty cycle on cloud (on mount + every 60s)
+  useEffect(() => {
+    if (isLocalHost || !getToken) return;
+    let cancelled = false;
+    const fetchDuty = async () => {
+      try {
+        const token = await getToken();
+        const res = await fetch(`${CLOUD_URL}/api/fleet/duty?range=24h`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled && data.duty_pct != null) {
+          setServerDutyPct(data.duty_pct);
+          setServerDutyRange('24h');
+        }
+      } catch { /* silently skip */ }
+    };
+    fetchDuty();
+    const iv = setInterval(fetchDuty, 60_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [getToken]);
 
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
@@ -1258,6 +1293,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       dutyRef.current.live  = Math.round(dutyRef.current.live  * 0.5);
       dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
     }
+    // Note: client-side counter is an in-memory session-only fallback for localhost.
+    // On cloud, server-side /api/fleet/duty (DuckDB) is the SSOT.
   }, [dutyMetrics]);
 
   // While the initial fleet fetch is in-flight (nodesLoading), show a blank
@@ -1406,10 +1443,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     return totalCapMb > 0 ? Math.round((totalUsedMb / totalCapMb) * 100) : null;
   })();
 
-  // ── Inference Duty Cycle — % of recent ticks where any node was "live" ──
-  // (dutyRef declared at top with other hooks; effect + read are here for locality)
-  const dutyPct = dutyRef.current.total > 0
+  // ── Inference Duty Cycle ──
+  // Cloud: prefer server-side 24h duty from /api/fleet/duty (persisted in DuckDB).
+  // Localhost: fall back to client-side tick counter.
+  const clientDutyPct = dutyRef.current.total > 0
     ? Math.round((dutyRef.current.live / dutyRef.current.total) * 100) : null;
+  const dutyPct = (!isLocalHost && serverDutyPct != null) ? Math.round(serverDutyPct) : clientDutyPct;
 
   // Tile 4 — FLEET NODES: online / total
   // fleetTotalCount — all registered nodes (single source via useFleetCounts)
@@ -1929,12 +1968,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             : dutyPct > 50 ? undefined
             : dutyPct > 10 ? 'text-amber-400'
             : 'text-gray-500'}
-          sub={dutyRef.current.total > 0
-            ? (() => {
-                const elapsedMin = Math.round((Date.now() - sessionStartRef.current) / 60000);
-                return elapsedMin < 1 ? '< 1m observed' : `${elapsedMin}m observed this session`;
-              })()
-            : 'collecting…'}
+          sub={!isLocalHost && serverDutyPct != null
+            ? `${serverDutyRange} from DuckDB`
+            : dutyRef.current.total > 0
+              ? `${dutyRef.current.total} ticks this session`
+              : 'collecting…'}
           icon={Activity}
           iconCls={dutyPct != null && dutyPct > 50 ? 'text-emerald-400'
             : dutyPct != null && dutyPct > 10 ? 'text-amber-400'
