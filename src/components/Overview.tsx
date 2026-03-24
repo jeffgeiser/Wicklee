@@ -1057,7 +1057,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // hook count doesn't grow with fleet size (hooks must be called unconditionally).
   const nodeCostBufsRef = useRef<Map<string, { buf: number[]; lastTs: number }>>(new Map());
 
-  // Inference duty cycle — rolling tracker. Hook declared here (unconditional), read later.
+  // Inference duty cycle — rolling tracker (hooks must be before any early returns)
   const dutyRef = useRef<{ live: number; total: number }>({ live: 0, total: 0 });
 
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
@@ -1240,6 +1240,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Must be called before any early returns (Rules of Hooks).
   const counts = useFleetCounts(nodes);
 
+  // Inference duty cycle effect — must be before early returns (Rules of Hooks).
+  // Uses allNodeMetrics directly since effectiveMetrics isn't computed until after early returns.
+  const dutyMetrics = Object.values(allNodeMetrics);
+  useEffect(() => {
+    if (dutyMetrics.length === 0) return;
+    const anyLive = dutyMetrics.some(m => m.inference_state === 'live');
+    dutyRef.current.total += 1;
+    if (anyLive) dutyRef.current.live += 1;
+    // Cap at ~3600 ticks (~1 hour at 1Hz SSE) to keep it a rolling-ish window
+    if (dutyRef.current.total > 3600) {
+      dutyRef.current.live  = Math.round(dutyRef.current.live  * 0.5);
+      dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
+    }
+  }, [dutyMetrics]);
+
   // While the initial fleet fetch is in-flight (nodesLoading), show a blank
   // loading screen rather than EmptyFleetState — avoids the "Add your first node"
   // flash on every page refresh for users who already have nodes paired.
@@ -1267,18 +1282,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const effectiveMetrics: SentinelMetrics[] = isLocalHost
     ? (sentinel ? [sentinel] : [])
     : liveMetrics.filter(m => !restrictedIds.has(m.node_id));
-
-  // Inference duty cycle effect — update rolling counter on each metrics tick
-  useEffect(() => {
-    const anyLive = effectiveMetrics.some(m => m.inference_state === 'live');
-    dutyRef.current.total += 1;
-    if (anyLive) dutyRef.current.live += 1;
-    // Cap at ~3600 ticks (~1 hour at 1Hz SSE) to keep it a rolling-ish window
-    if (dutyRef.current.total > 3600) {
-      dutyRef.current.live  = Math.round(dutyRef.current.live  * 0.5);
-      dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
-    }
-  }, [effectiveMetrics]);
 
   // Tile 1 — THROUGHPUT: ∑ estimated tok/s across inference-active nodes (Ollama + vLLM).
   // Both runtimes are not mutually exclusive — a node can run both simultaneously.
