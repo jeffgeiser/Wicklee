@@ -2301,6 +2301,28 @@ async fn handle_wes_history(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
+    // Tier enforcement — server-side guard on history ranges.
+    // community: 1h, 24h  |  pro: +7d  |  team/enterprise: +30d, 90d
+    {
+        let db2 = state.db.clone();
+        let uid2 = user_id.clone();
+        let tier: String = tokio::task::spawn_blocking(move || {
+            let conn = db2.lock().unwrap();
+            conn.query_row("SELECT subscription_tier FROM users WHERE id = ?1", params![uid2], |r| r.get(0))
+                .unwrap_or_else(|_| "community".to_string())
+        }).await.unwrap_or_else(|_| "community".to_string());
+
+        let allowed = match tier.as_str() {
+            "team" | "enterprise" => true,
+            "pro" => !matches!(range.as_str(), "30d" | "90d"),
+            _ => matches!(range.as_str(), "1h" | "24h"),
+        };
+        if !allowed {
+            return (StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
+        }
+    }
+
     // 2. Enumerate user's nodes from SQLite (wk_id + persisted hostname)
     let db2 = state.db.clone();
     let uid = user_id.clone();
@@ -2476,6 +2498,27 @@ async fn handle_metrics_history(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+
+    // Tier enforcement — server-side guard on history ranges.
+    {
+        let db2 = state.db.clone();
+        let uid2 = user_id.clone();
+        let tier: String = tokio::task::spawn_blocking(move || {
+            let conn = db2.lock().unwrap();
+            conn.query_row("SELECT subscription_tier FROM users WHERE id = ?1", params![uid2], |r| r.get(0))
+                .unwrap_or_else(|_| "community".to_string())
+        }).await.unwrap_or_else(|_| "community".to_string());
+
+        let allowed = match tier.as_str() {
+            "team" | "enterprise" => true,
+            "pro" => !matches!(range.as_str(), "30d" | "90d"),
+            _ => matches!(range.as_str(), "1h" | "24h"),
+        };
+        if !allowed {
+            return (StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
+        }
+    }
 
     // Enumerate user's nodes from SQLite
     let db2 = state.db.clone();
