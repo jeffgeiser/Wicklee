@@ -1860,10 +1860,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           }
           value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
           valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={wattPowerNodes.length > 0
-            ? `${wattPowerNodes.length} node${wattPowerNodes.length !== 1 ? 's' : ''} · per 1k tokens`
-            : 'per 1k tokens'}
-          sub2={idleFleetCostPerDay != null
+          sub={idleFleetCostPerDay != null
             ? idleFleetCostPerDay > 0 && idleFleetCostPerDay < 0.01
               ? 'est < $0.01/day'
               : `est $${idleFleetCostPerDay.toFixed(2)}/day`
