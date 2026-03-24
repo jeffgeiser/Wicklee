@@ -58,7 +58,10 @@ const deriveOS = (m: SentinelMetrics | null): NodeOS => {
 type PermLevel = 'full' | 'partial' | 'limited';
 const derivePermissions = (m: SentinelMetrics | null): PermLevel => {
   if (!m) return 'limited';
-  if (m.cpu_power_w != null || m.nvidia_vram_total_mb != null) return 'full';
+  const hasPower   = m.cpu_power_w != null || m.nvidia_vram_total_mb != null;
+  const hasThermal = m.thermal_state != null;
+  if (hasPower && hasThermal) return 'full';
+  if (hasPower)               return 'partial'; // power but no thermal (e.g. Linux without lm-sensors)
   const chip = (m.chip_name ?? m.gpu_name ?? '').toLowerCase();
   if (chip.includes('apple') || /\bm[1-4]\b/.test(chip)) return 'partial';
   return 'limited';
@@ -458,9 +461,13 @@ const MgmtRow: React.FC<{
         <div className="flex items-center gap-2 overflow-hidden sticky left-[68px] bg-white dark:bg-gray-900 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/40">
           <span className={`shrink-0 w-2 h-2 rounded-full ${dotCls}`} title={dotTooltip} />
           <div className="min-w-0">
-            <p className="text-xs font-bold font-telin text-gray-900 dark:text-white truncate">{node.id}</p>
-            {hostname && (
-              <p className="text-[10px] text-gray-500 font-telin truncate">{hostname}</p>
+            {hostname ? (
+              <>
+                <p className="text-xs font-bold text-gray-900 dark:text-white truncate">{hostname}</p>
+                <p className="text-[10px] text-gray-500 font-telin truncate">{node.id}</p>
+              </>
+            ) : (
+              <p className="text-xs font-bold font-telin text-gray-900 dark:text-white truncate">{node.id}</p>
             )}
           </div>
         </div>
@@ -508,9 +515,21 @@ const MgmtRow: React.FC<{
           }
         </div>
 
-        {/* Memory capacity — inventory, not live usage */}
+        {/* Memory capacity + utilisation bar */}
         <div className="min-w-0 overflow-hidden">
           <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate">{memCap}</p>
+          {m != null && (() => {
+            const hasNvram = m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0 && m.nvidia_vram_used_mb != null;
+            const usedMb  = hasNvram ? m.nvidia_vram_used_mb! : (m.total_memory_mb - m.available_memory_mb);
+            const totalMb = hasNvram ? m.nvidia_vram_total_mb! : m.total_memory_mb;
+            const pct = totalMb > 0 ? Math.round((usedMb / totalMb) * 100) : 0;
+            const barCls = pct > 80 ? 'bg-red-400' : pct > 60 ? 'bg-amber-400' : 'bg-indigo-400';
+            return (
+              <div className="w-full h-[3px] bg-gray-800 rounded-full mt-1 overflow-hidden" title={`${pct}% used`}>
+                <div className={`h-full ${barCls} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+              </div>
+            );
+          })()}
         </div>
 
         {/* Connectivity */}
