@@ -500,9 +500,13 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
           )}
         </span>
         <div className="min-w-0">
-          <p className="text-xs font-telin font-bold text-gray-900 dark:text-white truncate leading-none">{nodeId}</p>
-          {hostname !== nodeId && (
-            <p className="text-[10px] text-gray-500 truncate leading-none mt-0.5">{hostname}</p>
+          {hostname !== nodeId ? (
+            <>
+              <p className="text-xs font-bold text-gray-900 dark:text-white truncate leading-none">{hostname}</p>
+              <p className="text-[10px] font-telin text-gray-500 truncate leading-none mt-0.5">{nodeId}</p>
+            </>
+          ) : (
+            <p className="text-xs font-telin font-bold text-gray-900 dark:text-white truncate leading-none">{nodeId}</p>
           )}
           {dotState === 'offline' && (
             <p className="text-[9px] text-gray-400 dark:text-gray-600 leading-none mt-0.5">unreachable</p>
