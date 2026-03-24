@@ -27,7 +27,7 @@ import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
   TrendingDown, Database, Scale, Cpu, Globe, Shield,
   Activity, Layers, CheckCircle, ChevronDown, History, Clock,
-  Copy, Check, Server, Radio,
+  Copy, Check, Server, Radio, FileText,
 } from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier } from '../types';
@@ -138,6 +138,33 @@ const InlineCopyButton: React.FC<{ text: string }> = ({ text }) => {
       {copied
         ? <><Check className="w-3 h-3 text-green-400" />Copied</>
         : <><Copy  className="w-3 h-3" />Copy</>}
+    </button>
+  );
+};
+
+// ── InlineCopyAction — used by Top Finding action buttons ─────────────────────
+
+const InlineCopyAction: React.FC<{ text: string; label: string }> = ({ text, label }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  }, [text]);
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700
+                 border border-gray-700 hover:border-gray-600 transition-colors group"
+    >
+      <code className="text-[10px] font-mono text-gray-300 group-hover:text-white truncate max-w-[180px]">
+        {label}
+      </code>
+      {copied
+        ? <Check className="w-3 h-3 text-green-400 shrink-0" />
+        : <Copy  className="w-3 h-3 text-gray-500 group-hover:text-gray-300 shrink-0" />
+      }
     </button>
   );
 };
@@ -1289,19 +1316,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               </div>
 
               {/* ── Top Finding — highest-confidence active observation ──────
-                  Surfaces the single most important currently active pattern as
-                  a summary card, with its action_id mapped to a curl command
-                  targeting /api/v1/insights/latest.
-                  Intentionally shown before the full Observations list so that
-                  a returning operator knows the top priority before diving in.
-                  Hidden when all observations are resolved (none active).       */}
+                  Surfaces the single most important currently active pattern.
+                  Shows the recommendation + action copy buttons from the
+                  pattern engine. Hidden when all observations are resolved.    */}
               {(() => {
                 const topObs = obsEntries.find(e => e.resolvedMs === null);
                 if (!topObs) return null;
                 const ins = topObs.insight;
-                const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)
-                  ?? 'https://api.wicklee.dev';
-                const curlText = `curl -s -H "X-API-Key: <key>" ${apiBase}/api/v1/insights/latest`;
                 return (
                   <div className="bg-indigo-600/8 border border-indigo-600/20 rounded-2xl p-4 space-y-3">
 
@@ -1333,23 +1354,14 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       </p>
                     </div>
 
-                    {/* action_id → curl snippet */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
-                          API action_id
-                        </p>
-                        <span className="font-mono text-[9px] text-indigo-400/70 border border-indigo-600/20 bg-indigo-600/5 px-1.5 py-0.5 rounded">
-                          {ins.action_id}
-                        </span>
+                    {/* Action copy buttons from pattern engine */}
+                    {ins.actions.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {ins.actions.map(action => (
+                          <InlineCopyAction key={action.copyText} text={action.copyText} label={action.label} />
+                        ))}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <pre className="flex-1 font-mono text-[10px] text-gray-400 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 overflow-x-auto whitespace-pre min-w-0">
-                          {curlText}
-                        </pre>
-                        <InlineCopyButton text={curlText} />
-                      </div>
-                    </div>
+                    )}
 
                     {/* View source → link (Cockpit only — Metric History panel) */}
                     {isLocalHost && onNavigateToObservability && (
@@ -1456,11 +1468,16 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 );
               })()}
 
-              {/* Model Fit — compact 2-across mini tiles */}
+              {/* Model Fit — responsive mini tiles (1–4 cols depending on count) */}
               <div>
                 {fitNodes.length > 0
                   ? (
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className={`grid gap-3 ${
+                        fitNodes.length === 1 ? 'grid-cols-1' :
+                        fitNodes.length === 2 ? 'grid-cols-2' :
+                        fitNodes.length === 3 ? 'grid-cols-3' :
+                        'grid-cols-2 sm:grid-cols-4'
+                      }`}>
                         {fitNodes.map(n => {
                           const fit = computeModelFitScore(n);
                           return fit ? (
@@ -1630,18 +1647,55 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </InsightsLiteCard>
                 )}
 
-                {/* Inference Density — live HexHive */}
+                {/* Node Vitals — live HexHive + benchmark trigger */}
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
                   <div className="flex items-center gap-2">
                     <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-                    <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-                      Inference Density
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 flex-1">
+                      Node Vitals
                     </span>
+                    {effectiveNodes.length > 0 && wesValues.length > 0 && (
+                      <button
+                        onClick={handleExportBenchmark}
+                        title="Export benchmark report"
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+                      >
+                        <FileText className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
                   <HexHive rows={hiveRows} />
                 </div>
 
               </div>
+
+              {/* Quantization ROI — moved up as "Live Intelligence" slot */}
+              {canViewInsight(10) && effectiveNodes.length > 0 ? (
+                <QuantizationROICard
+                  node={effectiveNodes[0]}
+                  nodes={effectiveNodes}
+                />
+              ) : canViewInsight(10) ? (
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                  <Scale className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Quantization ROI</p>
+                    <p className="text-xs text-gray-700 mt-0.5">No model loaded — load a model to see efficiency metrics.</p>
+                  </div>
+                </div>
+              ) : (
+                <InsightsTeaseCard
+                  title="Quantization ROI"
+                  icon={<Scale className="w-3.5 h-3.5" />}
+                  tierRequired="team"
+                  upgradeCopy="Compare quantizations over time on Team →"
+                  liveContent={
+                    <p className="text-xs text-gray-600">
+                      Live efficiency metrics available — load a model to see tok/s and W/1K TKN.
+                    </p>
+                  }
+                />
+              )}
 
               {/* WES Trend Chart (cloud only) */}
               {!isLocalHost && getToken && (
@@ -1658,35 +1712,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   getToken={getToken}
                   historyDays={historyDays}
                   subscriptionTier={subscriptionTier}
-                />
-              )}
-
-              {/* Quantization ROI */}
-              {canViewInsight(10) && effectiveNodes.length > 0 ? (
-                <QuantizationROICard
-                  node={effectiveNodes[0]}
-                  nodes={effectiveNodes}
-                />
-              ) : canViewInsight(10) ? (
-                // No nodes connected yet
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
-                  <Scale className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Quantization ROI</p>
-                    <p className="text-xs text-gray-700 mt-0.5">No nodes connected.</p>
-                  </div>
-                </div>
-              ) : (
-                <InsightsTeaseCard
-                  title="Quantization ROI"
-                  icon={<Scale className="w-3.5 h-3.5" />}
-                  tierRequired="team"
-                  upgradeCopy="Compare quantizations over time on Team →"
-                  liveContent={
-                    <p className="text-xs text-gray-600">
-                      Live efficiency metrics available — load a model to see tok/s and W/1K TKN.
-                    </p>
-                  }
                 />
               )}
 

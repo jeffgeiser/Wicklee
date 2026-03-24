@@ -69,7 +69,10 @@ const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeade
     ? (node.gpu_name  ?? 'NVIDIA GPU')
     : (node.chip_name ?? node.gpu_name ?? 'Unknown hardware');
   const memType  = result.isNvidia ? 'VRAM' : 'unified';
-  const modelName = node.ollama_active_model ?? 'Unknown model';
+  const modelName = node.ollama_active_model
+    ?? node.vllm_model_name
+    ?? node.llamacpp_model_name
+    ?? 'Unknown model';
 
   // Memory bar — three segments as % of totalGb
   const usedGb      = result.totalGb - result.headroomGb;

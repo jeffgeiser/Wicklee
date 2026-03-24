@@ -40,7 +40,7 @@ import { SAMPLE_INTERVAL_MS } from '../hooks/useMetricHistory';
 // Never rename — these are external API contract values.
 
 export type ActionId =
-  | 'rebalance_workload'   // shift load to a healthier fleet node
+  // 'rebalance_workload' removed — routing is aspirational, not yet actionable
   | 'evict_idle_models'    // ollama stop / unload VRAM
   | 'reduce_batch_size'    // lower concurrent request batch
   | 'check_thermal_zone'   // physical intervention — airflow / ambient
@@ -288,36 +288,22 @@ function evaluatePatternA(
   let action_id: ActionId;
 
   if (wesTier === 'accelerator') {
-    // Accelerator nodes (H100, B200, GB10) — preserve for high-priority work
-    if (altNode) {
-      recommendation =
-        `Route lower-priority requests to ${altNode.hostname} ` +
-        `(WES ${altNode.currentWes?.toFixed(0) ?? '?'}, Normal thermal) to preserve ` +
-        `${hostname}'s accelerator capacity for high-priority inference. ` +
-        `Investigate rack cooling or ambient temperature to recover the ${deltaPercent.toFixed(0)}% penalty.`;
-    } else {
-      recommendation =
-        `No healthy peer is available for rerouting. Reduce concurrent request count ` +
-        `on ${hostname} to lower thermal load and recover throughput. ` +
+    // Accelerator nodes (H100, B200, GB10)
+    recommendation = altNode
+      ? `${altNode.hostname} (WES ${altNode.currentWes?.toFixed(0) ?? '?'}, Normal thermal) is the healthier peer. ` +
+        `Investigate rack cooling or ambient temperature on ${hostname} to recover the ${deltaPercent.toFixed(0)}% penalty.`
+      : `Reduce concurrent request count on ${hostname} to lower thermal load and recover throughput. ` +
         `Investigate rack cooling or ambient temperature.`;
-    }
-    action_id = altNode ? 'rebalance_workload' : 'check_thermal_zone';
+    action_id = 'check_thermal_zone';
   } else {
     // Workstation / server class
-    if (altNode) {
-      recommendation =
-        `Route new requests to ${altNode.hostname} ` +
-        `(WES ${altNode.currentWes?.toFixed(0) ?? '?'}) using \`GET /api/v1/route/best\`. ` +
+    recommendation = altNode
+      ? `${altNode.hostname} (WES ${altNode.currentWes?.toFixed(0) ?? '?'}) is the healthier peer. ` +
         `${hostname} will recover once thermal state returns to Normal — ` +
-        `improve airflow if the ${currentState} state persists.`;
-      action_id = 'rebalance_workload';
-    } else {
-      recommendation =
-        `No healthy peer is online for rerouting. Improve airflow around ${hostname}, ` +
-        `reduce concurrent requests, or pause low-priority jobs until thermal state ` +
-        `returns to Normal and throughput recovers.`;
-      action_id = 'check_thermal_zone';
-    }
+        `improve airflow if the ${currentState} state persists.`
+      : `Improve airflow around ${hostname}, reduce concurrent requests, or pause low-priority jobs ` +
+        `until thermal state returns to Normal and throughput recovers.`;
+    action_id = 'check_thermal_zone';
   }
 
   return {
@@ -526,15 +512,14 @@ function evaluatePatternC(
   let recommendation: string;
   if (altNode) {
     recommendation =
-      `Pre-emptively route new requests to ${altNode.hostname} ` +
-      `(WES ${altNode.currentWes?.toFixed(0) ?? '?'}) before thermal state changes. ` +
+      `${altNode.hostname} (WES ${altNode.currentWes?.toFixed(0) ?? '?'}) is the healthier peer. ` +
       `Check ambient temperature and background processes on ${hostname} — ` +
       `${minutesToHalf != null && minutesToHalf < 30
         ? `WES may halve in ~${Math.round(minutesToHalf)} min at this rate.`
         : `the decline has been sustained for ${Math.round(observedMs / 60000)} min.`}`;
   } else {
     recommendation =
-      `No healthy peer is available for rerouting. Reduce workload on ${hostname} now ` +
+      `Reduce workload on ${hostname} now ` +
       `— check ambient temperature, competing background processes, and VRAM allocation. ` +
       `${minutesToHalf != null && minutesToHalf < 30
         ? `WES may halve in ~${Math.round(minutesToHalf)} min at this rate.`
@@ -559,13 +544,13 @@ function evaluatePatternC(
     resolution_steps: [
       `Monitor WES trajectory every 30 s: \`watch -n 30 "curl -s http://localhost:7700/api/health | jq .wes_score"\``,
       altNode
-        ? `Pre-emptively route new requests to ${altNode.hostname} now — don't wait for thermal state change: \`GET /api/v1/route/best\``
-        : `Reduce active inference load immediately: lower \`OLLAMA_NUM_PARALLEL\` to 1 to slow the WES decline`,
+        ? `${altNode.hostname} is the healthier peer — consider shifting workloads manually if the decline continues`
+        : `Reduce active inference load: lower \`OLLAMA_NUM_PARALLEL\` to 1 to slow the WES decline`,
       `Check if any background processes (backups, updates, builds) started recently and pause them`,
       `If WES drops below 50 within the next 5 min, treat as Pattern A (Thermal Drain) — enact physical cooling steps`,
       `After stabilization, review Wicklee history to correlate the drop with specific request types or model loads`,
     ],
-    action_id:       altNode ? 'rebalance_workload' : 'check_thermal_zone',
+    action_id:       'check_thermal_zone',
     requiredMs:      PATTERN_C_MIN_WINDOW_MS,
     observedMs,
     confidence:      toConfidence(ratio),
@@ -573,13 +558,12 @@ function evaluatePatternC(
     tier:            'community',
     actions: [
       {
-        label:    'Route away now',
-        copyText: 'GET /api/v1/route/best',
-        isEndpoint: true,
-      },
-      {
         label:    'Check WES + thermal',
         copyText: `curl http://localhost:7700/api/health | jq '{wes:.wes_score,thermal:.thermal_state}'`,
+      },
+      {
+        label:    'Watch WES trend',
+        copyText: `watch -n 30 "curl -s http://localhost:7700/api/health | jq .wes_score"`,
       },
     ],
     firstFiredMs:       now,
@@ -775,22 +759,20 @@ function evaluatePatternE(
                        ? `WES: ${hostname} ${avgWes.toFixed(0)} vs ${altNode.hostname} ${peerWes.toFixed(0)} — ` +
                          `a ${wesDiff} that translates directly to throughput and efficiency loss.`
                        : `Routing new requests to the cooler node would reduce latency and thermal wear.`}`,
-    recommendation:  `Shift new inference requests to ${altNode.hostname} using ` +
-                     `\`GET /api/v1/route/best\`. ` +
+    recommendation:  `${altNode.hostname} (WES ${peerWes > 0 ? peerWes.toFixed(0) : '?'}) is the healthier node. ` +
                      `${isThermallySressed
-                       ? `Allow ${hostname} to cool down — consider pausing non-urgent jobs ` +
+                       ? `${hostname} is thermally stressed — consider pausing non-urgent jobs ` +
                          `until thermal state returns to Normal.`
-                       : `Monitor ${hostname}'s WES trend over the next 10 min.`}`,
+                       : `Monitor ${hostname}'s WES trend over the next 10 min to see if the gap closes.`}`,
     resolution_steps: [
-      `Query fleet-wide WES snapshot: \`GET /api/v1/fleet/wes\``,
-      `Update your load balancer to send new requests exclusively to ${altNode.hostname} until ${hostname} recovers`,
-      `If using Nginx upstream, temporarily set \`weight=0\` for ${hostname} and \`weight=10\` for ${altNode.hostname}`,
+      `Compare fleet WES scores on the Performance tab to identify the efficiency gap`,
       isThermallySressed
-        ? `Investigate thermal root cause on ${hostname}: check airflow, dust, and ambient temperature — allow 15 min cooldown before re-enabling`
-        : `Monitor ${hostname}'s WES over the next 10 min — if it stabilizes above 60, re-enable in the rotation`,
-      `Set up a cron or webhook to auto-rebalance when \`GET /api/v1/route/best\` returns ${hostname} as the top pick again`,
+        ? `Investigate thermal root cause on ${hostname}: check airflow, dust, and ambient temperature — allow 15 min cooldown`
+        : `Monitor ${hostname}'s WES over the next 10 min — if it stabilizes above 60, the imbalance may self-resolve`,
+      `Check ${altNode.hostname}'s VRAM headroom and thermal state to confirm it can absorb additional load`,
+      `Review the WES Trend chart for both nodes over 1H to identify whether this is transient or sustained`,
     ],
-    action_id:       'rebalance_workload',
+    action_id:       'check_thermal_zone',
     requiredMs:      PATTERN_E_MIN_WINDOW_MS,
     observedMs,
     confidence:      toConfidence(ratio),
@@ -798,13 +780,12 @@ function evaluatePatternE(
     tier:            'pro',
     actions: [
       {
-        label:    'Get best route',
-        copyText: 'GET /api/v1/route/best',
-        isEndpoint: true,
+        label:    `Check ${hostname} health`,
+        copyText: `curl http://localhost:7700/api/health | jq '{node:.node_id,wes:.wes_score,thermal:.thermal_state}'`,
       },
       {
-        label:    `Check ${altNode.hostname}`,
-        copyText: `curl http://localhost:7700/api/health | jq '{node:.node_id,wes:.wes_score,thermal:.thermal_state}'`,
+        label:    `Compare fleet WES`,
+        copyText: `curl http://localhost:7700/api/health | jq '{wes:.wes_score,hostname:.hostname}'`,
       },
     ],
     firstFiredMs:       now,
@@ -1037,10 +1018,9 @@ function evaluatePatternG(
 
   if (altNode) {
     recommendation =
-      `Shift active inference to ${altNode.hostname} ` +
-      `(WES ${altNode.currentWes?.toFixed(0) ?? '?'}) while ${hostname} is ${memLabel}-bus bound. ` +
-      quantNote;
-    action_id = 'rebalance_workload';
+      `${altNode.hostname} (WES ${altNode.currentWes?.toFixed(0) ?? '?'}) has available bandwidth headroom. ` +
+      `${hostname} is ${memLabel}-bus bound. ` + quantNote;
+    action_id = 'switch_quantization';
   } else {
     recommendation =
       quantNote +
@@ -1070,7 +1050,7 @@ function evaluatePatternG(
       `Switch the active model to a lower quantization to halve ${memLabel} bandwidth demand: \`ollama pull <model>:q4_K_M && ollama stop <model>:q8_0\``,
       `If already on Q4, try Q3_K_M or Q2_K — the quality trade-off is worth the bandwidth recovery when the bus is saturated`,
       altNode
-        ? `Route concurrent inference to ${altNode.hostname} while ${hostname} is ${memLabel}-bound — it has available bandwidth headroom`
+        ? `${altNode.hostname} has available bandwidth headroom — consider shifting workloads while ${hostname} is ${memLabel}-bound`
         : `Consider a hardware upgrade to a node with higher ${memLabel} bandwidth (H100 SXM5: 3.35 TB/s vs PCIe: 2 TB/s) for sustained bandwidth ceiling relief`,
       `Reduce context window size in your requests — longer contexts increase KV cache weight streaming; halving context can free 20–40% bandwidth`,
     ],

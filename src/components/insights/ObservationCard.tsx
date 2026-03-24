@@ -54,8 +54,7 @@ interface ActionBadgeConfig {
 
 export function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
   switch (actionId) {
-    case 'rebalance_workload':
-      return { label: 'Rebalance Workload', icon: <BarChart2 className="w-2.5 h-2.5" />, cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' };
+    // 'rebalance_workload' removed — routing not yet actionable
     case 'evict_idle_models':
       return { label: 'Evict Idle Models',  icon: <Cpu       className="w-2.5 h-2.5" />, cls: 'text-amber-400  bg-amber-500/10  border-amber-500/20'  };
     case 'reduce_batch_size':

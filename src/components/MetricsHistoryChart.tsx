@@ -367,7 +367,7 @@ const MetricsHistoryChart: React.FC<Props> = ({ getToken, historyDays, subscript
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={200}>
-            <ComposedChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+            <ComposedChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }} syncId="perf-charts">
               <defs>
                 <linearGradient id={cfg.gradId} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%"  stopColor={cfg.color} stopOpacity={0.22} />
@@ -380,6 +380,7 @@ const MetricsHistoryChart: React.FC<Props> = ({ getToken, historyDays, subscript
                 stroke="#374151"
                 tick={{ fill: '#6b7280', fontSize: 10 }}
                 interval="preserveStartEnd"
+                minTickGap={60}
                 tickLine={false}
                 axisLine={false}
               />
