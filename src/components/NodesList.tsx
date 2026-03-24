@@ -280,6 +280,29 @@ const DetailBand: React.FC<{
         <p className="text-[8px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500">
           Diagnostics
         </p>
+
+        {/* Resident Model — the model currently loaded in memory */}
+        {(() => {
+          const model = m?.ollama_active_model ?? m?.vllm_model_name ?? m?.llamacpp_model_name ?? null;
+          const runtime = m?.vllm_running ? 'vLLM' : m?.ollama_running ? 'Ollama' : m?.llamacpp_model_name ? 'llama.cpp' : null;
+          return model ? (
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-500/5 border border-indigo-500/15">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-[10px] text-gray-400 leading-tight">Resident Model</p>
+                <p className="text-xs font-telin text-indigo-300 truncate">
+                  {model}{runtime ? <span className="text-gray-500 ml-1.5">· {runtime}</span> : null}
+                </p>
+              </div>
+            </div>
+          ) : isOnline ? (
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gray-800/50">
+              <div className="w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0" />
+              <p className="text-[10px] text-gray-500">No model loaded</p>
+            </div>
+          ) : null;
+        })()}
+
         <div className="space-y-2">
 
           <div className="flex items-start gap-2">
@@ -509,17 +532,19 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* Uptime */}
+        {/* Uptime — derive from first-seen timestamp or agent-reported uptime */}
         <div className="overflow-hidden">
           <span className="text-xs font-telin tabular-nums text-gray-500">
-            {isOnline ? (node.uptime ?? '—') : '—'}
+            {isOnline
+              ? (node.uptime ?? (lastSeenMs != null ? fmtNodeAgo(lastSeenMs) : '—'))
+              : '—'}
           </span>
         </div>
 
-        {/* Agent Version */}
+        {/* Agent Version — from live metrics heartbeat */}
         <div className="overflow-hidden">
           <span className="text-xs font-telin text-gray-500">
-            {isLocal ? ((import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? '—') : '—'}
+            {m?.agent_version ? `v${m.agent_version}` : '—'}
           </span>
         </div>
 
