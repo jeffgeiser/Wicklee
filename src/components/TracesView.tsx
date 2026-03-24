@@ -1395,8 +1395,10 @@ const TelemetryInspector: React.FC<{ nodes: NodeAgent[] }> = ({ nodes }) => {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const entries = Object.values(allNodeMetrics);
-  const nodeId = selectedNode ?? entries[0]?.node_id ?? null;
+  const sseEntries = Object.values(allNodeMetrics);
+  // Use all registered nodes (from props), not just SSE-active ones
+  const allNodes = nodes.length > 0 ? nodes : sseEntries.map(m => ({ id: m.node_id, hostname: m.hostname || m.node_id } as NodeAgent));
+  const nodeId = selectedNode ?? allNodes[0]?.id ?? sseEntries[0]?.node_id ?? null;
   const metrics = nodeId ? allNodeMetrics[nodeId] : null;
 
   const handleCopy = useCallback(() => {
@@ -1431,15 +1433,16 @@ const TelemetryInspector: React.FC<{ nodes: NodeAgent[] }> = ({ nodes }) => {
           {/* Controls */}
           <div className="px-5 py-3 flex items-center justify-between border-b border-gray-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
-              {entries.length > 1 && (
+              {allNodes.length > 1 && (
                 <select
                   value={nodeId ?? ''}
                   onChange={e => setSelectedNode(e.target.value || null)}
                   className="text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-gray-300 appearance-none cursor-pointer"
                 >
-                  {entries.map(m => (
-                    <option key={m.node_id} value={m.node_id}>{m.hostname || m.node_id}</option>
-                  ))}
+                  {allNodes.map(n => {
+                    const hasLive = !!allNodeMetrics[n.id];
+                    return <option key={n.id} value={n.id}>{n.hostname || n.id}{hasLive ? '' : ' (offline)'}</option>;
+                  })}
                 </select>
               )}
               {nodeId && <span className="text-[10px] font-mono text-gray-500">{nodeId}</span>}
@@ -1889,15 +1892,28 @@ const FleetMetricsMini: React.FC<{
                     </span>
                   )}
                 </div>
-                <ResponsiveContainer width="100%" height={80}>
-                  <AreaChart data={chartPoints} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+                <ResponsiveContainer width="100%" height={90}>
+                  <AreaChart data={chartPoints} margin={{ top: 2, right: 4, bottom: 0, left: 4 }}>
                     <defs>
                       <linearGradient id={cfg.gradId} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor={cfg.color} stopOpacity={0.3} />
                         <stop offset="95%" stopColor={cfg.color} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <XAxis dataKey="ts_ms" hide />
+                    <XAxis
+                      dataKey="ts_ms"
+                      tickFormatter={v => {
+                        const d = new Date(v as number);
+                        if (range === '1h') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        if (range === '24h') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        return `${d.getMonth()+1}/${d.getDate()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                      }}
+                      tick={{ fontSize: 9, fill: '#6b7280' }}
+                      axisLine={false}
+                      tickLine={false}
+                      minTickGap={40}
+                      height={16}
+                    />
                     <YAxis hide domain={['auto', 'auto']} />
                     <Tooltip
                       contentStyle={{ background: '#1a1a2e', border: '1px solid #374151', borderRadius: '8px', fontSize: '11px' }}
