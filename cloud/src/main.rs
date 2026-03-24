@@ -3306,7 +3306,12 @@ fn run_duck_migrations(conn: &DuckConn) {
 
     // ── Additive column migrations (idempotent — silently ignored if column exists) ──
     let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN inference_state VARCHAR;");
+    let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN wes_version UTINYINT NOT NULL DEFAULT 1;");
+    let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN agent_version VARCHAR;");
     let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN inference_duty_pct FLOAT;");
+    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN wes_version UTINYINT NOT NULL DEFAULT 1;");
+    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN wes_version_count UTINYINT NOT NULL DEFAULT 1;");
+    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN agent_version VARCHAR;");
 }
 
 // ── DuckDB — derive MetricsRow from inbound telemetry ────────────────────────
