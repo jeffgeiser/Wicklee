@@ -1981,7 +1981,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             : dutyPct > 10 ? 'text-amber-400'
             : 'text-gray-500'}
           sub={!isLocalHost && serverDutyPct != null
-            ? `${serverDutyRange} from DuckDB`
+            ? `${serverDutyRange} from fleet history`
             : dutyRef.current.total > 0
               ? `${dutyRef.current.total} ticks this session`
               : 'collecting…'}

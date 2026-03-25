@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-const CLOUD_URL = import.meta.env.VITE_CLOUD_URL ?? 'https://wicklee.dev';
+const CLOUD_URL = ((import.meta.env.VITE_CLOUD_URL as string) ?? '').replace(/\/+$/, '') || 'https://wicklee.dev';
 
 export interface FleetObservation {
   id:             string;
