@@ -11,7 +11,8 @@ serde_json = "1.0"
 tower-http = { version = "0.5", features = ["cors"] }
 bcrypt     = "0.15"
 uuid       = { version = "1", features = ["v4"] }
-rusqlite       = { version = "0.31", features = ["bundled"] }
+# Postgres + TimescaleDB via sqlx — async connection pool, replaces both rusqlite and duckdb.
+sqlx           = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"] }
 tokio-stream   = "0.1"
 futures-util   = "0.3"
 jsonwebtoken   = "9"
@@ -24,8 +25,6 @@ hmac           = "0.12"
 hex            = "0.4"
 # Constant-time byte comparison for auth tokens — prevents timing side-channel attacks.
 subtle         = "2.6"
-# DuckDB for time-series analytics (Phase 4A). bundled = compile DuckDB from source (required for Railway).
-duckdb         = { version = "1.10501", features = ["bundled"] }
 
 [profile.release]
 opt-level     = 3
