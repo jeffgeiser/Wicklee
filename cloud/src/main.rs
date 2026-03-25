@@ -4595,6 +4595,54 @@ async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
+        // ── 5. Agent Version Mismatch: node version differs from fleet majority → warning ──
+        {
+            // Compute fleet majority version (mode).
+            let mut version_counts: HashMap<String, u32> = HashMap::new();
+            for (_, m) in &snapshot {
+                if let Some(ref v) = m.agent_version {
+                    *version_counts.entry(v.clone()).or_insert(0) += 1;
+                }
+            }
+            let majority_version = version_counts.iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(v, _)| v.clone());
+
+            if let Some(ref majority) = majority_version {
+                // Only alert if fleet has > 1 node reporting versions.
+                let total_versioned = version_counts.values().sum::<u32>();
+                if total_versioned > 1 {
+                    for (node_id, m) in &snapshot {
+                        let alert_type = "agent_version_mismatch";
+                        if let Some(ref node_ver) = m.agent_version {
+                            let is_firing = node_ver != majority;
+                            let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
+
+                            if is_firing && !is_open {
+                                to_fire.push(PendingObs {
+                                    node_id: node_id.clone(),
+                                    alert_type: alert_type.into(),
+                                    severity: ObsSeverity::Warning,
+                                    title: "Agent Version Mismatch".into(),
+                                    detail: format!(
+                                        "Running v{} while the fleet majority is v{}. Update with: curl -fsSL https://wicklee.dev/install.sh | bash",
+                                        node_ver, majority
+                                    ),
+                                    context: serde_json::json!({
+                                        "node_version": node_ver,
+                                        "fleet_majority": majority,
+                                        "fleet_node_count": total_versioned,
+                                    }),
+                                });
+                            } else if !is_firing && is_open {
+                                to_resolve.push((node_id.clone(), alert_type.into()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Also auto-resolve observations for nodes that are no longer online ──
         let online_nodes: HashSet<String> = snapshot.iter().map(|(nid, _)| nid.clone()).collect();
         let stale_keys: Vec<(String, String)> = open_observations.keys()

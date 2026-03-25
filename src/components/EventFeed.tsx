@@ -140,6 +140,12 @@ export function eventMeta(ev: FleetEvent): EventMeta {
         label: ev.detail ?? 'WES efficiency drop',
         cls: 'text-amber-400',
       };
+    case 'agent_version_mismatch':
+      return {
+        icon: <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? 'agent version mismatch',
+        cls: 'text-amber-400',
+      };
     default:
       return {
         icon: <Activity className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />,
