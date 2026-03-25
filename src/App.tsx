@@ -250,6 +250,9 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
 
   const fetchPairingStatus = useCallback(async () => {
+    // /api/pair/status only exists on the agent (localhost:7700).
+    // On wicklee.dev this endpoint 404s — skip entirely.
+    if (!isLocalHost) return;
     try {
       const r = await fetch('/api/pair/status');
       if (r.ok) setPairingInfo(await r.json());
@@ -257,6 +260,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   }, []);
 
   const generatePairingCode = useCallback(async () => {
+    if (!isLocalHost) return;
     try {
       const r = await fetch('/api/pair/generate', { method: 'POST' });
       if (r.ok) setPairingInfo(await r.json());
@@ -264,6 +268,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   }, []);
 
   const disconnectFleet = useCallback(async () => {
+    if (!isLocalHost) return;
     try {
       const r = await fetch('/api/pair/disconnect', { method: 'POST' });
       if (r.ok) setPairingInfo(await r.json());
