@@ -2007,16 +2007,18 @@ async fn handle_fleet_export(
     }
 }
 
-/// Helper for converting range to TimescaleDB time_bucket interval.
-fn time_bucket_for_range(range: &str) -> (&str, &str, bool) {
-    // Returns (time_bucket_interval, lookback_interval, use_raw)
+/// Helper for converting range to epoch-based bucket seconds (stock Postgres compatible).
+fn time_bucket_for_range(range: &str) -> (i64, &str, bool) {
+    // Returns (bucket_seconds, lookback_interval, use_raw)
+    // Using epoch-based bucketing instead of TimescaleDB time_bucket()
+    // so it works on stock Postgres without TimescaleDB extension.
     match range {
-        "1h"  => ("1 minute",   "1 hour",   true),
-        "24h" => ("5 minutes",  "24 hours",  true),
-        "7d"  => ("30 minutes", "7 days",   false),
-        "30d" => ("2 hours",    "30 days",  false),
-        "90d" => ("6 hours",    "90 days",  false),
-        _     => ("5 minutes",  "24 hours",  true),
+        "1h"  => (60,     "1 hour",   true),
+        "24h" => (300,    "24 hours",  true),
+        "7d"  => (1800,   "7 days",   false),
+        "30d" => (7200,   "30 days",  false),
+        "90d" => (21600,  "90 days",  false),
+        _     => (300,    "24 hours",  true),
     }
 }
 
@@ -2034,7 +2036,7 @@ async fn handle_wes_history(
 
     let range = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
     let node_id_filter = params.get("node_id").cloned();
-    let (bucket_interval, lookback_interval, use_raw) = time_bucket_for_range(&range);
+    let (bucket_secs, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
@@ -2095,7 +2097,7 @@ async fn handle_wes_history(
     for (node_id, hostname) in &target_nodes {
         let points: Vec<serde_json::Value> = if use_raw {
             let sql = format!(
-                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
                         AVG(wes_raw)       AS raw_wes,
                         AVG(wes_penalized) AS penalized_wes,
                         MAX(CASE thermal_state
@@ -2106,7 +2108,7 @@ async fn handle_wes_history(
                  FROM metrics_raw
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
-                bucket = bucket_interval, lookback = lookback_interval
+                bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<i32>)>(&sql)
                 .bind(&user_id).bind(node_id)
@@ -2117,7 +2119,7 @@ async fn handle_wes_history(
                 }).collect()
         } else {
             let sql = format!(
-                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
                         AVG(wes_raw_avg)       AS raw_wes,
                         AVG(wes_penalized_avg) AS penalized_wes,
                         MAX(CASE thermal_state_worst
@@ -2128,7 +2130,7 @@ async fn handle_wes_history(
                  FROM metrics_5min
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
-                bucket = bucket_interval, lookback = lookback_interval
+                bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<i32>)>(&sql)
                 .bind(&user_id).bind(node_id)
@@ -2160,7 +2162,7 @@ async fn handle_metrics_history(
 
     let range          = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
     let node_id_filter = params.get("node_id").cloned();
-    let (bucket_interval, lookback_interval, use_raw) = time_bucket_for_range(&range);
+    let (bucket_secs, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
@@ -2219,7 +2221,7 @@ async fn handle_metrics_history(
     for (node_id, hostname) in &target_nodes {
         let points: Vec<serde_json::Value> = if use_raw {
             let sql = format!(
-                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
                         AVG(tok_s)            AS tok_s,
                         NULL::float8           AS tok_s_p95,
                         AVG(watts)            AS watts,
@@ -2229,7 +2231,7 @@ async fn handle_metrics_history(
                  FROM metrics_raw
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
-                bucket = bucket_interval, lookback = lookback_interval
+                bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
@@ -2239,7 +2241,7 @@ async fn handle_metrics_history(
                 }).collect()
         } else {
             let sql = format!(
-                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
                         AVG(tok_s_avg)            AS tok_s,
                         AVG(tok_s_p95)            AS tok_s_p95,
                         AVG(watts_avg)            AS watts,
@@ -2249,7 +2251,7 @@ async fn handle_metrics_history(
                  FROM metrics_5min
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
-                bucket = bucket_interval, lookback = lookback_interval
+                bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
@@ -2748,7 +2750,7 @@ async fn run_rollup(pool: &sqlx::PgPool) {
             inference_duty_pct,
             sample_count, wes_version, wes_version_count, agent_version)
         SELECT
-            time_bucket('5 minutes', ts) AS bucket,
+            to_timestamp(floor(EXTRACT(EPOCH FROM ts) / 300) * 300) AS bucket,
             node_id, tenant_id,
             AVG(tok_s),
             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tok_s),
@@ -2790,7 +2792,7 @@ async fn run_rollup(pool: &sqlx::PgPool) {
                SELECT 1 FROM metrics_5min m
                WHERE m.tenant_id = metrics_raw.tenant_id
                  AND m.node_id   = metrics_raw.node_id
-                 AND m.ts        = time_bucket('5 minutes', metrics_raw.ts)
+                 AND m.ts        = to_timestamp(floor(EXTRACT(EPOCH FROM metrics_raw.ts) / 300) * 300)
            )"
     ).execute(pool).await;
 
