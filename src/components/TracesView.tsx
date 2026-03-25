@@ -1641,7 +1641,7 @@ const FleetEventTimeline: React.FC<{
         <select
           value={selectedNode}
           onChange={e => setSelectedNode(e.target.value)}
-          className="text-xs bg-transparent border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-gray-300 appearance-none cursor-pointer"
+          className="text-xs bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-300 cursor-pointer focus:border-cyan-500/40 focus:outline-none [&>option]:bg-gray-900 [&>option]:text-gray-300"
         >
           <option value="">All Nodes</option>
           {nodes.map(n => <option key={n.id} value={n.id}>{n.hostname || n.id}</option>)}
