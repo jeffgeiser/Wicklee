@@ -562,7 +562,21 @@ const AIInsights: React.FC<AIInsightsProps> = ({
    * This is intentionally longer than OBS_HOLD_MS (10m) to create a 5-minute quiet
    * gap after resolution — see insightLifecycle.ts for the full rationale.
    */
-  const patternOnsetMapRef = useRef(new Map<string, number>());
+  // Persist onset timestamps in localStorage so suppression survives tab switches
+  // and page refreshes. Without this, switching tabs remounts the component and
+  // resets the Map, causing every pattern to re-fire as "new."
+  const patternOnsetMapRef = useRef<Map<string, number>>(() => {
+    try {
+      const stored = localStorage.getItem('wicklee:patternOnsetMap');
+      if (stored) {
+        const entries: [string, number][] = JSON.parse(stored);
+        // Prune entries older than ONSET_SUPPRESSION_MS (15 min)
+        const cutoff = Date.now() - ONSET_SUPPRESSION_MS;
+        return new Map(entries.filter(([, ts]) => ts > cutoff));
+      }
+    } catch {}
+    return new Map<string, number>();
+  })();
 
   // Thermal Cost % rolling history — 30-frame window per node for rate-of-change detection.
   // At typical SSE cadence (~1 frame/s), 30 frames ≈ 30 seconds; adjust window as needed.
@@ -827,6 +841,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
           patternOnsetMapRef.current.set(key, nowMs2);
           patternOnsetMapRef.current.set(fleetKey, nowMs2);
+          // Persist to localStorage so suppression survives tab switches.
+          try {
+            localStorage.setItem('wicklee:patternOnsetMap',
+              JSON.stringify([...patternOnsetMapRef.current.entries()]));
+          } catch {}
         }
       }
     }
