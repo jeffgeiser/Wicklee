@@ -2797,12 +2797,28 @@ async fn run_rollup(pool: &sqlx::PgPool) {
     println!("[rollup] complete");
 }
 
-/// Nightly maintenance: prune old events and observations, VACUUM ANALYZE.
+/// Nightly maintenance: prune old data, VACUUM ANALYZE.
+/// On TimescaleDB, retention policies handle metrics_raw/node_events/metrics_5min
+/// automatically. These DELETEs are a fallback for stock Postgres without TimescaleDB.
 async fn run_nightly_maintenance(pool: &sqlx::PgPool) {
+    let now = now_ms() as i64;
+
+    // Prune metrics_raw older than 2 days (fallback — TimescaleDB retention handles this if active).
+    let _ = sqlx::query("DELETE FROM metrics_raw WHERE ts < to_timestamp($1::float8 / 1000.0)")
+        .bind(now - 2 * 86_400_000).execute(pool).await;
+
+    // Prune node_events older than 30 days.
+    let _ = sqlx::query("DELETE FROM node_events WHERE ts < to_timestamp($1::float8 / 1000.0)")
+        .bind(now - 30 * 86_400_000).execute(pool).await;
+
+    // Prune metrics_5min older than 90 days.
+    let _ = sqlx::query("DELETE FROM metrics_5min WHERE ts < to_timestamp($1::float8 / 1000.0)")
+        .bind(now - 90 * 86_400_000).execute(pool).await;
+
     // Prune resolved/acknowledged observations older than 30 days.
     let _ = sqlx::query(
         "DELETE FROM fleet_observations WHERE state != 'open' AND fired_at_ms < $1"
-    ).bind((now_ms() as i64) - 30 * 86_400_000).execute(pool).await;
+    ).bind(now - 30 * 86_400_000).execute(pool).await;
 
     // ANALYZE key tables for query planner.
     let _ = sqlx::query("ANALYZE metrics_raw").execute(pool).await;
@@ -2810,7 +2826,7 @@ async fn run_nightly_maintenance(pool: &sqlx::PgPool) {
     let _ = sqlx::query("ANALYZE node_events").execute(pool).await;
     let _ = sqlx::query("ANALYZE fleet_observations").execute(pool).await;
 
-    println!("[nightly] ANALYZE complete");
+    println!("[nightly] maintenance complete — pruned + ANALYZE");
 }
 
 async fn rollup_task(pool: sqlx::PgPool) {
