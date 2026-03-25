@@ -565,7 +565,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // Persist onset timestamps in localStorage so suppression survives tab switches
   // and page refreshes. Without this, switching tabs remounts the component and
   // resets the Map, causing every pattern to re-fire as "new."
-  const patternOnsetMapRef = useRef<Map<string, number>>(() => {
+  const patternOnsetMapRef = useRef<Map<string, number>>((() => {
     try {
       const stored = localStorage.getItem('wicklee:patternOnsetMap');
       if (stored) {
@@ -576,7 +576,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       }
     } catch {}
     return new Map<string, number>();
-  })();
+  })());
 
   // Thermal Cost % rolling history — 30-frame window per node for rate-of-change detection.
   // At typical SSE cadence (~1 frame/s), 30 frames ≈ 30 seconds; adjust window as needed.
