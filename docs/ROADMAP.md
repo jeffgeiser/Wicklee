@@ -438,8 +438,24 @@
 ### Notifications
 - [x] **Slack / Resend (Email) Webhook System:** Per-node, per-event-type configuration. Urgency levels: immediate, 5-min debounce, 15-min debounce. Slack Block Kit formatting + HTML email with plain-text fallback. 5-min flap suppression via `quiet_until_ms`. Resolution notifications sent when condition clears. Team+ only (`subscription_tier` column on `users` table; `402` for community).
 - [x] **Alert Threshold Configuration:** Per-node thresholds for thermal_serious, thermal_critical, memory_pressure_high, wes_drop. Fleet-wide or scoped to a specific node. CRUD API: 7 handlers for channels and rules. Settings UI with full channel management (test button) and rule builder.
-- [x] **node_offline detection:** Independent 60s Tokio interval task — stateful via `alert_events`, fires once per outage, resolves when node reconnects.
+- [x] **node_offline detection:** Independent 60s Tokio interval task — stateful via `alert_events`, fires once per outage, resolves when node reconnects. Dedup check prevents repeated "no telemetry received for Xm" events per outage.
 - [ ] **Idle Cost Weekly Digest:** "Fleet idle cost this week: $X" — emailed or Slacked Monday 9am.
+
+### Fleet Observations (Phase 4B — Server-Side Alerting) ✅
+- [x] **`fleet_observations` DuckDB table** — stateful observation records for triage. Schema: tenant_id, node_id, alert_type, severity (critical/warning/info), state (open/resolved/acknowledged), context JSON, fired_at_ms, resolved_at_ms, acknowledged_at_ms. Idempotent migration.
+- [x] **`GET /api/fleet/observations?state=open|resolved|all`** — authenticated endpoint. Returns structured observations for triage tab consumption.
+- [x] **`fleet_alert_evaluator_task`** — 60s cloud background task. Essential Four alert conditions evaluated against live metrics cache with in-memory ring buffers (60 slots per node) for "sustained" threshold checks:
+  - Zombied Engine: `inference_state == "busy"` sustained >10min → critical
+  - Thermal Redline: `thermal_state == "Critical"` sustained >2min → critical
+  - OOM Warning: `memory_pressure > 95%` sustained >1min → warning
+  - WES Cliff: WES < 50% of 24h DuckDB baseline → warning
+- [x] **Dual-write on fire:** Writes to both `node_events` (flat log for Fleet Event Timeline) and `fleet_observations` (stateful for triage).
+- [x] **Auto-resolve:** Observations auto-resolve when condition clears. `resolved_at_ms` + state transition to `'resolved'`.
+- [x] **`/health` diagnostic endpoint** — DuckDB pipeline health: latest_age_s, rows_1h, rows_24h, fleet_observations_open. Used to diagnose the schema-drift production incident.
+- [ ] **`POST /api/fleet/observations/:id/acknowledge`** — manual acknowledge button for intentional conditions.
+- [ ] **Triage tab consumption** — Intelligence tab reads observations, renders red/amber severity cards.
+- [ ] **Cross-navigation** — Observation card "View in Timeline →" → Observability tab with node_id + time window pre-set.
+- [ ] **Agent version mismatch alert** — fire when node agent_version differs from fleet majority.
 
 ---
 

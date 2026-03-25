@@ -6,6 +6,52 @@
 
 ---
 
+## March 24, 2026 (Session 3) — Phase 4B: Fleet Alerting & Observations
+
+### Fleet Observations System (Cloud Backend) ✅
+- **`fleet_observations` DuckDB table** — stateful alert triage: `(tenant_id, node_id, alert_type, fired_at_ms)` PK, severity (critical/warning/info), state (open/resolved/acknowledged), context JSON for forensic detail.
+- **`GET /api/fleet/observations?state=open|resolved|all`** — authenticated endpoint for triage tab consumption. Returns structured observation records with context.
+- **`fleet_alert_evaluator_task`** — new 60s cloud background task evaluating Essential Four alert conditions against live metrics cache:
+  1. **Zombied Engine** — `inference_state == "busy"` sustained >10min → critical
+  2. **Thermal Redline** — `thermal_state == "Critical"` sustained >2min → critical
+  3. **OOM Warning** — `memory_pressure > 95%` sustained >1min → warning
+  4. **WES Cliff** — WES < 50% of 24h DuckDB baseline → warning
+- In-memory ring buffers per node (60 slots) for "sustained" threshold checks. Writes to both `node_events` (flat timeline) and `fleet_observations` (stateful triage). Auto-resolves observations when condition clears.
+- **Node offline dedup** — `node_offline_alert_task` now checks for existing recent events before writing, preventing repeated "no telemetry received for Xm" entries.
+
+### DuckDB Pipeline Fix (Critical Production Issue) ✅
+- **Root cause:** Appender column count mismatch — Railway DuckDB table had 16 columns (created from older schema) but Appender sent 18 values. Missing ALTER TABLE migrations for `wes_version` + `agent_version`. Silent failure since ~1:23 PM EST.
+- **Fix 1:** Added ALTER TABLE migrations for all missing columns on `metrics_raw` and `metrics_5min`.
+- **Fix 2:** Replaced DuckDB Appender with explicit `INSERT INTO ... (col1, col2, ...) VALUES (?, ?, ...)` — immune to schema drift from ALTER TABLE migrations.
+- **Fix 3:** Added `duck_lock()` helper (21 call sites) — recovers from poisoned mutexes via `.unwrap_or_else(|e| e.into_inner())` instead of cascading panics across all DuckDB tasks.
+- **Fix 4:** Added error logging to `metrics_tx.try_send()` so pipeline breaks are visible in Railway logs.
+- **Fix 5:** Added `/health` endpoint with DuckDB diagnostics (`latest_age_s`, `rows_1h`, `rows_24h`, `fleet_observations_open`).
+
+### Live Activity De-spam ✅
+- **Fleet-wide onset coalescing** — `FLEET_COALESCE_MS = 60s`. Same pattern firing on 3 nodes within 1 minute now emits 1 feed event instead of 3. Per-node `ONSET_SUPPRESSION_MS` (15m) still applies.
+- **Proper event rendering** — Added `pattern_onset` (amber AlertTriangle), `pattern_resolved` (green Check), `pattern_dismissed` (gray Check) to EventFeed's `eventMeta()`. Also added server-side alert types: `zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff` with semantic icons.
+- **FleetEvent type union** — Added all new event types to `types.ts` for strict TypeScript coverage.
+
+### Silicon Fit Audit (QuantizationROI replacement) ✅
+- `SiliconFitAudit.tsx` replaces `QuantizationROICard.tsx` (deleted). Severity-based Fit status from WES (Optimal >100, Sub-Optimal 10-100, Poor <10). Multi-node pill selector. VRAM savings calculation. W/1K TKN as primary metric, Chip icon.
+
+### Telemetry Inspector Dropdown Fix ✅
+- Replaced native `<select>` (broken dark theme rendering on browser default option styling) with pill button selector matching SiliconFitAudit node picker. Cyan border on active, gray for inactive, "(offline)" suffix.
+
+### Server-Side Tier Enforcement ✅
+- Verified server-side range gating on all history endpoints (wes-history, metrics-history, duty). Community: 1h/24h, Pro: +7d, Team/Enterprise: +30d/90d. Frontend `RANGE_LIMITS` aligned. Lock icons on disabled ranges.
+
+### Intelligence Tab Mission Control Layout ✅
+- Reordered: Fleet Status + Triage → Fleet Intelligence + HexHive → Silicon Fit → Performance → Benchmark.
+- Monitoring strip compacted to single row of dormant pattern pills.
+
+### Key Bugs & Lessons
+- **DuckDB Appender + ALTER TABLE = schema drift** — CREATE TABLE IF NOT EXISTS is a no-op on existing tables. Columns added via ALTER TABLE change the physical schema, but Appender assumes the original CREATE TABLE order. INSERT with named columns is immune.
+- **Mutex poisoning cascade** — One task panicking while holding `Arc<Mutex<DuckConn>>` poisons the mutex, making ALL subsequent `.lock().unwrap()` calls panic. `duck_lock()` helper recovers via `.into_inner()`.
+- **`try_send` silent drops** — `let _ = tx.try_send(row)` silently swallows `SendError` when receiver is dropped. Pipeline breaks become invisible. Always log send failures on critical paths.
+
+---
+
 ## March 24, 2026 — Cloud Observability Fleet-First Redesign + Duty Cycle + Alerting Foundation
 
 ### Cloud Observability Tab — 4 Fleet-First Sections ✅
