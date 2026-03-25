@@ -3174,6 +3174,18 @@ fn duck_db_path() -> std::path::PathBuf {
 }
 
 fn open_duck_db() -> DuckConn {
+    // DUCKDB_MODE=memory forces in-memory mode (no file I/O, no corruption risk).
+    // Data is lost on restart but the process never crashes from file corruption.
+    let use_memory = std::env::var("DUCKDB_MODE").unwrap_or_default() == "memory";
+
+    if use_memory {
+        let conn = DuckConn::open_in_memory()
+            .expect("Cannot open in-memory DuckDB");
+        run_duck_migrations(&conn);
+        println!("  DUCK → :memory: (DUCKDB_MODE=memory)");
+        return conn;
+    }
+
     let path = duck_db_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("Cannot create DuckDB directory");
@@ -3200,10 +3212,8 @@ fn open_duck_db() -> DuckConn {
         }
     };
 
-    // Request ZSTD for all future checkpoints. DuckDB picks the level internally;
-    // zstd_compression_level is not an exposed setting in v1.
-    conn.execute_batch("SET force_compression='zstd';")
-        .expect("DuckDB compression settings failed");
+    // Request ZSTD for all future checkpoints.  Only meaningful for file-backed mode.
+    let _ = conn.execute_batch("SET force_compression='zstd';");
 
     run_duck_migrations(&conn);
     println!("  DUCK → {}", path.display());
