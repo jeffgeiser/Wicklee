@@ -11,7 +11,6 @@ use sha2::{Sha256, Digest};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::StreamExt as _;
-use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -20,29 +19,7 @@ use std::{
 };
 use uuid::Uuid;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use duckdb::Connection as DuckConn;
 use tokio::sync::mpsc;
-
-// ── DB types ──────────────────────────────────────────────────────────────────
-
-/// Shared SQLite connection.  rusqlite::Connection is Send but not Sync, so we
-/// wrap it in a Mutex to allow sharing across Axum handlers.
-type Db = Arc<Mutex<Connection>>;
-
-/// Shared DuckDB connection for analytics.  All writes are serialised through
-/// the metrics_writer_task channel — direct handler access is not needed.
-type DuckDb = Arc<Mutex<DuckConn>>;
-
-/// Lock the DuckDB mutex, recovering from a poisoned state.
-/// If a prior holder panicked (poisoning the mutex), we still acquire the
-/// inner connection — DuckDB is process-safe and the connection remains valid.
-/// This prevents a single task panic from cascading to every DuckDB consumer.
-fn duck_lock(duck: &DuckDb) -> std::sync::MutexGuard<'_, DuckConn> {
-    duck.lock().unwrap_or_else(|poisoned| {
-        eprintln!("[duck] WARNING: mutex was poisoned by a prior panic — recovering");
-        poisoned.into_inner()
-    })
-}
 
 // ── Shared payload shape — must stay in sync with the agent ──────────────────
 //
@@ -169,7 +146,7 @@ struct MetricsPayload {
     inference_state: Option<String>,
     // ── Live Activity events (v0.5.16+) ──────────────────────────────────────
     /// Ephemeral lifecycle events drained from the agent on each broadcast tick.
-    /// Persisted to cloud DuckDB `node_events` for fleet event history.
+    /// Persisted to cloud `node_events` for fleet event history.
     #[serde(default)]
     live_activities: Vec<LiveActivityEventPayload>,
 }
@@ -236,26 +213,25 @@ struct ClaimResponse {
     node_id:       String,
 }
 
-/// In-memory telemetry snapshot (not persisted to DuckDB directly — goes
-/// through the metrics_writer_task channel).
+/// In-memory telemetry snapshot.
 #[derive(Clone)]
 struct MetricsEntry {
     last_seen_ms: u64,
     metrics:      Option<MetricsPayload>,
 }
 
-/// One row of derived telemetry ready for DuckDB ingest.
+/// One row of derived telemetry ready for Postgres ingest.
 /// Built from MetricsPayload on every incoming frame; flushed in 30-second batches.
 #[derive(Clone)]
 struct MetricsRow {
     node_id:          String,
     ts_ms:            i64,
-    tenant_id:        String,           // SQLite user_id; set after node lookup
+    tenant_id:        String,           // user_id; set after node lookup
     tok_s:            Option<f32>,
     watts:            Option<f32>,
     wes_raw:          Option<f32>,      // tok_s / watts × 10, no penalty
     wes_penalized:    Option<f32>,      // tok_s / (watts × penalty) × 10
-    thermal_cost_pct: Option<f32>,      // Phase 4B — from agent WES v2
+    thermal_cost_pct: Option<f32>,
     thermal_penalty:  Option<f32>,      // 1.0 / 1.25 / 1.75 / 2.0
     thermal_state:    Option<String>,
     vram_used_mb:     Option<i32>,
@@ -267,7 +243,7 @@ struct MetricsRow {
     wes_version:      u8,               // incremented when WES formula changes
 }
 
-/// A Live Activity event destined for the cloud DuckDB `node_events` table.
+/// A Live Activity event destined for the `node_events` table.
 #[derive(Clone)]
 struct EventRow {
     ts_ms:      i64,
@@ -311,214 +287,292 @@ struct JwksResponse {
 
 #[derive(Clone)]
 struct AppState {
-    /// Persistent store for users, sessions, and node pairing records.
-    db:               Db,
+    /// Postgres connection pool (replaces both SQLite and DuckDB).
+    pool:             sqlx::PgPool,
     /// In-memory telemetry cache keyed by node_id.
     metrics:          Arc<RwLock<HashMap<String, MetricsEntry>>>,
     /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
     clerk_keys:       Arc<RwLock<Vec<JwkKey>>>,
     /// Sliding-window rate-limit timestamps keyed by api_key key_id.
     api_rate_limits:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
-    /// Channel to the DuckDB writer task.  try_send drops rows if the writer
+    /// Channel to the metrics writer task.  try_send drops rows if the writer
     /// falls behind; that's acceptable for telemetry.
     metrics_tx:       mpsc::Sender<MetricsRow>,
-    /// Channel to the DuckDB event writer task.  Persists Live Activity events
+    /// Channel to the event writer task.  Persists Live Activity events
     /// for the fleet event history endpoint.
     events_tx:        mpsc::Sender<EventRow>,
-    /// Shared DuckDB connection for history read queries (wes-history endpoint).
-    duck_db:          DuckDb,
 }
 
-// ── DB bootstrap ──────────────────────────────────────────────────────────────
+// ── PG bootstrap ──────────────────────────────────────────────────────────────
 
-fn db_path() -> std::path::PathBuf {
-    // Railway: set DB_PATH=/data/wicklee.db via the volume mount env var.
-    if let Ok(p) = std::env::var("DB_PATH") {
-        return std::path::PathBuf::from(p);
-    }
-    // Local fallback: ~/.wicklee/cloud.db
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home).join(".wicklee").join("cloud.db")
-}
+async fn run_pg_migrations(pool: &sqlx::PgPool) {
+    // ── Extensions ──────────────────────────────────────────────────────────
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE")
+        .execute(pool).await
+        .unwrap_or_else(|e| { eprintln!("[pg] timescaledb extension: {e}"); Default::default() });
 
-fn open_db() -> Connection {
-    let path = db_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("Cannot create DB directory");
-    }
-    let conn = Connection::open(&path)
-        .unwrap_or_else(|e| panic!("Cannot open SQLite at {}: {e}", path.display()));
+    // ── Transactional tables ────────────────────────────────────────────────
 
-    // WAL mode — better concurrent read/write performance.
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-        .expect("PRAGMA failed");
-
-    run_migrations(&conn);
-    println!("  DB  → {}", path.display());
-    conn
-}
-
-fn run_migrations(conn: &Connection) {
-    conn.execute_batch("
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS users (
-            id            TEXT PRIMARY KEY,
-            email         TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            full_name     TEXT NOT NULL,
-            role          TEXT NOT NULL DEFAULT 'Owner',
-            is_pro        INTEGER NOT NULL DEFAULT 0,
-            created_at    INTEGER NOT NULL
-        );
+            id                     TEXT PRIMARY KEY,
+            email                  TEXT UNIQUE NOT NULL,
+            password_hash          TEXT NOT NULL,
+            full_name              TEXT NOT NULL,
+            role                   TEXT NOT NULL DEFAULT 'Owner',
+            is_pro                 INTEGER NOT NULL DEFAULT 0,
+            created_at             BIGINT NOT NULL,
+            clerk_id               TEXT,
+            subscription_tier      TEXT NOT NULL DEFAULT 'community',
+            stripe_customer_id     TEXT,
+            stripe_subscription_id TEXT
+        )
+    ").execute(pool).await.expect("users migration failed");
 
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON users(clerk_id)")
+        .execute(pool).await.ok();
+
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS sessions (
             token      TEXT PRIMARY KEY,
-            user_id    TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
+            user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("sessions migration failed");
 
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS nodes (
-            wk_id         TEXT PRIMARY KEY,
-            fleet_url     TEXT NOT NULL,
-            session_token TEXT NOT NULL,
-            code          TEXT,
-            paired_at     INTEGER NOT NULL,
-            last_seen     INTEGER NOT NULL
-        );
+            wk_id               TEXT PRIMARY KEY,
+            fleet_url            TEXT NOT NULL,
+            session_token        TEXT NOT NULL,
+            code                 TEXT,
+            paired_at            BIGINT NOT NULL,
+            last_seen            BIGINT NOT NULL,
+            hostname             TEXT,
+            user_id              TEXT,
+            last_telemetry_json  JSONB
+        )
+    ").execute(pool).await.expect("nodes migration failed");
 
-    ").expect("Migration failed");
-    // Add code column if upgrading from an older schema — ignored on fresh DBs.
-    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN code TEXT;");
-    // Add hostname column — stores the machine hostname from telemetry so it
-    // survives Railway redeploys even when metrics_map is empty.
-    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN hostname TEXT;");
-    // Add user_id column — links each node to the account that activated it.
-    // Needed for per-user node counting to enforce the free-tier limit correctly.
-    let _ = conn.execute_batch("ALTER TABLE nodes ADD COLUMN user_id TEXT;");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_nodes_user_id ON nodes(user_id)")
+        .execute(pool).await.ok();
 
-    conn.execute_batch("
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS stream_tokens (
             token      TEXT PRIMARY KEY,
             user_id    TEXT NOT NULL,
-            expires_ms INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_stream_tokens_expires
-            ON stream_tokens(expires_ms);
-    ").expect("stream_tokens migration failed");
+            expires_ms BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("stream_tokens migration failed");
 
-    // Add clerk_id column — links a Clerk identity (sub claim) to an internal user.
-    let _ = conn.execute_batch("ALTER TABLE users ADD COLUMN clerk_id TEXT;");
-    let _ = conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON users(clerk_id);"
-    );
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_stream_tokens_expires ON stream_tokens(expires_ms)")
+        .execute(pool).await.ok();
 
-    // Backfill: if only one user exists, assign all orphaned nodes to them.
-    // Safe to run on every startup — no-ops when there are zero or multiple users.
-    let _ = conn.execute_batch("
-        UPDATE nodes
-        SET user_id = (SELECT id FROM users LIMIT 1)
-        WHERE user_id IS NULL
-          AND (SELECT COUNT(*) FROM users) = 1;
-    ");
-
-    // Index for per-user node queries.
-    let _ = conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_nodes_user_id ON nodes(user_id);"
-    );
-
-    // API keys for Agent API v1 (Phase 3B).
-    conn.execute_batch("
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS api_keys (
             key_id       TEXT PRIMARY KEY,
             key_hash     TEXT UNIQUE NOT NULL,
-            user_id      TEXT NOT NULL,
+            user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             name         TEXT NOT NULL,
-            created_at   INTEGER NOT NULL,
-            last_used_ms INTEGER,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
-    ").expect("api_keys migration failed");
+            created_at   BIGINT NOT NULL,
+            last_used_ms BIGINT
+        )
+    ").execute(pool).await.expect("api_keys migration failed");
 
-    // ── Phase 4A: Billing tier columns on users ────────────────────────────────
-    // subscription_tier: 'community' | 'team' | 'enterprise'
-    // Ignored on re-run (ALTER TABLE ADD COLUMN is idempotent via let _ =).
-    let _ = conn.execute_batch(
-        "ALTER TABLE users ADD COLUMN subscription_tier TEXT NOT NULL DEFAULT 'community';"
-    );
-    let _ = conn.execute_batch("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT;");
-    let _ = conn.execute_batch("ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT;");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
+        .execute(pool).await.ok();
 
-    // ── Phase 4A: Alerting tables ──────────────────────────────────────────────
-
-    // notification_channels — where to deliver alerts (Slack webhook URL or email).
-    // config_json holds channel-type-specific fields:
-    //   slack: { "webhook_url": "https://hooks.slack.com/..." }
-    //   email: { "address": "ops@example.com" }
-    conn.execute_batch("
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS notification_channels (
             id           TEXT PRIMARY KEY,
-            user_id      TEXT NOT NULL,
+            user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             channel_type TEXT NOT NULL CHECK (channel_type IN ('slack', 'email')),
             name         TEXT NOT NULL,
-            config_json  TEXT NOT NULL,
+            config_json  JSONB NOT NULL,
             verified     INTEGER NOT NULL DEFAULT 0,
-            created_at   INTEGER NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_notif_channels_user
-            ON notification_channels(user_id);
-    ").expect("notification_channels migration failed");
+            created_at   BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("notification_channels migration failed");
 
-    // alert_rules — one row per configured alert trigger.
-    // node_id NULL means fleet-wide (any node for this user).
-    // event_type values: 'thermal_serious' | 'thermal_critical' | 'node_offline' |
-    //   'memory_pressure_high' | 'wes_drop' | 'idle_digest' |
-    //   'thermal_drain' | 'phantom_load' | 'wes_velocity_drop' | 'memory_trajectory'
-    // urgency values: 'immediate' | 'debounce_5m' | 'debounce_15m' | 'digest_daily'
-    conn.execute_batch("
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_notif_channels_user ON notification_channels(user_id)")
+        .execute(pool).await.ok();
+
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS alert_rules (
             id              TEXT PRIMARY KEY,
-            user_id         TEXT NOT NULL,
+            user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             node_id         TEXT,
             event_type      TEXT NOT NULL,
             threshold_value REAL,
             urgency         TEXT NOT NULL DEFAULT 'immediate',
-            channel_id      TEXT NOT NULL,
+            channel_id      TEXT NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
             enabled         INTEGER NOT NULL DEFAULT 1,
-            created_at      INTEGER NOT NULL,
-            FOREIGN KEY (user_id)    REFERENCES users(id)                 ON DELETE CASCADE,
-            FOREIGN KEY (channel_id) REFERENCES notification_channels(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_alert_rules_user    ON alert_rules(user_id);
-        CREATE INDEX IF NOT EXISTS idx_alert_rules_channel ON alert_rules(channel_id);
-    ").expect("alert_rules migration failed");
+            created_at      BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("alert_rules migration failed");
 
-    // alert_events — firing history; drives debounce, resolution, and audit trail.
-    //
-    // State machine per (rule_id, node_id):
-    //   resolved_at IS NULL  → alert is currently open (firing)
-    //   resolved_at NOT NULL → alert resolved; quiet_until_ms enforces flap suppression
-    //
-    // quiet_until_ms: set to resolved_at + 300_000 (5 min) on resolution.
-    //   The evaluation loop skips re-firing while now_ms < quiet_until_ms.
-    conn.execute_batch("
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules(user_id)")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_rules_channel ON alert_rules(channel_id)")
+        .execute(pool).await.ok();
+
+    sqlx::query("
         CREATE TABLE IF NOT EXISTS alert_events (
             id                   TEXT PRIMARY KEY,
-            rule_id              TEXT NOT NULL,
+            rule_id              TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
             node_id              TEXT NOT NULL,
-            triggered_at         INTEGER NOT NULL,
-            resolved_at          INTEGER,
-            quiet_until_ms       INTEGER,
-            metrics_snapshot_json TEXT,
-            FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_alert_events_rule_node
-            ON alert_events(rule_id, node_id);
-        CREATE INDEX IF NOT EXISTS idx_alert_events_open
-            ON alert_events(resolved_at)
-            WHERE resolved_at IS NULL;
-    ").expect("alert_events migration failed");
+            triggered_at         BIGINT NOT NULL,
+            resolved_at          BIGINT,
+            quiet_until_ms       BIGINT,
+            metrics_snapshot_json TEXT
+        )
+    ").execute(pool).await.expect("alert_events migration failed");
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_events_rule_node ON alert_events(rule_id, node_id)")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_events_open ON alert_events(resolved_at) WHERE resolved_at IS NULL")
+        .execute(pool).await.ok();
+
+    // ── Time-series tables ──────────────────────────────────────────────────
+
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS metrics_raw (
+            ts               TIMESTAMPTZ NOT NULL,
+            node_id          TEXT        NOT NULL,
+            tenant_id        TEXT        NOT NULL,
+            tok_s            REAL,
+            watts            REAL,
+            wes_raw          REAL,
+            wes_penalized    REAL,
+            thermal_cost_pct REAL,
+            thermal_penalty  REAL,
+            thermal_state    TEXT,
+            vram_used_mb     INTEGER,
+            vram_total_mb    INTEGER,
+            mem_pressure_pct REAL,
+            gpu_pct          REAL,
+            cpu_pct          REAL,
+            inference_state  TEXT,
+            wes_version      SMALLINT    NOT NULL DEFAULT 1,
+            agent_version    TEXT,
+            UNIQUE (tenant_id, node_id, ts)
+        )
+    ").execute(pool).await.expect("metrics_raw migration failed");
+
+    // Convert to hypertable (idempotent check via exception handling)
+    sqlx::query(
+        "SELECT create_hypertable('metrics_raw', 'ts', if_not_exists => true)"
+    ).execute(pool).await.ok();
+
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS metrics_5min (
+            ts                   TIMESTAMPTZ NOT NULL,
+            node_id              TEXT        NOT NULL,
+            tenant_id            TEXT        NOT NULL,
+            tok_s_avg            REAL,
+            tok_s_p50            REAL,
+            tok_s_p95            REAL,
+            watts_avg            REAL,
+            wes_raw_avg          REAL,
+            wes_penalized_avg    REAL,
+            wes_penalized_min    REAL,
+            thermal_cost_pct_avg REAL,
+            thermal_cost_pct_max REAL,
+            thermal_state_worst  TEXT,
+            mem_pressure_pct_avg REAL,
+            mem_pressure_pct_max REAL,
+            gpu_pct_avg          REAL,
+            inference_duty_pct   REAL,
+            sample_count         SMALLINT    NOT NULL DEFAULT 0,
+            wes_version          SMALLINT    NOT NULL DEFAULT 1,
+            wes_version_count    SMALLINT    NOT NULL DEFAULT 1,
+            agent_version        TEXT,
+            UNIQUE (tenant_id, node_id, ts)
+        )
+    ").execute(pool).await.expect("metrics_5min migration failed");
+
+    sqlx::query(
+        "SELECT create_hypertable('metrics_5min', 'ts', if_not_exists => true)"
+    ).execute(pool).await.ok();
+
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS node_events (
+            ts          TIMESTAMPTZ NOT NULL,
+            node_id     TEXT        NOT NULL,
+            tenant_id   TEXT        NOT NULL,
+            level       TEXT        NOT NULL DEFAULT 'info',
+            event_type  TEXT,
+            message     TEXT        NOT NULL,
+            UNIQUE (tenant_id, node_id, ts, message)
+        )
+    ").execute(pool).await.expect("node_events migration failed");
+
+    sqlx::query(
+        "SELECT create_hypertable('node_events', 'ts', if_not_exists => true)"
+    ).execute(pool).await.ok();
+
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS fleet_observations (
+            id              TEXT        NOT NULL,
+            tenant_id       TEXT        NOT NULL,
+            node_id         TEXT        NOT NULL,
+            alert_type      TEXT        NOT NULL,
+            severity        TEXT        NOT NULL DEFAULT 'warning',
+            state           TEXT        NOT NULL DEFAULT 'open',
+            title           TEXT        NOT NULL,
+            detail          TEXT        NOT NULL,
+            context_json    JSONB,
+            fired_at_ms     BIGINT      NOT NULL,
+            resolved_at_ms  BIGINT,
+            ack_at_ms       BIGINT,
+            PRIMARY KEY (id)
+        )
+    ").execute(pool).await.expect("fleet_observations migration failed");
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_observations_tenant_state ON fleet_observations(tenant_id, state, fired_at_ms)")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_observations_node ON fleet_observations(tenant_id, node_id, fired_at_ms)")
+        .execute(pool).await.ok();
+
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS schema_breakpoints (
+            node_id         TEXT NOT NULL,
+            ts_ms           BIGINT NOT NULL,
+            tenant_id       TEXT NOT NULL,
+            breakpoint_type TEXT NOT NULL,
+            detail          TEXT
+        )
+    ").execute(pool).await.expect("schema_breakpoints migration failed");
+
+    // ── TimescaleDB policies ────────────────────────────────────────────────
+    // Retention: metrics_raw 2 days, node_events 30 days
+    // These are idempotent — TimescaleDB ignores if already set.
+    sqlx::query("SELECT add_retention_policy('metrics_raw', INTERVAL '2 days', if_not_exists => true)")
+        .execute(pool).await.ok();
+    sqlx::query("SELECT add_retention_policy('node_events', INTERVAL '30 days', if_not_exists => true)")
+        .execute(pool).await.ok();
+    sqlx::query("SELECT add_retention_policy('metrics_5min', INTERVAL '90 days', if_not_exists => true)")
+        .execute(pool).await.ok();
+
+    // Compression policies
+    sqlx::query("ALTER TABLE metrics_raw SET (timescaledb.compress, timescaledb.compress_segmentby = 'node_id,tenant_id')")
+        .execute(pool).await.ok();
+    sqlx::query("SELECT add_compression_policy('metrics_raw', INTERVAL '1 day', if_not_exists => true)")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE metrics_5min SET (timescaledb.compress, timescaledb.compress_segmentby = 'node_id,tenant_id')")
+        .execute(pool).await.ok();
+    sqlx::query("SELECT add_compression_policy('metrics_5min', INTERVAL '7 days', if_not_exists => true)")
+        .execute(pool).await.ok();
+
+    // ── Backfill: if only one user exists, assign all orphaned nodes to them. ──
+    sqlx::query("
+        UPDATE nodes
+        SET user_id = (SELECT id FROM users LIMIT 1)
+        WHERE user_id IS NULL
+          AND (SELECT COUNT(*) FROM users) = 1
+    ").execute(pool).await.ok();
+
+    println!("  PG migrations complete");
 }
 
 // ── Tier constants ────────────────────────────────────────────────────────────
@@ -531,7 +585,6 @@ const API_RATE_COMMUNITY: usize = 60;
 const API_RATE_TEAM:      usize = 600;
 
 /// Flap-suppression quiet period after an alert resolves (milliseconds).
-/// Prevents a node hovering on a threshold boundary from firing repeatedly.
 const ALERT_QUIET_PERIOD_MS: u64 = 300_000; // 5 minutes
 
 /// Returns true if the account has Team or Enterprise tier (alerting unlocked).
@@ -541,27 +594,6 @@ fn is_team_or_above(tier: &str) -> bool {
 
 /// Number of nodes available for free on the Community tier.
 const FREE_NODE_LIMIT: usize = 3;
-
-/// Returns the set of node_ids that are restricted for this user.
-/// For community tier: all nodes beyond the first FREE_NODE_LIMIT (by paired_at ASC).
-/// For team/enterprise: empty set (all nodes unrestricted).
-#[allow(dead_code)]
-fn restricted_node_set(user_id: &str, tier: &str, conn: &rusqlite::Connection) -> std::collections::HashSet<String> {
-    if is_team_or_above(tier) {
-        return std::collections::HashSet::new();
-    }
-    let mut stmt = match conn.prepare(
-        "SELECT wk_id FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
-    ) {
-        Ok(s) => s,
-        Err(_) => return std::collections::HashSet::new(),
-    };
-    let all_nodes: Vec<String> = stmt.query_map(params![user_id], |r| r.get(0))
-        .ok()
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default();
-    all_nodes.into_iter().skip(FREE_NODE_LIMIT).collect()
-}
 
 /// Nodes not seen within this window are considered offline.
 const ONLINE_THRESHOLD_MS: u64 = 30_000;
@@ -625,13 +657,12 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
         Err(e) => { eprintln!("[auth] JWT decode_header failed: {e}"); return None; }
     };
 
-    // kid is optional — if absent, try every key in the JWKS.
     let candidates: Vec<&JwkKey> = match &header.kid {
         Some(kid) => {
             let m: Vec<&JwkKey> = keys.iter().filter(|k| &k.kid == kid).collect();
             if m.is_empty() {
                 eprintln!("[auth] JWT kid={kid} not found in JWKS ({} keys cached)", keys.len());
-                keys.iter().collect() // fall back to all keys
+                keys.iter().collect()
             } else { m }
         }
         None => {
@@ -641,8 +672,8 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
     };
 
     let mut val = Validation::new(Algorithm::RS256);
-    val.validate_aud = false; // Clerk uses azp, not aud
-    val.leeway = 60;          // 60s leeway for clock skew
+    val.validate_aud = false;
+    val.leeway = 60;
 
     for jwk in &candidates {
         match DecodingKey::from_rsa_components(&jwk.n, &jwk.e) {
@@ -661,98 +692,86 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
 }
 
 /// Map a Clerk `sub` to an internal user ID, creating or linking the record as needed.
-/// - If a user with this clerk_id exists → return their id.
-/// - If exactly one user has no clerk_id → link them (solo-dev migration path).
-/// - Otherwise → create a new minimal user record.
-fn resolve_clerk_user(clerk_sub: &str, conn: &Connection) -> Option<String> {
+async fn resolve_clerk_user(clerk_sub: &str, pool: &sqlx::PgPool) -> Option<String> {
     // Already linked?
-    if let Ok(id) = conn.query_row(
-        "SELECT id FROM users WHERE clerk_id = ?1",
-        params![clerk_sub],
-        |r| r.get::<_, String>(0),
-    ) {
-        return Some(id);
+    if let Ok(row) = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM users WHERE clerk_id = $1"
+    ).bind(clerk_sub).fetch_one(pool).await {
+        return Some(row);
     }
 
     // Exactly one unmapped user — link them (handles DIY→Clerk migration).
-    let unmapped: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM users WHERE clerk_id IS NULL",
-        [],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let unmapped: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM users WHERE clerk_id IS NULL"
+    ).fetch_one(pool).await.unwrap_or(0);
 
     if unmapped == 1 {
-        if let Ok(id) = conn.query_row(
-            "SELECT id FROM users WHERE clerk_id IS NULL LIMIT 1",
-            [],
-            |r| r.get::<_, String>(0),
-        ) {
-            let _ = conn.execute(
-                "UPDATE users SET clerk_id = ?1 WHERE id = ?2",
-                params![clerk_sub, id],
-            );
+        if let Ok(id) = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM users WHERE clerk_id IS NULL LIMIT 1"
+        ).fetch_one(pool).await {
+            let _ = sqlx::query("UPDATE users SET clerk_id = $1 WHERE id = $2")
+                .bind(clerk_sub).bind(&id)
+                .execute(pool).await;
             return Some(id);
         }
     }
 
-    // New Clerk user — create a minimal record (Clerk owns the identity data).
+    // New Clerk user — create a minimal record.
     let new_id = Uuid::new_v4().to_string();
     let ts     = now_ms() as i64;
-    // Use clerk_sub as email placeholder (unique); password_hash empty (Clerk authenticates).
-    conn.execute(
+    let r = sqlx::query(
         "INSERT INTO users (id, email, password_hash, full_name, role, is_pro, created_at, clerk_id)
-         VALUES (?1, ?2, '', 'Clerk User', 'Owner', 0, ?3, ?2)",
-        params![new_id, clerk_sub, ts],
-    ).ok()?;
-    Some(new_id)
+         VALUES ($1, $2, '', 'Clerk User', 'Owner', 0, $3, $2)"
+    ).bind(&new_id).bind(clerk_sub).bind(ts)
+    .execute(pool).await;
+    if r.is_ok() { Some(new_id) } else { None }
 }
 
-// ── Auth helpers ──────────────────────────────────────────────────────────────
+// ── Auth helpers (async) ──────────────────────────────────────────────────────
 
 /// Validate a Bearer token and return the internal user_id.
 /// Tries the legacy sessions table first, then Clerk JWT.
-/// Synchronous — call inside spawn_blocking or block_in_place.
-fn require_user(token: &str, conn: &Connection, clerk_keys: &[JwkKey]) -> Option<String> {
-    // Legacy DIY sessions (backward compat with old tokens).
-    if let Ok(id) = conn.query_row(
-        "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
-        params![token],
-        |r| r.get::<_, String>(0),
-    ) {
+async fn require_user(token: &str, pool: &sqlx::PgPool, clerk_keys: &[JwkKey]) -> Option<String> {
+    // Legacy DIY sessions.
+    if let Ok(id) = sqlx::query_scalar::<_, String>(
+        "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1"
+    ).bind(token).fetch_one(pool).await {
         return Some(id);
     }
 
     // Clerk JWT.
-    validate_clerk_jwt(token, clerk_keys)
-        .and_then(|sub| resolve_clerk_user(&sub, conn))
+    let sub = validate_clerk_jwt(token, clerk_keys)?;
+    resolve_clerk_user(&sub, pool).await
 }
 
 /// Like require_user but also returns email and is_pro for tier checks.
-fn require_user_info(
+async fn require_user_info(
     token: &str,
-    conn: &Connection,
+    pool: &sqlx::PgPool,
     clerk_keys: &[JwkKey],
 ) -> Option<(String, String, i32)> {
-    let user_id = require_user(token, conn, clerk_keys)?;
-    conn.query_row(
-        "SELECT email, is_pro FROM users WHERE id = ?1",
-        params![user_id],
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)),
-    ).ok().map(|(email, is_pro)| (user_id, email, is_pro))
+    let user_id = require_user(token, pool, clerk_keys).await?;
+    let row = sqlx::query_as::<_, (String, i32)>(
+        "SELECT email, is_pro FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(pool).await.ok()?;
+    Some((user_id, row.0, row.1))
 }
 
 /// Load the set of node IDs belonging to a user.
-/// Synchronous — call inside spawn_blocking or block_in_place.
-fn user_node_set(user_id: &str, conn: &Connection) -> HashSet<String> {
-    conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1")
-        .ok()
-        .map(|mut stmt| {
-            stmt.query_map(params![user_id], |r| r.get::<_, String>(0))
-                .ok()
-                .map(|rows| rows.filter_map(|r| r.ok()).collect())
-                .unwrap_or_default()
-        })
+async fn user_node_set(user_id: &str, pool: &sqlx::PgPool) -> HashSet<String> {
+    sqlx::query_scalar::<_, String>("SELECT wk_id FROM nodes WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_all(pool).await
         .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// Blocking version for use inside SSE stream map closure (block_in_place).
+fn user_node_set_blocking(user_id: &str, pool: &sqlx::PgPool) -> HashSet<String> {
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(user_node_set(user_id, pool))
+    })
 }
 
 // ── Agent API v1 helpers ──────────────────────────────────────────────────────
@@ -786,22 +805,20 @@ fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
 }
 
 /// Validate a raw API key, enforce rate limits, return (key_id, user_id, is_pro).
-/// Call inside spawn_blocking.
-fn validate_api_key_sync(
+async fn validate_api_key(
     raw_key: &str,
-    conn: &Connection,
+    pool: &sqlx::PgPool,
     rate_limits: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
 ) -> Option<(String, String, bool)> {
     let hash = sha256_hex(raw_key);
-    let (key_id, user_id, is_pro_int): (String, String, i32) = conn.query_row(
+    let row = sqlx::query_as::<_, (String, String, i32)>(
         "SELECT k.key_id, k.user_id, u.is_pro
          FROM api_keys k
          JOIN users u ON u.id = k.user_id
-         WHERE k.key_hash = ?1",
-        params![hash],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    ).ok()?;
+         WHERE k.key_hash = $1"
+    ).bind(&hash).fetch_one(pool).await.ok()?;
 
+    let (key_id, user_id, is_pro_int) = row;
     let limit = if is_pro_int != 0 { API_RATE_TEAM } else { API_RATE_COMMUNITY };
     let now = now_ms();
     let window_start = now.saturating_sub(60_000);
@@ -810,15 +827,14 @@ fn validate_api_key_sync(
         let calls = rl.entry(key_id.clone()).or_default();
         calls.retain(|&t| t >= window_start);
         if calls.len() >= limit {
-            return None; // rate limit exceeded
+            return None;
         }
         calls.push(now);
     }
 
-    let _ = conn.execute(
-        "UPDATE api_keys SET last_used_ms = ?1 WHERE key_id = ?2",
-        params![now as i64, key_id],
-    );
+    let _ = sqlx::query("UPDATE api_keys SET last_used_ms = $1 WHERE key_id = $2")
+        .bind(now as i64).bind(&key_id)
+        .execute(pool).await;
 
     Some((key_id, user_id, is_pro_int != 0))
 }
@@ -887,7 +903,7 @@ struct V1CreateKeyRequest {
 #[derive(Serialize)]
 struct V1CreateKeyResponse {
     key_id:     String,
-    key:        String,  // raw key — returned once, not stored
+    key:        String,
     name:       String,
     created_at: i64,
 }
@@ -911,30 +927,30 @@ async fn handle_v1_create_key(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db   = state.db.clone();
-    let name = body.name.trim().to_owned();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let raw_key = format!("wk_live_{}", Uuid::new_v4().to_string().replace('-', ""));
-        let key_hash = sha256_hex(&raw_key);
-        let key_id   = Uuid::new_v4().to_string();
-        let ts       = now_ms() as i64;
+    let name     = body.name.trim().to_owned();
+    let raw_key  = format!("wk_live_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let key_hash = sha256_hex(&raw_key);
+    let key_id   = Uuid::new_v4().to_string();
+    let ts       = now_ms() as i64;
 
-        conn.execute(
-            "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![key_id, key_hash, user_id, name, ts],
-        ).ok()?;
-
-        Some(V1CreateKeyResponse { key_id, key: raw_key, name, created_at: ts })
-    }).await.unwrap();
+    let result = sqlx::query(
+        "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at)
+         VALUES ($1, $2, $3, $4, $5)"
+    ).bind(&key_id).bind(&key_hash).bind(&user_id).bind(&name).bind(ts)
+    .execute(&state.pool).await;
 
     match result {
-        None    => (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(r) => (StatusCode::CREATED, Json(r)).into_response(),
+        Ok(_) => (StatusCode::CREATED, Json(V1CreateKeyResponse {
+            key_id, key: raw_key, name, created_at: ts,
+        })).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     }
 }
 
@@ -950,34 +966,25 @@ async fn handle_v1_list_keys(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-
-    let result: Option<Vec<V1KeyInfo>> = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let mut stmt = conn.prepare(
-            "SELECT key_id, name, created_at, last_used_ms
-             FROM api_keys WHERE user_id = ?1 ORDER BY created_at DESC"
-        ).ok()?;
-        Some(stmt.query_map(params![user_id], |r| Ok(V1KeyInfo {
-            key_id:       r.get(0)?,
-            name:         r.get(1)?,
-            created_at:   r.get(2)?,
-            last_used_ms: r.get(3)?,
-        })).ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap();
-
-    match result {
-        None    => (StatusCode::UNAUTHORIZED,
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(k) => Json(serde_json::json!({ "keys": k })).into_response(),
-    }
+    };
+
+    let keys: Vec<(String, String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT key_id, name, created_at, last_used_ms
+         FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let key_list: Vec<V1KeyInfo> = keys.into_iter().map(|(key_id, name, created_at, last_used_ms)| {
+        V1KeyInfo { key_id, name, created_at, last_used_ms }
+    }).collect();
+
+    Json(serde_json::json!({ "keys": key_list })).into_response()
 }
 
 /// DELETE /api/nodes/:node_id
-/// Removes a node from the authenticated user's fleet and erases its stored
-/// metrics. The node slot is freed immediately — the user can pair a new node
-/// without hitting the Community tier limit.
 async fn handle_delete_node(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -990,44 +997,34 @@ async fn handle_delete_node(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    // Keep a copy of node_id for the in-memory eviction step below.
-    let node_id_evict = node_id.clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
-    let result: Option<usize> = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        // Delete from nodes table — scoped to user so users can only remove their own.
-        let n = conn.execute(
-            "DELETE FROM nodes WHERE wk_id = ?1 AND user_id = ?2",
-            params![node_id, user_id],
-        ).unwrap_or(0);
-        if n == 0 { return Some(0); }
-        // Purge stored metrics so the slot is truly clean.
-        let _ = conn.execute(
-            "DELETE FROM metrics_raw WHERE node_id = ?1 AND tenant_id = ?2",
-            params![node_id, user_id],
-        );
-        let _ = conn.execute(
-            "DELETE FROM metrics_5min WHERE node_id = ?1 AND tenant_id = ?2",
-            params![node_id, user_id],
-        );
-        Some(n)
-    }).await.unwrap();
+    let result = sqlx::query(
+        "DELETE FROM nodes WHERE wk_id = $1 AND user_id = $2"
+    ).bind(&node_id).bind(&user_id).execute(&state.pool).await;
 
     match result {
-        None    => (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(0) => (StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
-        Some(_) => {
-            // Evict the node from the in-memory telemetry cache immediately.
-            // The SSE fleet stream builds its payload by iterating metrics_map,
-            // so without this the deleted node reappears in SSE snapshots for
-            // up to ~60 s (the stream's node-set refresh interval).
-            state.metrics.write().unwrap().remove(&node_id_evict);
+        Ok(r) if r.rows_affected() == 0 => {
+            return (StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Node not found" }))).into_response();
+        }
+        Ok(_) => {
+            // Purge stored metrics.
+            let _ = sqlx::query("DELETE FROM metrics_raw WHERE node_id = $1 AND tenant_id = $2")
+                .bind(&node_id).bind(&user_id).execute(&state.pool).await;
+            let _ = sqlx::query("DELETE FROM metrics_5min WHERE node_id = $1 AND tenant_id = $2")
+                .bind(&node_id).bind(&user_id).execute(&state.pool).await;
+
+            // Evict from in-memory cache.
+            state.metrics.write().unwrap().remove(&node_id);
             StatusCode::NO_CONTENT.into_response()
         }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     }
 }
 
@@ -1044,24 +1041,22 @@ async fn handle_v1_delete_key(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
-    let result: Option<usize> = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let n = conn.execute(
-            "DELETE FROM api_keys WHERE key_id = ?1 AND user_id = ?2",
-            params![key_id, user_id],
-        ).unwrap_or(0);
-        Some(n)
-    }).await.unwrap();
+    let result = sqlx::query(
+        "DELETE FROM api_keys WHERE key_id = $1 AND user_id = $2"
+    ).bind(&key_id).bind(&user_id).execute(&state.pool).await;
 
     match result {
-        None    => (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(0) => (StatusCode::NOT_FOUND,
+        Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
-        Some(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_)  => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     }
 }
 
@@ -1078,24 +1073,15 @@ async fn handle_v1_fleet(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let db = state.db.clone();
-    let rl = state.api_rate_limits.clone();
-
-    let result: Option<Vec<(String, i64)>> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
-        let mut stmt = conn.prepare(
-            "SELECT wk_id, last_seen FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
-        ).ok()?;
-        Some(stmt.query_map(params![user_id], |r| Ok((r.get(0)?, r.get(1)?)))
-            .ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap();
-
-    let persisted = match result {
-        None    => return (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+
+    let persisted: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT wk_id, last_seen FROM nodes WHERE user_id = $1 ORDER BY last_seen DESC"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1123,22 +1109,15 @@ async fn handle_v1_fleet_wes(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let db = state.db.clone();
-    let rl = state.api_rate_limits.clone();
-
-    let result: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
-        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
-        Some(stmt.query_map(params![user_id], |r| r.get(0))
-            .ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap();
-
-    let node_ids = match result {
-        None  => return (StatusCode::UNAUTHORIZED,
+    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+        Some(r) => r,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
-        Some(ids) => ids,
     };
+
+    let node_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT wk_id FROM nodes WHERE user_id = $1"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1165,27 +1144,19 @@ async fn handle_v1_node(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let db       = state.db.clone();
-    let rl       = state.api_rate_limits.clone();
-    let nid      = node_id.clone();
-
-    let result: Option<bool> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
-        let owned: bool = conn.query_row(
-            "SELECT 1 FROM nodes WHERE wk_id = ?1 AND user_id = ?2",
-            params![nid, user_id],
-            |_| Ok(true),
-        ).unwrap_or(false);
-        Some(owned)
-    }).await.unwrap();
-
-    match result {
-        None        => return (StatusCode::UNAUTHORIZED,
+    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+        Some(r) => r,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
-        Some(false) => return (StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
-        Some(true)  => {}
+    };
+
+    let owned: bool = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM nodes WHERE wk_id = $1 AND user_id = $2)"
+    ).bind(&node_id).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(false);
+
+    if !owned {
+        return (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response();
     }
 
     let metrics_map = state.metrics.read().unwrap();
@@ -1218,22 +1189,15 @@ async fn handle_v1_route_best(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let db = state.db.clone();
-    let rl = state.api_rate_limits.clone();
-
-    let result: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
-        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
-        Some(stmt.query_map(params![user_id], |r| r.get(0))
-            .ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap();
-
-    let node_ids = match result {
-        None      => return (StatusCode::UNAUTHORIZED,
+    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+        Some(r) => r,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
-        Some(ids) => ids,
     };
+
+    let node_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT wk_id FROM nodes WHERE user_id = $1"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1275,14 +1239,6 @@ async fn handle_v1_route_best(
 }
 
 // ── GET /api/v1/insights/latest ───────────────────────────────────────────────
-//
-// Deterministic fleet pattern analysis — no LLM, no randomness.
-// Intended for external consumers: automation scripts, MCP servers, CI/CD
-// pipelines.  The Wicklee dashboard computes findings client-side via
-// patternEngine.ts and does NOT call this endpoint.
-//
-// Auth: X-API-Key (same as all v1 endpoints).
-// Response: InsightsResponse (see types below).
 
 #[derive(Serialize)]
 struct V1InsightsFleet {
@@ -1296,8 +1252,8 @@ struct V1InsightsFleet {
 struct V1InsightFinding {
     node_id:  String,
     hostname: Option<String>,
-    severity: &'static str,   // "high" | "moderate" | "low"
-    pattern:  &'static str,   // machine-readable pattern key
+    severity: &'static str,
+    pattern:  &'static str,
     title:    String,
     detail:   String,
     value:    Option<f32>,
@@ -1322,22 +1278,15 @@ async fn handle_v1_insights_latest(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let db = state.db.clone();
-    let rl = state.api_rate_limits.clone();
-
-    let node_ids: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let (_key_id, user_id, _is_pro) = validate_api_key_sync(&raw_key, &conn, &rl)?;
-        let mut stmt = conn.prepare("SELECT wk_id FROM nodes WHERE user_id = ?1").ok()?;
-        Some(stmt.query_map(params![user_id], |r| r.get(0))
-            .ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap();
-
-    let node_ids = match node_ids {
-        None      => return (StatusCode::UNAUTHORIZED,
+    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+        Some(r) => r,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
-        Some(ids) => ids,
     };
+
+    let node_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT wk_id FROM nodes WHERE user_id = $1"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1374,138 +1323,99 @@ async fn handle_v1_insights_latest(
         Some((tok_vals.iter().sum::<f32>() * 10.0).round() / 10.0)
     };
 
-    // ── Pattern evaluation ────────────────────────────────────────────────────
-
     let mut findings: Vec<V1InsightFinding> = Vec::new();
 
-    // Fleet offline — every node unreachable
     if total_count > 0 && online_count == 0 {
         findings.push(V1InsightFinding {
-            node_id:  "fleet".into(),
-            hostname: None,
-            severity: "high",
-            pattern:  "fleet_offline",
-            title:    "Fleet offline".into(),
-            detail:   format!("All {total_count} registered nodes are unreachable (last telemetry > 30s ago)."),
-            value:    None,
-            unit:     None,
+            node_id: "fleet".into(), hostname: None, severity: "high",
+            pattern: "fleet_offline",
+            title: "Fleet offline".into(),
+            detail: format!("All {total_count} registered nodes are unreachable (last telemetry > 30s ago)."),
+            value: None, unit: None,
         });
     }
 
     for snap in &snaps {
-        // Node offline (partial outage)
         if !snap.online && total_count > 1 {
             findings.push(V1InsightFinding {
-                node_id:  snap.node_id.clone(),
-                hostname: snap.hostname.clone(),
-                severity: "moderate",
-                pattern:  "node_offline",
-                title:    format!("{} offline", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
-                detail:   "Node has not reported telemetry in the last 30 seconds.".into(),
-                value:    None,
-                unit:     None,
+                node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
+                severity: "moderate", pattern: "node_offline",
+                title: format!("{} offline", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                detail: "Node has not reported telemetry in the last 30 seconds.".into(),
+                value: None, unit: None,
             });
-            continue; // no metric-level findings for offline nodes
+            continue;
         }
 
         let Some(ref m) = snap.metrics else { continue };
 
-        // Thermal stress
         match m.thermal_state.as_deref() {
             Some("Critical") => findings.push(V1InsightFinding {
-                node_id:  snap.node_id.clone(),
-                hostname: snap.hostname.clone(),
-                severity: "high",
-                pattern:  "thermal_stress",
-                title:    format!("Critical thermal state on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
-                detail:   "Thermal state: Critical — WES penalised 2×. Throughput may be severely throttled.".into(),
-                value:    snap.wes,
-                unit:     Some("WES"),
+                node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
+                severity: "high", pattern: "thermal_stress",
+                title: format!("Critical thermal state on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                detail: "Thermal state: Critical — WES penalised 2×. Throughput may be severely throttled.".into(),
+                value: snap.wes, unit: Some("WES"),
             }),
             Some("Serious") => findings.push(V1InsightFinding {
-                node_id:  snap.node_id.clone(),
-                hostname: snap.hostname.clone(),
-                severity: "moderate",
-                pattern:  "thermal_stress",
-                title:    format!("Thermal stress on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
-                detail:   "Thermal state: Serious — WES penalised 1.75×. Consider redistributing load.".into(),
-                value:    snap.wes,
-                unit:     Some("WES"),
+                node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
+                severity: "moderate", pattern: "thermal_stress",
+                title: format!("Thermal stress on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                detail: "Thermal state: Serious — WES penalised 1.75×. Consider redistributing load.".into(),
+                value: snap.wes, unit: Some("WES"),
             }),
             _ => {}
         }
 
-        // Memory pressure (Apple Silicon only)
         if let Some(mem_pct) = m.memory_pressure_percent {
             if mem_pct >= 90.0 {
                 findings.push(V1InsightFinding {
-                    node_id:  snap.node_id.clone(),
-                    hostname: snap.hostname.clone(),
-                    severity: "high",
-                    pattern:  "memory_pressure",
-                    title:    format!("High memory pressure on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
-                    detail:   format!("Memory pressure: {mem_pct:.0}% — swap thrashing likely. Throughput may degrade."),
-                    value:    Some(mem_pct),
-                    unit:     Some("%"),
+                    node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
+                    severity: "high", pattern: "memory_pressure",
+                    title: format!("High memory pressure on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                    detail: format!("Memory pressure: {mem_pct:.0}% — swap thrashing likely. Throughput may degrade."),
+                    value: Some(mem_pct), unit: Some("%"),
                 });
             } else if mem_pct >= 75.0 {
                 findings.push(V1InsightFinding {
-                    node_id:  snap.node_id.clone(),
-                    hostname: snap.hostname.clone(),
-                    severity: "moderate",
-                    pattern:  "memory_pressure",
-                    title:    format!("Elevated memory pressure on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
-                    detail:   format!("Memory pressure: {mem_pct:.0}% — monitor for swap activity."),
-                    value:    Some(mem_pct),
-                    unit:     Some("%"),
+                    node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
+                    severity: "moderate", pattern: "memory_pressure",
+                    title: format!("Elevated memory pressure on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                    detail: format!("Memory pressure: {mem_pct:.0}% — monitor for swap activity."),
+                    value: Some(mem_pct), unit: Some("%"),
                 });
             }
         }
 
-        // Low throughput relative to fleet average (only meaningful with ≥2 online nodes)
         if online_count >= 2 {
             if let (Some(node_tok), Some(fleet_avg)) = (snap.tok_s, fleet_tok_s.map(|t| t / online_count as f32)) {
                 if fleet_avg > 5.0 && node_tok < fleet_avg * 0.40 {
                     findings.push(V1InsightFinding {
-                        node_id:  snap.node_id.clone(),
-                        hostname: snap.hostname.clone(),
-                        severity: "low",
-                        pattern:  "low_throughput",
-                        title:    format!("Low throughput on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
-                        detail:   format!(
-                            "{:.1} tok/s vs fleet average {:.1} tok/s — node is underperforming.",
-                            node_tok, fleet_avg
-                        ),
-                        value:    Some(node_tok),
-                        unit:     Some("tok/s"),
+                        node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
+                        severity: "low", pattern: "low_throughput",
+                        title: format!("Low throughput on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                        detail: format!("{:.1} tok/s vs fleet average {:.1} tok/s — node is underperforming.", node_tok, fleet_avg),
+                        value: Some(node_tok), unit: Some("tok/s"),
                     });
                 }
             }
         }
 
-        // WES well below fleet average (only when we have a fleet average to compare)
         if online_count >= 2 {
             if let (Some(node_wes), Some(fleet_avg_wes)) = (snap.wes, avg_wes) {
                 if fleet_avg_wes > 1.0 && node_wes < fleet_avg_wes * 0.40 {
                     findings.push(V1InsightFinding {
-                        node_id:  snap.node_id.clone(),
-                        hostname: snap.hostname.clone(),
-                        severity: "low",
-                        pattern:  "wes_below_baseline",
-                        title:    format!("WES below fleet average on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
-                        detail:   format!(
-                            "WES {:.1} vs fleet average {:.1} — check thermal state and power headroom.",
-                            node_wes, fleet_avg_wes
-                        ),
-                        value:    Some(node_wes),
-                        unit:     Some("WES"),
+                        node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
+                        severity: "low", pattern: "wes_below_baseline",
+                        title: format!("WES below fleet average on {}", snap.hostname.as_deref().unwrap_or(&snap.node_id)),
+                        detail: format!("WES {:.1} vs fleet average {:.1} — check thermal state and power headroom.", node_wes, fleet_avg_wes),
+                        value: Some(node_wes), unit: Some("WES"),
                     });
                 }
             }
         }
     }
 
-    // Sort: high → moderate → low, then alphabetically within severity
     let sev_ord = |s: &str| match s { "high" => 0u8, "moderate" => 1, _ => 2 };
     findings.sort_by(|a, b| {
         sev_ord(a.severity).cmp(&sev_ord(b.severity))
@@ -1522,9 +1432,6 @@ async fn handle_v1_insights_latest(
 // ── Auth handlers ─────────────────────────────────────────────────────────────
 
 /// GET /api/auth/stream-token
-/// Issues a single-use 60-second token for EventSource connections.
-/// EventSource cannot send Authorization headers, so the client fetches this
-/// token via a normal authenticated request, then passes it as ?token=<uuid>.
 async fn handle_stream_token(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1536,11 +1443,7 @@ async fn handle_stream_token(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let user_id = match tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap() {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(uid) => uid,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
@@ -1548,15 +1451,11 @@ async fn handle_stream_token(
 
     let stream_token = Uuid::new_v4().to_string();
     let expires_ms = (now_ms() + 60_000) as i64;
-    let db2 = state.db.clone();
-    let st2 = stream_token.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = db2.lock().unwrap();
-        conn.execute(
-            "INSERT INTO stream_tokens (token, user_id, expires_ms) VALUES (?1, ?2, ?3)",
-            params![st2, user_id, expires_ms],
-        ).ok();
-    }).await.unwrap();
+
+    let _ = sqlx::query(
+        "INSERT INTO stream_tokens (token, user_id, expires_ms) VALUES ($1, $2, $3)"
+    ).bind(&stream_token).bind(&user_id).bind(expires_ms)
+    .execute(&state.pool).await;
 
     (StatusCode::OK, Json(serde_json::json!({ "stream_token": stream_token }))).into_response()
 }
@@ -1581,7 +1480,6 @@ async fn handle_signup(
             Json(serde_json::json!({ "error": "Full name required" }))).into_response();
     }
 
-    // Hash password off the async executor.
     let password = body.password.clone();
     let password_hash = match tokio::task::spawn_blocking(move || bcrypt::hash(password, 12))
         .await.unwrap()
@@ -1591,53 +1489,41 @@ async fn handle_signup(
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     };
 
-    let id         = Uuid::new_v4().to_string();
-    let token      = Uuid::new_v4().to_string();
-    let full_name  = body.full_name.trim().to_owned();
-    let ts         = now_ms() as i64;
-    let db         = state.db.clone();
-    let id2        = id.clone();
-    let email2     = email.clone();
-    let full_name2 = full_name.clone();
-    let token2     = token.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        // Check for duplicate email.
-        let exists: bool = conn.query_row(
-            "SELECT 1 FROM users WHERE email = ?1",
-            params![email2],
-            |_| Ok(true),
-        ).unwrap_or(false);
-        if exists { return Err("exists"); }
-
-        conn.execute(
-            "INSERT INTO users (id, email, password_hash, full_name, role, is_pro, created_at)
-             VALUES (?1, ?2, ?3, ?4, 'Owner', 0, ?5)",
-            params![id2, email2, password_hash, full_name2, ts],
-        ).map_err(|_| "insert_user")?;
-
-        conn.execute(
-            "INSERT INTO sessions (token, user_id, created_at) VALUES (?1, ?2, ?3)",
-            params![token2, id2, ts],
-        ).map_err(|_| "insert_session")?;
-
-        Ok(())
-    }).await.unwrap();
-
-    match result {
-        Err("exists") => (StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "An account with this email already exists" }))).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
-        Ok(()) => {
-            let is_pro = is_dev_account(&email);
-            (StatusCode::CREATED, Json(AuthResponse {
-                token,
-                user: UserResponse { id, email, full_name, role: "Owner".into(), is_pro },
-            })).into_response()
-        }
+    // Check for duplicate email.
+    let exists: bool = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)"
+    ).bind(&email).fetch_one(&state.pool).await.unwrap_or(false);
+    if exists {
+        return (StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "An account with this email already exists" }))).into_response();
     }
+
+    let id        = Uuid::new_v4().to_string();
+    let token     = Uuid::new_v4().to_string();
+    let full_name = body.full_name.trim().to_owned();
+    let ts        = now_ms() as i64;
+
+    let r = sqlx::query(
+        "INSERT INTO users (id, email, password_hash, full_name, role, is_pro, created_at)
+         VALUES ($1, $2, $3, $4, 'Owner', 0, $5)"
+    ).bind(&id).bind(&email).bind(&password_hash).bind(&full_name).bind(ts)
+    .execute(&state.pool).await;
+
+    if r.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response();
+    }
+
+    let _ = sqlx::query(
+        "INSERT INTO sessions (token, user_id, created_at) VALUES ($1, $2, $3)"
+    ).bind(&token).bind(&id).bind(ts)
+    .execute(&state.pool).await;
+
+    let is_pro = is_dev_account(&email);
+    (StatusCode::CREATED, Json(AuthResponse {
+        token,
+        user: UserResponse { id, email, full_name, role: "Owner".into(), is_pro },
+    })).into_response()
 }
 
 /// POST /api/auth/login
@@ -1646,33 +1532,17 @@ async fn handle_login(
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let email = body.email.trim().to_lowercase();
-    let db    = state.db.clone();
-    let email2 = email.clone();
 
-    // Fetch user record from DB.
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        conn.query_row(
-            "SELECT id, email, password_hash, full_name, role, is_pro FROM users WHERE email = ?1",
-            params![email2],
-            |r| Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, i32>(5)?,
-            )),
-        ).ok()
-    }).await.unwrap();
+    let row = sqlx::query_as::<_, (String, String, String, String, String, i32)>(
+        "SELECT id, email, password_hash, full_name, role, is_pro FROM users WHERE email = $1"
+    ).bind(&email).fetch_one(&state.pool).await;
 
     let (id, stored_email, hash, full_name, role, is_pro_int) = match row {
-        Some(r) => r,
-        None => return (StatusCode::UNAUTHORIZED,
+        Ok(r) => r,
+        Err(_) => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid email or password" }))).into_response(),
     };
 
-    // Verify password off-thread.
     let password = body.password.clone();
     let valid = tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash))
         .await.unwrap().unwrap_or(false);
@@ -1684,17 +1554,11 @@ async fn handle_login(
 
     let token = Uuid::new_v4().to_string();
     let ts    = now_ms() as i64;
-    let db    = state.db.clone();
-    let token2 = token.clone();
-    let id2    = id.clone();
 
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        conn.execute(
-            "INSERT INTO sessions (token, user_id, created_at) VALUES (?1, ?2, ?3)",
-            params![token2, id2, ts],
-        ).ok();
-    }).await.unwrap();
+    let _ = sqlx::query(
+        "INSERT INTO sessions (token, user_id, created_at) VALUES ($1, $2, $3)"
+    ).bind(&token).bind(&id).bind(ts)
+    .execute(&state.pool).await;
 
     let is_pro = is_pro_int != 0 || is_dev_account(&stored_email);
     (StatusCode::OK, Json(AuthResponse {
@@ -1703,7 +1567,7 @@ async fn handle_login(
     })).into_response()
 }
 
-/// GET /api/auth/me — validates session token from Authorization: Bearer header
+/// GET /api/auth/me
 async fn handle_me(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1714,29 +1578,17 @@ async fn handle_me(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
 
-    let db = state.db.clone();
-    let row = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        conn.query_row(
-            "SELECT u.id, u.email, u.full_name, u.role, u.is_pro
-             FROM sessions s
-             JOIN users u ON u.id = s.user_id
-             WHERE s.token = ?1",
-            params![token],
-            |r| Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, i32>(4)?,
-            )),
-        ).ok()
-    }).await.unwrap();
+    let row = sqlx::query_as::<_, (String, String, String, String, i32)>(
+        "SELECT u.id, u.email, u.full_name, u.role, u.is_pro
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         WHERE s.token = $1"
+    ).bind(&token).fetch_one(&state.pool).await;
 
     match row {
-        None => (StatusCode::UNAUTHORIZED,
+        Err(_) => (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some((id, email, full_name, role, is_pro_int)) => {
+        Ok((id, email, full_name, role, is_pro_int)) => {
             let is_pro = is_pro_int != 0 || is_dev_account(&email);
             (StatusCode::OK, Json(UserResponse {
                 id, email, full_name, role, is_pro,
@@ -1761,30 +1613,21 @@ async fn handle_claim(
             Json(serde_json::json!({ "error": "node_id and fleet_url are required" }))).into_response();
     }
 
-    let token    = mint_node_token(&body.node_id);
-    let ts       = now_ms() as i64;
-    let db       = state.db.clone();
-    let node_id  = body.node_id.clone();
-    let fleet_url = body.fleet_url.clone();
-    let code     = body.code.clone();
-    let token2   = token.clone();
-    let node_id2 = node_id.clone();
+    let token   = mint_node_token(&body.node_id);
+    let ts      = now_ms() as i64;
+    let node_id = body.node_id.clone();
 
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        conn.execute(
-            "INSERT INTO nodes (wk_id, fleet_url, session_token, code, paired_at, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-             ON CONFLICT(wk_id) DO UPDATE SET
-               fleet_url     = excluded.fleet_url,
-               session_token = excluded.session_token,
-               code          = excluded.code,
-               last_seen     = excluded.last_seen",
-            params![node_id2, fleet_url, token2, code, ts],
-        ).ok();
-    }).await.unwrap();
+    let _ = sqlx::query(
+        "INSERT INTO nodes (wk_id, fleet_url, session_token, code, paired_at, last_seen)
+         VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT(wk_id) DO UPDATE SET
+           fleet_url     = EXCLUDED.fleet_url,
+           session_token = EXCLUDED.session_token,
+           code          = EXCLUDED.code,
+           last_seen     = EXCLUDED.last_seen"
+    ).bind(&node_id).bind(&body.fleet_url).bind(&token).bind(&body.code).bind(ts)
+    .execute(&state.pool).await;
 
-    // Seed the in-memory metrics entry so telemetry can flow immediately.
     state.metrics.write().unwrap()
         .entry(node_id.clone())
         .or_insert(MetricsEntry { last_seen_ms: now_ms(), metrics: None });
@@ -1801,14 +1644,12 @@ async fn handle_telemetry(
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
 
-    // Derive the DuckDB row BEFORE moving payload into the in-memory map.
     let duck_row = metrics_row_from_payload(&payload, ts);
-
-    // Extract Live Activity events before payload is moved into the map.
     let live_activities = payload.live_activities.clone();
-
-    // Clone for alert evaluation (payload is moved into the map below).
     let metrics_snap: Option<MetricsPayload> = Some(payload.clone());
+
+    // Serialize payload as JSON for last_telemetry_json column.
+    let payload_json = serde_json::to_value(&payload).ok();
 
     // Update in-memory snapshot.
     {
@@ -1821,39 +1662,36 @@ async fn handle_telemetry(
         }
     }
 
-    // Persist last_seen (and hostname when present) to nodes table,
-    // then look up tenant_id and enqueue the DuckDB row.
-    let db         = state.db.clone();
+    // Persist last_seen, hostname, last_telemetry_json to nodes table,
+    // then look up tenant_id and enqueue the metrics row.
+    let pool       = state.pool.clone();
     let metrics_tx = state.metrics_tx.clone();
     let events_tx  = state.events_tx.clone();
     let nid        = node_id.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
+
+    tokio::spawn(async move {
+        // Update nodes table.
         if let Some(ref h) = node_hostname {
-            conn.execute(
-                "UPDATE nodes SET last_seen = ?1, hostname = ?2 WHERE wk_id = ?3",
-                params![ts as i64, h, nid],
-            ).ok();
+            let _ = sqlx::query(
+                "UPDATE nodes SET last_seen = $1, hostname = $2, last_telemetry_json = $3 WHERE wk_id = $4"
+            ).bind(ts as i64).bind(h).bind(&payload_json).bind(&nid)
+            .execute(&pool).await;
         } else {
-            conn.execute(
-                "UPDATE nodes SET last_seen = ?1 WHERE wk_id = ?2",
-                params![ts as i64, nid],
-            ).ok();
+            let _ = sqlx::query(
+                "UPDATE nodes SET last_seen = $1, last_telemetry_json = $2 WHERE wk_id = $3"
+            ).bind(ts as i64).bind(&payload_json).bind(&nid)
+            .execute(&pool).await;
         }
 
-        // Resolve tenant_id (= user_id) and enqueue for DuckDB ingest.
-        // Nodes that haven't been activated yet have NULL user_id — skip those.
-        if let Ok(tenant_id) = conn.query_row(
-            "SELECT user_id FROM nodes WHERE wk_id = ?1 AND user_id IS NOT NULL",
-            params![nid],
-            |r| r.get::<_, String>(0),
-        ) {
+        // Resolve tenant_id and enqueue for ingest.
+        if let Ok(tenant_id) = sqlx::query_scalar::<_, String>(
+            "SELECT user_id FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
+        ).bind(&nid).fetch_one(&pool).await {
             let row = MetricsRow { tenant_id: tenant_id.clone(), ..duck_row };
             if let Err(e) = metrics_tx.try_send(row) {
-                eprintln!("[telemetry] metrics_tx send failed for {nid}: {e} — DuckDB pipeline may be broken");
+                eprintln!("[telemetry] metrics_tx send failed for {nid}: {e}");
             }
 
-            // Persist any Live Activity events to DuckDB.
             for ev in &live_activities {
                 let _ = events_tx.try_send(EventRow {
                     ts_ms:      ev.timestamp_ms as i64,
@@ -1866,20 +1704,18 @@ async fn handle_telemetry(
             }
 
             // Evaluate alert rules if user is Team+ tier.
-            let tier: String = conn.query_row(
-                "SELECT subscription_tier FROM users WHERE id = ?1",
-                params![tenant_id],
-                |r| r.get(0),
-            ).unwrap_or_else(|_| "community".to_string());
+            let tier: String = sqlx::query_scalar::<_, String>(
+                "SELECT subscription_tier FROM users WHERE id = $1"
+            ).bind(&tenant_id).fetch_one(&pool).await
+            .unwrap_or_else(|_| "community".to_string());
+
             if is_team_or_above(&tier) {
-                // Borrow the payload from the in-memory map for rule evaluation.
-                // We already moved `payload` into the map above, so re-fetch it.
                 if let Some(ref metrics_snapshot) = metrics_snap {
-                    evaluate_alerts(&tenant_id, &nid, metrics_snapshot, &conn);
+                    evaluate_alerts(&tenant_id, &nid, metrics_snapshot, &pool).await;
                 }
             }
         }
-    }).await.ok();
+    });
 
     StatusCode::NO_CONTENT
 }
@@ -1896,36 +1732,22 @@ async fn handle_fleet(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let result: Option<(String, Vec<(String, String, i64)>)> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let tier: String = conn.query_row(
-            "SELECT subscription_tier FROM users WHERE id = ?1",
-            params![user_id],
-            |r| r.get(0),
-        ).unwrap_or_else(|_| "community".to_string());
-        let mut stmt = conn.prepare(
-            "SELECT wk_id, fleet_url, paired_at FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
-        ).ok()?;
-        let rows = stmt.query_map(params![user_id], |r| Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, i64>(2)?,
-        )))
-        .ok()?
-        .filter_map(|r| r.ok())
-        .collect();
-        Some((tier, rows))
-    }).await.unwrap();
-
-    let (tier, persisted) = match result {
-        Some(r) => r,
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let restricted: std::collections::HashSet<String> = persisted.iter()
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await
+    .unwrap_or_else(|_| "community".to_string());
+
+    let persisted: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT wk_id, fleet_url, paired_at FROM nodes WHERE user_id = $1 ORDER BY paired_at ASC"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let restricted: HashSet<String> = persisted.iter()
         .skip(if is_team_or_above(&tier) { usize::MAX } else { FREE_NODE_LIMIT })
         .map(|(id, _, _)| id.clone())
         .collect();
@@ -1942,14 +1764,11 @@ async fn handle_fleet(
     Json(FleetResponse { nodes }).into_response()
 }
 
-/// GET /api/fleet/events/history?limit=50&before=<ts_ms>&node_id=<optional>&event_type=<optional>
-///
-/// Returns persisted Live Activity events for the authenticated user's fleet.
-/// Paginated via `before` (exclusive upper bound on ts_ms).  Max 200 per page.
+/// GET /api/fleet/events/history
 async fn handle_fleet_events_history(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -1957,15 +1776,8 @@ async fn handle_fleet_events_history(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
 
-    // Authenticate via Clerk JWT → user_id (same pattern as handle_wes_history).
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap();
-
-    let user_id = match user_id {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(id) => id,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
@@ -1981,61 +1793,55 @@ async fn handle_fleet_events_history(
     let node_id_filter = params.get("node_id").cloned();
     let event_type_filter = params.get("event_type").cloned();
 
-    let duck = state.duck_db.clone();
-    match tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
+    let base = "SELECT (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS ts_ms, node_id, level, event_type, message FROM node_events WHERE tenant_id = $1 AND ts < to_timestamp($2::float8 / 1000.0)";
 
-        // Row mapper closure reused across all query branches.
-        let map_row = |r: &duckdb::Row| Ok(serde_json::json!({
-            "ts_ms":      r.get::<_, i64>(0)?,
-            "node_id":    r.get::<_, String>(1)?,
-            "level":      r.get::<_, String>(2)?,
-            "event_type": r.get::<_, Option<String>>(3)?,
-            "message":    r.get::<_, String>(4)?,
-        }));
+    let events: Vec<serde_json::Value> = match (&node_id_filter, &event_type_filter) {
+        (Some(nid), Some(et)) => {
+            let sql = format!("{base} AND node_id = $3 AND event_type = $4 ORDER BY ts DESC LIMIT $5");
+            sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
+                .bind(&user_id).bind(before).bind(nid).bind(et).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
+                    serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
+                }).collect()
+        }
+        (Some(nid), None) => {
+            let sql = format!("{base} AND node_id = $3 ORDER BY ts DESC LIMIT $4");
+            sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
+                .bind(&user_id).bind(before).bind(nid).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
+                    serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
+                }).collect()
+        }
+        (None, Some(et)) => {
+            let sql = format!("{base} AND event_type = $3 ORDER BY ts DESC LIMIT $4");
+            sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
+                .bind(&user_id).bind(before).bind(et).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
+                    serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
+                }).collect()
+        }
+        (None, None) => {
+            let sql = format!("{base} ORDER BY ts DESC LIMIT $3");
+            sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
+                .bind(&user_id).bind(before).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
+                    serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
+                }).collect()
+        }
+    };
 
-        // Use fixed SQL per filter combination to avoid raw_bind_parameter issues.
-        let base = "SELECT ts_ms, node_id, level, event_type, message FROM node_events WHERE tenant_id = ?1 AND ts_ms < ?2";
-        let rows = match (&node_id_filter, &event_type_filter) {
-            (Some(nid), Some(et)) => {
-                let sql = format!("{base} AND node_id = ?3 AND event_type = ?4 ORDER BY ts_ms DESC LIMIT ?5");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, nid, et, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            (Some(nid), None) => {
-                let sql = format!("{base} AND node_id = ?3 ORDER BY ts_ms DESC LIMIT ?4");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, nid, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            (None, Some(et)) => {
-                let sql = format!("{base} AND event_type = ?3 ORDER BY ts_ms DESC LIMIT ?4");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, et, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            (None, None) => {
-                let sql = format!("{base} ORDER BY ts_ms DESC LIMIT ?3");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, before, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-        };
-        Ok::<_, duckdb::Error>(rows)
-    }).await {
-        Ok(Ok(events)) => Json(serde_json::json!({ "events": events })).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("query failed: {e}") }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("task join failed: {e}") }))).into_response(),
-    }
+    Json(serde_json::json!({ "events": events })).into_response()
 }
 
-/// GET /api/fleet/observations?state=open|resolved|acknowledged|all&node_id=<optional>&limit=50
-///
-/// Returns fleet observations from DuckDB. JWT-authenticated, tenant-isolated.
-/// Observations are stateful alert records with severity and lifecycle state.
+/// GET /api/fleet/observations
 async fn handle_fleet_observations(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -2044,81 +1850,53 @@ async fn handle_fleet_observations(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap();
-
-    let user_id = match user_id {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(id) => id,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let limit: i64 = params.get("limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50)
-        .min(200);
+    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50).min(200);
     let state_filter = params.get("state").cloned().unwrap_or_else(|| "open".into());
     let node_id_filter = params.get("node_id").cloned();
 
-    let duck = state.duck_db.clone();
-    match tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
+    let base = "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms, ack_at_ms FROM fleet_observations WHERE tenant_id = $1";
 
-        let map_row = |r: &duckdb::Row| Ok(serde_json::json!({
-            "id":             r.get::<_, String>(0)?,
-            "node_id":        r.get::<_, String>(1)?,
-            "alert_type":     r.get::<_, String>(2)?,
-            "severity":       r.get::<_, String>(3)?,
-            "state":          r.get::<_, String>(4)?,
-            "title":          r.get::<_, String>(5)?,
-            "detail":         r.get::<_, String>(6)?,
-            "context_json":   r.get::<_, Option<String>>(7)?,
-            "fired_at_ms":    r.get::<_, i64>(8)?,
-            "resolved_at_ms": r.get::<_, Option<i64>>(9)?,
-            "ack_at_ms":      r.get::<_, Option<i64>>(10)?,
-        }));
+    let rows: Vec<(String, String, String, String, String, String, String, Option<String>, i64, Option<i64>, Option<i64>)> = match (state_filter.as_str(), &node_id_filter) {
+        ("all", Some(nid)) => {
+            let sql = format!("{base} AND node_id = $2 ORDER BY fired_at_ms DESC LIMIT $3");
+            sqlx::query_as(&sql).bind(&user_id).bind(nid).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+        }
+        ("all", None) => {
+            let sql = format!("{base} ORDER BY fired_at_ms DESC LIMIT $2");
+            sqlx::query_as(&sql).bind(&user_id).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+        }
+        (st, Some(nid)) => {
+            let sql = format!("{base} AND state = $2 AND node_id = $3 ORDER BY fired_at_ms DESC LIMIT $4");
+            sqlx::query_as(&sql).bind(&user_id).bind(st).bind(nid).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+        }
+        (st, None) => {
+            let sql = format!("{base} AND state = $2 ORDER BY fired_at_ms DESC LIMIT $3");
+            sqlx::query_as(&sql).bind(&user_id).bind(st).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+        }
+    };
 
-        let base = "SELECT id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms, resolved_at_ms, ack_at_ms FROM fleet_observations WHERE tenant_id = ?1";
+    let observations: Vec<serde_json::Value> = rows.into_iter().map(|r| {
+        serde_json::json!({
+            "id": r.0, "node_id": r.1, "alert_type": r.2, "severity": r.3,
+            "state": r.4, "title": r.5, "detail": r.6, "context_json": r.7,
+            "fired_at_ms": r.8, "resolved_at_ms": r.9, "ack_at_ms": r.10,
+        })
+    }).collect();
 
-        let rows = match (state_filter.as_str(), &node_id_filter) {
-            ("all", Some(nid)) => {
-                let sql = format!("{base} AND node_id = ?2 ORDER BY fired_at_ms DESC LIMIT ?3");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, nid, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            ("all", None) => {
-                let sql = format!("{base} ORDER BY fired_at_ms DESC LIMIT ?2");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            (st, Some(nid)) => {
-                let sql = format!("{base} AND state = ?2 AND node_id = ?3 ORDER BY fired_at_ms DESC LIMIT ?4");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, st, nid, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            (st, None) => {
-                let sql = format!("{base} AND state = ?2 ORDER BY fired_at_ms DESC LIMIT ?3");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, st, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-        };
-        Ok::<_, duckdb::Error>(rows)
-    }).await {
-        Ok(Ok(obs)) => Json(serde_json::json!({ "observations": obs })).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("query failed: {e}") }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("task join failed: {e}") }))).into_response(),
-    }
+    Json(serde_json::json!({ "observations": observations })).into_response()
 }
 
 /// POST /api/fleet/observations/:id/acknowledge
-///
-/// Manually acknowledge an open observation (sets state='acknowledged', ack_at_ms=now).
-/// JWT-authenticated, tenant-isolated.
 async fn handle_acknowledge_observation(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2131,46 +1909,33 @@ async fn handle_acknowledge_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap();
-
-    let user_id = match user_id {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(id) => id,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let duck = state.duck_db.clone();
     let now = now_ms() as i64;
-    match tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
-        let updated = conn.execute(
-            "UPDATE fleet_observations SET state = 'acknowledged', ack_at_ms = ?1
-             WHERE id = ?2 AND tenant_id = ?3 AND state = 'open'",
-            duckdb::params![now, obs_id, user_id],
-        )?;
-        Ok::<_, duckdb::Error>(updated)
-    }).await {
-        Ok(Ok(n)) if n > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
-        Ok(Ok(_)) => (StatusCode::NOT_FOUND,
+    let result = sqlx::query(
+        "UPDATE fleet_observations SET state = 'acknowledged', ack_at_ms = $1
+         WHERE id = $2 AND tenant_id = $3 AND state = 'open'"
+    ).bind(now).bind(&obs_id).bind(&user_id)
+    .execute(&state.pool).await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Observation not found or already resolved" }))).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("update failed: {e}") }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("task join failed: {e}") }))).into_response(),
+            Json(serde_json::json!({ "error": format!("update failed: {e}") }))).into_response(),
     }
 }
 
-/// GET /api/fleet/export?format=csv|json&from=<ts_ms>&to=<ts_ms>&limit=10000&node_id=<optional>
-///
-/// Export fleet node events as CSV or JSON. JWT-authenticated, tenant-isolated.
+/// GET /api/fleet/export
 async fn handle_fleet_export(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -2179,67 +1944,44 @@ async fn handle_fleet_export(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap();
-
-    let user_id = match user_id {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(id) => id,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
-    let from_ms: i64 = params.get("from").and_then(|v| v.parse().ok()).unwrap_or(now_ms - 24 * 60 * 60 * 1000);
-    let to_ms: i64   = params.get("to").and_then(|v| v.parse().ok()).unwrap_or(now_ms);
+    let now_ms_val = now_ms() as i64;
+    let from_ms: i64 = params.get("from").and_then(|v| v.parse().ok()).unwrap_or(now_ms_val - 24 * 60 * 60 * 1000);
+    let to_ms: i64   = params.get("to").and_then(|v| v.parse().ok()).unwrap_or(now_ms_val);
     let limit: i64   = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(10_000).min(50_000);
     let format        = params.get("format").map(|s| s.as_str()).unwrap_or("csv").to_string();
     let node_filter   = params.get("node_id").cloned();
 
-    let duck = state.duck_db.clone();
-    let events = match tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
-        let base = "SELECT ts_ms, node_id, level, event_type, message FROM node_events
-                    WHERE tenant_id = ?1 AND ts_ms >= ?2 AND ts_ms <= ?3";
-        let map_row = |r: &duckdb::Row| {
-            let ts_ms: i64 = r.get(0)?;
-            let ts_str = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
-            Ok(serde_json::json!({
-                "ts_ms": ts_ms,
-                "timestamp": ts_str,
-                "record_type": "event",
-                "node_id": r.get::<_, String>(1)?,
-                "level": r.get::<_, String>(2)?,
-                "event_type": r.get::<_, Option<String>>(3)?,
-                "message": r.get::<_, String>(4)?,
-            }))
-        };
-        let rows = match &node_filter {
-            Some(nid) => {
-                let sql = format!("{base} AND node_id = ?4 ORDER BY ts_ms DESC LIMIT ?5");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, from_ms, to_ms, nid, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            None => {
-                let sql = format!("{base} ORDER BY ts_ms DESC LIMIT ?4");
-                conn.prepare(&sql)?.query_map(duckdb::params![user_id, from_ms, to_ms, limit], map_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-        };
-        Ok::<_, duckdb::Error>(rows)
-    }).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("Export failed: {e}") }))).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("Task join failed: {e}") }))).into_response(),
+    let base = "SELECT (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS ts_ms, node_id, level, event_type, message
+                FROM node_events WHERE tenant_id = $1 AND ts >= to_timestamp($2::float8 / 1000.0) AND ts <= to_timestamp($3::float8 / 1000.0)";
+
+    let events: Vec<(i64, String, String, Option<String>, String)> = match &node_filter {
+        Some(nid) => {
+            let sql = format!("{base} AND node_id = $4 ORDER BY ts DESC LIMIT $5");
+            sqlx::query_as(&sql).bind(&user_id).bind(from_ms).bind(to_ms).bind(nid).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+        }
+        None => {
+            let sql = format!("{base} ORDER BY ts DESC LIMIT $4");
+            sqlx::query_as(&sql).bind(&user_id).bind(from_ms).bind(to_ms).bind(limit)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+        }
     };
 
     if format == "json" {
-        let body = serde_json::to_string_pretty(&events).unwrap_or_default();
+        let json_events: Vec<serde_json::Value> = events.iter().map(|(ts_ms, node_id, level, event_type, message)| {
+            let ts_str = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
+            serde_json::json!({
+                "ts_ms": ts_ms, "timestamp": ts_str, "record_type": "event",
+                "node_id": node_id, "level": level, "event_type": event_type, "message": message,
+            })
+        }).collect();
+        let body = serde_json::to_string_pretty(&json_events).unwrap_or_default();
         (
             StatusCode::OK,
             [(axum::http::header::CONTENT_TYPE, "application/json"),
@@ -2248,14 +1990,12 @@ async fn handle_fleet_export(
         ).into_response()
     } else {
         let mut csv = String::from("timestamp,record_type,node_id,level,event_type,message\n");
-        for e in &events {
+        for (ts_ms, node_id, level, event_type, message) in &events {
+            let ts_str = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
             csv.push_str(&format!("{},{},{},{},{},{}\n",
-                e["timestamp"].as_str().unwrap_or(""),
-                "event",
-                e["node_id"].as_str().unwrap_or(""),
-                e["level"].as_str().unwrap_or(""),
-                e["event_type"].as_str().unwrap_or(""),
-                e["message"].as_str().unwrap_or("").replace(',', ";"),
+                ts_str, "event", node_id, level,
+                event_type.as_deref().unwrap_or(""),
+                message.replace(',', ";"),
             ));
         }
         (
@@ -2267,16 +2007,24 @@ async fn handle_fleet_export(
     }
 }
 
-/// GET /api/fleet/wes-history?node_id=<optional>&range=1h|24h|7d|30d|90d
-///
-/// Returns WES time-series data for the authenticated user's fleet (or a single node).
-/// Short ranges (1h) pull from metrics_raw; longer ranges use metrics_5min aggregates.
-///
-/// Response: { "range": "24h", "nodes": [{ "node_id", "hostname", "points": [{ ts_ms, raw_wes, penalized_wes, thermal_state }] }] }
+/// Helper for converting range to TimescaleDB time_bucket interval.
+fn time_bucket_for_range(range: &str) -> (&str, &str, bool) {
+    // Returns (time_bucket_interval, lookback_interval, use_raw)
+    match range {
+        "1h"  => ("1 minute",   "1 hour",   true),
+        "24h" => ("5 minutes",  "24 hours",  true),
+        "7d"  => ("30 minutes", "7 days",   false),
+        "30d" => ("2 hours",    "30 days",  false),
+        "90d" => ("6 hours",    "90 days",  false),
+        _     => ("5 minutes",  "24 hours",  true),
+    }
+}
+
+/// GET /api/fleet/wes-history
 async fn handle_wes_history(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -2286,75 +2034,40 @@ async fn handle_wes_history(
 
     let range = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
     let node_id_filter = params.get("node_id").cloned();
+    let (bucket_interval, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
-    // (lookback_ms, bucket_ms, use_raw_table)
-    // 1h + 24h use metrics_raw (2-day retention) to ensure data is always
-    // visible even before the hourly rollup populates metrics_5min.
-    // 7d+ use metrics_5min for efficiency (rollup aggregates older data).
-    let (lookback_ms, bucket_ms, use_raw): (i64, i64, bool) = match range.as_str() {
-        "1h"  => (3_600_000,      60_000,    true),
-        "24h" => (86_400_000,     300_000,   true),
-        "7d"  => (604_800_000,    1_800_000, false),
-        "30d" => (2_592_000_000,  7_200_000, false),
-        "90d" => (7_776_000_000,  21_600_000, false),
-        _     => (86_400_000,     300_000,   true),
-    };
-
-    // 1. Authenticate
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap();
-
-    let user_id = match user_id {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(id) => id,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    // Tier enforcement — server-side guard on history ranges.
-    // community: 1h, 24h  |  pro: +7d  |  team/enterprise: +30d, 90d
-    {
-        let db2 = state.db.clone();
-        let uid2 = user_id.clone();
-        let tier: String = tokio::task::spawn_blocking(move || {
-            let conn = db2.lock().unwrap();
-            conn.query_row("SELECT subscription_tier FROM users WHERE id = ?1", params![uid2], |r| r.get(0))
-                .unwrap_or_else(|_| "community".to_string())
-        }).await.unwrap_or_else(|_| "community".to_string());
+    // Tier enforcement
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
 
-        let allowed = match tier.as_str() {
-            "team" | "enterprise" => true,
-            "pro" => !matches!(range.as_str(), "30d" | "90d"),
-            _ => matches!(range.as_str(), "1h" | "24h"),
-        };
-        if !allowed {
-            return (StatusCode::FORBIDDEN,
-                Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
-        }
+    let allowed = match tier.as_str() {
+        "team" | "enterprise" => true,
+        "pro" => !matches!(range.as_str(), "30d" | "90d"),
+        _ => matches!(range.as_str(), "1h" | "24h"),
+    };
+    if !allowed {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
     }
 
-    // 2. Enumerate user's nodes from SQLite (wk_id + persisted hostname)
-    let db2 = state.db.clone();
-    let uid = user_id.clone();
-    let node_rows: Vec<(String, Option<String>)> = tokio::task::spawn_blocking(move || {
-        let conn = db2.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT wk_id, hostname FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
-        ).ok()?;
-        Some(stmt.query_map(params![uid], |r| Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, Option<String>>(1).ok().flatten(),
-        ))).ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap().unwrap_or_default();
+    // Enumerate user's nodes
+    let node_rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT wk_id, hostname FROM nodes WHERE user_id = $1 ORDER BY last_seen DESC"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     if node_rows.is_empty() {
         return Json(serde_json::json!({ "range": range, "nodes": [] })).into_response();
     }
 
-    // Enrich hostnames from live metrics cache (takes precedence over persisted hostname)
+    // Enrich hostnames from live cache
     let node_rows: Vec<(String, Option<String>)> = {
         let metrics_map = state.metrics.read().unwrap();
         node_rows.into_iter().map(|(nid, stored_hostname)| {
@@ -2365,7 +2078,6 @@ async fn handle_wes_history(
         }).collect()
     };
 
-    // 3. Filter to requested node (or all nodes)
     let target_nodes: Vec<(String, Option<String>)> = match node_id_filter {
         Some(ref id) => {
             let found: Vec<_> = node_rows.into_iter().filter(|(nid, _)| nid == id).collect();
@@ -2378,105 +2090,67 @@ async fn handle_wes_history(
         None => node_rows,
     };
 
-    // 4. Query DuckDB for WES points
-    let duck = state.duck_db.clone();
-    let now  = now_ms() as i64;
-    let since_ms = now - lookback_ms;
+    let mut nodes_data: Vec<serde_json::Value> = Vec::new();
 
-    let nodes_data: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
-        let mut out = Vec::new();
+    for (node_id, hostname) in &target_nodes {
+        let points: Vec<serde_json::Value> = if use_raw {
+            let sql = format!(
+                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                        AVG(wes_raw)       AS raw_wes,
+                        AVG(wes_penalized) AS penalized_wes,
+                        MAX(CASE thermal_state
+                            WHEN 'Critical' THEN 3
+                            WHEN 'Serious'  THEN 2
+                            WHEN 'Fair'     THEN 1
+                            ELSE 0 END)     AS thermal_rank
+                 FROM metrics_raw
+                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                 GROUP BY bucket_ms ORDER BY bucket_ms",
+                bucket = bucket_interval, lookback = lookback_interval
+            );
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<i32>)>(&sql)
+                .bind(&user_id).bind(node_id)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts, rw, pw, tr)| {
+                    let thermal = match tr { Some(3) => "Critical", Some(2) => "Serious", Some(1) => "Fair", _ => "Normal" };
+                    serde_json::json!({ "ts_ms": ts, "raw_wes": rw, "penalized_wes": pw, "thermal_state": thermal })
+                }).collect()
+        } else {
+            let sql = format!(
+                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                        AVG(wes_raw_avg)       AS raw_wes,
+                        AVG(wes_penalized_avg) AS penalized_wes,
+                        MAX(CASE thermal_state_worst
+                            WHEN 'Critical' THEN 3
+                            WHEN 'Serious'  THEN 2
+                            WHEN 'Fair'     THEN 1
+                            ELSE 0 END)         AS thermal_rank
+                 FROM metrics_5min
+                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                 GROUP BY bucket_ms ORDER BY bucket_ms",
+                bucket = bucket_interval, lookback = lookback_interval
+            );
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<i32>)>(&sql)
+                .bind(&user_id).bind(node_id)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts, rw, pw, tr)| {
+                    let thermal = match tr { Some(3) => "Critical", Some(2) => "Serious", Some(1) => "Fair", _ => "Normal" };
+                    serde_json::json!({ "ts_ms": ts, "raw_wes": rw, "penalized_wes": pw, "thermal_state": thermal })
+                }).collect()
+        };
 
-        for (node_id, hostname) in &target_nodes {
-            let points: Vec<serde_json::Value> = if use_raw {
-                let sql = format!(
-                    "SELECT (ts_ms / {bkt}) * {bkt} AS bucket,
-                            AVG(wes_raw)       AS raw_wes,
-                            AVG(wes_penalized) AS penalized_wes,
-                            MAX(CASE thermal_state
-                                WHEN 'Critical' THEN 3
-                                WHEN 'Serious'  THEN 2
-                                WHEN 'Fair'     THEN 1
-                                ELSE 0 END)     AS thermal_rank
-                     FROM metrics_raw
-                     WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
-                     GROUP BY bucket ORDER BY bucket",
-                    bkt = bucket_ms, uid = user_id, nid = node_id, since = since_ms
-                );
-                match conn.prepare(&sql).ok().and_then(|mut s| {
-                    s.query_map([], |r| Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, Option<f64>>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, Option<i64>>(3)?,
-                    ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                }) {
-                    Some(rows) => rows.into_iter().map(|(ts, rw, pw, tr)| {
-                        let thermal = match tr { Some(3) => "Critical", Some(2) => "Serious", Some(1) => "Fair", _ => "Normal" };
-                        serde_json::json!({ "ts_ms": ts, "raw_wes": rw, "penalized_wes": pw, "thermal_state": thermal })
-                    }).collect(),
-                    None => vec![],
-                }
-            } else {
-                let sql = format!(
-                    "SELECT (ts_ms / {bkt}) * {bkt} AS bucket,
-                            AVG(wes_raw_avg)       AS raw_wes,
-                            AVG(wes_penalized_avg) AS penalized_wes,
-                            MAX(CASE thermal_state_worst
-                                WHEN 'Critical' THEN 3
-                                WHEN 'Serious'  THEN 2
-                                WHEN 'Fair'     THEN 1
-                                ELSE 0 END)         AS thermal_rank
-                     FROM metrics_5min
-                     WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
-                     GROUP BY bucket ORDER BY bucket",
-                    bkt = bucket_ms, uid = user_id, nid = node_id, since = since_ms
-                );
-                match conn.prepare(&sql).ok().and_then(|mut s| {
-                    s.query_map([], |r| Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, Option<f64>>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, Option<i64>>(3)?,
-                    ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                }) {
-                    Some(rows) => rows.into_iter().map(|(ts, rw, pw, tr)| {
-                        let thermal = match tr { Some(3) => "Critical", Some(2) => "Serious", Some(1) => "Fair", _ => "Normal" };
-                        serde_json::json!({ "ts_ms": ts, "raw_wes": rw, "penalized_wes": pw, "thermal_state": thermal })
-                    }).collect(),
-                    None => vec![],
-                }
-            };
-
-            // Resolve hostname from the live metrics cache (most current)
-            let display_hostname = hostname.clone().unwrap_or_else(|| node_id.clone());
-
-            out.push(serde_json::json!({
-                "node_id":  node_id,
-                "hostname": display_hostname,
-                "points":   points,
-            }));
-        }
-        out
-    }).await.unwrap_or_default();
+        let display_hostname = hostname.clone().unwrap_or_else(|| node_id.clone());
+        nodes_data.push(serde_json::json!({ "node_id": node_id, "hostname": display_hostname, "points": points }));
+    }
 
     Json(serde_json::json!({ "range": range, "nodes": nodes_data })).into_response()
 }
 
-/// GET /api/fleet/metrics-history?node_id=<optional>&range=1h|24h|7d|30d|90d
-///
-/// Returns time-series data for Tok/s, Power (W), GPU%, and Memory Pressure %
-/// for the authenticated user's fleet (or a single node).
-/// Short ranges (1h) pull from metrics_raw; longer ranges use metrics_5min aggregates.
-/// The tok_s_p95 field is only populated for 24h+ ranges (metrics_5min source).
-///
-/// Response: { "range": "24h", "nodes": [{ "node_id", "hostname", "points": [
-///   { ts_ms, tok_s, tok_s_p95, watts, gpu_pct, mem_pct }
-/// ] }] }
+/// GET /api/fleet/metrics-history
 async fn handle_metrics_history(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -2486,72 +2160,38 @@ async fn handle_metrics_history(
 
     let range          = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
     let node_id_filter = params.get("node_id").cloned();
+    let (bucket_interval, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
-    // 1h + 24h query metrics_raw directly (2-day retention) so data is
-    // visible immediately. 7d+ use metrics_5min rollup aggregates.
-    let (lookback_ms, bucket_ms, use_raw): (i64, i64, bool) = match range.as_str() {
-        "1h"  => (3_600_000,      60_000,    true),
-        "24h" => (86_400_000,     300_000,   true),
-        "7d"  => (604_800_000,    1_800_000, false),
-        "30d" => (2_592_000_000,  7_200_000, false),
-        "90d" => (7_776_000_000,  21_600_000, false),
-        _     => (86_400_000,     300_000,   true),
-    };
-
-    // Authenticate
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db         = state.db.clone();
-    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap();
-
-    let user_id = match user_id {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(id) => id,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    // Tier enforcement — server-side guard on history ranges.
-    {
-        let db2 = state.db.clone();
-        let uid2 = user_id.clone();
-        let tier: String = tokio::task::spawn_blocking(move || {
-            let conn = db2.lock().unwrap();
-            conn.query_row("SELECT subscription_tier FROM users WHERE id = ?1", params![uid2], |r| r.get(0))
-                .unwrap_or_else(|_| "community".to_string())
-        }).await.unwrap_or_else(|_| "community".to_string());
+    // Tier enforcement
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
 
-        let allowed = match tier.as_str() {
-            "team" | "enterprise" => true,
-            "pro" => !matches!(range.as_str(), "30d" | "90d"),
-            _ => matches!(range.as_str(), "1h" | "24h"),
-        };
-        if !allowed {
-            return (StatusCode::FORBIDDEN,
-                Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
-        }
+    let allowed = match tier.as_str() {
+        "team" | "enterprise" => true,
+        "pro" => !matches!(range.as_str(), "30d" | "90d"),
+        _ => matches!(range.as_str(), "1h" | "24h"),
+    };
+    if !allowed {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
     }
 
-    // Enumerate user's nodes from SQLite
-    let db2 = state.db.clone();
-    let uid  = user_id.clone();
-    let node_rows: Vec<(String, Option<String>)> = tokio::task::spawn_blocking(move || {
-        let conn = db2.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT wk_id, hostname FROM nodes WHERE user_id = ?1 ORDER BY last_seen DESC"
-        ).ok()?;
-        Some(stmt.query_map(params![uid], |r| Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, Option<String>>(1).ok().flatten(),
-        ))).ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap().unwrap_or_default();
+    let node_rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT wk_id, hostname FROM nodes WHERE user_id = $1 ORDER BY last_seen DESC"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     if node_rows.is_empty() {
         return Json(serde_json::json!({ "range": range, "nodes": [] })).into_response();
     }
 
-    // Enrich hostnames from live metrics cache
     let node_rows: Vec<(String, Option<String>)> = {
         let metrics_map = state.metrics.read().unwrap();
         node_rows.into_iter().map(|(nid, stored_hostname)| {
@@ -2562,7 +2202,6 @@ async fn handle_metrics_history(
         }).collect()
     };
 
-    // Filter to requested node (or all nodes)
     let target_nodes: Vec<(String, Option<String>)> = match node_id_filter {
         Some(ref id) => {
             let found: Vec<_> = node_rows.into_iter().filter(|(nid, _)| nid == id).collect();
@@ -2575,120 +2214,63 @@ async fn handle_metrics_history(
         None => node_rows,
     };
 
-    // Query DuckDB
-    let duck     = state.duck_db.clone();
-    let now      = now_ms() as i64;
-    let since_ms = now - lookback_ms;
+    let mut nodes_data: Vec<serde_json::Value> = Vec::new();
 
-    let nodes_data: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
-        let mut out = Vec::new();
+    for (node_id, hostname) in &target_nodes {
+        let points: Vec<serde_json::Value> = if use_raw {
+            let sql = format!(
+                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                        AVG(tok_s)            AS tok_s,
+                        NULL::float8           AS tok_s_p95,
+                        AVG(watts)            AS watts,
+                        AVG(gpu_pct)          AS gpu_pct,
+                        AVG(mem_pressure_pct) AS mem_pct,
+                        (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::float8 / NULLIF(COUNT(*), 0)::float8 * 100.0) AS duty_pct
+                 FROM metrics_raw
+                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                 GROUP BY bucket_ms ORDER BY bucket_ms",
+                bucket = bucket_interval, lookback = lookback_interval
+            );
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+                .bind(&user_id).bind(node_id)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty })
+                }).collect()
+        } else {
+            let sql = format!(
+                "SELECT (EXTRACT(EPOCH FROM time_bucket('{bucket}', ts)) * 1000)::bigint AS bucket_ms,
+                        AVG(tok_s_avg)            AS tok_s,
+                        AVG(tok_s_p95)            AS tok_s_p95,
+                        AVG(watts_avg)            AS watts,
+                        AVG(gpu_pct_avg)          AS gpu_pct,
+                        AVG(mem_pressure_pct_avg) AS mem_pct,
+                        AVG(inference_duty_pct)   AS duty_pct
+                 FROM metrics_5min
+                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                 GROUP BY bucket_ms ORDER BY bucket_ms",
+                bucket = bucket_interval, lookback = lookback_interval
+            );
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+                .bind(&user_id).bind(node_id)
+                .fetch_all(&state.pool).await.unwrap_or_default()
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty })
+                }).collect()
+        };
 
-        for (node_id, hostname) in &target_nodes {
-            let points: Vec<serde_json::Value> = if use_raw {
-                // 1h range — query metrics_raw, 60-second buckets
-                let sql = format!(
-                    "SELECT (ts_ms / {bkt}) * {bkt} AS bucket,
-                            AVG(tok_s)            AS tok_s,
-                            NULL::DOUBLE           AS tok_s_p95,
-                            AVG(watts)            AS watts,
-                            AVG(gpu_pct)          AS gpu_pct,
-                            AVG(mem_pressure_pct) AS mem_pct,
-                            (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::DOUBLE / COUNT(*)::DOUBLE * 100.0) AS duty_pct
-                     FROM metrics_raw
-                     WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
-                     GROUP BY bucket ORDER BY bucket",
-                    bkt = bucket_ms, uid = user_id, nid = node_id, since = since_ms
-                );
-                match conn.prepare(&sql).ok().and_then(|mut s| {
-                    s.query_map([], |r| Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, Option<f64>>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, Option<f64>>(3)?,
-                        r.get::<_, Option<f64>>(4)?,
-                        r.get::<_, Option<f64>>(5)?,
-                        r.get::<_, Option<f64>>(6)?,
-                    ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                }) {
-                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
-                        serde_json::json!({
-                            "ts_ms":      ts,
-                            "tok_s":      toks,
-                            "tok_s_p95":  toksp95,
-                            "watts":      w,
-                            "gpu_pct":    gpu,
-                            "mem_pct":    mem,
-                            "duty_pct":   duty,
-                        })
-                    }).collect(),
-                    None => vec![],
-                }
-            } else {
-                // 24h–90d — query metrics_5min aggregates
-                let sql = format!(
-                    "SELECT (ts_ms / {bkt}) * {bkt} AS bucket,
-                            AVG(tok_s_avg)            AS tok_s,
-                            AVG(tok_s_p95)            AS tok_s_p95,
-                            AVG(watts_avg)            AS watts,
-                            AVG(gpu_pct_avg)          AS gpu_pct,
-                            AVG(mem_pressure_pct_avg) AS mem_pct,
-                            AVG(inference_duty_pct)   AS duty_pct
-                     FROM metrics_5min
-                     WHERE tenant_id = '{uid}' AND node_id = '{nid}' AND ts_ms >= {since}
-                     GROUP BY bucket ORDER BY bucket",
-                    bkt = bucket_ms, uid = user_id, nid = node_id, since = since_ms
-                );
-                match conn.prepare(&sql).ok().and_then(|mut s| {
-                    s.query_map([], |r| Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, Option<f64>>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, Option<f64>>(3)?,
-                        r.get::<_, Option<f64>>(4)?,
-                        r.get::<_, Option<f64>>(5)?,
-                        r.get::<_, Option<f64>>(6)?,
-                    ))).ok().map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                }) {
-                    Some(rows) => rows.into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
-                        serde_json::json!({
-                            "ts_ms":      ts,
-                            "tok_s":      toks,
-                            "tok_s_p95":  toksp95,
-                            "watts":      w,
-                            "gpu_pct":    gpu,
-                            "mem_pct":    mem,
-                            "duty_pct":   duty,
-                        })
-                    }).collect(),
-                    None => vec![],
-                }
-            };
-
-            let display_hostname = hostname.clone().unwrap_or_else(|| node_id.clone());
-            out.push(serde_json::json!({
-                "node_id":  node_id,
-                "hostname": display_hostname,
-                "points":   points,
-            }));
-        }
-        out
-    }).await.unwrap_or_default();
+        let display_hostname = hostname.clone().unwrap_or_else(|| node_id.clone());
+        nodes_data.push(serde_json::json!({ "node_id": node_id, "hostname": display_hostname, "points": points }));
+    }
 
     Json(serde_json::json!({ "range": range, "nodes": nodes_data })).into_response()
 }
 
-/// GET /api/fleet/duty?range=1h|24h|7d|30d
-///
-/// Returns the fleet-wide inference duty cycle — the percentage of time at least
-/// one node was actively generating tokens ("live" state).
-///
-/// Response: { "range": "24h", "duty_pct": 42.5, "total_samples": 1234, "live_samples": 525,
-///             "nodes": [{ "node_id", "hostname", "duty_pct" }] }
+/// GET /api/fleet/duty
 async fn handle_fleet_duty(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -2697,115 +2279,73 @@ async fn handle_fleet_duty(
     };
 
     let range = params.get("range").map(|s| s.as_str()).unwrap_or("24h").to_string();
-
-    let (lookback_ms, use_raw): (i64, bool) = match range.as_str() {
-        "1h"  => (3_600_000,     true),
-        "24h" => (86_400_000,    false),
-        "7d"  => (604_800_000,   false),
-        "30d" => (2_592_000_000, false),
-        _     => (86_400_000,    false),
-    };
+    let (_bucket, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db         = state.db.clone();
-    let user_id: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user(&token, &conn, &clerk_keys)
-    }).await.unwrap();
-
-    let user_id = match user_id {
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
         Some(uid) => uid,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid token" }))).into_response(),
     };
 
-    let duck   = state.duck_db.clone();
-    let db2    = state.db.clone();
-    let since_ms = now_ms() as i64 - lookback_ms;
+    let target_nodes: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT wk_id, hostname FROM nodes WHERE user_id = $1"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
-        let sql_conn = db2.lock().unwrap();
+    if target_nodes.is_empty() {
+        return Json(serde_json::json!({ "range": range, "duty_pct": null, "total_samples": 0, "live_samples": 0, "nodes": [] })).into_response();
+    }
 
-        // Get target nodes
-        let mut node_stmt = sql_conn.prepare("SELECT id, hostname FROM nodes WHERE user_id = ?1").ok()?;
-        let target_nodes: Vec<(String, Option<String>)> = node_stmt.query_map(
-            params![user_id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-        ).ok()?.filter_map(|r| r.ok()).collect();
+    let mut per_node = Vec::new();
+    let mut total_all: i64 = 0;
+    let mut live_all: i64 = 0;
 
-        if target_nodes.is_empty() { return Some(serde_json::json!({ "range": range, "duty_pct": null, "total_samples": 0, "live_samples": 0, "nodes": [] })); }
-
-        let mut per_node = Vec::new();
-        let mut total_all: i64 = 0;
-        let mut live_all: i64 = 0;
-
-        for (nid, hostname) in &target_nodes {
-            let (total, live) = if use_raw {
-                let sql = format!(
-                    "SELECT COUNT(*) AS total,
-                            SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END) AS live_count
-                     FROM metrics_raw
-                     WHERE tenant_id = '{}' AND node_id = '{}' AND ts_ms >= {}",
-                    user_id, nid, since_ms
-                );
-                conn.prepare(&sql).ok().and_then(|mut s| {
-                    s.query_row([], |r| Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, i64>(1)?,
-                    ))).ok()
-                }).unwrap_or((0, 0))
-            } else {
-                // For longer ranges, use metrics_5min: weighted average of duty_pct × sample_count
-                let sql = format!(
-                    "SELECT COALESCE(SUM(sample_count), 0) AS total,
-                            COALESCE(SUM(inference_duty_pct * sample_count / 100.0), 0)::BIGINT AS live_count
-                     FROM metrics_5min
-                     WHERE tenant_id = '{}' AND node_id = '{}' AND ts_ms >= {}",
-                    user_id, nid, since_ms
-                );
-                conn.prepare(&sql).ok().and_then(|mut s| {
-                    s.query_row([], |r| Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, i64>(1)?,
-                    ))).ok()
-                }).unwrap_or((0, 0))
-            };
-
-            let duty_pct = if total > 0 { Some((live as f64 / total as f64) * 100.0) } else { None };
-            let display_hostname = hostname.clone().unwrap_or_else(|| nid.clone());
-            per_node.push(serde_json::json!({
-                "node_id":  nid,
-                "hostname": display_hostname,
-                "duty_pct": duty_pct.map(|d| (d * 10.0).round() / 10.0),
-            }));
-            total_all += total;
-            live_all  += live;
-        }
-
-        let fleet_duty = if total_all > 0 {
-            Some(((live_all as f64 / total_all as f64) * 1000.0).round() / 10.0)
+    for (nid, hostname) in &target_nodes {
+        let (total, live): (i64, i64) = if use_raw {
+            let sql = format!(
+                "SELECT COUNT(*) AS total,
+                        SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END) AS live_count
+                 FROM metrics_raw
+                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'",
+                lookback = lookback_interval
+            );
+            sqlx::query_as::<_, (i64, i64)>(&sql)
+                .bind(&user_id).bind(nid)
+                .fetch_one(&state.pool).await.unwrap_or((0, 0))
         } else {
-            None
+            let sql = format!(
+                "SELECT COALESCE(SUM(sample_count), 0) AS total,
+                        COALESCE(SUM((inference_duty_pct * sample_count / 100.0)::bigint), 0) AS live_count
+                 FROM metrics_5min
+                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'",
+                lookback = lookback_interval
+            );
+            sqlx::query_as::<_, (i64, i64)>(&sql)
+                .bind(&user_id).bind(nid)
+                .fetch_one(&state.pool).await.unwrap_or((0, 0))
         };
 
-        Some(serde_json::json!({
-            "range":         range,
-            "duty_pct":      fleet_duty,
-            "total_samples": total_all,
-            "live_samples":  live_all,
-            "nodes":         per_node,
-        }))
-    }).await.unwrap_or(None);
-
-    match result {
-        Some(data) => Json(data).into_response(),
-        None => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Query failed" }))).into_response(),
+        let duty_pct = if total > 0 { Some((live as f64 / total as f64) * 100.0) } else { None };
+        let display_hostname = hostname.clone().unwrap_or_else(|| nid.clone());
+        per_node.push(serde_json::json!({
+            "node_id": nid, "hostname": display_hostname,
+            "duty_pct": duty_pct.map(|d| (d * 10.0).round() / 10.0),
+        }));
+        total_all += total;
+        live_all  += live;
     }
+
+    let fleet_duty = if total_all > 0 {
+        Some(((live_all as f64 / total_all as f64) * 1000.0).round() / 10.0)
+    } else { None };
+
+    Json(serde_json::json!({
+        "range": range, "duty_pct": fleet_duty,
+        "total_samples": total_all, "live_samples": live_all, "nodes": per_node,
+    })).into_response()
 }
 
-/// POST /api/pair/activate — user enters 6-digit code from their terminal to link the node.
+/// POST /api/pair/activate
 #[derive(Deserialize)]
 struct ActivateRequest {
     code: String,
@@ -2821,7 +2361,6 @@ async fn handle_activate(
             Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
     }
 
-    // Auth is required — a node must always be owned by an account.
     let token = match extract_bearer(&headers) {
         Some(t) => t,
         None => return (StatusCode::UNAUTHORIZED,
@@ -2829,12 +2368,7 @@ async fn handle_activate(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-    // Returns (user_id, email, is_pro)
-    let user_info: Option<(String, String, i32)> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        require_user_info(&token, &conn, &clerk_keys)
-    }).await.unwrap();
+    let user_info = require_user_info(&token, &state.pool, &clerk_keys).await;
 
     let (user_id, email, is_pro_db) = match user_info {
         Some(info) => info,
@@ -2842,20 +2376,12 @@ async fn handle_activate(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    // Enforce free-tier node limit per user (skip for dev account or pro users).
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
     if !is_pro {
-        let db2 = state.db.clone();
-        let uid = user_id.clone();
-        let count: usize = tokio::task::spawn_blocking(move || {
-            let conn = db2.lock().unwrap();
-            conn.query_row(
-                "SELECT COUNT(*) FROM nodes WHERE user_id = ?1",
-                params![uid],
-                |r| r.get::<_, i64>(0),
-            ).unwrap_or(0) as usize
-        }).await.unwrap();
-        if count >= MAX_FREE_NODES {
+        let count: i64 = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM nodes WHERE user_id = $1"
+        ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0);
+        if count as usize >= MAX_FREE_NODES {
             return (StatusCode::PAYMENT_REQUIRED,
                 Json(serde_json::json!({
                     "error": format!("Free tier limit reached ({MAX_FREE_NODES} nodes). Upgrade to Wicklee Pro to add more.")
@@ -2863,100 +2389,66 @@ async fn handle_activate(
         }
     }
 
-    let db   = state.db.clone();
-    let code = body.code.clone();
-    let uid  = user_id.clone();
-
-    let row: Option<(String, String)> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let row = conn.query_row(
-            "SELECT wk_id, fleet_url FROM nodes WHERE code = ?1",
-            params![code],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        ).ok()?;
-        // Stamp user_id immediately — always set, never NULL.
-        let _ = conn.execute(
-            "UPDATE nodes SET user_id = ?1 WHERE wk_id = ?2",
-            params![uid, row.0],
-        );
-        Some(row)
-    }).await.unwrap();
+    let row = sqlx::query_as::<_, (String, String)>(
+        "SELECT wk_id, fleet_url FROM nodes WHERE code = $1"
+    ).bind(&body.code).fetch_one(&state.pool).await;
 
     match row {
-        None => (StatusCode::NOT_FOUND,
+        Err(_) => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Code not found or already used. Make sure the agent is running and try again." }))).into_response(),
-        Some((node_id, fleet_url)) =>
-            (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response(),
+        Ok((node_id, fleet_url)) => {
+            let _ = sqlx::query("UPDATE nodes SET user_id = $1 WHERE wk_id = $2")
+                .bind(&user_id).bind(&node_id)
+                .execute(&state.pool).await;
+            (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response()
+        }
     }
 }
 
 /// GET /api/fleet/stream — SSE stream pushing fleet snapshots every 2 s.
-/// Auth: single-use stream token via ?token=<uuid> (issued by /api/auth/stream-token).
-/// EventSource cannot send Authorization headers, so we use a short-lived UUID token.
 async fn handle_fleet_stream(
     State(state): State<AppState>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let stream_token = match params.get("token") {
         Some(t) if !t.is_empty() => t.clone(),
-        _ => {
-            return (StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Missing stream token" }))).into_response();
-        }
+        _ => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing stream token" }))).into_response(),
     };
 
-    // Validate the token from SQLite.
-    // Using spawn_blocking so the SELECT runs on the same connection/thread.
     let now = now_ms() as i64;
-    let db_auth = state.db.clone();
-    let st_clone = stream_token.clone();
-    let user_id = match tokio::task::spawn_blocking(move || {
-        let conn = db_auth.lock().unwrap();
-        // Fetch the token row (validates existence and expiry in one shot).
-        // Do NOT delete here — EventSource may retry after a proxy 502,
-        // and the token is already time-limited to 60 s.  The background
-        // cleanup task purges expired tokens every 5 minutes.
-        conn.query_row(
-            "SELECT user_id FROM stream_tokens WHERE token = ?1 AND expires_ms > ?2",
-            params![st_clone, now],
-            |r| r.get::<_, String>(0),
-        ).ok()
-    }).await.unwrap() {
-        Some(uid) => uid,
-        None => return (StatusCode::UNAUTHORIZED,
+    let user_id = match sqlx::query_scalar::<_, String>(
+        "SELECT user_id FROM stream_tokens WHERE token = $1 AND expires_ms > $2"
+    ).bind(&stream_token).bind(now).fetch_one(&state.pool).await {
+        Ok(uid) => uid,
+        Err(_) => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
 
-    // Load initial node set and tier for this user.
-    let db = state.db.clone();
+    // Load initial node set and tier.
+    let pool = state.pool.clone();
     let uid2 = user_id.clone();
-    let initial: (HashSet<String>, Vec<String>, String) = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let node_set = user_node_set(&uid2, &conn);
-        // Ordered list (by paired_at ASC) for restricted-set computation.
-        let ordered: Vec<String> = conn.prepare(
-            "SELECT wk_id FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
-        ).ok()
-        .map(|mut stmt| stmt.query_map(params![uid2], |r| r.get::<_, String>(0))
-            .ok()
-            .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-            .unwrap_or_default())
-        .unwrap_or_default();
-        let tier: String = conn.query_row(
-            "SELECT subscription_tier FROM users WHERE id = ?1",
-            params![uid2],
-            |r| r.get(0),
-        ).unwrap_or_else(|_| "community".to_string());
-        (node_set, ordered, tier)
-    }).await.unwrap();
+    let initial_nodes = user_node_set_blocking(&uid2, &pool);
+    let initial_ordered: Vec<String> = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT wk_id FROM nodes WHERE user_id = $1 ORDER BY paired_at ASC"
+            ).bind(&uid2).fetch_all(&pool).await.unwrap_or_default()
+        })
+    });
+    let initial_tier: String = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT subscription_tier FROM users WHERE id = $1"
+            ).bind(&uid2).fetch_one(&pool).await.unwrap_or_else(|_| "community".to_string())
+        })
+    });
 
     let interval_stream = tokio_stream::wrappers::IntervalStream::new(
         tokio::time::interval(Duration::from_secs(2)),
     );
 
-    let db_stream  = state.db.clone();
     let uid_stream = user_id.clone();
-    let (initial_nodes, initial_ordered, initial_tier) = initial;
     let mut nodes          = initial_nodes;
     let mut ordered_nodes  = initial_ordered;
     let mut tier           = initial_tier;
@@ -2964,34 +2456,25 @@ async fn handle_fleet_stream(
 
     let stream = interval_stream.map(move |_| {
         tick += 1;
-        // Refresh the user's node list every 30 ticks (~60 s) to pick up
-        // newly paired nodes without restarting the stream.
         if tick % 30 == 0 {
             let uid_ref = uid_stream.clone();
-            let (new_nodes, new_ordered, new_tier) = tokio::task::block_in_place(|| {
-                let conn = db_stream.lock().unwrap();
-                let node_set = user_node_set(&uid_ref, &conn);
-                let ordered: Vec<String> = conn.prepare(
-                    "SELECT wk_id FROM nodes WHERE user_id = ?1 ORDER BY paired_at ASC"
-                ).ok()
-                .map(|mut stmt| stmt.query_map(params![uid_ref], |r| r.get::<_, String>(0))
-                    .ok()
-                    .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                    .unwrap_or_default())
-                .unwrap_or_default();
-                let t: String = conn.query_row(
-                    "SELECT subscription_tier FROM users WHERE id = ?1",
-                    params![uid_ref],
-                    |r| r.get(0),
-                ).unwrap_or_else(|_| "community".to_string());
-                (node_set, ordered, t)
+            nodes = user_node_set_blocking(&uid_ref, &pool);
+            ordered_nodes = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT wk_id FROM nodes WHERE user_id = $1 ORDER BY paired_at ASC"
+                    ).bind(&uid_ref).fetch_all(&pool).await.unwrap_or_default()
+                })
             });
-            nodes         = new_nodes;
-            ordered_nodes = new_ordered;
-            tier          = new_tier;
+            tier = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT subscription_tier FROM users WHERE id = $1"
+                    ).bind(&uid_ref).fetch_one(&pool).await.unwrap_or_else(|_| "community".to_string())
+                })
+            });
         }
 
-        // Compute restricted set from the ordered node list.
         let restricted_ids: HashSet<&str> = if is_team_or_above(&tier) {
             HashSet::new()
         } else {
@@ -3020,65 +2503,39 @@ async fn handle_fleet_stream(
     Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
-/// GET /health — trivial liveness probe, no DB dependency.
+/// GET /health
 async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
-    // Diagnostic: check DuckDB metrics_raw freshness
-    let duck = state.duck_db.clone();
-    let diag = tokio::task::spawn_blocking(move || {
-        let conn = duck_lock(&duck);
-        let latest_ts: Option<i64> = conn.query_row(
-            "SELECT MAX(ts_ms) FROM metrics_raw", [], |r| r.get(0),
-        ).ok();
-        let count_1h: Option<i64> = {
-            let cutoff = (now_ms() as i64) - 3_600_000;
-            conn.query_row(
-                "SELECT COUNT(*) FROM metrics_raw WHERE ts_ms >= ?", duckdb::params![cutoff], |r| r.get(0),
-            ).ok()
-        };
-        let count_24h: Option<i64> = {
-            let cutoff = (now_ms() as i64) - 86_400_000;
-            conn.query_row(
-                "SELECT COUNT(*) FROM metrics_raw WHERE ts_ms >= ?", duckdb::params![cutoff], |r| r.get(0),
-            ).ok()
-        };
-        let obs_open: Option<i64> = conn.query_row(
-            "SELECT COUNT(*) FROM fleet_observations WHERE state = 'open'", [], |r| r.get(0),
-        ).ok();
-        (latest_ts, count_1h, count_24h, obs_open)
-    }).await.unwrap_or((None, None, None, None));
-
     let now = now_ms() as i64;
-    let age_s = diag.0.map(|ts| (now - ts) / 1000);
+    let raw_stats = sqlx::query_as::<_, (Option<i64>, i64, i64)>(
+        "SELECT
+            (EXTRACT(EPOCH FROM MAX(ts)) * 1000)::bigint,
+            COUNT(*) FILTER (WHERE ts > NOW() - INTERVAL '1 hour'),
+            COUNT(*) FILTER (WHERE ts > NOW() - INTERVAL '24 hours')
+         FROM metrics_raw"
+    ).fetch_one(&state.pool).await.unwrap_or((None, 0, 0));
+
+    let obs_open: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM fleet_observations WHERE state = 'open'"
+    ).fetch_one(&state.pool).await.unwrap_or(0);
+
+    let age_s = raw_stats.0.map(|ts| (now - ts) / 1000);
 
     Json(serde_json::json!({
         "status": "ok",
         "now_ms": now,
         "metrics_raw": {
-            "latest_ts_ms": diag.0,
+            "latest_ts_ms": raw_stats.0,
             "latest_age_s": age_s,
-            "rows_1h": diag.1,
-            "rows_24h": diag.2,
+            "rows_1h": raw_stats.1,
+            "rows_24h": raw_stats.2,
         },
-        "fleet_observations_open": diag.3,
+        "fleet_observations_open": obs_open,
     })).into_response()
 }
 
-/// GET /api/agent/version?platform=<platform>
-///
-/// Queries the GitHub releases API for the latest wicklee-agent release and
-/// returns the version tag + platform-specific download URL. Called by the
-/// agent's auto-updater on startup. No auth required — public endpoint.
-///
-/// Response: { "latest": "v0.4.9", "download_url": "https://..." }
-///
-/// Platform → asset mapping:
-///   darwin-aarch64        → wicklee-agent-darwin-aarch64
-///   linux-x86_64          → wicklee-agent-linux-x86_64
-///   linux-aarch64         → wicklee-agent-linux-aarch64
-///   linux-x86_64-nvidia   → wicklee-agent-linux-x86_64-nvidia
-///   windows-x86_64        → wicklee-agent-windows-x86_64.exe
+/// GET /api/agent/version
 async fn handle_agent_version(
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let platform = params.get("platform").cloned().unwrap_or_default();
 
@@ -3088,41 +2545,27 @@ async fn handle_agent_version(
         "linux-aarch64"       => "wicklee-agent-linux-aarch64",
         "linux-x86_64-nvidia" => "wicklee-agent-linux-x86_64-nvidia",
         "windows-x86_64"      => "wicklee-agent-windows-x86_64.exe",
-        _ => {
-            return (StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "unrecognised platform" }))).into_response();
-        }
+        _ => return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "unrecognised platform" }))).into_response(),
     };
 
-    // Query GitHub releases API in a blocking task (ureq is synchronous).
     let result = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
         let resp = ureq::get("https://api.github.com/repos/jeffgeiser/Wicklee/releases/latest")
             .set("User-Agent", "wicklee-cloud/1.0")
             .set("Accept", "application/vnd.github+json")
             .call()
             .map_err(|e| format!("github api request failed: {e}"))?;
-
         let body: serde_json::Value = resp.into_json()
             .map_err(|e| format!("github api json parse failed: {e}"))?;
-
-        let tag = body["tag_name"]
-            .as_str()
-            .ok_or_else(|| "missing tag_name in github response".to_string())?
-            .to_string();
-
-        // Build direct download URL from the release tag + known asset name.
-        let download_url = format!(
-            "https://github.com/jeffgeiser/Wicklee/releases/download/{tag}/{asset_name}"
-        );
-
+        let tag = body["tag_name"].as_str()
+            .ok_or_else(|| "missing tag_name".to_string())?.to_string();
+        let download_url = format!("https://github.com/jeffgeiser/Wicklee/releases/download/{tag}/{asset_name}");
         Ok((tag, download_url))
     }).await;
 
     match result {
-        Ok(Ok((latest, download_url))) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "latest": latest, "download_url": download_url })),
-        ).into_response(),
+        Ok(Ok((latest, download_url))) => (StatusCode::OK,
+            Json(serde_json::json!({ "latest": latest, "download_url": download_url }))).into_response(),
         Ok(Err(e)) => {
             eprintln!("[agent-version] upstream error: {e}");
             (StatusCode::BAD_GATEWAY,
@@ -3137,10 +2580,6 @@ async fn handle_agent_version(
 }
 
 // ── CORS middleware ───────────────────────────────────────────────────────────
-//
-// Injected directly into the response so Railway's proxy cannot strip the
-// headers. OPTIONS preflights are short-circuited with 200 OK before they
-// reach any route handler.
 
 async fn cors(req: Request<Body>, next: Next) -> Response {
     if req.method() == Method::OPTIONS {
@@ -3161,203 +2600,10 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
     res
 }
 
-// ── DuckDB — path & connection ────────────────────────────────────────────────
-
-fn duck_db_path() -> std::path::PathBuf {
-    // Railway: set DUCK_DB_PATH=/data/analytics.duckdb via the volume mount.
-    if let Ok(p) = std::env::var("DUCK_DB_PATH") {
-        return std::path::PathBuf::from(p);
-    }
-    // Local fallback: ~/.wicklee/analytics.duckdb
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home).join(".wicklee").join("analytics.duckdb")
-}
-
-fn open_duck_db() -> DuckConn {
-    // DUCKDB_MODE=memory forces in-memory mode (no file I/O, no corruption risk).
-    // Data is lost on restart but the process never crashes from file corruption.
-    let use_memory = std::env::var("DUCKDB_MODE").unwrap_or_default() == "memory";
-
-    if use_memory {
-        let conn = DuckConn::open_in_memory()
-            .expect("Cannot open in-memory DuckDB");
-        run_duck_migrations(&conn);
-        println!("  DUCK → :memory: (DUCKDB_MODE=memory)");
-        return conn;
-    }
-
-    let path = duck_db_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("Cannot create DuckDB directory");
-    }
-
-    // Try to open.  If the file is corrupted (heap corruption, WAL damage),
-    // rename the broken file and start fresh.  Metrics history is expendable;
-    // a corrupted file that crashes the process is not.
-    let conn = match DuckConn::open(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[duck] CRITICAL: cannot open {}: {e}", path.display());
-            eprintln!("[duck] Renaming corrupted file and starting fresh");
-            let backup = path.with_extension("duckdb.corrupt");
-            if let Err(re) = std::fs::rename(&path, &backup) {
-                eprintln!("[duck] WARNING: rename failed: {re} — deleting instead");
-                let _ = std::fs::remove_file(&path);
-                // Also remove WAL file if present.
-                let wal = path.with_extension("duckdb.wal");
-                let _ = std::fs::remove_file(&wal);
-            }
-            DuckConn::open(&path)
-                .unwrap_or_else(|e2| panic!("Cannot create fresh DuckDB at {}: {e2}", path.display()))
-        }
-    };
-
-    // Request ZSTD for all future checkpoints.  Only meaningful for file-backed mode.
-    let _ = conn.execute_batch("SET force_compression='zstd';");
-
-    run_duck_migrations(&conn);
-    println!("  DUCK → {}", path.display());
-    conn
-}
-
-// ── DuckDB — schema migrations ────────────────────────────────────────────────
-
-fn run_duck_migrations(conn: &DuckConn) {
-    conn.execute_batch("
-        -- ── Raw telemetry (24-hour rolling window at native 1 Hz) ──────────
-        CREATE TABLE IF NOT EXISTS metrics_raw (
-            node_id          VARCHAR   NOT NULL,
-            ts_ms            BIGINT    NOT NULL,
-            tenant_id        VARCHAR   NOT NULL,
-            tok_s            FLOAT,
-            watts            FLOAT,
-            wes_raw          FLOAT,
-            wes_penalized    FLOAT,
-            thermal_cost_pct FLOAT,
-            thermal_penalty  FLOAT,
-            thermal_state    VARCHAR,
-            vram_used_mb     INTEGER,
-            vram_total_mb    INTEGER,
-            mem_pressure_pct FLOAT,
-            gpu_pct          FLOAT,
-            cpu_pct          FLOAT,
-            inference_state  VARCHAR,
-            wes_version      UTINYINT  NOT NULL DEFAULT 1,
-            agent_version    VARCHAR,
-            PRIMARY KEY (tenant_id, node_id, ts_ms)
-        );
-
-        -- ── 5-minute aggregates (90-day retention) ───────────────────────
-        CREATE TABLE IF NOT EXISTS metrics_5min (
-            node_id              VARCHAR   NOT NULL,
-            ts_ms                BIGINT    NOT NULL,
-            tenant_id            VARCHAR   NOT NULL,
-            tok_s_avg            FLOAT,
-            tok_s_p50            FLOAT,
-            tok_s_p95            FLOAT,
-            watts_avg            FLOAT,
-            wes_raw_avg          FLOAT,
-            wes_penalized_avg    FLOAT,
-            wes_penalized_min    FLOAT,
-            thermal_cost_pct_avg FLOAT,
-            thermal_cost_pct_max FLOAT,
-            thermal_state_worst  VARCHAR,
-            mem_pressure_pct_avg FLOAT,
-            mem_pressure_pct_max FLOAT,
-            gpu_pct_avg          FLOAT,
-            inference_duty_pct   FLOAT,
-            sample_count         USMALLINT NOT NULL DEFAULT 0,
-            wes_version          UTINYINT  NOT NULL DEFAULT 1,
-            wes_version_count    UTINYINT  NOT NULL DEFAULT 1,
-            agent_version        VARCHAR,
-            PRIMARY KEY (tenant_id, node_id, ts_ms)
-        );
-
-        -- ── WES formula version boundaries ───────────────────────────────
-        CREATE TABLE IF NOT EXISTS schema_breakpoints (
-            node_id         VARCHAR NOT NULL,
-            ts_ms           BIGINT  NOT NULL,
-            tenant_id       VARCHAR NOT NULL,
-            breakpoint_type VARCHAR NOT NULL,
-            detail          VARCHAR
-        );
-
-        -- ── Node events (30-day retention) ──────────────────────────────
-        CREATE TABLE IF NOT EXISTS node_events (
-            ts_ms       BIGINT  NOT NULL,
-            node_id     VARCHAR NOT NULL,
-            tenant_id   VARCHAR NOT NULL,
-            level       VARCHAR NOT NULL DEFAULT 'info',
-            event_type  VARCHAR,
-            message     VARCHAR NOT NULL,
-            PRIMARY KEY (tenant_id, node_id, ts_ms, message)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_raw_node_ts
-            ON metrics_raw  (tenant_id, node_id, ts_ms);
-        CREATE INDEX IF NOT EXISTS idx_5min_node_ts
-            ON metrics_5min (tenant_id, node_id, ts_ms);
-        CREATE INDEX IF NOT EXISTS idx_node_events_tenant_ts
-            ON node_events  (tenant_id, ts_ms);
-    ").expect("DuckDB migrations failed");
-
-    // ── Fleet observations (Phase 4B — stateful alert triage) ──────────
-    //
-    // Separate from node_events (flat log): observations are stateful records
-    // with severity, open/resolved/acknowledged lifecycle, and structured
-    // context JSON for the Triage tab.
-    //
-    // State machine:
-    //   state = 'open'         → condition is actively firing
-    //   state = 'resolved'     → condition cleared (auto-resolved by evaluator)
-    //   state = 'acknowledged' → operator dismissed via UI (manual)
-    conn.execute_batch("
-        CREATE TABLE IF NOT EXISTS fleet_observations (
-            id              VARCHAR   NOT NULL,
-            tenant_id       VARCHAR   NOT NULL,
-            node_id         VARCHAR   NOT NULL,
-            alert_type      VARCHAR   NOT NULL,
-            severity        VARCHAR   NOT NULL DEFAULT 'warning',
-            state           VARCHAR   NOT NULL DEFAULT 'open',
-            title           VARCHAR   NOT NULL,
-            detail          VARCHAR   NOT NULL,
-            context_json    VARCHAR,
-            fired_at_ms     BIGINT    NOT NULL,
-            resolved_at_ms  BIGINT,
-            ack_at_ms       BIGINT,
-            PRIMARY KEY (tenant_id, node_id, alert_type, fired_at_ms)
-        );
-        CREATE INDEX IF NOT EXISTS idx_observations_tenant_state
-            ON fleet_observations (tenant_id, state, fired_at_ms);
-        CREATE INDEX IF NOT EXISTS idx_observations_node
-            ON fleet_observations (tenant_id, node_id, fired_at_ms);
-    ").unwrap_or_else(|e| eprintln!("[duck] fleet_observations migration failed (non-fatal): {e}"));
-
-    // ── Additive column migrations (idempotent — silently ignored if column exists) ──
-    let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN inference_state VARCHAR;");
-    let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN wes_version UTINYINT NOT NULL DEFAULT 1;");
-    let _ = conn.execute_batch("ALTER TABLE metrics_raw  ADD COLUMN agent_version VARCHAR;");
-    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN inference_duty_pct FLOAT;");
-    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN wes_version UTINYINT NOT NULL DEFAULT 1;");
-    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN wes_version_count UTINYINT NOT NULL DEFAULT 1;");
-    let _ = conn.execute_batch("ALTER TABLE metrics_5min ADD COLUMN agent_version VARCHAR;");
-
-    // ── Diagnostic: log actual column count so schema drift is visible ──
-    if let Ok(mut stmt) = conn.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'metrics_raw' ORDER BY ordinal_position") {
-        if let Ok(cols) = stmt.query_map([], |r| r.get::<_, String>(0)) {
-            let names: Vec<String> = cols.filter_map(|r| r.ok()).collect();
-            eprintln!("[duck] metrics_raw schema: {} columns — {:?}", names.len(), names);
-        }
-    }
-}
-
-// ── DuckDB — derive MetricsRow from inbound telemetry ────────────────────────
+// ── Derive MetricsRow from inbound telemetry ────────────────────────────────
 
 fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
     let tok_s   = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
-    // Power priority: NVIDIA board power → Apple SoC (Combined CPU+GPU+ANE) → cpu_power_w fallback.
-    // apple_soc_power_w is the correct total power for Apple Silicon WES calculation.
-    // cpu_power_w alone is just the CPU cluster (~0.1W at idle) and produces inflated WES.
     let watts   = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
     let penalty = thermal_penalty_for(m.thermal_state.as_deref());
 
@@ -3376,12 +2622,11 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
     MetricsRow {
         node_id:          m.node_id.clone(),
         ts_ms:            ts_ms as i64,
-        tenant_id:        String::new(), // filled in by handle_telemetry after node lookup
+        tenant_id:        String::new(),
         tok_s,
         watts,
         wes_raw,
         wes_penalized,
-        // Use agent's penalty_avg for thermal cost if available (WES v2).
         thermal_cost_pct: m.penalty_avg.and_then(|p| if p > 1.0 { Some(((p - 1.0) / p) * 100.0) } else { None }),
         thermal_penalty:  Some(penalty),
         thermal_state:    m.thermal_state.clone(),
@@ -3395,80 +2640,70 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
     }
 }
 
-// ── DuckDB — batch writer ─────────────────────────────────────────────────────
+// ── Batch writer (Postgres UNNEST) ──────────────────────────────────────────
 
-/// Flush a batch of MetricsRow into metrics_raw using explicit INSERT statements.
-/// Slower than the DuckDB Appender but immune to schema drift from ALTER TABLE
-/// migrations that change the column order or count on an existing database file.
-/// Call only from spawn_blocking — DuckDB Connection is !Sync.
-fn flush_batch(conn: &DuckConn, batch: &[MetricsRow]) {
+async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
     if batch.is_empty() { return; }
 
-    let mut stmt = match conn.prepare(
-        "INSERT INTO metrics_raw (
-            node_id, ts_ms, tenant_id, tok_s, watts, wes_raw, wes_penalized,
-            thermal_cost_pct, thermal_penalty, thermal_state,
-            vram_used_mb, vram_total_mb, mem_pressure_pct, gpu_pct, cpu_pct,
-            inference_state, wes_version, agent_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ) {
-        Ok(s) => s,
-        Err(e) => { eprintln!("[duck] INSERT prepare failed: {e}"); return; }
-    };
+    for chunk in batch.chunks(1000) {
+        let ts_values:   Vec<f64>            = chunk.iter().map(|r| r.ts_ms as f64).collect();
+        let node_ids:    Vec<&str>           = chunk.iter().map(|r| r.node_id.as_str()).collect();
+        let tenant_ids:  Vec<&str>           = chunk.iter().map(|r| r.tenant_id.as_str()).collect();
+        let tok_s:       Vec<Option<f32>>    = chunk.iter().map(|r| r.tok_s).collect();
+        let watts:       Vec<Option<f32>>    = chunk.iter().map(|r| r.watts).collect();
+        let wes_raw:     Vec<Option<f32>>    = chunk.iter().map(|r| r.wes_raw).collect();
+        let wes_pen:     Vec<Option<f32>>    = chunk.iter().map(|r| r.wes_penalized).collect();
+        let therm_cost:  Vec<Option<f32>>    = chunk.iter().map(|r| r.thermal_cost_pct).collect();
+        let therm_pen:   Vec<Option<f32>>    = chunk.iter().map(|r| r.thermal_penalty).collect();
+        let therm_state: Vec<Option<&str>>   = chunk.iter().map(|r| r.thermal_state.as_deref()).collect();
+        let vram_used:   Vec<Option<i32>>    = chunk.iter().map(|r| r.vram_used_mb).collect();
+        let vram_total:  Vec<Option<i32>>    = chunk.iter().map(|r| r.vram_total_mb).collect();
+        let mem_pct:     Vec<Option<f32>>    = chunk.iter().map(|r| r.mem_pressure_pct).collect();
+        let gpu_pct:     Vec<Option<f32>>    = chunk.iter().map(|r| r.gpu_pct).collect();
+        let cpu_pct:     Vec<Option<f32>>    = chunk.iter().map(|r| r.cpu_pct).collect();
+        let inf_state:   Vec<Option<&str>>   = chunk.iter().map(|r| r.inference_state.as_deref()).collect();
+        let wes_ver:     Vec<i16>            = chunk.iter().map(|r| r.wes_version as i16).collect();
 
-    let mut ok = 0usize;
-    let mut fail = 0usize;
-    for row in batch {
-        match stmt.execute(duckdb::params![
-            row.node_id.as_str(),
-            row.ts_ms,
-            row.tenant_id.as_str(),
-            row.tok_s,
-            row.watts,
-            row.wes_raw,
-            row.wes_penalized,
-            row.thermal_cost_pct,
-            row.thermal_penalty,
-            row.thermal_state.as_deref(),
-            row.vram_used_mb,
-            row.vram_total_mb,
-            row.mem_pressure_pct,
-            row.gpu_pct,
-            row.cpu_pct,
-            row.inference_state.as_deref(),
-            row.wes_version,
-            Option::<&str>::None, // agent_version — Phase 4B
-        ]) {
-            Ok(_)  => ok += 1,
-            Err(_) => fail += 1,
-        }
-    }
-    if fail > 0 {
-        eprintln!("[duck] INSERT batch: {ok} ok, {fail} failed (of {} total)", batch.len());
+        let _ = sqlx::query(
+            "INSERT INTO metrics_raw (ts, node_id, tenant_id, tok_s, watts, wes_raw, wes_penalized,
+                thermal_cost_pct, thermal_penalty, thermal_state, vram_used_mb, vram_total_mb,
+                mem_pressure_pct, gpu_pct, cpu_pct, inference_state, wes_version)
+             SELECT to_timestamp(unnest($1::float8[]) / 1000.0),
+                    unnest($2::text[]), unnest($3::text[]),
+                    unnest($4::real[]), unnest($5::real[]), unnest($6::real[]), unnest($7::real[]),
+                    unnest($8::real[]), unnest($9::real[]), unnest($10::text[]),
+                    unnest($11::int[]), unnest($12::int[]),
+                    unnest($13::real[]), unnest($14::real[]), unnest($15::real[]),
+                    unnest($16::text[]), unnest($17::smallint[])
+             ON CONFLICT DO NOTHING"
+        )
+        .bind(&ts_values).bind(&node_ids).bind(&tenant_ids)
+        .bind(&tok_s).bind(&watts).bind(&wes_raw).bind(&wes_pen)
+        .bind(&therm_cost).bind(&therm_pen).bind(&therm_state)
+        .bind(&vram_used).bind(&vram_total)
+        .bind(&mem_pct).bind(&gpu_pct).bind(&cpu_pct)
+        .bind(&inf_state).bind(&wes_ver)
+        .execute(pool).await;
     }
 }
 
-/// Background task: drain the metrics channel and flush to DuckDB every 30 s
-/// or when the buffer hits 512 rows (safety valve).
-async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, duck: DuckDb) {
+/// Background task: drain the metrics channel and flush every 30 s.
+async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, pool: sqlx::PgPool) {
     let mut buffer: Vec<MetricsRow> = Vec::with_capacity(256);
     let mut flush_interval = tokio::time::interval(Duration::from_secs(30));
     flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    flush_interval.tick().await; // discard the immediate first tick
+    flush_interval.tick().await;
 
     loop {
         tokio::select! {
             msg = rx.recv() => {
                 match msg {
-                    None => break, // sender dropped; flush remaining and exit
+                    None => break,
                     Some(row) => {
                         buffer.push(row);
                         if buffer.len() >= 512 {
                             let batch = std::mem::take(&mut buffer);
-                            let d = duck.clone();
-                            tokio::task::spawn_blocking(move || {
-                                flush_batch(&duck_lock(&d), &batch);
-                            }).await.ok();
+                            flush_batch(&pool, &batch).await;
                         }
                     }
                 }
@@ -3476,78 +2711,50 @@ async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, duck: DuckDb) {
             _ = flush_interval.tick() => {
                 if !buffer.is_empty() {
                     let batch = std::mem::take(&mut buffer);
-                    let d = duck.clone();
-                    tokio::task::spawn_blocking(move || {
-                        flush_batch(&duck_lock(&d), &batch);
-                    }).await.ok();
+                    flush_batch(&pool, &batch).await;
                 }
             }
         }
     }
 
-    // Final flush on shutdown
     if !buffer.is_empty() {
-        let d = duck.clone();
-        tokio::task::spawn_blocking(move || {
-            flush_batch(&duck_lock(&d), &buffer);
-        }).await.ok();
+        flush_batch(&pool, &buffer).await;
     }
 }
 
-/// Background task: drain the events channel and write to DuckDB immediately.
-/// Events are rare (a few per day per node), so no batching — direct INSERT.
-async fn events_writer_task(mut rx: mpsc::Receiver<EventRow>, duck: DuckDb) {
+/// Background task: drain the events channel and write immediately.
+async fn events_writer_task(mut rx: mpsc::Receiver<EventRow>, pool: sqlx::PgPool) {
     while let Some(ev) = rx.recv().await {
-        let d = duck.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let conn = duck_lock(&d);
-            if let Err(e) = conn.execute(
-                "INSERT INTO node_events (ts_ms, node_id, tenant_id, level, event_type, message)
-                 VALUES (?, ?, ?, ?, ?, ?)
-                 ON CONFLICT DO NOTHING",
-                duckdb::params![ev.ts_ms, ev.node_id, ev.tenant_id, ev.level, ev.event_type, ev.message],
-            ) {
-                eprintln!("[duck] event write error: {e}");
-            }
-        }).await;
+        let _ = sqlx::query(
+            "INSERT INTO node_events (ts, node_id, tenant_id, level, event_type, message)
+             VALUES (to_timestamp($1::float8 / 1000.0), $2, $3, $4, $5, $6)
+             ON CONFLICT DO NOTHING"
+        ).bind(ev.ts_ms as f64).bind(&ev.node_id).bind(&ev.tenant_id)
+        .bind(&ev.level).bind(&ev.event_type).bind(&ev.message)
+        .execute(&pool).await;
     }
 }
 
-// ── DuckDB — rollup & maintenance ────────────────────────────────────────────
+// ── Rollup & maintenance ─────────────────────────────────────────────────────
 
-/// Hourly: aggregate metrics_raw rows older than 24 h into 5-minute buckets,
-/// then delete the raw rows that were successfully rolled up.
-/// EXISTS guard on DELETE ensures we never lose data if the INSERT fails.
-fn run_rollup(conn: &DuckConn) {
-    let cutoff_ms: i64 = (now_ms() as i64) - 86_400_000; // 24 h ago
-
-    // thermal_state_worst uses numeric encoding so ordering is correct:
-    // Critical(3) > Serious(2) > Fair(1) > Normal(0).
-    let sql = format!(r#"
-        BEGIN TRANSACTION;
-
-        INSERT INTO metrics_5min (
-            node_id, ts_ms, tenant_id,
+async fn run_rollup(pool: &sqlx::PgPool) {
+    // Aggregate metrics_raw rows older than 24h into 5-minute buckets.
+    let result = sqlx::query(
+        "INSERT INTO metrics_5min (ts, node_id, tenant_id,
             tok_s_avg, tok_s_p50, tok_s_p95,
             watts_avg, wes_raw_avg, wes_penalized_avg, wes_penalized_min,
             thermal_cost_pct_avg, thermal_cost_pct_max, thermal_state_worst,
             mem_pressure_pct_avg, mem_pressure_pct_max, gpu_pct_avg,
             inference_duty_pct,
-            sample_count, wes_version, wes_version_count, agent_version
-        )
+            sample_count, wes_version, wes_version_count, agent_version)
         SELECT
-            node_id,
-            (ts_ms / 300000) * 300000          AS ts_ms,
-            tenant_id,
-            AVG(tok_s)                         AS tok_s_avg,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tok_s) AS tok_s_p50,
-            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tok_s) AS tok_s_p95,
-            AVG(watts)                         AS watts_avg,
-            AVG(wes_raw)                       AS wes_raw_avg,
-            AVG(wes_penalized)                 AS wes_penalized_avg,
-            MIN(wes_penalized)                 AS wes_penalized_min,
-            AVG(thermal_cost_pct)              AS thermal_cost_pct_avg,
-            MAX(thermal_cost_pct)              AS thermal_cost_pct_max,
+            time_bucket('5 minutes', ts) AS bucket,
+            node_id, tenant_id,
+            AVG(tok_s),
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tok_s),
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tok_s),
+            AVG(watts), AVG(wes_raw), AVG(wes_penalized), MIN(wes_penalized),
+            AVG(thermal_cost_pct), MAX(thermal_cost_pct),
             CASE MAX(CASE thermal_state
                      WHEN 'Critical' THEN 3
                      WHEN 'Serious'  THEN 2
@@ -3556,111 +2763,82 @@ fn run_rollup(conn: &DuckConn) {
                 WHEN 3 THEN 'Critical'
                 WHEN 2 THEN 'Serious'
                 WHEN 1 THEN 'Fair'
-                ELSE 'Normal' END              AS thermal_state_worst,
-            AVG(mem_pressure_pct)              AS mem_pressure_pct_avg,
-            MAX(mem_pressure_pct)              AS mem_pressure_pct_max,
-            AVG(gpu_pct)                       AS gpu_pct_avg,
-            -- Inference duty: % of samples in this 5-min bucket where the node was "live"
-            (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::FLOAT / COUNT(*)::FLOAT * 100.0) AS inference_duty_pct,
-            COUNT(*)::USMALLINT                AS sample_count,
-            MAX(wes_version)                   AS wes_version,
-            COUNT(DISTINCT wes_version)::UTINYINT AS wes_version_count,
-            ANY_VALUE(agent_version)           AS agent_version
+                ELSE 'Normal' END,
+            AVG(mem_pressure_pct), MAX(mem_pressure_pct), AVG(gpu_pct),
+            (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::real / NULLIF(COUNT(*), 0)::real * 100.0),
+            COUNT(*)::smallint,
+            MIN(wes_version)::smallint,
+            COUNT(DISTINCT wes_version)::smallint,
+            MIN(agent_version)
         FROM metrics_raw
-        WHERE ts_ms < {cutoff_ms}
-        GROUP BY node_id, tenant_id, (ts_ms / 300000) * 300000
-        ON CONFLICT DO NOTHING;
+        WHERE ts < NOW() - INTERVAL '24 hours'
+        GROUP BY bucket, node_id, tenant_id
+        ON CONFLICT DO NOTHING"
+    ).execute(pool).await;
 
-        -- Only delete raw rows that were successfully rolled up (EXISTS guard).
-        DELETE FROM metrics_raw
-        WHERE ts_ms < {cutoff_ms}
-          AND EXISTS (
-              SELECT 1 FROM metrics_5min m
-              WHERE m.tenant_id = metrics_raw.tenant_id
-                AND m.node_id   = metrics_raw.node_id
-                AND m.ts_ms     = (metrics_raw.ts_ms / 300000) * 300000
-          );
-
-        -- Prune 5-min rows older than 90 days.
-        DELETE FROM metrics_5min
-        WHERE ts_ms < ({cutoff_ms} - 7776000000);
-
-        COMMIT;
-    "#);
-
-    conn.execute_batch(&sql)
-        .unwrap_or_else(|e| eprintln!("[rollup] failed: {e}"));
-    println!("[rollup] complete (cutoff_ms={cutoff_ms})");
-}
-
-/// Nightly (3 AM UTC): CHECKPOINT + ANALYZE to compact WAL and update stats.
-/// Separated from the hourly rollup to avoid blocking the Appender writer.
-fn run_nightly_maintenance(conn: &DuckConn) {
-    // Prune node_events older than 30 days.
-    let event_cutoff_ms = (now_ms() as i64) - 30 * 86_400_000;
-    let _ = conn.execute(
-        "DELETE FROM node_events WHERE ts_ms < ?",
-        duckdb::params![event_cutoff_ms],
-    );
-
-    // Prune resolved/acknowledged observations older than 30 days.
-    let _ = conn.execute(
-        "DELETE FROM fleet_observations WHERE state != 'open' AND fired_at_ms < ?",
-        duckdb::params![event_cutoff_ms],
-    );
-
-    conn.execute_batch("
-        CHECKPOINT;
-        ANALYZE metrics_raw;
-        ANALYZE metrics_5min;
-        ANALYZE node_events;
-        ANALYZE fleet_observations;
-    ").unwrap_or_else(|e| eprintln!("[nightly] maintenance failed: {e}"));
-    println!("[nightly] CHECKPOINT + ANALYZE complete");
-}
-
-/// Hourly rollup background task.  Runs once on startup (after 60s warm-up
-/// to let the first telemetry frames land), then every hour.
-async fn rollup_task(duck: DuckDb) {
-    // Wait 60s for initial telemetry to arrive, then run first rollup.
-    tokio::time::sleep(Duration::from_secs(60)).await;
-    {
-        let d = duck.clone();
-        tokio::task::spawn_blocking(move || run_rollup(&duck_lock(&d))).await.ok();
+    match result {
+        Ok(r) => println!("[rollup] inserted {} 5-min aggregates", r.rows_affected()),
+        Err(e) => eprintln!("[rollup] insert failed: {e}"),
     }
+
+    // Delete rolled-up raw rows. TimescaleDB retention policy also handles this,
+    // but explicit deletion ensures data is rolled up first.
+    let _ = sqlx::query(
+        "DELETE FROM metrics_raw
+         WHERE ts < NOW() - INTERVAL '24 hours'
+           AND EXISTS (
+               SELECT 1 FROM metrics_5min m
+               WHERE m.tenant_id = metrics_raw.tenant_id
+                 AND m.node_id   = metrics_raw.node_id
+                 AND m.ts        = time_bucket('5 minutes', metrics_raw.ts)
+           )"
+    ).execute(pool).await;
+
+    println!("[rollup] complete");
+}
+
+/// Nightly maintenance: prune old events and observations, VACUUM ANALYZE.
+async fn run_nightly_maintenance(pool: &sqlx::PgPool) {
+    // Prune resolved/acknowledged observations older than 30 days.
+    let _ = sqlx::query(
+        "DELETE FROM fleet_observations WHERE state != 'open' AND fired_at_ms < $1"
+    ).bind((now_ms() as i64) - 30 * 86_400_000).execute(pool).await;
+
+    // ANALYZE key tables for query planner.
+    let _ = sqlx::query("ANALYZE metrics_raw").execute(pool).await;
+    let _ = sqlx::query("ANALYZE metrics_5min").execute(pool).await;
+    let _ = sqlx::query("ANALYZE node_events").execute(pool).await;
+    let _ = sqlx::query("ANALYZE fleet_observations").execute(pool).await;
+
+    println!("[nightly] ANALYZE complete");
+}
+
+async fn rollup_task(pool: sqlx::PgPool) {
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    run_rollup(&pool).await;
 
     let mut interval = tokio::time::interval(Duration::from_secs(3600));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    interval.tick().await; // consume the immediate first tick
+    interval.tick().await;
     loop {
         interval.tick().await;
-        let d = duck.clone();
-        tokio::task::spawn_blocking(move || {
-            run_rollup(&duck_lock(&d));
-        }).await.ok();
+        run_rollup(&pool).await;
     }
 }
 
-/// Nightly maintenance task — fires at 3 AM UTC.
-async fn nightly_task(duck: DuckDb) {
+async fn nightly_task(pool: sqlx::PgPool) {
     loop {
-        // Calculate seconds until next 3 AM UTC.
         let now_s = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let secs_in_day      = now_s % 86400;
-        let target_in_day    = 3 * 3600_u64; // 03:00 UTC
+            .duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let secs_in_day   = now_s % 86400;
+        let target_in_day = 3 * 3600_u64;
         let sleep_secs = if secs_in_day < target_in_day {
             target_in_day - secs_in_day
         } else {
             86400 - secs_in_day + target_in_day
         };
         tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
-        let d = duck.clone();
-        tokio::task::spawn_blocking(move || {
-            run_nightly_maintenance(&duck_lock(&d));
-        }).await.ok();
+        run_nightly_maintenance(&pool).await;
     }
 }
 
@@ -3690,9 +2868,9 @@ struct AlertRule {
 
 #[derive(Deserialize)]
 struct CreateChannelRequest {
-    channel_type: String,  // "slack" | "email"
+    channel_type: String,
     name:         String,
-    config_json:  String,  // { "webhook_url": "..." } or { "address": "..." }
+    config_json:  String,
 }
 
 #[derive(Deserialize)]
@@ -3706,8 +2884,6 @@ struct CreateRuleRequest {
 
 // ── Alerting — notification delivery ─────────────────────────────────────────
 
-/// Post a message to a Slack incoming webhook URL.
-/// Returns true on success.
 fn send_slack(webhook_url: &str, blocks_json: &str) -> bool {
     let body = format!(r#"{{"blocks":{blocks_json}}}"#);
     match ureq::post(webhook_url)
@@ -3719,27 +2895,16 @@ fn send_slack(webhook_url: &str, blocks_json: &str) -> bool {
     }
 }
 
-/// Send a transactional email via Resend.
-/// RESEND_API_KEY env var must be set.  FROM_EMAIL defaults to alerts@wicklee.dev.
 fn send_email(to: &str, subject: &str, text: &str, html: &str) -> bool {
     let api_key = match std::env::var("RESEND_API_KEY") {
         Ok(k) => k,
-        Err(_) => {
-            eprintln!("[email] RESEND_API_KEY not set — skipping delivery");
-            return false;
-        }
+        Err(_) => { eprintln!("[email] RESEND_API_KEY not set"); return false; }
     };
     let from = std::env::var("FROM_EMAIL")
         .unwrap_or_else(|_| "Wicklee Alerts <alerts@wicklee.dev>".to_string());
-
     let payload = serde_json::json!({
-        "from":    from,
-        "to":      [to],
-        "subject": subject,
-        "text":    text,
-        "html":    html,
+        "from": from, "to": [to], "subject": subject, "text": text, "html": html,
     });
-
     match ureq::post("https://api.resend.com/emails")
         .set("Authorization", &format!("Bearer {api_key}"))
         .set("Content-Type", "application/json")
@@ -3750,67 +2915,39 @@ fn send_email(to: &str, subject: &str, text: &str, html: &str) -> bool {
     }
 }
 
-// ── Alerting — payload builders ───────────────────────────────────────────────
-
-/// Build a Slack Block Kit payload for a firing alert.
-fn slack_alert_blocks(
-    node_id:    &str,
-    event_type: &str,
-    detail:     &str,
-    resolved:   bool,
-) -> String {
+fn slack_alert_blocks(node_id: &str, event_type: &str, detail: &str, resolved: bool) -> String {
     let (icon, color_word) = if resolved {
-        ("✅", "Recovered")
+        ("\u{2705}", "Recovered")
     } else {
         match event_type {
-            "thermal_critical"      => ("🔥", "Critical"),
-            "thermal_serious"       => ("⚠️",  "Warning"),
-            "thermal_drain"         => ("🌡️",  "Thermal Drain"),
-            "memory_pressure_high"  => ("💾", "Warning"),
-            "memory_trajectory"     => ("📈", "Memory Trajectory"),
-            "wes_drop"              => ("📉", "Warning"),
-            "wes_velocity_drop"     => ("📉", "WES Declining"),
-            "phantom_load"          => ("⚡", "Phantom Load"),
-            "node_offline"          => ("🔴", "Offline"),
-            _                       => ("⚡", "Alert"),
+            "thermal_critical"      => ("\u{1F525}", "Critical"),
+            "thermal_serious"       => ("\u{26A0}\u{FE0F}",  "Warning"),
+            "thermal_drain"         => ("\u{1F321}\u{FE0F}",  "Thermal Drain"),
+            "memory_pressure_high"  => ("\u{1F4BE}", "Warning"),
+            "memory_trajectory"     => ("\u{1F4C8}", "Memory Trajectory"),
+            "wes_drop"              => ("\u{1F4C9}", "Warning"),
+            "wes_velocity_drop"     => ("\u{1F4C9}", "WES Declining"),
+            "phantom_load"          => ("\u{26A1}", "Phantom Load"),
+            "node_offline"          => ("\u{1F534}", "Offline"),
+            _                       => ("\u{26A1}", "Alert"),
         }
     };
     let title = if resolved {
-        format!("{icon} {node_id} — Recovered ({event_type})")
+        format!("{icon} {node_id} \u{2014} Recovered ({event_type})")
     } else {
-        format!("{icon} {node_id} — {color_word}")
+        format!("{icon} {node_id} \u{2014} {color_word}")
     };
     serde_json::json!([
-        {
-            "type": "header",
-            "text": { "type": "plain_text", "text": title }
-        },
-        {
-            "type": "section",
-            "text": { "type": "mrkdwn", "text": detail }
-        },
-        {
-            "type": "context",
-            "elements": [{
-                "type": "mrkdwn",
-                "text": format!("Wicklee · <https://wicklee.dev|View Dashboard>")
-            }]
-        }
+        { "type": "header", "text": { "type": "plain_text", "text": title } },
+        { "type": "section", "text": { "type": "mrkdwn", "text": detail } },
+        { "type": "context", "elements": [{ "type": "mrkdwn", "text": "Wicklee \u{00B7} <https://wicklee.dev|View Dashboard>" }] }
     ]).to_string()
 }
 
-/// Build plain-text + HTML email body for an alert.
-fn email_alert_body(
-    node_id:    &str,
-    event_type: &str,
-    detail:     &str,
-    resolved:   bool,
-) -> (String, String) {
+fn email_alert_body(node_id: &str, event_type: &str, detail: &str, resolved: bool) -> (String, String) {
     let state_word = if resolved { "RECOVERED" } else { "FIRING" };
-    let subject_prefix = if resolved { "✅ Recovered" } else { "⚠️ Alert" };
-    let text = format!(
-        "{subject_prefix}: {node_id} — {event_type}\n\n{detail}\n\nView dashboard: https://wicklee.dev",
-    );
+    let subject_prefix = if resolved { "\u{2705} Recovered" } else { "\u{26A0}\u{FE0F} Alert" };
+    let text = format!("{subject_prefix}: {node_id} \u{2014} {event_type}\n\n{detail}\n\nView dashboard: https://wicklee.dev");
     let html = format!(
         r#"<html><body style="font-family:monospace;background:#030712;color:#e5e7eb;padding:24px">
 <h2 style="color:{color}">{state_word}: {node_id}</h2>
@@ -3823,304 +2960,193 @@ fn email_alert_body(
     (text, html)
 }
 
-// ── Alerting — core evaluation ────────────────────────────────────────────────
+// ── Alerting — core evaluation (async) ──────────────────────────────────────
 
-/// Evaluate active alert rules for a single telemetry frame.
-/// Called synchronously inside `handle_telemetry`'s spawn_blocking block.
-fn evaluate_alerts(
+async fn evaluate_alerts(
     user_id:  &str,
     node_id:  &str,
     metrics:  &MetricsPayload,
-    conn:     &Connection,
+    pool:     &sqlx::PgPool,
 ) {
-    // Load enabled rules for this user that apply to this node (or fleet-wide).
-    let mut stmt = match conn.prepare(
+    // Load enabled rules for this user + node.
+    let rules: Vec<(String, String, Option<f64>, String, String, String)> = sqlx::query_as(
         "SELECT ar.id, ar.event_type, ar.threshold_value, ar.urgency,
-                nc.channel_type, nc.config_json
+                nc.channel_type, nc.config_json::text
          FROM   alert_rules ar
          JOIN   notification_channels nc ON nc.id = ar.channel_id
-         WHERE  ar.user_id  = ?1
+         WHERE  ar.user_id  = $1
            AND  ar.enabled  = 1
-           AND  (ar.node_id IS NULL OR ar.node_id = ?2)",
-    ) {
-        Ok(s)  => s,
-        Err(e) => { eprintln!("[alerts] prepare failed: {e}"); return; }
-    };
-
-    struct RuleRow {
-        id:              String,
-        event_type:      String,
-        threshold_value: f64,
-        urgency:         String,
-        channel_type:    String,
-        config_json:     String,
-    }
-
-    let rules: Vec<RuleRow> = match stmt.query_map(params![user_id, node_id], |r| {
-        Ok(RuleRow {
-            id:              r.get(0)?,
-            event_type:      r.get(1)?,
-            threshold_value: r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
-            urgency:         r.get(3)?,
-            channel_type:    r.get(4)?,
-            config_json:     r.get(5)?,
-        })
-    }) {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(e)   => { eprintln!("[alerts] query failed: {e}"); return; }
-    };
+           AND  (ar.node_id IS NULL OR ar.node_id = $2)"
+    ).bind(user_id).bind(node_id)
+    .fetch_all(pool).await.unwrap_or_default();
 
     let now = now_ms();
 
-    for rule in &rules {
-        // ── Evaluate condition ──────────────────────────────────────────────
-        let firing = match rule.event_type.as_str() {
-            "thermal_serious"  => matches!(
-                metrics.thermal_state.as_deref(),
-                Some("Serious") | Some("Critical")
-            ),
-            "thermal_critical" => matches!(
-                metrics.thermal_state.as_deref(),
-                Some("Critical")
-            ),
+    for (rule_id, event_type, threshold_value_opt, urgency, channel_type, config_json) in &rules {
+        let threshold_value = threshold_value_opt.unwrap_or(0.0);
+
+        let firing = match event_type.as_str() {
+            "thermal_serious"  => matches!(metrics.thermal_state.as_deref(), Some("Serious") | Some("Critical")),
+            "thermal_critical" => matches!(metrics.thermal_state.as_deref(), Some("Critical")),
             "memory_pressure_high" => {
-                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 85.0 };
-                metrics.memory_pressure_percent
-                    .map(|p| p > threshold)
-                    .unwrap_or(false)
+                let threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 85.0 };
+                metrics.memory_pressure_percent.map(|p| p > threshold).unwrap_or(false)
             }
             "wes_drop" => {
-                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 5.0 };
-                wes_for_payload(metrics)
-                    .map(|w| w < threshold)
-                    .unwrap_or(false)
+                let threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 5.0 };
+                wes_for_payload(metrics).map(|w| w < threshold).unwrap_or(false)
             }
-            // ── Pattern Engine alert types ──────────────────────────────────────
-            //
-            // These are server-side proxy conditions that approximate the client-side
-            // pattern engine's time-windowed detections. They fire on a single telemetry
-            // frame; the frontend pattern engine provides richer trend-based analysis.
-            //
-            // thermal_drain: non-Normal thermal state with a measurable efficiency
-            //   penalty (penalized WES below threshold). Fires before thermal_critical
-            //   but after the node has crossed into Fair/Serious thermal territory.
-            //   Default threshold: WES < 6.0 (penalized).
             "thermal_drain" => {
-                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 6.0 };
-                let is_throttled = matches!(
-                    metrics.thermal_state.as_deref(),
-                    Some("Fair") | Some("Serious") | Some("Critical")
-                );
-                if !is_throttled { false } else {
-                    wes_for_payload(metrics).map(|w| w < threshold).unwrap_or(false)
-                }
+                let threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 6.0 };
+                let is_throttled = matches!(metrics.thermal_state.as_deref(), Some("Fair") | Some("Serious") | Some("Critical"));
+                is_throttled && wes_for_payload(metrics).map(|w| w < threshold).unwrap_or(false)
             }
-            // phantom_load: a model is loaded and drawing power but no inference
-            //   activity is happening. Proxy: watts > threshold AND vram > 1 GB (or
-            //   an Ollama model is active) AND tok/s is effectively zero.
-            //   Default threshold: watts > 15W.
             "phantom_load" => {
-                let watts_threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 15.0 };
+                let watts_threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 15.0 };
                 let watts = metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0);
-                let tok_s  = if metrics.vllm_running {
-                    metrics.vllm_tokens_per_sec
-                } else {
-                    metrics.ollama_tokens_per_second
-                };
-                let model_loaded = metrics.nvidia_vram_used_mb.map(|v| v >= 1024).unwrap_or(false)
-                    || metrics.ollama_active_model.is_some();
-                watts > watts_threshold
-                    && model_loaded
-                    && tok_s.map(|t| t < 0.5).unwrap_or(true)
+                let tok_s = if metrics.vllm_running { metrics.vllm_tokens_per_sec } else { metrics.ollama_tokens_per_second };
+                let model_loaded = metrics.nvidia_vram_used_mb.map(|v| v >= 1024).unwrap_or(false) || metrics.ollama_active_model.is_some();
+                watts > watts_threshold && model_loaded && tok_s.map(|t| t < 0.5).unwrap_or(true)
             }
-            // wes_velocity_drop: WES is in a "warning zone" — below the velocity-drop
-            //   threshold but NOT yet at the critical wes_drop level, AND thermal state
-            //   is not already Serious/Critical (avoids duplicate with thermal_serious).
-            //   Acts as an early-warning complement to wes_drop.
-            //   Default threshold: WES < 7.0 (penalized).
             "wes_velocity_drop" => {
-                let threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 7.0 };
-                let not_thermal = !matches!(
-                    metrics.thermal_state.as_deref(),
-                    Some("Serious") | Some("Critical")
-                );
+                let threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 7.0 };
+                let not_thermal = !matches!(metrics.thermal_state.as_deref(), Some("Serious") | Some("Critical"));
                 not_thermal && wes_for_payload(metrics).map(|w| w < threshold).unwrap_or(false)
             }
-            // memory_trajectory: memory pressure is in the early-warning zone before
-            //   the memory_pressure_high threshold — fires between 65% and 80%.
-            //   Default threshold: 65% (pattern engine suppresses at ≥ 80%).
             "memory_trajectory" => {
-                let lo_threshold = if rule.threshold_value > 0.0 { rule.threshold_value as f32 } else { 65.0 };
-                metrics.memory_pressure_percent
-                    .map(|p| p >= lo_threshold && p < 80.0)
-                    .unwrap_or(false)
+                let lo_threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 65.0 };
+                metrics.memory_pressure_percent.map(|p| p >= lo_threshold && p < 80.0).unwrap_or(false)
             }
-            _ => continue, // node_offline is handled by the interval task
+            _ => continue,
         };
 
-        // ── Check existing open alert for this rule + node ──────────────────
-        let open_event: Option<(String, Option<i64>)> = conn.query_row(
+        let open_event: Option<(String, Option<i64>)> = sqlx::query_as(
             "SELECT id, quiet_until_ms FROM alert_events
-             WHERE rule_id = ?1 AND node_id = ?2 AND resolved_at IS NULL
-             ORDER BY triggered_at DESC LIMIT 1",
-            params![rule.id, node_id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)),
-        ).ok();
+             WHERE rule_id = $1 AND node_id = $2 AND resolved_at IS NULL
+             ORDER BY triggered_at DESC LIMIT 1"
+        ).bind(rule_id).bind(node_id).fetch_optional(pool).await.ok().flatten();
 
-        // ── Debounce / urgency window check ────────────────────────────────
-        let debounce_ms: u64 = match rule.urgency.as_str() {
-            "immediate"      => 0,
-            "debounce_5m"    => 5 * 60_000,
-            "debounce_15m"   => 15 * 60_000,
-            _                => 0,
+        let debounce_ms: u64 = match urgency.as_str() {
+            "debounce_5m"  => 5 * 60_000,
+            "debounce_15m" => 15 * 60_000,
+            _              => 0,
         };
 
         if firing {
-            // Skip if in flap-suppression quiet period
             if let Some((_, Some(quiet_until))) = &open_event {
                 if now < *quiet_until as u64 { continue; }
             }
-            // Skip if already open (don't re-fire same alert)
             if open_event.is_some() { continue; }
 
-            // Check last resolved event for debounce window
             if debounce_ms > 0 {
-                let last_resolved_at: Option<i64> = conn.query_row(
+                let last_resolved_at: Option<i64> = sqlx::query_scalar(
                     "SELECT MAX(resolved_at) FROM alert_events
-                     WHERE rule_id = ?1 AND node_id = ?2 AND resolved_at IS NOT NULL",
-                    params![rule.id, node_id],
-                    |r| r.get(0),
-                ).ok().flatten();
+                     WHERE rule_id = $1 AND node_id = $2 AND resolved_at IS NOT NULL"
+                ).bind(rule_id).bind(node_id).fetch_one(pool).await.ok().flatten();
                 if let Some(last_res) = last_resolved_at {
                     if now < (last_res as u64).saturating_add(debounce_ms) { continue; }
                 }
             }
 
-            // ── Build detail string ─────────────────────────────────────────
-            let detail = match rule.event_type.as_str() {
+            let detail = match event_type.as_str() {
                 "thermal_serious" | "thermal_critical" => format!(
-                    "Thermal state: *{}*\nWES: {:.1} · Watts: {:.1}W",
-                    metrics.thermal_state.as_deref().unwrap_or("—"),
+                    "Thermal state: *{}*\nWES: {:.1} \u{00B7} Watts: {:.1}W",
+                    metrics.thermal_state.as_deref().unwrap_or("\u{2014}"),
                     wes_for_payload(metrics).unwrap_or(0.0),
                     metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
                 ),
                 "memory_pressure_high" => format!(
                     "Memory pressure: *{:.0}%*  (threshold: {:.0}%)\n{:.1} GB used / {:.1} GB total",
                     metrics.memory_pressure_percent.unwrap_or(0.0),
-                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 85.0 },
+                    if threshold_value > 0.0 { threshold_value } else { 85.0 },
                     metrics.used_memory_mb as f64 / 1024.0,
                     metrics.total_memory_mb as f64 / 1024.0,
                 ),
                 "wes_drop" => format!(
                     "WES: *{:.1}*  (threshold: {:.1})\nTok/s: {:.1}  Watts: {:.1}W  Thermal: {}",
                     wes_for_payload(metrics).unwrap_or(0.0),
-                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 5.0 },
+                    if threshold_value > 0.0 { threshold_value } else { 5.0 },
                     metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec).unwrap_or(0.0),
                     metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
-                    metrics.thermal_state.as_deref().unwrap_or("—"),
+                    metrics.thermal_state.as_deref().unwrap_or("\u{2014}"),
                 ),
                 "thermal_drain" => {
                     let penalty = thermal_penalty_for(metrics.thermal_state.as_deref());
                     format!(
-                        "Thermal: *{}*  (penalty ×{:.2})\nWES: {:.1}  Tok/s: {:.1}  Watts: {:.1}W\n\
-                         Route requests away to preserve throughput.",
-                        metrics.thermal_state.as_deref().unwrap_or("—"),
-                        penalty,
+                        "Thermal: *{}*  (penalty \u{00D7}{:.2})\nWES: {:.1}  Tok/s: {:.1}  Watts: {:.1}W\nRoute requests away to preserve throughput.",
+                        metrics.thermal_state.as_deref().unwrap_or("\u{2014}"), penalty,
                         wes_for_payload(metrics).unwrap_or(0.0),
                         metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec).unwrap_or(0.0),
                         metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
                     )
                 }
                 "phantom_load" => {
-                    let watts  = metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0);
-                    let vram   = metrics.nvidia_vram_used_mb.unwrap_or(0);
-                    let model  = metrics.ollama_active_model.as_deref().unwrap_or("unknown");
-                    format!(
-                        "Drawing *{:.0}W* with {:.1} GB VRAM allocated — no inference activity.\n\
-                         Model: {}  |  Tok/s: 0\n\
-                         Unload the idle model to reclaim VRAM and reduce power draw.",
-                        watts,
-                        vram as f64 / 1024.0,
-                        model,
-                    )
+                    let watts = metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0);
+                    let vram  = metrics.nvidia_vram_used_mb.unwrap_or(0);
+                    let model = metrics.ollama_active_model.as_deref().unwrap_or("unknown");
+                    format!("Drawing *{:.0}W* with {:.1} GB VRAM allocated \u{2014} no inference activity.\nModel: {}  |  Tok/s: 0\nUnload the idle model to reclaim VRAM and reduce power draw.",
+                        watts, vram as f64 / 1024.0, model)
                 }
                 "wes_velocity_drop" => format!(
-                    "WES: *{:.1}*  (early-warning threshold: {:.1})\n\
-                     Tok/s: {:.1}  Watts: {:.1}W  Thermal: {}\n\
-                     Efficiency is declining — check for thermal buildup or competing processes.",
+                    "WES: *{:.1}*  (early-warning threshold: {:.1})\nTok/s: {:.1}  Watts: {:.1}W  Thermal: {}\nEfficiency is declining \u{2014} check for thermal buildup or competing processes.",
                     wes_for_payload(metrics).unwrap_or(0.0),
-                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 7.0 },
+                    if threshold_value > 0.0 { threshold_value } else { 7.0 },
                     metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec).unwrap_or(0.0),
                     metrics.nvidia_power_draw_w.or(metrics.cpu_power_w).unwrap_or(0.0),
                     metrics.thermal_state.as_deref().unwrap_or("Normal"),
                 ),
                 "memory_trajectory" => format!(
-                    "Memory pressure: *{:.0}%*  (warning threshold: {:.0}%  |  critical: 85%)\n\
-                     {:.1} GB used / {:.1} GB total\n\
-                     Pressure is rising — unload models or stop background processes now.",
+                    "Memory pressure: *{:.0}%*  (warning threshold: {:.0}%  |  critical: 85%)\n{:.1} GB used / {:.1} GB total\nPressure is rising \u{2014} unload models or stop background processes now.",
                     metrics.memory_pressure_percent.unwrap_or(0.0),
-                    if rule.threshold_value > 0.0 { rule.threshold_value } else { 65.0 },
+                    if threshold_value > 0.0 { threshold_value } else { 65.0 },
                     metrics.used_memory_mb as f64 / 1024.0,
                     metrics.total_memory_mb as f64 / 1024.0,
                 ),
                 _ => String::new(),
             };
 
-            // ── Fire notification ───────────────────────────────────────────
-            let fired = deliver_alert(
-                &rule.channel_type,
-                &rule.config_json,
-                node_id,
-                &rule.event_type,
-                &detail,
-                false,
-            );
+            let fired = tokio::task::spawn_blocking({
+                let ct = channel_type.clone();
+                let cj = config_json.clone();
+                let ni = node_id.to_owned();
+                let et = event_type.clone();
+                let dt = detail.clone();
+                move || deliver_alert(&ct, &cj, &ni, &et, &dt, false)
+            }).await.unwrap_or(false);
+
             if fired {
                 let event_id = Uuid::new_v4().to_string();
-                let _ = conn.execute(
+                let _ = sqlx::query(
                     "INSERT INTO alert_events (id, rule_id, node_id, triggered_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![event_id, rule.id, node_id, now as i64],
-                );
-                println!("[alerts] fired {}/{node_id} → {}", rule.event_type, rule.channel_type);
+                     VALUES ($1, $2, $3, $4)"
+                ).bind(&event_id).bind(rule_id).bind(node_id).bind(now as i64)
+                .execute(pool).await;
+                println!("[alerts] fired {}/{node_id} \u{2192} {}", event_type, channel_type);
             }
-
         } else {
-            // Condition cleared — resolve any open alert and send recovery notification.
             if let Some((event_id, _)) = open_event {
                 let quiet_until = (now + ALERT_QUIET_PERIOD_MS) as i64;
-                let _ = conn.execute(
-                    "UPDATE alert_events SET resolved_at = ?1, quiet_until_ms = ?2
-                     WHERE id = ?3",
-                    params![now as i64, quiet_until, event_id],
-                );
-                // Only send recovery message for immediate urgency (not digests)
-                if rule.urgency == "immediate" || rule.urgency == "debounce_5m" {
-                    deliver_alert(
-                        &rule.channel_type,
-                        &rule.config_json,
-                        node_id,
-                        &rule.event_type,
-                        "Condition has cleared.",
-                        true,
-                    );
+                let _ = sqlx::query(
+                    "UPDATE alert_events SET resolved_at = $1, quiet_until_ms = $2 WHERE id = $3"
+                ).bind(now as i64).bind(quiet_until).bind(&event_id)
+                .execute(pool).await;
+
+                if urgency == "immediate" || urgency == "debounce_5m" {
+                    let ct = channel_type.clone();
+                    let cj = config_json.clone();
+                    let ni = node_id.to_owned();
+                    let et = event_type.clone();
+                    tokio::task::spawn_blocking(move || {
+                        deliver_alert(&ct, &cj, &ni, &et, "Condition has cleared.", true);
+                    });
                 }
-                println!("[alerts] resolved {}/{node_id}", rule.event_type);
+                println!("[alerts] resolved {}/{node_id}", event_type);
             }
         }
     }
 }
 
-/// Dispatch a notification to the configured channel.
-/// Returns true if delivery succeeded.
-fn deliver_alert(
-    channel_type: &str,
-    config_json:  &str,
-    node_id:      &str,
-    event_type:   &str,
-    detail:       &str,
-    resolved:     bool,
-) -> bool {
+fn deliver_alert(channel_type: &str, config_json: &str, node_id: &str, event_type: &str, detail: &str, resolved: bool) -> bool {
     let cfg: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
     match channel_type {
         "slack" => {
@@ -4136,8 +3162,8 @@ fn deliver_alert(
                 Some(a) => a.to_owned(),
                 None => { eprintln!("[alerts] email channel missing address"); return false; }
             };
-            let subject_prefix = if resolved { "✅ Recovered" } else { "⚠️ Alert" };
-            let subject = format!("{subject_prefix}: {node_id} — {event_type}");
+            let subject_prefix = if resolved { "\u{2705} Recovered" } else { "\u{26A0}\u{FE0F} Alert" };
+            let subject = format!("{subject_prefix}: {node_id} \u{2014} {event_type}");
             let (text, html) = email_alert_body(node_id, event_type, detail, resolved);
             send_email(&addr, &subject, &text, &html)
         }
@@ -4145,227 +3171,132 @@ fn deliver_alert(
     }
 }
 
-// ── Alerting — node offline interval task ────────────────────────────────────
+// ── Node offline alert task ──────────────────────────────────────────────────
 
-/// Runs every 60 seconds.  Detects node offline/online transitions and writes
-/// events to the DuckDB `node_events` table (visible in Fleet Event Timeline).
-/// Also fires `node_offline` alerts for Team+ users with configured rules.
 async fn node_offline_alert_task(state: AppState) {
-    // In-memory set of nodes we've already marked offline this process lifetime.
-    // Prevents duplicate "offline" events on every 60-second tick.
-    let mut known_offline: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut known_offline: HashSet<String> = HashSet::new();
 
     let mut interval = tokio::time::interval(Duration::from_secs(60));
-    interval.tick().await; // skip immediate first tick
+    interval.tick().await;
     loop {
         interval.tick().await;
-        let state2 = state.clone();
-        let mut offline_snapshot = known_offline.clone();
-        let (new_offline, new_online) = tokio::task::spawn_blocking(move || {
-            let conn = state2.db.lock().unwrap();
-            let now  = now_ms();
-            let offline_threshold_ms = 5 * 60_000_u64; // 5 minutes
-            let mut went_offline: Vec<(String, String, String, u64)> = Vec::new(); // (user_id, node_id, tenant_id, elapsed)
-            let mut came_online:  Vec<(String, String, String)> = Vec::new();      // (user_id, node_id, tenant_id)
+        let now = now_ms();
+        let offline_threshold_ms = 5 * 60_000_u64;
 
-            // Load all user_id → node_id pairs with their last_seen timestamps.
-            let nodes: Vec<(String, String, u64, String)> = {
-                let mut stmt = match conn.prepare(
-                    "SELECT n.user_id, n.wk_id, n.last_seen
-                     FROM nodes n WHERE n.user_id IS NOT NULL"
-                ) { Ok(s) => s, Err(_) => return (vec![], vec![]) };
-                match stmt.query_map([], |r| Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2).map(|v| v as u64)?,
-                    r.get::<_, String>(0)?, // tenant_id = user_id
-                ))) {
-                    Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                    Err(_)   => return (vec![], vec![]),
+        let nodes: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT user_id, wk_id, last_seen FROM nodes WHERE user_id IS NOT NULL"
+        ).fetch_all(&state.pool).await.unwrap_or_default();
+
+        let mut went_offline: Vec<(String, String, u64)> = Vec::new();
+        let mut came_online:  Vec<(String, String)> = Vec::new();
+
+        for (user_id, node_id, last_seen) in &nodes {
+            let elapsed = now.saturating_sub(*last_seen as u64);
+            if elapsed >= offline_threshold_ms {
+                if !known_offline.contains(node_id) {
+                    went_offline.push((user_id.clone(), node_id.clone(), elapsed));
+                    known_offline.insert(node_id.clone());
                 }
-            };
-
-            for (user_id, node_id, last_seen, tenant_id) in &nodes {
-                let elapsed = now.saturating_sub(*last_seen);
-
-                if elapsed >= offline_threshold_ms {
-                    // Node is offline
-                    if !offline_snapshot.contains(node_id) {
-                        went_offline.push((user_id.clone(), node_id.clone(), tenant_id.clone(), elapsed));
-                        offline_snapshot.insert(node_id.clone());
-                    }
-                } else {
-                    // Node is online — check if it was previously offline (recovery)
-                    if offline_snapshot.remove(node_id) {
-                        came_online.push((user_id.clone(), node_id.clone(), tenant_id.clone()));
-                    }
-                }
+            } else if known_offline.remove(node_id) {
+                came_online.push((user_id.clone(), node_id.clone()));
             }
+        }
 
-            // ── Fire alerts for nodes that just went offline ──────────────
-            for (user_id, node_id, _tenant_id, elapsed) in &went_offline {
-                // Check subscription tier — alerting delivery is Team+.
-                let tier: Option<String> = conn.query_row(
-                    "SELECT subscription_tier FROM users WHERE id = ?1",
-                    params![user_id],
-                    |r| r.get(0),
-                ).ok();
-                if !is_team_or_above(tier.as_deref().unwrap_or("community")) { continue; }
+        // Fire alerts for nodes that just went offline.
+        for (user_id, node_id, elapsed) in &went_offline {
+            let tier: String = sqlx::query_scalar::<_, String>(
+                "SELECT subscription_tier FROM users WHERE id = $1"
+            ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+            if !is_team_or_above(&tier) { continue; }
 
-                let rules: Vec<(String, String, String)> = {
-                    let mut stmt = match conn.prepare(
-                        "SELECT ar.id, nc.channel_type, nc.config_json
-                         FROM   alert_rules ar
-                         JOIN   notification_channels nc ON nc.id = ar.channel_id
-                         WHERE  ar.user_id = ?1
-                           AND  ar.event_type = 'node_offline'
-                           AND  ar.enabled = 1
-                           AND  (ar.node_id IS NULL OR ar.node_id = ?2)",
-                    ) { Ok(s) => s, Err(_) => continue };
-                    match stmt.query_map(params![user_id, node_id], |r| Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                    ))) {
-                        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                        Err(_)   => continue,
-                    }
-                };
+            let rules: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT ar.id, nc.channel_type, nc.config_json::text
+                 FROM alert_rules ar
+                 JOIN notification_channels nc ON nc.id = ar.channel_id
+                 WHERE ar.user_id = $1 AND ar.event_type = 'node_offline' AND ar.enabled = 1
+                   AND (ar.node_id IS NULL OR ar.node_id = $2)"
+            ).bind(user_id).bind(node_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-                for (rule_id, channel_type, config_json) in rules {
-                    let open: Option<String> = conn.query_row(
-                        "SELECT id FROM alert_events
-                         WHERE rule_id = ?1 AND node_id = ?2 AND resolved_at IS NULL
-                         LIMIT 1",
-                        params![rule_id, node_id],
-                        |r| r.get(0),
-                    ).ok();
-                    if open.is_some() { continue; }
+            for (rule_id, channel_type, config_json) in rules {
+                let open: Option<String> = sqlx::query_scalar(
+                    "SELECT id FROM alert_events WHERE rule_id = $1 AND node_id = $2 AND resolved_at IS NULL LIMIT 1"
+                ).bind(&rule_id).bind(node_id).fetch_optional(&state.pool).await.ok().flatten();
+                if open.is_some() { continue; }
 
-                    let minutes = elapsed / 60_000;
-                    let detail  = format!("Node has not reported telemetry in *{minutes} minutes*.");
-                    let fired   = deliver_alert(&channel_type, &config_json, node_id, "node_offline", &detail, false);
-                    if fired {
-                        let event_id = Uuid::new_v4().to_string();
-                        let _ = conn.execute(
-                            "INSERT INTO alert_events (id, rule_id, node_id, triggered_at)
-                             VALUES (?1, ?2, ?3, ?4)",
-                            params![event_id, rule_id, node_id, now as i64],
-                        );
-                        println!("[alerts] node_offline fired for {node_id}");
-                    }
+                let minutes = elapsed / 60_000;
+                let detail  = format!("Node has not reported telemetry in *{minutes} minutes*.");
+                let ct = channel_type.clone();
+                let cj = config_json.clone();
+                let ni = node_id.clone();
+                let fired = tokio::task::spawn_blocking(move || deliver_alert(&ct, &cj, &ni, "node_offline", &detail, false))
+                    .await.unwrap_or(false);
+                if fired {
+                    let event_id = Uuid::new_v4().to_string();
+                    let _ = sqlx::query("INSERT INTO alert_events (id, rule_id, node_id, triggered_at) VALUES ($1, $2, $3, $4)")
+                        .bind(&event_id).bind(&rule_id).bind(node_id).bind(now as i64)
+                        .execute(&state.pool).await;
+                    println!("[alerts] node_offline fired for {node_id}");
                 }
             }
 
-            // ── Resolve open alerts for nodes that came back online ───────
-            for (user_id, node_id, _tenant_id) in &came_online {
-                let tier: Option<String> = conn.query_row(
-                    "SELECT subscription_tier FROM users WHERE id = ?1",
-                    params![user_id],
-                    |r| r.get(0),
-                ).ok();
-                if !is_team_or_above(tier.as_deref().unwrap_or("community")) { continue; }
-
-                // Resolve all open node_offline alert events for this node.
-                let _ = conn.execute(
-                    "UPDATE alert_events SET resolved_at = ?1
-                     WHERE node_id = ?2 AND resolved_at IS NULL",
-                    params![now as i64, node_id],
-                );
-                println!("[alerts] node_online — resolved alerts for {node_id}");
-            }
-
-            (went_offline, came_online)
-        }).await.unwrap_or_default();
-
-        // ── Persist offline/online events to DuckDB (visible in Fleet Event Timeline) ──
-        // Dedup: skip if a node_offline event was already written for this node
-        // within the last hour (guards against process restarts on Railway).
-        for (_user_id, node_id, tenant_id, elapsed) in &new_offline {
-            let duck = state.duck_db.clone();
-            let nid = node_id.clone();
-            let tid = tenant_id.clone();
-            let cutoff = (now_ms() as i64) - 3_600_000; // 1 hour ago
-            let already_exists = tokio::task::spawn_blocking(move || {
-                let conn = duck_lock(&duck);
-                conn.query_row(
-                    "SELECT 1 FROM node_events WHERE tenant_id = ? AND node_id = ? AND event_type = 'node_offline' AND ts_ms > ? LIMIT 1",
-                    duckdb::params![tid, nid, cutoff],
-                    |_| Ok(true),
-                ).unwrap_or(false)
-            }).await.unwrap_or(false);
+            // Dedup check before writing event.
+            let cutoff = (now as i64) - 3_600_000;
+            let already_exists: bool = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM node_events WHERE tenant_id = $1 AND node_id = $2 AND event_type = 'node_offline' AND ts > to_timestamp($3::float8 / 1000.0))"
+            ).bind(user_id).bind(node_id).bind(cutoff as f64).fetch_one(&state.pool).await.unwrap_or(false);
 
             if !already_exists {
                 let minutes = elapsed / 60_000;
                 let _ = state.events_tx.try_send(EventRow {
-                    ts_ms:      now_ms() as i64,
-                    node_id:    node_id.clone(),
-                    tenant_id:  tenant_id.clone(),
-                    level:      "error".into(),
-                    event_type: Some("node_offline".into()),
-                    message:    format!("Node offline — no telemetry received for {minutes}m"),
+                    ts_ms: now as i64, node_id: node_id.clone(), tenant_id: user_id.clone(),
+                    level: "error".into(), event_type: Some("node_offline".into()),
+                    message: format!("Node offline \u{2014} no telemetry received for {minutes}m"),
                 });
 
-                // Also write a fleet_observation for the Triage tab.
-                let duck2 = state.duck_db.clone();
+                // Write fleet observation.
                 let obs_id = Uuid::new_v4().to_string();
-                let nid2 = node_id.clone();
-                let tid2 = tenant_id.clone();
                 let minutes = elapsed / 60_000;
-                let now_i64 = now_ms() as i64;
-                let _ = tokio::task::spawn_blocking(move || {
-                    let conn = duck_lock(&duck2);
-                    conn.execute(
-                        "INSERT INTO fleet_observations
-                         (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
-                         VALUES (?, ?, ?, 'node_offline', 'critical', 'open', ?, ?, ?, ?)
-                         ON CONFLICT DO NOTHING",
-                        duckdb::params![
-                            obs_id, tid2, nid2,
-                            "Node Offline",
-                            format!("Node has not reported telemetry in {minutes} minutes."),
-                            format!(r#"{{"elapsed_minutes":{minutes}}}"#),
-                            now_i64,
-                        ],
-                    )
-                }).await;
+                let _ = sqlx::query(
+                    "INSERT INTO fleet_observations (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
+                     VALUES ($1, $2, $3, 'node_offline', 'critical', 'open', 'Node Offline', $4, $5, $6)
+                     ON CONFLICT DO NOTHING"
+                ).bind(&obs_id).bind(user_id).bind(node_id)
+                .bind(format!("Node has not reported telemetry in {minutes} minutes."))
+                .bind(serde_json::json!({"elapsed_minutes": minutes}))
+                .bind(now as i64)
+                .execute(&state.pool).await;
             }
-            known_offline.insert(node_id.clone());
         }
 
-        for (_user_id, node_id, tenant_id) in &new_online {
+        // Resolve alerts for nodes that came back online.
+        for (user_id, node_id) in &came_online {
+            let tier: String = sqlx::query_scalar::<_, String>(
+                "SELECT subscription_tier FROM users WHERE id = $1"
+            ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+            if !is_team_or_above(&tier) { continue; }
+
+            let _ = sqlx::query("UPDATE alert_events SET resolved_at = $1 WHERE node_id = $2 AND resolved_at IS NULL")
+                .bind(now as i64).bind(node_id).execute(&state.pool).await;
+
             let _ = state.events_tx.try_send(EventRow {
-                ts_ms:      now_ms() as i64,
-                node_id:    node_id.clone(),
-                tenant_id:  tenant_id.clone(),
-                level:      "info".into(),
-                event_type: Some("node_online".into()),
-                message:    "Node back online — telemetry resumed".into(),
+                ts_ms: now as i64, node_id: node_id.clone(), tenant_id: user_id.clone(),
+                level: "info".into(), event_type: Some("node_online".into()),
+                message: "Node back online \u{2014} telemetry resumed".into(),
             });
-            // Auto-resolve any open node_offline observation for this node.
-            let duck = state.duck_db.clone();
-            let nid = node_id.clone();
-            let tid = tenant_id.clone();
-            let now_i64 = now_ms() as i64;
-            let _ = tokio::task::spawn_blocking(move || {
-                let conn = duck_lock(&duck);
-                conn.execute(
-                    "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = ?
-                     WHERE tenant_id = ? AND node_id = ? AND alert_type = 'node_offline' AND state = 'open'",
-                    duckdb::params![now_i64, tid, nid],
-                )
-            }).await;
-            known_offline.remove(node_id);
+
+            let _ = sqlx::query(
+                "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1
+                 WHERE tenant_id = $2 AND node_id = $3 AND alert_type = 'node_offline' AND state = 'open'"
+            ).bind(now as i64).bind(user_id).bind(node_id).execute(&state.pool).await;
+
+            println!("[alerts] node_online \u{2014} resolved alerts for {node_id}");
         }
     }
 }
 
-// ── Phase 4B — Fleet Alert Evaluator (Essential Four) ─────────────────────────
+// ── Fleet Alert Evaluator (Essential Four + Agent Version Mismatch) ───────────
 
-/// Per-node ring buffer for sustained-threshold checks.
-/// Stores the last N evaluation ticks (60s each) worth of metric snapshots.
 struct NodeRingBuffer {
-    /// Circular buffer of (timestamp_ms, inference_state, thermal_state, mem_pressure_pct, wes_penalized).
     entries: Vec<(u64, Option<String>, Option<String>, Option<f32>, Option<f32>)>,
     head: usize,
     len: usize,
@@ -4373,272 +3304,161 @@ struct NodeRingBuffer {
 
 impl NodeRingBuffer {
     fn new(capacity: usize) -> Self {
-        Self {
-            entries: vec![(0, None, None, None, None); capacity],
-            head: 0,
-            len: 0,
-        }
+        Self { entries: vec![(0, None, None, None, None); capacity], head: 0, len: 0 }
     }
 
     fn push(&mut self, ts_ms: u64, inf_state: Option<String>, thermal: Option<String>, mem_pct: Option<f32>, wes: Option<f32>) {
         self.entries[self.head] = (ts_ms, inf_state, thermal, mem_pct, wes);
         self.head = (self.head + 1) % self.entries.len();
-        if self.len < self.entries.len() {
-            self.len += 1;
-        }
+        if self.len < self.entries.len() { self.len += 1; }
     }
 
-    /// Returns the number of consecutive recent ticks (from newest backward) where the predicate holds.
     fn consecutive_ticks<F: Fn(&(u64, Option<String>, Option<String>, Option<f32>, Option<f32>)) -> bool>(&self, pred: F) -> usize {
         let mut count = 0;
         for i in 0..self.len {
             let idx = (self.head + self.entries.len() - 1 - i) % self.entries.len();
-            if pred(&self.entries[idx]) {
-                count += 1;
-            } else {
-                break;
-            }
+            if pred(&self.entries[idx]) { count += 1; } else { break; }
         }
         count
     }
 }
 
-/// Observation severity — maps to card color in the Triage tab.
 #[allow(dead_code)]
-enum ObsSeverity {
-    Warning,
-    Critical,
-}
-
+enum ObsSeverity { Warning, Critical }
 impl ObsSeverity {
     fn as_str(&self) -> &'static str {
         match self { Self::Warning => "warning", Self::Critical => "critical" }
     }
 }
 
-/// Runs every 60 seconds.  Evaluates the Essential Four alert conditions against
-/// the live in-memory metrics cache.  Uses per-node ring buffers for "sustained"
-/// threshold checks.  Writes to both `node_events` (flat log for timeline) and
-/// `fleet_observations` (stateful for triage).
-///
-/// Essential Four:
-///   1. Zombied Engine — inference_state == "busy" sustained >10min → critical
-///   2. Thermal Redline — thermal_state == "Critical" sustained >2min → critical
-///   3. OOM Warning — memory_pressure_percent > 95% sustained >1min → warning
-///   4. WES Cliff — current WES < 50% of 24h baseline → warning
 async fn fleet_alert_evaluator_task(state: AppState) {
-    // Per-node ring buffers — 15 ticks × 60s = 15 minutes of history.
     let mut ring_buffers: HashMap<String, NodeRingBuffer> = HashMap::new();
-
-    // Track which observations are currently open per (node_id, alert_type).
-    // Value = observation ID.  Prevents duplicate fires on every tick.
     let mut open_observations: HashMap<(String, String), String> = HashMap::new();
-
-    // Cache 24h WES baselines per node (refreshed every 10 ticks = 10 min).
     let mut wes_baselines: HashMap<String, f32> = HashMap::new();
     let mut baseline_refresh_counter: u32 = 0;
 
     let mut interval = tokio::time::interval(Duration::from_secs(60));
-    interval.tick().await; // skip immediate first tick
-    // Wait 120s on startup for telemetry + ring buffers to fill.
+    interval.tick().await;
     tokio::time::sleep(Duration::from_secs(120)).await;
 
     loop {
         interval.tick().await;
         let now = now_ms();
 
-        // ── Refresh 24h WES baselines every 10 min ───────────────────────────
+        // Refresh 24h WES baselines every 10 min.
         baseline_refresh_counter += 1;
         if baseline_refresh_counter >= 10 || wes_baselines.is_empty() {
             baseline_refresh_counter = 0;
-            let duck = state.duck_db.clone();
-            if let Ok(baselines) = tokio::task::spawn_blocking(move || {
-                let conn = duck_lock(&duck);
-                let cutoff = (now as i64) - 86_400_000; // 24h ago
-                let mut stmt = conn.prepare(
-                    "SELECT node_id, AVG(wes_penalized) FROM metrics_raw
-                     WHERE ts_ms > ? AND wes_penalized IS NOT NULL
-                     GROUP BY node_id"
-                )?;
-                let rows: Vec<(String, f32)> = stmt.query_map(duckdb::params![cutoff], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)? as f32))
-                })?.filter_map(|r| r.ok()).collect();
-                Ok::<_, duckdb::Error>(rows)
-            }).await.unwrap_or(Err(duckdb::Error::InvalidQuery)) {
-                wes_baselines.clear();
-                for (nid, avg) in baselines {
-                    wes_baselines.insert(nid, avg);
-                }
+            let baselines: Vec<(String, f64)> = sqlx::query_as(
+                "SELECT node_id, AVG(wes_penalized)::float8 FROM metrics_raw
+                 WHERE ts > NOW() - INTERVAL '24 hours' AND wes_penalized IS NOT NULL
+                 GROUP BY node_id"
+            ).fetch_all(&state.pool).await.unwrap_or_default();
+            wes_baselines.clear();
+            for (nid, avg) in baselines {
+                wes_baselines.insert(nid, avg as f32);
             }
         }
 
-        // ── Snapshot current metrics from live cache ─────────────────────────
+        // Snapshot current metrics.
         let snapshot: Vec<(String, MetricsPayload)> = {
             let cache = state.metrics.read().unwrap();
             cache.iter()
                 .filter_map(|(nid, entry)| {
-                    // Only consider nodes with recent telemetry (< 5 min).
                     if now.saturating_sub(entry.last_seen_ms) > 300_000 { return None; }
                     entry.metrics.as_ref().map(|m| (nid.clone(), m.clone()))
                 })
                 .collect()
         };
 
-        // ── Evaluate each node ───────────────────────────────────────────────
         struct PendingObs {
-            node_id:    String,
-            alert_type: String,
-            severity:   ObsSeverity,
-            title:      String,
-            detail:     String,
-            context:    serde_json::Value,
+            node_id: String, alert_type: String, severity: ObsSeverity,
+            title: String, detail: String, context: serde_json::Value,
         }
         let mut to_fire: Vec<PendingObs> = Vec::new();
-        let mut to_resolve: Vec<(String, String)> = Vec::new(); // (node_id, alert_type)
+        let mut to_resolve: Vec<(String, String)> = Vec::new();
 
         for (node_id, m) in &snapshot {
-            // Update ring buffer for this node.
-            let ring = ring_buffers
-                .entry(node_id.clone())
-                .or_insert_with(|| NodeRingBuffer::new(15));
-
+            let ring = ring_buffers.entry(node_id.clone()).or_insert_with(|| NodeRingBuffer::new(15));
             let mem_pct = m.memory_pressure_percent;
             let wes = {
                 let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
                 let tok_s = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
                 match (tok_s, watts) {
-                    (Some(t), Some(w)) if w > 0.0 => {
-                        let penalty = thermal_penalty_for(m.thermal_state.as_deref());
-                        Some(t / (w * penalty) * 10.0)
-                    }
+                    (Some(t), Some(w)) if w > 0.0 => Some(t / (w * thermal_penalty_for(m.thermal_state.as_deref())) * 10.0),
                     _ => None,
                 }
             };
             ring.push(now, m.inference_state.clone(), m.thermal_state.clone(), mem_pct, wes);
 
-            // ── 1. Zombied Engine: busy >10min (10 consecutive ticks) → critical ──
+            // 1. Zombied Engine
             {
                 let alert_type = "zombied_engine";
                 let busy_ticks = ring.consecutive_ticks(|e| e.1.as_deref() == Some("busy"));
-                let threshold = 10; // 10 × 60s = 10 min
-                let is_firing = busy_ticks >= threshold;
+                let is_firing = busy_ticks >= 10;
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
-
                 if is_firing && !is_open {
-                    to_fire.push(PendingObs {
-                        node_id: node_id.clone(),
-                        alert_type: alert_type.into(),
-                        severity: ObsSeverity::Critical,
-                        title: "Zombied Engine Detected".into(),
-                        detail: format!("Inference state has been 'busy' for >{} minutes without completing. The engine may be deadlocked.", busy_ticks),
-                        context: serde_json::json!({
-                            "inference_state": "busy",
-                            "sustained_minutes": busy_ticks,
-                            "active_model": m.ollama_active_model.as_deref().or(m.vllm_model_name.as_deref()),
-                        }),
+                    to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
+                        severity: ObsSeverity::Critical, title: "Zombied Engine Detected".into(),
+                        detail: format!("Inference state has been 'busy' for >{} minutes without completing.", busy_ticks),
+                        context: serde_json::json!({"inference_state": "busy", "sustained_minutes": busy_ticks, "active_model": m.ollama_active_model.as_deref().or(m.vllm_model_name.as_deref())}),
                     });
-                } else if !is_firing && is_open {
-                    to_resolve.push((node_id.clone(), alert_type.into()));
-                }
+                } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
             }
-
-            // ── 2. Thermal Redline: thermal_state == "Critical" >2min (2 ticks) → critical ──
+            // 2. Thermal Redline
             {
                 let alert_type = "thermal_redline";
                 let critical_ticks = ring.consecutive_ticks(|e| e.2.as_deref() == Some("Critical"));
-                let threshold = 2; // 2 × 60s = 2 min
-                let is_firing = critical_ticks >= threshold;
+                let is_firing = critical_ticks >= 2;
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
-
                 if is_firing && !is_open {
-                    to_fire.push(PendingObs {
-                        node_id: node_id.clone(),
-                        alert_type: alert_type.into(),
-                        severity: ObsSeverity::Critical,
-                        title: "Thermal Redline — Critical Temperature".into(),
-                        detail: format!("Thermal state has been Critical for >{} minutes. Hardware throttling is active.", critical_ticks),
-                        context: serde_json::json!({
-                            "thermal_state": "Critical",
-                            "sustained_minutes": critical_ticks,
-                            "gpu_temp_c": m.nvidia_gpu_temp_c,
-                        }),
+                    to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
+                        severity: ObsSeverity::Critical, title: "Thermal Redline \u{2014} Critical Temperature".into(),
+                        detail: format!("Thermal state has been Critical for >{} minutes.", critical_ticks),
+                        context: serde_json::json!({"thermal_state": "Critical", "sustained_minutes": critical_ticks, "gpu_temp_c": m.nvidia_gpu_temp_c}),
                     });
-                } else if !is_firing && is_open {
-                    to_resolve.push((node_id.clone(), alert_type.into()));
-                }
+                } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
             }
-
-            // ── 3. OOM Warning: memory_pressure > 95% >1min (1 tick) → warning ──
+            // 3. OOM Warning
             {
                 let alert_type = "oom_warning";
                 let oom_ticks = ring.consecutive_ticks(|e| e.3.map_or(false, |p| p > 95.0));
-                let threshold = 1;
-                let is_firing = oom_ticks >= threshold;
+                let is_firing = oom_ticks >= 1;
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
-
                 if is_firing && !is_open {
                     let pct = mem_pct.unwrap_or(0.0);
-                    to_fire.push(PendingObs {
-                        node_id: node_id.clone(),
-                        alert_type: alert_type.into(),
-                        severity: ObsSeverity::Warning,
-                        title: "Memory Pressure Critical — OOM Risk".into(),
-                        detail: format!("Memory pressure at {:.1}% — system is at risk of OOM. Consider evicting idle models.", pct),
-                        context: serde_json::json!({
-                            "memory_pressure_pct": pct,
-                            "used_memory_mb": m.used_memory_mb,
-                            "total_memory_mb": m.total_memory_mb,
-                            "active_model": m.ollama_active_model.as_deref().or(m.vllm_model_name.as_deref()),
-                        }),
+                    to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
+                        severity: ObsSeverity::Warning, title: "Memory Pressure Critical \u{2014} OOM Risk".into(),
+                        detail: format!("Memory pressure at {:.1}%.", pct),
+                        context: serde_json::json!({"memory_pressure_pct": pct, "used_memory_mb": m.used_memory_mb, "total_memory_mb": m.total_memory_mb}),
                     });
-                } else if !is_firing && is_open {
-                    to_resolve.push((node_id.clone(), alert_type.into()));
-                }
+                } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
             }
-
-            // ── 4. WES Cliff: current WES < 50% of 24h baseline → warning ──
+            // 4. WES Cliff
             {
                 let alert_type = "wes_cliff";
                 if let (Some(current_wes), Some(&baseline)) = (wes, wes_baselines.get(node_id)) {
                     let is_firing = baseline > 0.0 && current_wes < baseline * 0.5;
                     let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
-
                     if is_firing && !is_open {
-                        to_fire.push(PendingObs {
-                            node_id: node_id.clone(),
-                            alert_type: alert_type.into(),
-                            severity: ObsSeverity::Warning,
-                            title: "WES Cliff — Efficiency Collapse".into(),
-                            detail: format!("WES dropped to {:.1} (24h baseline: {:.1}). Efficiency has fallen below 50% of normal.", current_wes, baseline),
-                            context: serde_json::json!({
-                                "current_wes": current_wes,
-                                "baseline_wes_24h": baseline,
-                                "drop_pct": ((baseline - current_wes) / baseline * 100.0) as i32,
-                                "thermal_state": m.thermal_state,
-                            }),
+                        to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
+                            severity: ObsSeverity::Warning, title: "WES Cliff \u{2014} Efficiency Collapse".into(),
+                            detail: format!("WES dropped to {:.1} (24h baseline: {:.1}).", current_wes, baseline),
+                            context: serde_json::json!({"current_wes": current_wes, "baseline_wes_24h": baseline, "thermal_state": m.thermal_state}),
                         });
-                    } else if !is_firing && is_open {
-                        to_resolve.push((node_id.clone(), alert_type.into()));
-                    }
+                    } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
                 }
             }
         }
 
-        // ── 5. Agent Version Mismatch: node version differs from fleet majority → warning ──
+        // 5. Agent Version Mismatch
         {
-            // Compute fleet majority version (mode).
             let mut version_counts: HashMap<String, u32> = HashMap::new();
             for (_, m) in &snapshot {
-                if let Some(ref v) = m.agent_version {
-                    *version_counts.entry(v.clone()).or_insert(0) += 1;
-                }
+                if let Some(ref v) = m.agent_version { *version_counts.entry(v.clone()).or_insert(0) += 1; }
             }
-            let majority_version = version_counts.iter()
-                .max_by_key(|(_, count)| *count)
-                .map(|(v, _)| v.clone());
-
+            let majority_version = version_counts.iter().max_by_key(|(_, c)| *c).map(|(v, _)| v.clone());
             if let Some(ref majority) = majority_version {
-                // Only alert if fleet has > 1 node reporting versions.
                 let total_versioned = version_counts.values().sum::<u32>();
                 if total_versioned > 1 {
                     for (node_id, m) in &snapshot {
@@ -4646,175 +3466,99 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                         if let Some(ref node_ver) = m.agent_version {
                             let is_firing = node_ver != majority;
                             let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
-
                             if is_firing && !is_open {
-                                to_fire.push(PendingObs {
-                                    node_id: node_id.clone(),
-                                    alert_type: alert_type.into(),
-                                    severity: ObsSeverity::Warning,
-                                    title: "Agent Version Mismatch".into(),
-                                    detail: format!(
-                                        "Running v{} while the fleet majority is v{}. Update with: curl -fsSL https://wicklee.dev/install.sh | bash",
-                                        node_ver, majority
-                                    ),
-                                    context: serde_json::json!({
-                                        "node_version": node_ver,
-                                        "fleet_majority": majority,
-                                        "fleet_node_count": total_versioned,
-                                    }),
+                                to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
+                                    severity: ObsSeverity::Warning, title: "Agent Version Mismatch".into(),
+                                    detail: format!("Running v{} while fleet majority is v{}.", node_ver, majority),
+                                    context: serde_json::json!({"node_version": node_ver, "fleet_majority": majority}),
                                 });
-                            } else if !is_firing && is_open {
-                                to_resolve.push((node_id.clone(), alert_type.into()));
-                            }
+                            } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
                         }
                     }
                 }
             }
         }
 
-        // ── Also auto-resolve observations for nodes that are no longer online ──
-        let online_nodes: HashSet<String> = snapshot.iter().map(|(nid, _)| nid.clone()).collect();
-        let stale_keys: Vec<(String, String)> = open_observations.keys()
-            .filter(|(nid, _)| !online_nodes.contains(nid))
-            .cloned()
-            .collect();
-        for _key in stale_keys {
-            // Don't auto-resolve for offline nodes — they'll get a node_offline observation instead.
-            // Just clean up the in-memory tracking; the DuckDB row stays open.
-        }
-
-        // ── Write observations to DuckDB ─────────────────────────────────────
+        // Write observations.
         if !to_fire.is_empty() || !to_resolve.is_empty() {
-            // Resolve tenant_ids for affected nodes.
             let affected_nodes: HashSet<String> = to_fire.iter().map(|o| o.node_id.clone())
-                .chain(to_resolve.iter().map(|(nid, _)| nid.clone()))
-                .collect();
+                .chain(to_resolve.iter().map(|(nid, _)| nid.clone())).collect();
 
-            let db = state.db.clone();
-            let tenant_map: HashMap<String, String> = tokio::task::spawn_blocking(move || {
-                let conn = db.lock().unwrap();
-                let mut map = HashMap::new();
-                for nid in &affected_nodes {
-                    if let Ok(uid) = conn.query_row(
-                        "SELECT user_id FROM nodes WHERE wk_id = ?1 AND user_id IS NOT NULL",
-                        params![nid],
-                        |r| r.get::<_, String>(0),
-                    ) {
-                        map.insert(nid.clone(), uid);
-                    }
+            let mut tenant_map: HashMap<String, String> = HashMap::new();
+            for nid in &affected_nodes {
+                if let Ok(uid) = sqlx::query_scalar::<_, String>(
+                    "SELECT user_id FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
+                ).bind(nid).fetch_one(&state.pool).await {
+                    tenant_map.insert(nid.clone(), uid);
                 }
-                map
-            }).await.unwrap_or_default();
+            }
 
-            // Fire new observations.
             for obs in &to_fire {
-                let tenant_id = match tenant_map.get(&obs.node_id) {
-                    Some(t) => t.clone(),
-                    None => continue,
-                };
-
+                let tenant_id = match tenant_map.get(&obs.node_id) { Some(t) => t.clone(), None => continue };
                 let obs_id = Uuid::new_v4().to_string();
-                let duck = state.duck_db.clone();
-                let obs_id2 = obs_id.clone();
-                let node_id = obs.node_id.clone();
-                let alert_type = obs.alert_type.clone();
-                let severity = obs.severity.as_str().to_owned();
-                let title = obs.title.clone();
-                let detail = obs.detail.clone();
                 let context_str = serde_json::to_string(&obs.context).unwrap_or_default();
-                let tenant_id2 = tenant_id.clone();
-                let now_i64 = now as i64;
 
-                let _ = tokio::task::spawn_blocking(move || {
-                    let conn = duck_lock(&duck);
-                    conn.execute(
-                        "INSERT INTO fleet_observations
-                         (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
-                         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
-                         ON CONFLICT DO NOTHING",
-                        duckdb::params![obs_id2, tenant_id2, node_id, alert_type, severity, title, detail, context_str, now_i64],
-                    )
-                }).await;
+                let _ = sqlx::query(
+                    "INSERT INTO fleet_observations (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
+                     VALUES ($1, $2, $3, $4, $5, 'open', $6, $7, $8::jsonb, $9)
+                     ON CONFLICT DO NOTHING"
+                ).bind(&obs_id).bind(&tenant_id).bind(&obs.node_id).bind(&obs.alert_type)
+                .bind(obs.severity.as_str()).bind(&obs.title).bind(&obs.detail)
+                .bind(&context_str).bind(now as i64)
+                .execute(&state.pool).await;
 
-                // Also write to node_events for the Fleet Event Timeline.
                 let _ = state.events_tx.try_send(EventRow {
-                    ts_ms:      now as i64,
-                    node_id:    obs.node_id.clone(),
-                    tenant_id:  tenant_id.clone(),
-                    level:      if matches!(obs.severity, ObsSeverity::Critical) { "error" } else { "warning" }.into(),
-                    event_type: Some(obs.alert_type.clone()),
-                    message:    obs.title.clone(),
+                    ts_ms: now as i64, node_id: obs.node_id.clone(), tenant_id: tenant_id.clone(),
+                    level: if matches!(obs.severity, ObsSeverity::Critical) { "error" } else { "warning" }.into(),
+                    event_type: Some(obs.alert_type.clone()), message: obs.title.clone(),
                 });
 
-                // Deliver to notification channels (Team+ only).
-                let db2 = state.db.clone();
+                // Deliver to notification channels.
+                let pool2 = state.pool.clone();
                 let node_id3 = obs.node_id.clone();
                 let alert_type3 = obs.alert_type.clone();
                 let detail3 = obs.detail.clone();
-                tokio::task::spawn_blocking(move || {
-                    let conn = db2.lock().unwrap();
-                    let tier: Option<String> = conn.query_row(
-                        "SELECT subscription_tier FROM users WHERE id = ?1",
-                        params![tenant_id],
-                        |r| r.get(0),
-                    ).ok();
-                    if !is_team_or_above(tier.as_deref().unwrap_or("community")) { return; }
+                let tenant_id2 = tenant_id.clone();
+                tokio::spawn(async move {
+                    let tier: String = sqlx::query_scalar::<_, String>(
+                        "SELECT subscription_tier FROM users WHERE id = $1"
+                    ).bind(&tenant_id2).fetch_one(&pool2).await.unwrap_or_else(|_| "community".to_string());
+                    if !is_team_or_above(&tier) { return; }
 
-                    // Find matching alert rules for this event type.
-                    let rules: Vec<(String, String)> = {
-                        let mut stmt = match conn.prepare(
-                            "SELECT nc.channel_type, nc.config_json
-                             FROM alert_rules ar
-                             JOIN notification_channels nc ON nc.id = ar.channel_id
-                             WHERE ar.user_id = ?1
-                               AND ar.event_type = ?2
-                               AND ar.enabled = 1
-                               AND (ar.node_id IS NULL OR ar.node_id = ?3)"
-                        ) { Ok(s) => s, Err(_) => return };
-                        match stmt.query_map(params![tenant_id, alert_type3, node_id3], |r| {
-                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                        }) {
-                            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                            Err(_) => return,
-                        }
-                    };
+                    let rules: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT nc.channel_type, nc.config_json::text
+                         FROM alert_rules ar JOIN notification_channels nc ON nc.id = ar.channel_id
+                         WHERE ar.user_id = $1 AND ar.event_type = $2 AND ar.enabled = 1
+                           AND (ar.node_id IS NULL OR ar.node_id = $3)"
+                    ).bind(&tenant_id2).bind(&alert_type3).bind(&node_id3)
+                    .fetch_all(&pool2).await.unwrap_or_default();
+
                     for (ch_type, config_json) in rules {
-                        deliver_alert(&ch_type, &config_json, &node_id3, &alert_type3, &detail3, false);
+                        let ni = node_id3.clone();
+                        let at = alert_type3.clone();
+                        let dt = detail3.clone();
+                        tokio::task::spawn_blocking(move || { deliver_alert(&ch_type, &config_json, &ni, &at, &dt, false); });
                     }
                 });
 
                 open_observations.insert((obs.node_id.clone(), obs.alert_type.clone()), obs_id);
-                println!("[evaluator] 🔴 {} fired for {}", obs.alert_type, obs.node_id);
+                println!("[evaluator] fired {} for {}", obs.alert_type, obs.node_id);
             }
 
-            // Resolve cleared observations.
             for (node_id, alert_type) in &to_resolve {
                 if let Some(obs_id) = open_observations.remove(&(node_id.clone(), alert_type.clone())) {
-                    let duck = state.duck_db.clone();
-                    let now_i64 = now as i64;
-                    let obs_id2 = obs_id.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let conn = duck_lock(&duck);
-                        conn.execute(
-                            "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = ?1
-                             WHERE id = ?2 AND state = 'open'",
-                            duckdb::params![now_i64, obs_id2],
-                        )
-                    }).await;
+                    let _ = sqlx::query(
+                        "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1 WHERE id = $2 AND state = 'open'"
+                    ).bind(now as i64).bind(&obs_id).execute(&state.pool).await;
 
-                    // Write resolution event to timeline.
                     if let Some(tenant_id) = tenant_map.get(node_id) {
                         let _ = state.events_tx.try_send(EventRow {
-                            ts_ms:      now as i64,
-                            node_id:    node_id.clone(),
-                            tenant_id:  tenant_id.clone(),
-                            level:      "info".into(),
-                            event_type: Some(format!("{alert_type}_resolved")),
-                            message:    format!("{} condition cleared", alert_type.replace('_', " ")),
+                            ts_ms: now as i64, node_id: node_id.clone(), tenant_id: tenant_id.clone(),
+                            level: "info".into(), event_type: Some(format!("{alert_type}_resolved")),
+                            message: format!("{} condition cleared", alert_type.replace('_', " ")),
                         });
                     }
-
-                    println!("[evaluator] ✅ {} resolved for {}", alert_type, node_id);
+                    println!("[evaluator] resolved {} for {}", alert_type, node_id);
                 }
             }
         }
@@ -4823,7 +3567,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
 
 // ── Alerting — CRUD handlers ──────────────────────────────────────────────────
 
-/// POST /api/alerts/channels — create a notification channel (Slack or email).
+/// POST /api/alerts/channels
 async fn handle_create_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4840,44 +3584,35 @@ async fn handle_create_channel(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db   = state.db.clone();
-    let body = body;
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if !is_team_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Alerting requires Team tier" }))).into_response();
+    }
 
-        // Tier gate — alerting is Team+.
-        let tier: String = conn.query_row(
-            "SELECT subscription_tier FROM users WHERE id = ?1",
-            params![user_id],
-            |r| r.get(0),
-        ).unwrap_or_else(|_| "community".to_string());
-        if !is_team_or_above(&tier) {
-            return None; // caller maps None → 402 Upgrade Required
-        }
-
-        let id = Uuid::new_v4().to_string();
-        let ts = now_ms() as i64;
-        conn.execute(
-            "INSERT INTO notification_channels (id, user_id, channel_type, name, config_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, user_id, body.channel_type, body.name, body.config_json, ts],
-        ).ok()?;
-        Some(AlertChannel {
-            id,
-            channel_type: body.channel_type,
-            name: body.name,
-            config_json: body.config_json,
-            verified: false,
-            created_at: ts,
-        })
-    }).await.unwrap();
+    let id = Uuid::new_v4().to_string();
+    let ts = now_ms() as i64;
+    let result = sqlx::query(
+        "INSERT INTO notification_channels (id, user_id, channel_type, name, config_json, created_at)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6)"
+    ).bind(&id).bind(&user_id).bind(&body.channel_type).bind(&body.name).bind(&body.config_json).bind(ts)
+    .execute(&state.pool).await;
 
     match result {
-        None    => (StatusCode::PAYMENT_REQUIRED,
-            Json(serde_json::json!({ "error": "Alerting requires Team tier" }))).into_response(),
-        Some(c) => (StatusCode::CREATED, Json(c)).into_response(),
+        Ok(_) => (StatusCode::CREATED, Json(AlertChannel {
+            id, channel_type: body.channel_type, name: body.name,
+            config_json: body.config_json, verified: false, created_at: ts,
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("insert failed: {e}") }))).into_response(),
     }
 }
 
@@ -4892,37 +3627,29 @@ async fn handle_list_channels(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-
-    let result: Option<Vec<AlertChannel>> = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let mut stmt = conn.prepare(
-            "SELECT id, channel_type, name, config_json, verified, created_at
-             FROM notification_channels WHERE user_id = ?1 ORDER BY created_at DESC"
-        ).ok()?;
-        Some(stmt.query_map(params![user_id], |r| Ok(AlertChannel {
-            id:           r.get(0)?,
-            channel_type: r.get(1)?,
-            name:         r.get(2)?,
-            config_json:  r.get(3)?,
-            verified:     r.get::<_, i32>(4)? != 0,
-            created_at:   r.get(5)?,
-        })).ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap();
-
-    match result {
-        None    => (StatusCode::UNAUTHORIZED,
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(c) => Json(serde_json::json!({ "channels": c })).into_response(),
-    }
+    };
+
+    let rows: Vec<(String, String, String, String, i32, i64)> = sqlx::query_as(
+        "SELECT id, channel_type, name, config_json::text, verified, created_at
+         FROM notification_channels WHERE user_id = $1 ORDER BY created_at DESC"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let channels: Vec<AlertChannel> = rows.into_iter().map(|(id, ct, name, cj, v, ca)| {
+        AlertChannel { id, channel_type: ct, name, config_json: cj, verified: v != 0, created_at: ca }
+    }).collect();
+
+    Json(serde_json::json!({ "channels": channels })).into_response()
 }
 
 /// DELETE /api/alerts/channels/:id
 async fn handle_delete_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::extract::Path(channel_id): axum::extract::Path<String>,
+    Path(channel_id): Path<String>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -4930,24 +3657,19 @@ async fn handle_delete_channel(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
-    let result: Option<bool> = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let rows = conn.execute(
-            "DELETE FROM notification_channels WHERE id = ?1 AND user_id = ?2",
-            params![channel_id, user_id],
-        ).unwrap_or(0);
-        Some(rows > 0)
-    }).await.unwrap();
+    let result = sqlx::query("DELETE FROM notification_channels WHERE id = $1 AND user_id = $2")
+        .bind(&channel_id).bind(&user_id).execute(&state.pool).await;
 
     match result {
-        None         => (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(false)  => (StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Channel not found" }))).into_response(),
-        Some(true)   => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Channel not found" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
     }
 }
 
@@ -4970,56 +3692,48 @@ async fn handle_create_rule(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db   = state.db.clone();
-    let body = body;
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
-    let result = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if !is_team_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Alerting requires Team tier" }))).into_response();
+    }
 
-        let tier: String = conn.query_row(
-            "SELECT subscription_tier FROM users WHERE id = ?1",
-            params![user_id],
-            |r| r.get(0),
-        ).unwrap_or_else(|_| "community".to_string());
-        if !is_team_or_above(&tier) { return None; }
+    // Verify channel belongs to user.
+    let channel_owner: Option<String> = sqlx::query_scalar(
+        "SELECT user_id FROM notification_channels WHERE id = $1"
+    ).bind(&body.channel_id).fetch_optional(&state.pool).await.ok().flatten();
+    if channel_owner.as_deref() != Some(&user_id) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Alerting requires Team tier or channel not found" }))).into_response();
+    }
 
-        // Verify the channel belongs to this user.
-        let channel_owner: Option<String> = conn.query_row(
-            "SELECT user_id FROM notification_channels WHERE id = ?1",
-            params![body.channel_id],
-            |r| r.get(0),
-        ).ok();
-        if channel_owner.as_deref() != Some(&user_id) { return None; }
+    let id      = Uuid::new_v4().to_string();
+    let urgency = body.urgency.as_deref().unwrap_or("immediate").to_string();
+    let ts      = now_ms() as i64;
 
-        let id      = Uuid::new_v4().to_string();
-        let urgency = body.urgency.as_deref().unwrap_or("immediate").to_string();
-        let ts      = now_ms() as i64;
-        conn.execute(
-            "INSERT INTO alert_rules
-             (id, user_id, node_id, event_type, threshold_value, urgency, channel_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                id, user_id, body.node_id, body.event_type,
-                body.threshold_value, urgency, body.channel_id, ts
-            ],
-        ).ok()?;
-        Some(AlertRule {
-            id,
-            node_id:         body.node_id,
-            event_type:      body.event_type,
-            threshold_value: body.threshold_value,
-            urgency,
-            channel_id:      body.channel_id,
-            enabled:         true,
-            created_at:      ts,
-        })
-    }).await.unwrap();
+    let result = sqlx::query(
+        "INSERT INTO alert_rules (id, user_id, node_id, event_type, threshold_value, urgency, channel_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+    ).bind(&id).bind(&user_id).bind(&body.node_id).bind(&body.event_type)
+    .bind(body.threshold_value).bind(&urgency).bind(&body.channel_id).bind(ts)
+    .execute(&state.pool).await;
 
     match result {
-        None    => (StatusCode::PAYMENT_REQUIRED,
-            Json(serde_json::json!({ "error": "Alerting requires Team tier or channel not found" }))).into_response(),
-        Some(r) => (StatusCode::CREATED, Json(r)).into_response(),
+        Ok(_) => (StatusCode::CREATED, Json(AlertRule {
+            id, node_id: body.node_id, event_type: body.event_type,
+            threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
+            enabled: true, created_at: ts,
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
     }
 }
 
@@ -5034,39 +3748,30 @@ async fn handle_list_rules(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-
-    let result: Option<Vec<AlertRule>> = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let mut stmt = conn.prepare(
-            "SELECT id, node_id, event_type, threshold_value, urgency, channel_id, enabled, created_at
-             FROM alert_rules WHERE user_id = ?1 ORDER BY created_at DESC"
-        ).ok()?;
-        Some(stmt.query_map(params![user_id], |r| Ok(AlertRule {
-            id:              r.get(0)?,
-            node_id:         r.get(1)?,
-            event_type:      r.get(2)?,
-            threshold_value: r.get(3)?,
-            urgency:         r.get(4)?,
-            channel_id:      r.get(5)?,
-            enabled:         r.get::<_, i32>(6)? != 0,
-            created_at:      r.get(7)?,
-        })).ok()?.filter_map(|r| r.ok()).collect())
-    }).await.unwrap();
-
-    match result {
-        None    => (StatusCode::UNAUTHORIZED,
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(r) => Json(serde_json::json!({ "rules": r })).into_response(),
-    }
+    };
+
+    let rows: Vec<(String, Option<String>, String, Option<f64>, String, String, i32, i64)> = sqlx::query_as(
+        "SELECT id, node_id, event_type, threshold_value, urgency, channel_id, enabled, created_at
+         FROM alert_rules WHERE user_id = $1 ORDER BY created_at DESC"
+    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let rules: Vec<AlertRule> = rows.into_iter().map(|(id, nid, et, tv, u, cid, en, ca)| {
+        AlertRule { id, node_id: nid, event_type: et, threshold_value: tv, urgency: u,
+            channel_id: cid, enabled: en != 0, created_at: ca }
+    }).collect();
+
+    Json(serde_json::json!({ "rules": rules })).into_response()
 }
 
 /// DELETE /api/alerts/rules/:id
 async fn handle_delete_rule(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::extract::Path(rule_id): axum::extract::Path<String>,
+    Path(rule_id): Path<String>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -5074,32 +3779,27 @@ async fn handle_delete_rule(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
 
-    let result: Option<bool> = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let rows = conn.execute(
-            "DELETE FROM alert_rules WHERE id = ?1 AND user_id = ?2",
-            params![rule_id, user_id],
-        ).unwrap_or(0);
-        Some(rows > 0)
-    }).await.unwrap();
+    let result = sqlx::query("DELETE FROM alert_rules WHERE id = $1 AND user_id = $2")
+        .bind(&rule_id).bind(&user_id).execute(&state.pool).await;
 
     match result {
-        None        => (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
-        Some(false) => (StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Rule not found" }))).into_response(),
-        Some(true)  => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Rule not found" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
     }
 }
 
-/// POST /api/alerts/channels/:id/test — fire a test notification immediately.
+/// POST /api/alerts/channels/:id/test
 async fn handle_test_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::extract::Path(channel_id): axum::extract::Path<String>,
+    Path(channel_id): Path<String>,
 ) -> impl IntoResponse {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -5107,41 +3807,37 @@ async fn handle_test_channel(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let db = state.db.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn    = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        let row: Option<(String, String)> = conn.query_row(
-            "SELECT channel_type, config_json FROM notification_channels
-             WHERE id = ?1 AND user_id = ?2",
-            params![channel_id, user_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).ok();
-        row.map(|(ct, cfg)| {
-            deliver_alert(
-                &ct, &cfg, "WK-TEST", "test",
-                "This is a test notification from Wicklee. Your alert channel is working correctly.",
-                false,
-            )
-        })
-    }).await.unwrap();
-
-    match result {
-        None        => (StatusCode::UNAUTHORIZED,
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session or channel not found" }))).into_response(),
-        Some(false) => (StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": "Delivery failed — check webhook URL or email address" }))).into_response(),
-        Some(true)  => Json(serde_json::json!({ "ok": true, "message": "Test notification sent" })).into_response(),
+    };
+
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT channel_type, config_json::text FROM notification_channels WHERE id = $1 AND user_id = $2"
+    ).bind(&channel_id).bind(&user_id).fetch_optional(&state.pool).await.ok().flatten();
+
+    match row {
+        None => (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session or channel not found" }))).into_response(),
+        Some((ct, cfg)) => {
+            let ok = tokio::task::spawn_blocking(move || {
+                deliver_alert(&ct, &cfg, "WK-TEST", "test",
+                    "This is a test notification from Wicklee. Your alert channel is working correctly.", false)
+            }).await.unwrap_or(false);
+            if ok {
+                Json(serde_json::json!({ "ok": true, "message": "Test notification sent" })).into_response()
+            } else {
+                (StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": "Delivery failed \u{2014} check webhook URL or email address" }))).into_response()
+            }
+        }
     }
 }
 
 // ── Billing handlers ──────────────────────────────────────────────────────────
 
 /// POST /api/billing/checkout
-/// Creates a Stripe Checkout session (subscription mode) for the authenticated user.
-/// Reads STRIPE_SECRET_KEY and STRIPE_PRICE_ID env vars.
-/// Returns: { "url": "https://checkout.stripe.com/..." }
 async fn handle_billing_checkout(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5157,22 +3853,19 @@ async fn handle_billing_checkout(
         _ => return (StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": "Billing not configured" }))).into_response(),
     };
-    let price_id = std::env::var("STRIPE_PRICE_ID")
-        .unwrap_or_else(|_| "price_placeholder".to_string());
-    let base_url = std::env::var("APP_URL")
-        .unwrap_or_else(|_| "https://wicklee.dev".to_string());
+    let price_id = std::env::var("STRIPE_PRICE_ID").unwrap_or_else(|_| "price_placeholder".to_string());
+    let base_url = std::env::var("APP_URL").unwrap_or_else(|_| "https://wicklee.dev".to_string());
 
-    let db = state.db.clone();
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let email: Option<String> = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().unwrap();
-        let user_id = require_user(&token, &conn, &clerk_keys)?;
-        conn.query_row(
-            "SELECT email FROM users WHERE id = ?1",
-            params![user_id],
-            |r| r.get(0),
-        ).ok()
-    }).await.unwrap();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid session" }))).into_response(),
+    };
+
+    let email: Option<String> = sqlx::query_scalar(
+        "SELECT email FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_optional(&state.pool).await.ok().flatten();
 
     let email = match email {
         Some(e) => e,
@@ -5182,12 +3875,7 @@ async fn handle_billing_checkout(
 
     let result = tokio::task::spawn_blocking(move || {
         let body = format!(
-            "mode=subscription\
-             &line_items[0][price]={price_id}\
-             &line_items[0][quantity]=1\
-             &customer_email={email}\
-             &success_url={base_url}/dashboard?upgraded=1\
-             &cancel_url={base_url}/dashboard"
+            "mode=subscription&line_items[0][price]={price_id}&line_items[0][quantity]=1&customer_email={email}&success_url={base_url}/dashboard?upgraded=1&cancel_url={base_url}/dashboard"
         );
         match ureq::post("https://api.stripe.com/v1/checkout/sessions")
             .set("Authorization", &format!("Bearer {secret_key}"))
@@ -5207,32 +3895,22 @@ async fn handle_billing_checkout(
 }
 
 /// POST /api/webhooks/stripe
-/// Handles Stripe webhook events. Verifies HMAC-SHA256 signature if
-/// STRIPE_WEBHOOK_SECRET is set. Processes checkout.session.completed
-/// (upgrades user to 'team') and customer.subscription.deleted (downgrades to 'community').
 async fn handle_stripe_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    // Verify Stripe-Signature header if STRIPE_WEBHOOK_SECRET is set
     if let Ok(secret) = std::env::var("STRIPE_WEBHOOK_SECRET") {
         let sig_header = headers.get("stripe-signature")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let ts = sig_header.split(',')
-            .find(|p| p.starts_with("t="))
-            .and_then(|p| p.strip_prefix("t="))
-            .unwrap_or("");
-        let expected = sig_header.split(',')
-            .find(|p| p.starts_with("v1="))
-            .and_then(|p| p.strip_prefix("v1="))
-            .unwrap_or("");
+            .and_then(|v| v.to_str().ok()).unwrap_or("");
+        let ts = sig_header.split(',').find(|p| p.starts_with("t="))
+            .and_then(|p| p.strip_prefix("t=")).unwrap_or("");
+        let expected = sig_header.split(',').find(|p| p.starts_with("v1="))
+            .and_then(|p| p.strip_prefix("v1=")).unwrap_or("");
         let payload = format!("{}.{}", ts, String::from_utf8_lossy(&body));
         use hmac::{Hmac, Mac};
         type HmacSha256 = Hmac<sha2::Sha256>;
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .expect("HMAC can take any key length");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC key");
         mac.update(payload.as_bytes());
         let computed = hex::encode(mac.finalize().into_bytes());
         let sig_ok: bool = subtle::ConstantTimeEq::ct_eq(computed.as_bytes(), expected.as_bytes()).into();
@@ -5241,7 +3919,7 @@ async fn handle_stripe_webhook(
                 Json(serde_json::json!({ "error": "Invalid signature" }))).into_response();
         }
     } else {
-        eprintln!("[billing] STRIPE_WEBHOOK_SECRET not set — skipping signature verification");
+        eprintln!("[billing] STRIPE_WEBHOOK_SECRET not set \u{2014} skipping signature verification");
     }
 
     let event: serde_json::Value = match serde_json::from_slice(&body) {
@@ -5256,33 +3934,20 @@ async fn handle_stripe_webhook(
             let customer_id     = event["data"]["object"]["customer"].as_str().unwrap_or("").to_string();
             let subscription_id = event["data"]["object"]["subscription"].as_str().unwrap_or("").to_string();
             let customer_email  = event["data"]["object"]["customer_email"].as_str().unwrap_or("").to_string();
-            let db = state.db.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                let conn = db.lock().unwrap();
-                let _ = conn.execute(
-                    "UPDATE users SET subscription_tier = 'team',
-                         stripe_customer_id = ?1, stripe_subscription_id = ?2
-                     WHERE email = ?3",
-                    params![customer_id, subscription_id, customer_email],
-                );
-                println!("[billing] upgraded {customer_email} → team (customer={customer_id})");
-            }).await;
+            let _ = sqlx::query(
+                "UPDATE users SET subscription_tier = 'team', stripe_customer_id = $1, stripe_subscription_id = $2 WHERE email = $3"
+            ).bind(&customer_id).bind(&subscription_id).bind(&customer_email)
+            .execute(&state.pool).await;
+            println!("[billing] upgraded {customer_email} \u{2192} team");
         }
         "customer.subscription.deleted" => {
             let customer_id = event["data"]["object"]["customer"].as_str().unwrap_or("").to_string();
-            let db = state.db.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                let conn = db.lock().unwrap();
-                let _ = conn.execute(
-                    "UPDATE users SET subscription_tier = 'community',
-                         stripe_subscription_id = NULL
-                     WHERE stripe_customer_id = ?1",
-                    params![customer_id],
-                );
-                println!("[billing] downgraded customer={customer_id} → community");
-            }).await;
+            let _ = sqlx::query(
+                "UPDATE users SET subscription_tier = 'community', stripe_subscription_id = NULL WHERE stripe_customer_id = $1"
+            ).bind(&customer_id).execute(&state.pool).await;
+            println!("[billing] downgraded customer={customer_id} \u{2192} community");
         }
-        _ => {} // Ignore other event types
+        _ => {}
     }
 
     StatusCode::OK.into_response()
@@ -5292,99 +3957,81 @@ async fn handle_stripe_webhook(
 
 #[tokio::main]
 async fn main() {
-    let conn = open_db();
+    // Connect to Postgres. DATABASE_URL must be set.
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL env var must be set (e.g. postgres://user:pass@host/db)");
 
-    // One-shot node purge — set RESET_NODES=1 in Railway env, redeploy once,
-    // then remove the var.  Clears the nodes table and the in-memory cache so
-    // all nodes can be re-paired from scratch.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(20)
+        .connect(&database_url)
+        .await
+        .expect("Cannot connect to Postgres");
+
+    println!("  PG  \u{2192} connected");
+
+    run_pg_migrations(&pool).await;
+
+    // One-shot node purge.
     if std::env::var("RESET_NODES").as_deref() == Ok("1") {
-        conn.execute_batch("DELETE FROM nodes;").expect("RESET_NODES purge failed");
-        println!("  ⚠  RESET_NODES=1 — all nodes purged.  Remove this env var now.");
+        sqlx::query("DELETE FROM nodes").execute(&pool).await.expect("RESET_NODES purge failed");
+        println!("  RESET_NODES=1 \u{2014} all nodes purged.");
     }
 
-    // Pre-load known nodes from the DB so they survive Railway redeploys.
-    // metrics is always None here — the frontend shows "last seen X ago" until
-    // the agent re-pushes real telemetry (within its 2s push cadence).
+    // Pre-load known nodes. If last_telemetry_json is available, seed the in-memory cache.
     let seed_metrics: HashMap<String, MetricsEntry> = {
-        let rows: Vec<(String, i64)> = conn
-            .prepare("SELECT wk_id, last_seen FROM nodes")
-            .unwrap()
-            .query_map([], |r| Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-            )))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
+        let rows: Vec<(String, i64, Option<serde_json::Value>)> = sqlx::query_as(
+            "SELECT wk_id, last_seen, last_telemetry_json FROM nodes"
+        ).fetch_all(&pool).await.unwrap_or_default();
         rows.into_iter()
-            .map(|(node_id, last_seen)| {
-                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics: None })
+            .map(|(node_id, last_seen, json_opt)| {
+                let metrics = json_opt.and_then(|j| serde_json::from_value::<MetricsPayload>(j).ok());
+                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics })
             })
             .collect()
     };
 
-    // Fetch Clerk JWKS on startup so JWT validation works immediately.
-    // Set CLERK_JWKS_URL in Railway env, e.g.:
-    //   https://<your-clerk-domain>/.well-known/jwks.json
+    // Fetch Clerk JWKS on startup.
     let jwks_url = std::env::var("CLERK_JWKS_URL").ok();
     let initial_keys = if let Some(ref url) = jwks_url {
         let url2 = url.clone();
-        tokio::task::spawn_blocking(move || fetch_jwks(&url2))
-            .await
-            .unwrap_or_default()
+        tokio::task::spawn_blocking(move || fetch_jwks(&url2)).await.unwrap_or_default()
     } else {
-        eprintln!("[jwks] CLERK_JWKS_URL not set — Clerk JWT auth disabled");
+        eprintln!("[jwks] CLERK_JWKS_URL not set \u{2014} Clerk JWT auth disabled");
         vec![]
     };
     if !initial_keys.is_empty() {
-        println!("  JWKS → {} key(s) loaded", initial_keys.len());
+        println!("  JWKS \u{2192} {} key(s) loaded", initial_keys.len());
     }
     let clerk_keys = Arc::new(RwLock::new(initial_keys));
 
-    // Open DuckDB and create the analytics write channel.
-    let duck_conn = open_duck_db();
-    let duck      = Arc::new(Mutex::new(duck_conn)) as DuckDb;
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsRow>(8_192);
     let (events_tx,  events_rx)  = mpsc::channel::<EventRow>(1_024);
 
     let state = AppState {
-        db:              Arc::new(Mutex::new(conn)),
+        pool:            pool.clone(),
         metrics:         Arc::new(RwLock::new(seed_metrics)),
         clerk_keys:      clerk_keys.clone(),
         api_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         metrics_tx,
         events_tx,
-        duck_db:         duck.clone(),
     };
 
-    // Spawn DuckDB analytics writer (drains channel, batches, flushes every 30 s).
-    tokio::spawn(metrics_writer_task(metrics_rx, duck.clone()));
-
-    // Spawn DuckDB event writer (Live Activity events — rare, no batching needed).
-    tokio::spawn(events_writer_task(events_rx, duck.clone()));
-
-    // Spawn hourly rollup (raw → 5-min aggregates, prune old raw rows).
-    tokio::spawn(rollup_task(duck.clone()));
-
-    // Spawn nightly maintenance (CHECKPOINT + ANALYZE at 3 AM UTC).
-    tokio::spawn(nightly_task(duck.clone()));
-
-    // Spawn node-offline alert task (checks every 60 s; fires once per outage).
+    // Spawn background tasks.
+    tokio::spawn(metrics_writer_task(metrics_rx, pool.clone()));
+    tokio::spawn(events_writer_task(events_rx, pool.clone()));
+    tokio::spawn(rollup_task(pool.clone()));
+    tokio::spawn(nightly_task(pool.clone()));
     tokio::spawn(node_offline_alert_task(state.clone()));
-
-    // Spawn fleet alert evaluator (Essential Four: Zombied Engine, Thermal
-    // Redline, OOM Warning, WES Cliff — 60 s cadence with ring-buffer history).
     tokio::spawn(fleet_alert_evaluator_task(state.clone()));
 
-    // Refresh JWKS every 6 hours to pick up Clerk key rotations.
+    // Refresh JWKS every 6 hours.
     if let Some(url) = jwks_url {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
                 let url2 = url.clone();
                 let new_keys = tokio::task::spawn_blocking(move || fetch_jwks(&url2))
-                    .await
-                    .unwrap_or_default();
+                    .await.unwrap_or_default();
                 if !new_keys.is_empty() {
                     *clerk_keys.write().unwrap() = new_keys;
                     println!("[jwks] refreshed");
@@ -5394,16 +4041,13 @@ async fn main() {
     }
 
     // Purge expired stream tokens every 5 minutes.
-    let db_cleanup = state.db.clone();
+    let pool_cleanup = pool.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(300)).await;
-            let db2 = db_cleanup.clone();
             let now = now_ms() as i64;
-            tokio::task::spawn_blocking(move || {
-                let conn = db2.lock().unwrap();
-                conn.execute("DELETE FROM stream_tokens WHERE expires_ms < ?1", params![now]).ok();
-            }).await.ok();
+            let _ = sqlx::query("DELETE FROM stream_tokens WHERE expires_ms < $1")
+                .bind(now).execute(&pool_cleanup).await;
         }
     });
 
@@ -5425,10 +4069,8 @@ async fn main() {
         .route("/api/fleet/duty",                 get(handle_fleet_duty))
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
         .route("/api/fleet/export",               get(handle_fleet_export))
-        // ── Fleet Observations (Phase 4B — stateful alert triage) ────────────
         .route("/api/fleet/observations",            get(handle_fleet_observations))
         .route("/api/fleet/observations/:id/acknowledge", post(handle_acknowledge_observation))
-        // ── Agent API v1 ──────────────────────────────────────────────────────
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))
         .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))
@@ -5437,7 +4079,6 @@ async fn main() {
         .route("/api/v1/nodes/:id",      get(handle_v1_node))
         .route("/api/v1/route/best",     get(handle_v1_route_best))
         .route("/api/v1/insights/latest", get(handle_v1_insights_latest))
-        // ── Alerting (Phase 4A) ───────────────────────────────────────────────
         .route("/api/alerts/channels",          post(handle_create_channel))
         .route("/api/alerts/channels",          get(handle_list_channels))
         .route("/api/alerts/channels/:id",      delete(handle_delete_channel))
@@ -5445,55 +4086,18 @@ async fn main() {
         .route("/api/alerts/rules",             post(handle_create_rule))
         .route("/api/alerts/rules",             get(handle_list_rules))
         .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
-        // ── Billing (Stripe) ──────────────────────────────────────────────────
         .route("/api/billing/checkout",  post(handle_billing_checkout))
         .route("/api/webhooks/stripe",   post(handle_stripe_webhook))
         .with_state(state)
-        .layer(middleware::from_fn(cors)); // cors() short-circuits OPTIONS before router
+        .layer(middleware::from_fn(cors));
 
-    // Railway injects PORT at runtime; fall back to 8080 for local dev.
     let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
+        .ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
     let addr = format!("0.0.0.0:{port}");
 
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("Failed to bind");
+    let listener = tokio::net::TcpListener::bind(&addr).await.expect("Failed to bind");
 
-    println!("╔══════════════════════════════════════════════╗");
-    println!("║  Wicklee Cloud  (Phase 4A — Alerts active)   ║");
-    println!("║  POST /api/auth/signup                       ║");
-    println!("║  POST /api/auth/login                        ║");
-    println!("║  GET  /api/auth/me                           ║");
-    println!("║  GET  /api/auth/stream-token                 ║");
-    println!("║  POST /api/pair/claim                        ║");
-    println!("║  POST /api/pair/activate                     ║");
-    println!("║  POST /api/telemetry  → DuckDB + alerts      ║");
-    println!("║  GET  /api/fleet                             ║");
-    println!("║  GET  /api/fleet/stream                      ║");
-    println!("║  GET  /api/fleet/wes-history                 ║");
-    println!("║  GET  /api/fleet/metrics-history             ║");
-    println!("║  ── Alerting (Team+) ─────────────────────  ║");
-    println!("║  POST   /api/alerts/channels                 ║");
-    println!("║  GET    /api/alerts/channels                 ║");
-    println!("║  DELETE /api/alerts/channels/:id             ║");
-    println!("║  POST   /api/alerts/channels/:id/test        ║");
-    println!("║  POST   /api/alerts/rules                    ║");
-    println!("║  GET    /api/alerts/rules                    ║");
-    println!("║  DELETE /api/alerts/rules/:id                ║");
-    println!("║  ── Agent API v1 ─────────────────────────  ║");
-    println!("║  POST   /api/v1/keys                         ║");
-    println!("║  GET    /api/v1/keys                         ║");
-    println!("║  DELETE /api/v1/keys/:key_id                 ║");
-    println!("║  GET    /api/v1/fleet                        ║");
-    println!("║  GET    /api/v1/fleet/wes                    ║");
-    println!("║  GET    /api/v1/nodes/:id                    ║");
-    println!("║  GET    /api/v1/route/best                   ║");
-    println!("║  GET    /api/v1/insights/latest              ║");
-    println!("║  Listening on {addr:<30} ║");
-    println!("╚══════════════════════════════════════════════╝");
+    println!("  Wicklee Cloud — Phase 5 — Postgres + TimescaleDB listening on {addr}");
 
     axum::serve(listener, app).await.expect("Server exited unexpectedly");
 }
