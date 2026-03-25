@@ -25,7 +25,7 @@ fn config_path_hint() -> &'static str {
 pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16, cfg_ref: &WickleeConfig) {
     // Format one 48-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
     let row = |key: &str, val: &str| -> String {
-        let inner = format!("   {:<7}{}", key, val);
+        let inner = if key.is_empty() { format!("   {val}") } else { format!("   {:<8} {}", key, val) };
         let capped = if inner.chars().count() <= 46 {
             format!("{:<46}", inner)
         } else {
