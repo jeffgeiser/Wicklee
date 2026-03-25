@@ -3178,8 +3178,27 @@ fn open_duck_db() -> DuckConn {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("Cannot create DuckDB directory");
     }
-    let conn = DuckConn::open(&path)
-        .unwrap_or_else(|e| panic!("Cannot open DuckDB at {}: {e}", path.display()));
+
+    // Try to open.  If the file is corrupted (heap corruption, WAL damage),
+    // rename the broken file and start fresh.  Metrics history is expendable;
+    // a corrupted file that crashes the process is not.
+    let conn = match DuckConn::open(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[duck] CRITICAL: cannot open {}: {e}", path.display());
+            eprintln!("[duck] Renaming corrupted file and starting fresh");
+            let backup = path.with_extension("duckdb.corrupt");
+            if let Err(re) = std::fs::rename(&path, &backup) {
+                eprintln!("[duck] WARNING: rename failed: {re} — deleting instead");
+                let _ = std::fs::remove_file(&path);
+                // Also remove WAL file if present.
+                let wal = path.with_extension("duckdb.wal");
+                let _ = std::fs::remove_file(&wal);
+            }
+            DuckConn::open(&path)
+                .unwrap_or_else(|e2| panic!("Cannot create fresh DuckDB at {}: {e2}", path.display()))
+        }
+    };
 
     // Request ZSTD for all future checkpoints. DuckDB picks the level internally;
     // zstd_compression_level is not an exposed setting in v1.
