@@ -1212,7 +1212,7 @@ async fn try_evict_port(port: u16) -> bool {
     let proc_name = String::from_utf8_lossy(&ps_out.stdout).trim().to_lowercase();
     if !proc_name.contains("wicklee") { return false; }
 
-    println!("  Evicting previous wicklee instance (PID {pid_str})…");
+    eprintln!("  Replacing previous wicklee instance (PID {pid_str})…");
 
     // Step 3: SIGTERM — allow graceful shutdown.
     let _ = tokio::process::Command::new("kill")
@@ -3136,7 +3136,7 @@ async fn main() {
         let bot       = "╚══════════════════════════════════════════════╝";
         let blank_row = "║                                              ║";
         let row = |key: &str, val: &str| -> String {
-            let inner = format!("   {:<7}{}", key, val);
+            let inner = if key.is_empty() { format!("   {val}") } else { format!("   {:<8} {}", key, val) };
             let capped = if inner.chars().count() <= 46 { format!("{:<46}", inner) }
                          else { inner.chars().take(43).collect::<String>() + "..." };
             format!("║{}║", capped)
@@ -3216,6 +3216,14 @@ async fn main() {
             None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
         }
         print_pairing_box(&config.node_id, &code);
+
+        // Pairing is done — config is saved. The running service (systemd/launchd)
+        // will pick up the new fleet_url + session_token on its next telemetry push.
+        // Don't fall through to the server startup path, which would evict the
+        // running service and confuse users with SIGTERM/shutdown messages.
+        println!("\n  ✓ Pairing complete. The background service will connect to the fleet automatically.");
+        println!("  Run `wicklee --status` to verify.\n");
+        return;
     }
 
     // Run diagnostics first so the output appears before the banner
