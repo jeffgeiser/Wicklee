@@ -1832,22 +1832,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </InsightsLiteCard>
                 )}
 
-                {/* Node Vitals — live HexHive + benchmark trigger */}
+                {/* Fleet Benchmarks — live HexHive + benchmark trigger */}
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
                   <div className="flex items-center gap-2">
                     <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
                     <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 flex-1">
-                      Node Vitals
+                      Fleet Benchmarks
                     </span>
-                    {effectiveNodes.length > 0 && wesValues.length > 0 && (
-                      <button
-                        onClick={handleExportBenchmark}
-                        title="Export benchmark report"
-                        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
-                      >
-                        <FileText className="w-3 h-3" />
-                      </button>
-                    )}
                   </div>
                   <HexHive rows={hiveRows} onNodeClick={(node) => setBenchmarkReport(buildReportFromLive(node))} />
                 </div>
