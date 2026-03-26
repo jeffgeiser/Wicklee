@@ -1,5 +1,5 @@
 /**
- * HexHive — Node Vitals Map
+ * HexHive — Fleet Benchmarks Map
  *
  * One hex per node. State drives color + glow:
  *   Active inference  → amber pulse
@@ -26,7 +26,7 @@ export interface HexHiveRow {
 
 interface HexHiveProps {
   rows: HexHiveRow[];
-  /** Optional click handler for a specific node. Used by Node Vitals to open per-node benchmark. */
+  /** Optional click handler for a specific node. Used by Fleet Benchmarks to open per-node benchmark. */
   onNodeClick?: (node: SentinelMetrics) => void;
 }
 
@@ -104,8 +104,8 @@ const HexHive: React.FC<HexHiveProps> = ({ rows, onNodeClick }) => {
                     title={tooltipText}
                   />
                 </div>
-                <p className="text-[8px] font-telin text-gray-500 truncate max-w-[44px] text-center leading-none">
-                  {entry.nodeId}
+                <p className="text-[8px] font-telin text-gray-500 truncate max-w-[72px] text-center leading-none">
+                  {entry.hostname || entry.nodeId}
                 </p>
               </div>
             );
