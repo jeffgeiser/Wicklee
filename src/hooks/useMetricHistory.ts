@@ -49,6 +49,14 @@ export interface MetricSample {
   pcie_link_width:     number | null;
   /** Max PCIe link width the GPU + slot support. Pattern L: fires when current < max. */
   pcie_link_max_width: number | null;
+  /** vLLM KV cache utilization 0–100%. Pattern M: fires when > 90% sustained. */
+  vllm_cache_usage_perc:  number | null;
+  /** NVIDIA GPU temperature in Celsius. Pattern N: fires > 85°C sustained or > 90°C instant. */
+  nvidia_gpu_temp_c:      number | null;
+  /** Loaded Ollama model size in GB. Pattern O: fires when > 90% of VRAM capacity. */
+  ollama_model_size_gb:   number | null;
+  /** Apple Silicon GPU VRAM budget (MB). Pattern O: VRAM capacity on Apple Silicon nodes. */
+  gpu_wired_limit_mb:     number | null;
 }
 
 // Map<node_id, MetricSample[]> — stored as JSON in localStorage
@@ -107,6 +115,10 @@ export function metricsToSample(
     pcie_link_max_width?:           number | null;
     ollama_tokens_per_second?:      number | null;
     vllm_tokens_per_sec?:           number | null;
+    vllm_cache_usage_perc?:         number | null;
+    nvidia_gpu_temp_c?:             number | null;
+    ollama_model_size_gb?:          number | null;
+    gpu_wired_limit_mb?:            number | null;
     // WES score is not in SentinelMetrics directly — computed downstream
     _wes_score?:                    number | null;
   },
@@ -138,8 +150,13 @@ export function metricsToSample(
     vram_total_mb:    vramTotal,
     swap_write_mb_s:    m.swap_write_mb_s    ?? null,
     clock_throttle_pct: m.clock_throttle_pct ?? null,
-    pcie_link_width:    m.pcie_link_width     ?? null,
-    pcie_link_max_width: m.pcie_link_max_width ?? null,
+    pcie_link_width:      m.pcie_link_width      ?? null,
+    pcie_link_max_width:  m.pcie_link_max_width  ?? null,
+    vllm_cache_usage_perc:  m.vllm_cache_usage_perc  ?? null,
+    nvidia_gpu_temp_c:      m.nvidia_gpu_temp_c      ?? null,
+    ollama_model_size_gb:   m.ollama_model_size_gb   ?? null,
+    gpu_wired_limit_mb:     (m.gpu_wired_limit_mb != null && m.gpu_wired_limit_mb > 0)
+                              ? m.gpu_wired_limit_mb : null,
   };
 }
 

@@ -653,49 +653,157 @@ WES Version:     2
             title="Pattern Intelligence"
           >
             <p>
-              The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. All computation is local; no data leaves the machine.
+              The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. Each observation includes actionable commands tailored to your platform (macOS, Linux, or NVIDIA).
+            </p>
+            <p>
+              Wicklee evaluates 15 patterns across three scopes: patterns that run on both localhost and the fleet cloud, patterns that require fleet context (cloud-only), and patterns that rely on local-only sensors.
             </p>
 
+            {/* ── Localhost + Cloud patterns ── */}
+            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Localhost + Cloud (4 patterns)</p>
+            <p className="text-xs text-gray-500 mb-2">Run on both the local agent (DuckDB) and the client-side pattern engine. Available in standalone and fleet mode.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr>
                     <Th>Pattern</Th>
                     <Th>What it detects</Th>
-                    <Th>Evidence window</Th>
+                    <Th>Window</Th>
                     <Th>Tier</Th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <Td><span className="font-medium text-amber-400">Thermal Drain</span></Td>
+                    <Td><span className="font-medium text-amber-400">A — Thermal Drain</span></Td>
                     <Td>Sustained throttle state reducing tok/s vs. the node's own Normal-temperature baseline (&gt; 8% degradation)</Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-violet-400">Phantom Load</span></Td>
-                    <Td>Significant power draw + VRAM allocated with zero inference activity — idle model burning electricity</Td>
+                    <Td><span className="font-medium text-violet-400">B — Phantom Load</span></Td>
+                    <Td>Model loaded + power &gt; 5W + tok/s &lt; 0.5 — idle model burning electricity with no inference</Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-indigo-400">WES Velocity Drop</span></Td>
-                    <Td>Efficiency score declining at a sustained rate before thermal state has changed — early warning pattern</Td>
+                    <Td><span className="font-medium text-rose-400">J — Swap I/O Pressure</span></Td>
+                    <Td>Swap write rate &gt; 2 MB/s sustained — model layers spilling to disk, degrading throughput. Escalates to "Swap Storm" at &gt; 10 MB/s</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-orange-400">L — PCIe Degradation</span></Td>
+                    <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* ── Cloud-only patterns ── */}
+            <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mt-6">Cloud / Fleet Context (6 patterns)</p>
+            <p className="text-xs text-gray-500 mb-2">Require sustained localStorage history or multi-node fleet context. Available when paired with wicklee.dev or running the fleet dashboard.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <Th>Pattern</Th>
+                    <Th>What it detects</Th>
+                    <Th>Window</Th>
+                    <Th>Tier</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td><span className="font-medium text-indigo-400">C — WES Velocity Drop</span></Td>
+                    <Td>Efficiency score declining &gt; 10% over a sustained period before thermal state has changed — early warning</Td>
                     <Td mono>10 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-cyan-400">Memory Trajectory</span></Td>
-                    <Td>Rising memory pressure projected to hit the critical threshold (&gt; 85%) within 30 minutes</Td>
-                    <Td mono>10 min</Td>
+                    <Td><span className="font-medium text-purple-400">D — Power-GPU Decoupling</span></Td>
+                    <Td>High power draw (&gt; 50W) with active inference but GPU utilization &lt; 20% — layers running on CPU instead of GPU</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-sky-400">E — Fleet Load Imbalance</span></Td>
+                    <Td>Node thermally stressed or WES &lt; 50% of best peer while a healthier node has spare capacity</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-teal-400">G — Bandwidth Saturation</span></Td>
+                    <Td>GPU utilization &lt; 40% but VRAM &gt; 80% full with WES dropping — memory bandwidth bottleneck, not compute</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-yellow-400">H — Power Jitter</span></Td>
+                    <Td>Mean power &gt; 30W with active inference and coefficient of variation &gt; 20% — unstable power delivery or erratic batch scheduling</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-fuchsia-400">I — Efficiency Penalty Drag</span></Td>
+                    <Td>WES penalty_avg &gt; 30% loss with Normal thermal state, active GPU, and no memory pressure — hidden context/batch inefficiency</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* ── Localhost-only patterns ── */}
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-6">Localhost Only (5 patterns)</p>
+            <p className="text-xs text-gray-500 mb-2">Rely on local-only sensors or point-in-time checks not available in the fleet stream.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <Th>Pattern</Th>
+                    <Th>What it detects</Th>
+                    <Th>Window</Th>
+                    <Th>Tier</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td><span className="font-medium text-cyan-400">F — Memory Trajectory</span></Td>
+                    <Td>Apple Silicon memory pressure rising &gt; 1 pct/min sustained — projected to hit critical threshold</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-lime-400">K — Clock Drift</span></Td>
+                    <Td>Clock throttle &gt; 15% during inference with Normal thermal state — power cap or driver limit constraining clocks, not heat</Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-pink-400">M — vLLM Cache Saturation</span></Td>
+                    <Td>vLLM KV cache &gt; 90% full — scheduler cannot admit new sequences, requests will queue or return 503</Td>
+                    <Td mono>3 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-red-400">N — NVIDIA Thermal Redline</span></Td>
+                    <Td>GPU temperature &gt; 85°C sustained or &gt; 90°C instantaneous — driver will aggressively throttle clocks. NVIDIA only</Td>
+                    <Td mono>2 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-emerald-400">O — VRAM Overcommit</span></Td>
+                    <Td>Loaded model consumes &gt; 90% of VRAM/unified memory — no headroom for KV cache, context, or concurrency</Td>
+                    <Td mono>instant</Td>
                     <Td>Community</Td>
                   </tr>
                 </tbody>
               </table>
             </div>
 
-            <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2">
+            <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2 mt-4">
               <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Alert lifecycle</p>
               <p className="text-xs text-gray-400 leading-relaxed">
                 <strong className="text-white">Onset gate (15 s):</strong> tier-1 alert cards (Thermal Degradation, Power Anomaly, Memory Exhaustion, Thermal Cost) require the condition to be continuously true for 15 seconds before rendering. This prevents single-frame metric spikes from flashing on screen.
@@ -708,8 +816,15 @@ WES Version:     2
               </p>
             </div>
 
+            <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2">
+              <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Action commands</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Each observation includes one or two actionable commands you can copy and run. Commands are platform-aware — Pattern O shows <code className="text-gray-300">sysctl iogpu.wired_limit_mb</code> on Apple Silicon and <code className="text-gray-300">nvidia-smi --query-gpu=memory.total,memory.used,memory.free</code> on NVIDIA. All commands target the local agent or runtime and never send data externally.
+              </p>
+            </div>
+
             <NoteBox>
-              Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window.
+              Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window. Point-in-time patterns (Pattern O) always fire at High confidence since a single observation provides complete evidence.
             </NoteBox>
           </Section>
 

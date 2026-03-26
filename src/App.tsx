@@ -322,13 +322,16 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
 
-  const handleUpgrade = useCallback(async () => {
-    setIsUpgradeModalOpen(false);
+  const handleCheckoutTier = useCallback(async (tier: 'pro' | 'team') => {
     try {
       const token = await getToken();
       const r = await fetch(`${CLOUD_URL}/api/billing/checkout`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tier }),
       });
       if (r.ok) {
         const { url } = await r.json();
@@ -338,6 +341,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       // Billing unavailable — silently fail, user can try again
     }
   }, [getToken]);
+
+  const handleUpgrade = useCallback(async () => {
+    setIsUpgradeModalOpen(false);
+    await handleCheckoutTier('pro');
+  }, [handleCheckoutTier]);
 
   const handleToggleSentinel = (nodeId: string) => {
     setNodes(prev => prev.map(node => 
@@ -369,6 +377,18 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   // Documentation route — public, no auth required (trailing slash tolerant)
   if (currentPath === '/docs' || currentPath === '/docs/') {
     return <DocsPage onNavigate={navigate} />;
+  }
+
+  // Pricing route — public, accessible logged in or out
+  if (currentPath === '/pricing' || currentPath === '/pricing/') {
+    return (
+      <PricingPage
+        currentTier={permissions.subscriptionTier}
+        isLoggedIn={isLoggedIn}
+        onNavigate={navigate}
+        onCheckout={handleCheckoutTier}
+      />
+    );
   }
 
   // Blog routes — public, no auth required
@@ -467,11 +487,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       case DashboardTab.PREFERENCES:
         return <PreferencesView currentTenant={currentTenant} theme={theme} setTheme={setTheme} />;
       case DashboardTab.PRICING:
-        return <PricingPage />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} />;
       case DashboardTab.AI_PROVIDERS:
         return <AIProvidersView />;
       case DashboardTab.BILLING:
-        return <PricingPage />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} />;
       default:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }

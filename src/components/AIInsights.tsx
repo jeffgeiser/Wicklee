@@ -903,6 +903,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         fleetContext: peerContext,
         kwhRate:      ns.kwhRate,
         wesTier:      m.wes_tier ?? null,
+        os:           m.os ?? null,
       });
       allObservations.push(...results);
     }

@@ -1676,6 +1676,280 @@ function evaluatePatternL(
   };
 }
 
+// ── Pattern M: vLLM KV Cache Saturation ──────────────────────────────────────
+//
+// vLLM's KV cache is the memory pool for in-flight sequence state. When it
+// fills (>90%), the scheduler cannot admit new sequences — requests queue,
+// preempt, or reject. This pattern fires before the user sees 503s.
+//
+// Trigger: vllm_cache_usage_perc > 90% sustained for 3 min (70% density).
+// Tier: pro — vLLM operators are advanced users.
+
+const PATTERN_M_ID            = 'vllm_kv_cache_saturation';
+const PATTERN_M_MIN_WINDOW_MS = 3 * 60 * 1000;   // 3 min
+const PATTERN_M_MIN_SAMPLES   = Math.ceil(PATTERN_M_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 6
+const PATTERN_M_CACHE_THRESH  = 90;  // percent
+
+function evaluatePatternM(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+): DetectedInsight | null {
+  if (history.length < PATTERN_M_MIN_SAMPLES) return null;
+
+  const recent = history.slice(-PATTERN_M_MIN_SAMPLES);
+
+  // Only vLLM nodes populate this field
+  const cacheSamples = recent.filter(s => s.vllm_cache_usage_perc != null);
+  if (cacheSamples.length < Math.ceil(PATTERN_M_MIN_SAMPLES * 0.7)) return null;
+
+  const saturated = cacheSamples.filter(s => s.vllm_cache_usage_perc! > PATTERN_M_CACHE_THRESH);
+  if (saturated.length < Math.ceil(cacheSamples.length * 0.7)) return null;
+
+  const avgCache   = saturated.reduce((sum, s) => sum + s.vllm_cache_usage_perc!, 0) / saturated.length;
+  const observedMs = cacheSamples.length * SAMPLE_INTERVAL_MS;
+  const ratio      = Math.min(observedMs / PATTERN_M_MIN_WINDOW_MS, 1);
+
+  return {
+    patternId:   PATTERN_M_ID,
+    nodeId,
+    hostname,
+    title:       'vLLM KV Cache Saturation',
+    hook:        `${avgCache.toFixed(0)}% KV cache full`,
+    body:        `${hostname}'s vLLM KV cache has been above ${PATTERN_M_CACHE_THRESH}% for the last ` +
+                 `${Math.round(observedMs / 60000)} min (avg ${avgCache.toFixed(1)}%). ` +
+                 `When the cache fills, the scheduler cannot admit new sequences — incoming requests ` +
+                 `queue, get preempted, or return 503. Throughput degrades before errors appear.`,
+    recommendation: `Reduce concurrent load: lower \`--max-num-seqs\` or \`--max-num-batched-tokens\` ` +
+                    `to free KV cache headroom. If demand is sustained, scale horizontally or switch ` +
+                    `to a smaller model/quantization that uses less cache per sequence.`,
+    resolution_steps: [
+      `Check current KV cache utilization: \`curl http://localhost:7700/api/health | jq '.vllm_cache_usage_perc'\``,
+      `Reduce max concurrent sequences: restart vLLM with \`--max-num-seqs 4\` (default is often 256)`,
+      `Lower max batched tokens: \`--max-num-batched-tokens 2048\` reduces per-batch KV footprint`,
+      `If using long contexts (>4096 tokens), reduce \`--max-model-len\` to cap per-sequence KV allocation`,
+      `Monitor after change: \`watch -n 5 "curl -s http://localhost:7700/api/health | jq .vllm_cache_usage_perc"\``,
+    ],
+    action_id:       'reduce_batch_size',
+    requiredMs:      PATTERN_M_MIN_WINDOW_MS,
+    observedMs,
+    confidence:      toConfidence(ratio),
+    confidenceRatio: ratio,
+    tier:            'pro',
+    actions: [
+      {
+        label:    'Check vLLM cache usage',
+        copyText: `curl http://localhost:7700/api/health | jq '.vllm_cache_usage_perc'`,
+      },
+      {
+        label:    'Reduce max sequences',
+        copyText: `--max-num-seqs 4 --max-num-batched-tokens 2048`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,
+    best_node_hostname: null,
+  };
+}
+
+// ── Pattern N: NVIDIA Thermal Redline ────────────────────────────────────────
+//
+// Raw GPU temperature monitoring for NVIDIA nodes. Pattern A covers Apple
+// Silicon via thermal_state abstraction; this pattern watches nvidia_gpu_temp_c
+// directly, giving earlier warning than waiting for driver-level "Critical".
+//
+// Dual trigger:
+//   Sustained: > 85°C for 2 min at 70% density
+//   Instantaneous: > 90°C on any single sample (immediate critical)
+//
+// Tier: community — temperature is universal and actionable.
+
+const PATTERN_N_ID                = 'nvidia_thermal_redline';
+const PATTERN_N_MIN_WINDOW_MS     = 2 * 60 * 1000;   // 2 min
+const PATTERN_N_MIN_SAMPLES       = Math.ceil(PATTERN_N_MIN_WINDOW_MS / SAMPLE_INTERVAL_MS); // 4
+const PATTERN_N_SUSTAINED_THRESH  = 85;  // °C
+const PATTERN_N_INSTANT_THRESH    = 90;  // °C
+
+function evaluatePatternN(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+): DetectedInsight | null {
+  if (history.length === 0) return null;
+
+  // ── Path B: instantaneous critical (>90°C on latest sample) ──────────────
+  const latest = history[history.length - 1];
+  const instantCritical = latest.nvidia_gpu_temp_c != null
+    && latest.nvidia_gpu_temp_c > PATTERN_N_INSTANT_THRESH;
+
+  // ── Path A: sustained (>85°C for 2 min) ─────────────────────────────────
+  let sustained = false;
+  let avgTemp   = 0;
+  let observedMs = SAMPLE_INTERVAL_MS;
+  let ratio      = 1;
+
+  if (history.length >= PATTERN_N_MIN_SAMPLES) {
+    const recent = history.slice(-PATTERN_N_MIN_SAMPLES);
+    const tempSamples = recent.filter(s => s.nvidia_gpu_temp_c != null);
+    if (tempSamples.length >= Math.ceil(PATTERN_N_MIN_SAMPLES * 0.7)) {
+      const hotSamples = tempSamples.filter(s => s.nvidia_gpu_temp_c! > PATTERN_N_SUSTAINED_THRESH);
+      if (hotSamples.length >= Math.ceil(tempSamples.length * 0.7)) {
+        sustained  = true;
+        avgTemp    = hotSamples.reduce((sum, s) => sum + s.nvidia_gpu_temp_c!, 0) / hotSamples.length;
+        observedMs = tempSamples.length * SAMPLE_INTERVAL_MS;
+        ratio      = Math.min(observedMs / PATTERN_N_MIN_WINDOW_MS, 1);
+      }
+    }
+  }
+
+  if (!instantCritical && !sustained) return null;
+
+  const temp = instantCritical
+    ? latest.nvidia_gpu_temp_c!
+    : avgTemp;
+  const isCritical = instantCritical || temp > PATTERN_N_INSTANT_THRESH;
+  const severity   = isCritical ? 'critical' : 'warning';
+
+  return {
+    patternId:   PATTERN_N_ID,
+    nodeId,
+    hostname,
+    title:       isCritical ? 'NVIDIA GPU Critical Temperature' : 'NVIDIA GPU Thermal Redline',
+    hook:        `${temp.toFixed(0)}°C GPU temperature`,
+    body:        `${hostname}'s NVIDIA GPU is at ${temp.toFixed(0)}°C` +
+                 (instantCritical
+                   ? ` — exceeding the ${PATTERN_N_INSTANT_THRESH}°C critical threshold. ` +
+                     `The driver will aggressively throttle clocks and may shut down the GPU to prevent damage.`
+                   : ` — sustained above ${PATTERN_N_SUSTAINED_THRESH}°C for ${Math.round(observedMs / 60000)} min. ` +
+                     `Thermal throttling reduces clock frequency and inference throughput progressively.`),
+    recommendation: isCritical
+      ? `Immediately reduce GPU load: stop inference, check fan operation, and verify airflow. ` +
+        `If temperature doesn't drop within 60 seconds, power off to prevent hardware damage.`
+      : `Check case airflow and fan curves. Consider lowering the power limit with \`nvidia-smi -pl\` ` +
+        `to reduce thermal output while maintaining stable throughput.`,
+    resolution_steps: [
+      `Check GPU temperature and throttle status: \`nvidia-smi --query-gpu=temperature.gpu,temperature.gpu.tlimit,power.draw,clocks_throttle_reasons.active --format=csv,noheader\``,
+      `Verify fan operation: \`nvidia-smi --query-gpu=fan.speed --format=csv,noheader\` — 0% may indicate a failed fan`,
+      `Lower power limit to reduce thermal load: \`sudo nvidia-smi -pl <watts>\` (try 80% of current TDP)`,
+      `Check ambient temperature — GPU cooling is rated for 35°C ambient; datacenters target 18–22°C`,
+      `If persistent, clean dust from heatsink and verify thermal paste contact — degraded paste causes >10°C increase`,
+    ],
+    action_id:       'check_thermal_zone',
+    requiredMs:      instantCritical ? SAMPLE_INTERVAL_MS : PATTERN_N_MIN_WINDOW_MS,
+    observedMs:      instantCritical ? SAMPLE_INTERVAL_MS : observedMs,
+    confidence:      instantCritical ? 'high' : toConfidence(ratio),
+    confidenceRatio: instantCritical ? 1 : ratio,
+    tier:            'community',
+    actions: [
+      {
+        label:    'Check GPU temperature',
+        copyText: `nvidia-smi --query-gpu=temperature.gpu,temperature.gpu.tlimit,power.draw --format=csv,noheader`,
+      },
+      {
+        label:    'Set power limit',
+        copyText: `sudo nvidia-smi -pl <watts>`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,   // Pattern N: physical fix — no routing target
+    best_node_hostname: null,
+  };
+}
+
+// ── Pattern O: VRAM Overcommit ───────────────────────────────────────────────
+//
+// Catches models that barely fit in VRAM/unified memory at load time, before
+// symptoms (swap pressure, degraded tok/s) cascade into Patterns F and J.
+// Point-in-time check — fires on the latest sample, not a sustained window.
+//
+// Trigger: ollama_model_size_gb > 90% of VRAM capacity.
+// VRAM capacity: nvidia_vram_total_mb (NVIDIA) or gpu_wired_limit_mb (Apple).
+// Tier: community — VRAM overcommit is the #1 cause of slow inference.
+
+const PATTERN_O_ID             = 'vram_overcommit';
+const PATTERN_O_OVERCOMMIT_PCT = 90;
+
+function evaluatePatternO(
+  nodeId:   string,
+  hostname: string,
+  history:  MetricSample[],
+  now:      number,
+  os?:      string | null,
+): DetectedInsight | null {
+  if (history.length === 0) return null;
+
+  const latest = history[history.length - 1];
+  const modelSizeGb = latest.ollama_model_size_gb;
+  if (modelSizeGb == null || modelSizeGb <= 0) return null;
+
+  // Determine VRAM capacity: NVIDIA path first, then Apple Silicon
+  let vramCapacityGb: number;
+  let isApple = false;
+  if (latest.vram_total_mb != null && latest.vram_total_mb > 0) {
+    vramCapacityGb = latest.vram_total_mb / 1024;
+  } else if (latest.gpu_wired_limit_mb != null && latest.gpu_wired_limit_mb > 0) {
+    vramCapacityGb = latest.gpu_wired_limit_mb / 1024;
+    isApple = true;
+  } else {
+    return null;  // Cannot determine VRAM capacity
+  }
+
+  const usagePct = (modelSizeGb / vramCapacityGb) * 100;
+  if (usagePct < PATTERN_O_OVERCOMMIT_PCT) return null;
+
+  // Platform-aware action commands
+  const osIsApple = os === 'macOS' || isApple;
+  const primaryAction: PatternAction = osIsApple
+    ? { label: 'Check GPU memory budget', copyText: 'sysctl iogpu.wired_limit_mb' }
+    : { label: 'Check VRAM usage',        copyText: 'nvidia-smi --query-gpu=memory.total,memory.used,memory.free --format=csv,noheader' };
+
+  const headroomGb = vramCapacityGb - modelSizeGb;
+
+  return {
+    patternId:   PATTERN_O_ID,
+    nodeId,
+    hostname,
+    title:       'VRAM Overcommit',
+    hook:        `${modelSizeGb.toFixed(1)} GB model in ${vramCapacityGb.toFixed(0)} GB ${osIsApple ? 'unified memory' : 'VRAM'} (${usagePct.toFixed(0)}%)`,
+    body:        `${hostname} has a ${modelSizeGb.toFixed(1)} GB model loaded into ` +
+                 `${vramCapacityGb.toFixed(0)} GB of ${osIsApple ? 'unified memory' : 'VRAM'}, ` +
+                 `leaving only ${headroomGb.toFixed(1)} GB headroom. ` +
+                 `KV cache, context buffers, and concurrent requests compete for the remaining space. ` +
+                 (osIsApple
+                   ? `macOS will spill layers to system RAM, causing swap pressure and degraded tok/s.`
+                   : `The driver will swap layers to system RAM via PCIe, destroying inference throughput.`),
+    recommendation: `Switch to a quantized variant (q4_K_M) that fits comfortably, or unload competing ` +
+                    `models with \`ollama ps\` + \`ollama stop\` to free headroom before the next request.`,
+    resolution_steps: [
+      osIsApple
+        ? `Check GPU memory budget: \`sysctl iogpu.wired_limit_mb\``
+        : `Check VRAM usage: \`nvidia-smi --query-gpu=memory.total,memory.used,memory.free --format=csv,noheader\``,
+      `List loaded models: \`ollama ps\``,
+      `Pull a smaller quantization: \`ollama pull $(ollama ps | awk 'NR>1{print $1}' | head -1 | sed 's|:.*|:q4_K_M|')\``,
+      `Unload the current model and reload the quantized variant: \`ollama stop $(ollama ps | awk 'NR>1{print $1}' | head -1)\``,
+      `Verify headroom after swap: \`curl http://localhost:7700/api/health | jq '{model_gb:.ollama_model_size_gb,vram_total:.nvidia_vram_total_mb}'\``,
+    ],
+    action_id:       'switch_quantization',
+    requiredMs:      SAMPLE_INTERVAL_MS,
+    observedMs:      SAMPLE_INTERVAL_MS,
+    confidence:      'high',
+    confidenceRatio: 1,
+    tier:            'community',
+    actions: [
+      primaryAction,
+      {
+        label:    'Pull quantized variant',
+        copyText: `ollama pull $(ollama ps | awk 'NR>1{print $1}' | head -1 | sed 's|:.*|:q4_K_M|')`,
+      },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,
+    best_node_hostname: null,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -1695,6 +1969,8 @@ export interface PatternEvaluatorInput {
   kwhRate?: number;
   /** WES tier for hardware-tier-aware recommendations. */
   wesTier?: 'workstation' | 'server' | 'accelerator' | null;
+  /** Agent-reported OS: "macOS" | "Linux" | "Windows". Platform-aware action commands. */
+  os?: string | null;
 }
 
 /**
@@ -1707,7 +1983,7 @@ export interface PatternEvaluatorInput {
 export function evaluatePatterns(
   input: PatternEvaluatorInput,
 ): DetectedInsight[] {
-  const { nodeId, hostname, history, kwhRate, wesTier } = input;
+  const { nodeId, hostname, history, kwhRate, wesTier, os } = input;
   const fleetContext = input.fleetContext ?? [];
   const now = Date.now();
   const results: DetectedInsight[] = [];
@@ -1747,6 +2023,15 @@ export function evaluatePatterns(
 
   const l = evaluatePatternL(nodeId, hostname, history, now);
   if (l) results.push(l);
+
+  const m = evaluatePatternM(nodeId, hostname, history, now);
+  if (m) results.push(m);
+
+  const n = evaluatePatternN(nodeId, hostname, history, now);
+  if (n) results.push(n);
+
+  const o = evaluatePatternO(nodeId, hostname, history, now, os);
+  if (o) results.push(o);
 
   return results;
 }
