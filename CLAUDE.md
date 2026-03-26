@@ -121,3 +121,34 @@ The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any fie
 - Rust: no `unsafe` except NVML bindings. Minimal dependencies. `pub(crate)` for inter-module visibility.
 - Frontend: Tailwind utility classes only (no custom CSS). Strict typing in `types.ts`.
 - All metrics are real or explicitly labeled as unavailable — no mock values in production.
+
+## Session Handoff: v0.7.6 Local Observations (2026-03-26)
+
+### What shipped (on main, tagged v0.7.6)
+- **GET /api/observations** — agent endpoint evaluating 4 hardware patterns (A: Thermal Drain, B: Phantom Load, J: Swap Pressure, L: PCIe Degradation) against the DuckDB 1-hour buffer
+- **`query_observation_window()`** in `store.rs` — queries last 5 min of `metrics_raw` for pattern evaluation
+- **`evaluate_local_observations()`** in `main.rs` — pure function, no side effects, returns `Vec<LocalObservation>`
+- **`useLocalObservations` hook** — `src/hooks/useLocalObservations.ts`, polls agent every 30s on localhost
+- **Triage tab (AIInsights.tsx)** — renders hardware observations as accordion cards in local mode, appends Cloud-Only placeholders for Patterns C, E, I
+
+### ⚠️ INCOMPLETE: musl build fix needed
+The v0.7.6 tag **fails CI on Linux musl targets** (arm64-musl, x64-musl). The fix is committed locally but **not yet pushed**:
+
+**Root cause:** `LocalObservation`, `PcieSnapshot`, and `evaluate_local_observations()` in `main.rs` reference `store::ObsSample`, but `mod store` is gated behind `#[cfg(not(target_env = "musl"))]`. These items need the same gate.
+
+**Fix already applied locally** (on `claude/romantic-lamarr` worktree, not pushed):
+- Added `#[cfg(not(target_env = "musl"))]` before `struct LocalObservation` (~line 2700)
+- Added `#[cfg(not(target_env = "musl"))]` before `struct PcieSnapshot` (~line 2718)
+- Added `#[cfg(not(target_env = "musl"))]` before `fn evaluate_local_observations()` (~line 2726)
+
+**To complete:**
+1. Run `cargo check` on main repo to verify the fix compiles (the worktree has it but hasn't finished compiling)
+2. Commit the fix, push to main
+3. Delete tag v0.7.6 and re-tag, OR tag as v0.7.6.1: `git tag -d v0.7.6 && git push origin :refs/tags/v0.7.6 && git tag -a v0.7.6 -m "v0.7.6 — Local Observations" && git push origin v0.7.6`
+4. Verify CI passes all 6 targets (macOS arm64, Linux x64/arm64 glibc, Linux x64/arm64 musl, Windows x64)
+
+### Files changed
+- `agent/src/main.rs` — observations endpoint, evaluator, structs, route wiring (all in `#[cfg(not(target_env = "musl"))]` blocks)
+- `agent/src/store.rs` — `ObsSample` struct + `query_observation_window()` (already inside musl-gated module)
+- `src/components/AIInsights.tsx` — local observations rendering in Triage tab
+- `src/hooks/useLocalObservations.ts` — new hook for polling `/api/observations`
