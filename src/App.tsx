@@ -227,6 +227,33 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
     handleNodeAdded();
   }, [isSignedIn, handleNodeAdded]);
 
+  // Bootstrap local node on localhost — pairingInfo provides the node_id, and
+  // /api/metrics provides hostname + hardware data.  Without this, nodes[] stays
+  // empty and per-node Settings (idle watts, overrides) are never shown.
+  useEffect(() => {
+    if (!isLocalHost || !pairingInfo?.node_id) return;
+    const nid = pairingInfo.node_id;
+    // Avoid duplicate if already populated (e.g. from a subsequent WS frame).
+    setNodes(prev => {
+      if (prev.some(n => n.id === nid)) return prev;
+      return [{
+        id: nid,
+        hostname: nid,
+        ip: nid,
+        status: 'online' as const,
+        gpuTemp: null,
+        vramUsed: null,
+        vramTotal: null,
+        powerUsage: null,
+        requestsPerSecond: 0,
+        activeInterceptors: [],
+        uptime: '—',
+        sentinelActive: false,
+        restricted: false,
+      }];
+    });
+  }, [isLocalHost, pairingInfo?.node_id]);
+
   // Callback for FleetStreamProvider — patches node hostnames and restricted flag when real metrics arrive.
   const handleNodesSnapshot = useCallback((snapshot: FleetNode[]) => {
     setNodes(prev => prev.map(node => {

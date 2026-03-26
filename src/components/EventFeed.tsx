@@ -232,12 +232,6 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
         )}
       </div>
 
-      {/* Footer */}
-      <div className="px-4 py-2.5 border-t border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-800/10 shrink-0">
-        <p className="text-[10px] text-gray-400 dark:text-gray-600">
-          Full event history in Observability →
-        </p>
-      </div>
     </div>
   );
 };

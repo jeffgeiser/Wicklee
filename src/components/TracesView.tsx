@@ -437,7 +437,7 @@ const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, colo
 };
 
 const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
-  const [window_, setWindow] = useState<HistoryWindow>(1);
+  const window_ = 1 as HistoryWindow;  // localhost: 1h DuckDB buffer only
   const [resp,    setResp]   = useState<HistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -487,21 +487,13 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           </div>
         </div>
 
-        {/* Time window selector */}
+        {/* Time window selector — localhost only has 1h of DuckDB data */}
         <div className="flex items-center gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1">
-          {([1, 6, 24] as HistoryWindow[]).map(w => (
-            <button
-              key={w}
-              onClick={() => setWindow(w)}
-              className={`px-3 py-1 rounded-lg text-[10px] font-semibold transition-colors ${
-                window_ === w
-                  ? 'bg-indigo-600 text-white'
-                  : 'text-gray-500 hover:text-gray-300'
-              }`}
-            >
-              {w}h
-            </button>
-          ))}
+          <button
+            className="px-3 py-1 rounded-lg text-[10px] font-semibold bg-indigo-600 text-white"
+          >
+            1h
+          </button>
           <button
             onClick={load}
             disabled={loading}
@@ -612,10 +604,16 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 // Available in Cockpit mode (isLocalHost) only.
 
 const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
-  const { connectionState, lastTelemetryMs, transport } = useFleetStream();
+  const isLocalHost = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+
+  // On localhost, probe the local agent directly instead of using the fleet SSE
+  // (FleetStreamContext connects to the cloud SSE, which is disconnected on localhost).
+  const fleetStream = useFleetStream();
+  const [localAgentOk, setLocalAgentOk]         = useState(false);
+  const [localLastMs, setLocalLastMs]            = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<'ok' | 'unavailable' | 'checking'>('checking');
 
-  // Lightweight local store probe — tiny 30-second window to minimise query cost.
+  // Lightweight local agent + store probe — runs once on mount.
   useEffect(() => {
     if (!nodeId) return;
     const probe = async () => {
@@ -624,12 +622,31 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         const from = to - 30_000;
         const r    = await fetch(`/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&to=${to}`);
         setDbStatus(r.ok ? 'ok' : 'unavailable');
+        if (r.ok) {
+          setLocalAgentOk(true);
+          setLocalLastMs(Date.now());
+        }
       } catch {
         setDbStatus('unavailable');
       }
     };
+    // Also hit the SSE endpoint to verify the agent's live stream is working.
+    const sseProbe = async () => {
+      try {
+        const r = await fetch('/api/metrics');
+        if (r.ok) { setLocalAgentOk(true); setLocalLastMs(Date.now()); }
+      } catch { /* agent unreachable */ }
+    };
     probe();
+    sseProbe();
   }, [nodeId]);
+
+  // Resolve connection state: localhost → local probes, cloud → fleet SSE.
+  const connectionState = isLocalHost
+    ? (localAgentOk ? 'connected' : 'disconnected')
+    : fleetStream.connectionState;
+  const lastTelemetryMs = isLocalHost ? localLastMs : fleetStream.lastTelemetryMs;
+  const transport       = isLocalHost ? (localAgentOk ? 'http' : null) : fleetStream.transport;
 
   const relTelemetry = lastTelemetryMs
     ? (() => {

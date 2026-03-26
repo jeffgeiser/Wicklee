@@ -705,7 +705,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Storage</p>
                   <p className="text-sm font-telin text-gray-500 dark:text-gray-400">
-                    {isCloud ? 'Managed Postgres' : 'Local DuckDB'}
+                    {isCloud ? 'Managed Postgres' : 'Local Store'}
                   </p>
                 </div>
               </div>
