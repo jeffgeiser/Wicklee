@@ -94,6 +94,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   const peakTpsRef     = useRef<Record<string, number>>({});
   /** Tracks the active model per node to detect swaps that should reset the peak. */
   const peakModelRef   = useRef<Record<string, string | null>>({});
+  /** Per-(nodeId, eventType) suppression: prevents the same event from firing
+   *  more than once per 15 minutes for the same node. Key = "nodeId:eventType". */
+  const eventSuppressionRef = useRef<Record<string, number>>({});
 
   // Stable ref for the snapshot callback so the SSE effect doesn't re-run.
   const onNodesSnapshotRef = useRef(onNodesSnapshot);
@@ -146,6 +149,17 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
           const updatedLastSeen: Record<string, number>          = {};
           const newEvents:       FleetEvent[]                    = [];
 
+          // Per-(nodeId, eventType) suppression — 15 min cooldown per node per event type.
+          const EVENT_SUPPRESS_MS = 15 * 60_000;
+          const suppression = eventSuppressionRef.current;
+          const shouldSuppress = (nodeId: string, eventType: string): boolean => {
+            const key = `${nodeId}:${eventType}`;
+            const lastFired = suppression[key];
+            if (lastFired && (now - lastFired) < EVENT_SUPPRESS_MS) return true;
+            suppression[key] = now;
+            return false;
+          };
+
           for (const n of fleet.nodes) {
             const nodeId   = n.node_id;
             const hostname = n.metrics?.hostname ?? nodeId;
@@ -195,7 +209,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
               const pc = np.connectivity;
               if (isNowLive === pc.targetValue) {
                 if (now - pc.pendingAt >= SETTLE_MS) {
-                  newEvents.push({ id: uid(), ts: now, type: pc.type, nodeId, hostname: pc.hostname });
+                  if (!shouldSuppress(nodeId, pc.type)) {
+                    newEvents.push({ id: uid(), ts: now, type: pc.type, nodeId, hostname: pc.hostname });
+                  }
                   delete np.connectivity;
                 }
                 // else: still in settlement window — wait.
@@ -253,7 +269,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
               if (np.thermal) {
                 const pt = np.thermal;
                 if (curThermal === pt.targetValue && now - pt.pendingAt >= SETTLE_MS) {
-                  newEvents.push({ id: uid(), ts: now, type: pt.type, nodeId, hostname: pt.hostname, detail: pt.detail });
+                  if (!shouldSuppress(nodeId, pt.type)) {
+                    newEvents.push({ id: uid(), ts: now, type: pt.type, nodeId, hostname: pt.hostname, detail: pt.detail });
+                  }
                   delete np.thermal;
                 } else if (curThermal !== pt.targetValue) {
                   // Already updated above; if target still differs, the new pending was set.
@@ -293,7 +311,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
               if (np.model) {
                 const pm = np.model;
                 if (curModel === pm.targetValue && now - pm.pendingAt >= SETTLE_MS) {
-                  newEvents.push({ id: uid(), ts: now, type: 'model_swap', nodeId, hostname: pm.hostname, detail: pm.detail });
+                  if (!shouldSuppress(nodeId, 'model_swap')) {
+                    newEvents.push({ id: uid(), ts: now, type: 'model_swap', nodeId, hostname: pm.hostname, detail: pm.detail });
+                  }
                   delete np.model;
                 } else if (curModel !== pm.targetValue && (!np.model || np.model.targetValue !== curModel)) {
                   delete np.model;
@@ -339,7 +359,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
 
               if (np.power && now - np.power.pendingAt >= SETTLE_MS) {
                 const pp = np.power;
-                newEvents.push({ id: uid(), ts: now, type: 'power_anomaly', nodeId, hostname: pp.hostname, detail: pp.detail });
+                if (!shouldSuppress(nodeId, 'power_anomaly')) {
+                  newEvents.push({ id: uid(), ts: now, type: 'power_anomaly', nodeId, hostname: pp.hostname, detail: pp.detail });
+                }
                 delete np.power;
               }
 

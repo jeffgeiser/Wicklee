@@ -529,6 +529,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("fleet_observations migration failed");
 
+    // Additive column migration — acknowledged_by tracks who acknowledged (Clerk user_id).
+    sqlx::query("ALTER TABLE fleet_observations ADD COLUMN IF NOT EXISTS acknowledged_by TEXT")
+        .execute(pool).await.ok();
+
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_observations_tenant_state ON fleet_observations(tenant_id, state, fired_at_ms)")
         .execute(pool).await.ok();
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_observations_node ON fleet_observations(tenant_id, node_id, fired_at_ms)")
@@ -1860,9 +1864,9 @@ async fn handle_fleet_observations(
     let state_filter = params.get("state").cloned().unwrap_or_else(|| "open".into());
     let node_id_filter = params.get("node_id").cloned();
 
-    let base = "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms, ack_at_ms FROM fleet_observations WHERE tenant_id = $1";
+    let base = "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms, ack_at_ms, acknowledged_by FROM fleet_observations WHERE tenant_id = $1";
 
-    let rows: Vec<(String, String, String, String, String, String, String, Option<String>, i64, Option<i64>, Option<i64>)> = match (state_filter.as_str(), &node_id_filter) {
+    let rows: Vec<(String, String, String, String, String, String, String, Option<String>, i64, Option<i64>, Option<i64>, Option<String>)> = match (state_filter.as_str(), &node_id_filter) {
         ("all", Some(nid)) => {
             let sql = format!("{base} AND node_id = $2 ORDER BY fired_at_ms DESC LIMIT $3");
             sqlx::query_as(&sql).bind(&user_id).bind(nid).bind(limit)
@@ -1890,6 +1894,7 @@ async fn handle_fleet_observations(
             "id": r.0, "node_id": r.1, "alert_type": r.2, "severity": r.3,
             "state": r.4, "title": r.5, "detail": r.6, "context_json": r.7,
             "fired_at_ms": r.8, "resolved_at_ms": r.9, "ack_at_ms": r.10,
+            "acknowledged_by": r.11,
         })
     }).collect();
 
@@ -1917,9 +1922,9 @@ async fn handle_acknowledge_observation(
 
     let now = now_ms() as i64;
     let result = sqlx::query(
-        "UPDATE fleet_observations SET state = 'acknowledged', ack_at_ms = $1
+        "UPDATE fleet_observations SET state = 'acknowledged', ack_at_ms = $1, acknowledged_by = $4
          WHERE id = $2 AND tenant_id = $3 AND state = 'open'"
-    ).bind(now).bind(&obs_id).bind(&user_id)
+    ).bind(now).bind(&obs_id).bind(&user_id).bind(&user_id)
     .execute(&state.pool).await;
 
     match result {
@@ -3511,8 +3516,29 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 }
             }
 
+            // 1-hour cooldown: skip firing if the same (node, alert_type) was
+            // resolved or acknowledged less than 1 hour ago. Prevents flickering
+            // alerts for nodes that hover near a threshold boundary.
+            let cooldown_ms: i64 = 3_600_000; // 1 hour
+            let cooldown_cutoff = (now as i64) - cooldown_ms;
+
             for obs in &to_fire {
                 let tenant_id = match tenant_map.get(&obs.node_id) { Some(t) => t.clone(), None => continue };
+
+                // Check cooldown: was this (node, alert_type) recently resolved/acknowledged?
+                let recently_settled: bool = sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM fleet_observations
+                     WHERE tenant_id = $1 AND node_id = $2 AND alert_type = $3
+                       AND state IN ('resolved', 'acknowledged')
+                       AND COALESCE(resolved_at_ms, ack_at_ms) > $4"
+                ).bind(&tenant_id).bind(&obs.node_id).bind(&obs.alert_type).bind(cooldown_cutoff)
+                .fetch_one(&state.pool).await.unwrap_or(0) > 0;
+
+                if recently_settled {
+                    eprintln!("[evaluator] cooldown: skipping {} for {} (settled <1h ago)", obs.alert_type, obs.node_id);
+                    continue;
+                }
+
                 let obs_id = Uuid::new_v4().to_string();
                 let context_str = serde_json::to_string(&obs.context).unwrap_or_default();
 
