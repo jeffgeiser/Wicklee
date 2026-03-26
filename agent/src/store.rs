@@ -894,6 +894,45 @@ impl Store {
 
     // ── Audit Log Export ──────────────────────────────────────────────────────
 
+    // ── Observation window query ────────────────────────────────────────────
+
+    /// Return the last `window_ms` of raw samples for a given node.
+    /// Used by the local observations evaluator (Patterns A/B/J/L).
+    /// Ordered oldest-first so pattern windows can be scanned left-to-right.
+    pub fn query_observation_window(
+        &self,
+        node_id:   &str,
+        window_ms: i64,
+    ) -> Result<Vec<ObsSample>, duckdb::Error> {
+        let now   = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let from  = now - window_ms;
+        let conn  = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT ts_ms, model, tps, thermal_state,
+                    gpu_power_w, cpu_power_w, mem_pressure_pct,
+                    swap_write_mb_s
+             FROM metrics_raw
+             WHERE node_id = ? AND ts_ms >= ?
+             ORDER BY ts_ms ASC",
+        )?;
+        let rows = stmt.query_map(params![node_id, from], |row| {
+            Ok(ObsSample {
+                ts_ms:            row.get(0)?,
+                model:            row.get(1)?,
+                tps:              row.get(2)?,
+                thermal_state:    row.get(3)?,
+                gpu_power_w:      row.get(4)?,
+                cpu_power_w:      row.get(5)?,
+                mem_pressure_pct: row.get(6)?,
+                swap_write_mb_s:  row.get(7)?,
+            })
+        })?.collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
     /// Export a unified audit log joining events, traces, and dismissals.
     /// Returns flat records sorted newest-first, capped at `limit`.
     pub fn export_audit_log(
@@ -956,6 +995,23 @@ impl Store {
 
         Ok(rows)
     }
+}
+
+// ── Observation samples ──────────────────────────────────────────────────────
+
+/// Lightweight sample for server-side pattern evaluation.
+/// Pulled from `metrics_raw` over a short window (typically 5 min).
+#[derive(Debug)]
+#[allow(dead_code)] // mem_pressure_pct reserved for Pattern F
+pub struct ObsSample {
+    pub ts_ms:            i64,
+    pub model:            Option<String>,
+    pub tps:              Option<f64>,
+    pub thermal_state:    Option<String>,
+    pub gpu_power_w:      Option<f64>,
+    pub cpu_power_w:      Option<f64>,
+    pub mem_pressure_pct: Option<f64>,
+    pub swap_write_mb_s:  Option<f64>,
 }
 
 /// Flat audit record combining events, traces, and dismissals.

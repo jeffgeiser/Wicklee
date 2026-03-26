@@ -2691,6 +2691,341 @@ async fn handle_dismissed_list(
     }
 }
 
+// ── Local Observations (Patterns A, B, J, L) ─────────────────────────────────
+//
+// Server-side evaluation of 4 hardware-focused patterns against the 1-hour
+// DuckDB buffer. Returned by GET /api/observations so the localhost frontend
+// can render them without needing a cloud connection.
+
+#[derive(Serialize, Clone)]
+struct LocalObservation {
+    pattern_id:       &'static str,
+    severity:         &'static str,
+    title:            String,
+    hook:             String,
+    body:             String,
+    recommendation:   String,
+    resolution_steps: Vec<String>,
+    action_id:        &'static str,
+    confidence:       &'static str,
+    confidence_ratio: f64,
+    first_fired_ms:   i64,
+    node_id:          String,
+    hostname:         String,
+}
+
+/// PCIe state snapshot from live NvidiaMetrics (not stored in DuckDB).
+struct PcieSnapshot {
+    link_width:     Option<u32>,
+    link_max_width: Option<u32>,
+}
+
+/// Pure evaluation function — no side effects, no stored state.
+/// Takes a 5-minute window of DuckDB samples + live PCIe state and returns
+/// any observations that meet their gating criteria.
+fn evaluate_local_observations(
+    samples:  &[store::ObsSample],
+    pcie:     &PcieSnapshot,
+    node_id:  &str,
+    hostname: &str,
+) -> Vec<LocalObservation> {
+    let mut obs = Vec::new();
+    let now_ms = now_ms() as i64;
+
+    // Minimum sample density: 70% of 5 min at 1 Hz = 210 samples
+    let min_density = 210_usize;
+    // 5-minute window in ms
+    let window_ms = 300_000_i64;
+
+    // Filter samples to the 5-min window
+    let cutoff = now_ms - window_ms;
+    let window: Vec<&store::ObsSample> = samples.iter()
+        .filter(|s| s.ts_ms >= cutoff)
+        .collect();
+
+    // ── Pattern A: Thermal Performance Drain ─────────────────────────────
+    // thermal_state != "Normal" sustained 5 min + tok/s visible during window.
+    // Hook: tok/s delta vs Normal-thermal baseline.
+    if window.len() >= min_density {
+        let thermal_samples: Vec<&store::ObsSample> = window.iter()
+            .filter(|s| s.thermal_state.as_deref().is_some_and(|t| t != "Normal"))
+            .copied()
+            .collect();
+        let normal_samples: Vec<&store::ObsSample> = window.iter()
+            .filter(|s| s.thermal_state.as_deref() == Some("Normal"))
+            .copied()
+            .collect();
+
+        let thermal_ratio = thermal_samples.len() as f64 / window.len() as f64;
+
+        if thermal_ratio >= 0.70 {
+            // Compute tok/s means for throttled vs Normal baselines
+            let throttled_tps: Vec<f64> = thermal_samples.iter()
+                .filter_map(|s| s.tps)
+                .filter(|t| *t > 0.0)
+                .collect();
+            let normal_tps: Vec<f64> = normal_samples.iter()
+                .filter_map(|s| s.tps)
+                .filter(|t| *t > 0.0)
+                .collect();
+
+            if !throttled_tps.is_empty() {
+                let throttled_avg = throttled_tps.iter().sum::<f64>() / throttled_tps.len() as f64;
+                let (hook, body, degradation_pct) = if !normal_tps.is_empty() {
+                    let normal_avg = normal_tps.iter().sum::<f64>() / normal_tps.len() as f64;
+                    let delta = normal_avg - throttled_avg;
+                    let pct = if normal_avg > 0.0 { (delta / normal_avg) * 100.0 } else { 0.0 };
+                    (
+                        format!("-{:.1} tok/s ({:.0}% below Normal baseline)", delta.max(0.0), pct.max(0.0)),
+                        format!(
+                            "Thermal state has been elevated for {:.0}% of the last 5 minutes. \
+                             Throughput averages {:.1} tok/s under thermal pressure vs {:.1} tok/s \
+                             at Normal — a {:.0}% performance drain.",
+                            thermal_ratio * 100.0, throttled_avg, normal_avg, pct.max(0.0),
+                        ),
+                        pct,
+                    )
+                } else {
+                    // No Normal baseline — still report the throttle
+                    (
+                        format!("{:.1} tok/s under thermal pressure", throttled_avg),
+                        format!(
+                            "Thermal state has been elevated for {:.0}% of the last 5 minutes \
+                             with no Normal-thermal baseline available for comparison. \
+                             Current throughput: {:.1} tok/s.",
+                            thermal_ratio * 100.0, throttled_avg,
+                        ),
+                        0.0,
+                    )
+                };
+
+                // Only fire if degradation > 8% (spec threshold)
+                if degradation_pct > 8.0 || normal_tps.is_empty() {
+                    let confidence_ratio = (thermal_ratio).min(1.0);
+                    obs.push(LocalObservation {
+                        pattern_id:       "thermal_drain",
+                        severity:         if degradation_pct > 20.0 { "critical" } else { "warning" },
+                        title:            "Thermal Performance Drain".into(),
+                        hook,
+                        body,
+                        recommendation:   "Reduce ambient temperature or improve airflow around the node. \
+                                           If persistent, consider offloading inference to a cooler node."
+                                           .into(),
+                        resolution_steps: vec![
+                            "Check ambient temperature and airflow around the machine".into(),
+                            "Run: pmset -g therm (macOS) or check /sys/class/thermal (Linux)".into(),
+                            "If model is large, consider a smaller quantization to reduce heat output".into(),
+                        ],
+                        action_id:        "check_thermal_zone",
+                        confidence:       if confidence_ratio >= 0.9 { "high" } else if confidence_ratio >= 0.5 { "moderate" } else { "building" },
+                        confidence_ratio,
+                        first_fired_ms:   now_ms,
+                        node_id:          node_id.into(),
+                        hostname:         hostname.into(),
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Pattern B: Phantom Load ──────────────────────────────────────────
+    // Model loaded + power > 5W + tok/s < 0.5 for 5 min at 70% density.
+    if window.len() >= min_density {
+        let phantom_samples: Vec<&store::ObsSample> = window.iter()
+            .filter(|s| {
+                let model_loaded = s.model.is_some();
+                let power = s.gpu_power_w.or(s.cpu_power_w).unwrap_or(0.0);
+                let tps = s.tps.unwrap_or(0.0);
+                model_loaded && power > 5.0 && tps < 0.5
+            })
+            .copied()
+            .collect();
+
+        let phantom_ratio = phantom_samples.len() as f64 / window.len() as f64;
+
+        if phantom_ratio >= 0.70 {
+            let avg_watts: f64 = phantom_samples.iter()
+                .filter_map(|s| s.gpu_power_w.or(s.cpu_power_w))
+                .sum::<f64>() / phantom_samples.len().max(1) as f64;
+            // Cost estimate: $/day at $0.12/kWh default
+            let kwh_rate = 0.12;
+            let cost_per_day = (avg_watts / 1000.0) * 24.0 * kwh_rate;
+            let model_name = phantom_samples.last()
+                .and_then(|s| s.model.as_deref())
+                .unwrap_or("unknown");
+
+            let confidence_ratio = phantom_ratio.min(1.0);
+            obs.push(LocalObservation {
+                pattern_id:       "phantom_load",
+                severity:         "warning",
+                title:            "Phantom Load Detected".into(),
+                hook:             format!("-${:.2}/day · {:.0}W idle", cost_per_day, avg_watts),
+                body:             format!(
+                    "Model \"{}\" is loaded in VRAM and drawing {:.0}W with zero inference activity \
+                     for the last 5 minutes. This is pure idle cost — {:.0}% of samples show \
+                     no useful work being done.",
+                    model_name, avg_watts, phantom_ratio * 100.0,
+                ),
+                recommendation:   "Unload the idle model to reclaim VRAM and reduce power draw. \
+                                   If the model is needed soon, set a keep-alive timer instead."
+                                   .into(),
+                resolution_steps: vec![
+                    format!("Run: ollama stop {}", model_name),
+                    "Or: ollama ps  (verify model is still loaded)".into(),
+                    "Consider: OLLAMA_KEEP_ALIVE=5m to auto-unload after inactivity".into(),
+                ],
+                action_id:        "investigate_phantom",
+                confidence:       if confidence_ratio >= 0.9 { "high" } else if confidence_ratio >= 0.5 { "moderate" } else { "building" },
+                confidence_ratio,
+                first_fired_ms:   now_ms,
+                node_id:          node_id.into(),
+                hostname:         hostname.into(),
+            });
+        }
+    }
+
+    // ── Pattern J: Swap I/O Pressure ─────────────────────────────────────
+    // swap_write_mb_s > 2.0 sustained 5 min.
+    if window.len() >= min_density {
+        let swap_samples: Vec<&store::ObsSample> = window.iter()
+            .filter(|s| s.swap_write_mb_s.unwrap_or(0.0) > 2.0)
+            .copied()
+            .collect();
+
+        let swap_ratio = swap_samples.len() as f64 / window.len() as f64;
+
+        if swap_ratio >= 0.70 {
+            let avg_swap: f64 = swap_samples.iter()
+                .filter_map(|s| s.swap_write_mb_s)
+                .sum::<f64>() / swap_samples.len().max(1) as f64;
+            let is_storm = avg_swap > 10.0;
+            let avg_tps: Option<f64> = {
+                let tps_vals: Vec<f64> = window.iter()
+                    .filter_map(|s| s.tps)
+                    .filter(|t| *t > 0.0)
+                    .collect();
+                if tps_vals.is_empty() { None } else { Some(tps_vals.iter().sum::<f64>() / tps_vals.len() as f64) }
+            };
+
+            let confidence_ratio = swap_ratio.min(1.0);
+            obs.push(LocalObservation {
+                pattern_id:       "swap_pressure",
+                severity:         if is_storm { "critical" } else { "warning" },
+                title:            if is_storm { "Swap Storm".into() } else { "Swap I/O Pressure".into() },
+                hook:             format!(
+                    "{:.1} MB/s swap{}",
+                    avg_swap,
+                    avg_tps.map(|t| format!(" · {:.1} tok/s", t)).unwrap_or_default(),
+                ),
+                body:             format!(
+                    "Sustained swap write rate of {:.1} MB/s over {:.0}% of the last 5 minutes{}. \
+                     Swap pressure forces the OS to page model weights to disk, dramatically \
+                     increasing inference latency.",
+                    avg_swap, swap_ratio * 100.0,
+                    if is_storm { " — this is a swap storm (>10 MB/s)" } else { "" },
+                ),
+                recommendation:   "Reduce memory pressure by unloading idle models or switching to \
+                                   a smaller quantization. If possible, add physical RAM."
+                                   .into(),
+                resolution_steps: vec![
+                    "Run: ollama ps  (check loaded model count and VRAM usage)".into(),
+                    "Evict idle models: ollama stop <model>".into(),
+                    "Consider a smaller quantization (e.g., Q4_K_M → Q4_0)".into(),
+                    "Monitor: vm_stat 1 (macOS) or vmstat 1 (Linux)".into(),
+                ],
+                action_id:        "evict_idle_models",
+                confidence:       if confidence_ratio >= 0.9 { "high" } else if confidence_ratio >= 0.5 { "moderate" } else { "building" },
+                confidence_ratio,
+                first_fired_ms:   now_ms,
+                node_id:          node_id.into(),
+                hostname:         hostname.into(),
+            });
+        }
+    }
+
+    // ── Pattern L: PCIe Lane Degradation ─────────────────────────────────
+    // Point-in-time: pcie_link_width < pcie_link_max_width (NVIDIA only).
+    if let (Some(cur), Some(max)) = (pcie.link_width, pcie.link_max_width) {
+        if cur < max {
+            obs.push(LocalObservation {
+                pattern_id:       "pcie_degradation",
+                severity:         if cur <= max / 2 { "critical" } else { "warning" },
+                title:            "PCIe Lane Degradation".into(),
+                hook:             format!("x{} in x{} slot", cur, max),
+                body:             format!(
+                    "GPU is negotiating {} PCIe lanes but the slot supports {}. \
+                     This reduces GPU↔CPU bandwidth by {:.0}%, which can bottleneck \
+                     large model weight transfers and KV cache synchronisation.",
+                    cur, max, (1.0 - cur as f64 / max as f64) * 100.0,
+                ),
+                recommendation:   "Reseat the GPU in its PCIe slot. Check for dust, bent pins, \
+                                   or a loose riser cable. Verify BIOS PCIe settings."
+                                   .into(),
+                resolution_steps: vec![
+                    "Power off and reseat the GPU in the PCIe slot".into(),
+                    "Inspect the slot and card edge connector for debris or damage".into(),
+                    "Check BIOS: ensure PCIe link speed is set to Auto or Gen4/Gen5".into(),
+                    "Run: nvidia-smi -q -d PCIE  (confirm current negotiated width)".into(),
+                ],
+                action_id:        "check_power_limits",
+                confidence:       "high",
+                confidence_ratio: 1.0,
+                first_fired_ms:   now_ms,
+                node_id:          node_id.into(),
+                hostname:         hostname.into(),
+            });
+        }
+    }
+
+    obs
+}
+
+/// Newtype wrapper for the node_id Extension so it doesn't collide with other Arc<String>.
+#[derive(Clone)]
+struct NodeId(Arc<String>);
+
+#[cfg(not(target_env = "musl"))]
+async fn handle_observations(
+    axum::extract::Extension(store):          axum::extract::Extension<store::Store>,
+    axum::extract::Extension(nvidia_metrics): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
+    axum::extract::Extension(node_id_ext):    axum::extract::Extension<NodeId>,
+) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let node_id  = node_id_ext.0.as_str().to_owned();
+    let hostname = node_id.clone(); // agent uses node_id as hostname
+
+    // 1. Query last 5 minutes from DuckDB
+    let node_id_q = node_id.clone();
+    let samples = match tokio::task::spawn_blocking(move || {
+        store.query_observation_window(&node_id_q, 300_000)
+    }).await {
+        Ok(Ok(s))  => s,
+        Ok(Err(e)) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    };
+
+    // 2. Read PCIe state from live NvidiaMetrics
+    let pcie = {
+        let nv = nvidia_metrics.lock().unwrap();
+        PcieSnapshot {
+            link_width:     nv.pcie_link_width,
+            link_max_width: nv.pcie_link_max_width,
+        }
+    };
+
+    // 3. Evaluate patterns
+    let observations = evaluate_local_observations(&samples, &pcie, &node_id, &hostname);
+
+    Json(serde_json::json!({ "observations": observations })).into_response()
+}
+
 /// Returns the last 20 lifecycle events from the recent_events_log ring buffer,
 /// filtered to those within the last 5 minutes. Used by the frontend to seed
 /// the Live Activity feed on every fresh WS connect — catches the startup event
@@ -3548,7 +3883,8 @@ async fn main() {
             .route("/api/pair/disconnect",post(handle_pair_disconnect));
 
         // Wire store-backed routes only when DuckDB opened successfully.
-        // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET).
+        // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET),
+        // /api/observations (local Patterns A/B/J/L).
         #[cfg(not(target_env = "musl"))]
         let r = if let Some(ref st) = metrics_store {
             r.route("/api/history",             get(handle_history))
@@ -3557,6 +3893,7 @@ async fn main() {
              .route("/api/export",              get(handle_export))
              .route("/api/insights/dismiss",    post(handle_dismiss))
              .route("/api/insights/dismissed",  get(handle_dismissed_list))
+             .route("/api/observations",        get(handle_observations))
              .layer(axum::extract::Extension(st.clone()))
         } else {
             r
@@ -3576,6 +3913,7 @@ async fn main() {
          .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(axum::extract::Extension(probe_active))
+         .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
          .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target, runtime_overrides: runtime_overrides }))
          .layer(cors)
     };
