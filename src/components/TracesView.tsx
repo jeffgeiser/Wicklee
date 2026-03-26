@@ -1968,10 +1968,12 @@ const FleetMetricsMini: React.FC<{
 // ── Main component ─────────────────────────────────────────────────────────────
 
 const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo, getToken, subscriptionTier, navParams, onNavConsumed }) => {
-  // node_id is always populated once pairingInfo loads from /api/pair/status.
-  // Gate on pairingInfo !== null (not on nodeId) so the panels aren't permanently
-  // hidden during the brief window before the first API response arrives.
-  const nodeId = pairingInfo?.node_id ?? '';
+  // Derive nodeId from pairing info first, then fall back to the WS metrics
+  // stream so Metric History / Agent Health render even before /api/pair/status
+  // resolves (or when the node is unpaired).
+  const { allNodeMetrics } = useFleetStream();
+  const wsNodeId = Object.keys(allNodeMetrics)[0] ?? '';
+  const nodeId = pairingInfo?.node_id || wsNodeId;
   const { proxyActive, listenPort: proxyListenPort, targetPort: proxyTargetPort, runtimeOverrides } = useProxyStatus();
 
   // Consume nav params after mount so they don't persist on tab re-visits.
@@ -1998,13 +2000,13 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
       {/* 1. Sovereignty (collapsible) */}
       {isLocalHost && <SovereigntySection pairingInfo={pairingInfo} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} runtimeOverrides={runtimeOverrides} />}
       {/* 2. Metric History (6-chart 3×2 grid) */}
-      {isLocalHost && pairingInfo !== null && <MetricHistoryPanel nodeId={nodeId} />}
+      {isLocalHost && nodeId && <MetricHistoryPanel nodeId={nodeId} />}
       {/* 3. Inference Traces */}
       {isLocalHost && <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />}
       {/* 4. Connection Event Log */}
-      {isLocalHost && pairingInfo !== null && <EventHistoryPanel />}
+      {isLocalHost && <EventHistoryPanel />}
       {/* 5. Diagnostics (formerly Agent Health) */}
-      {isLocalHost && pairingInfo !== null && <AgentHealthPanel   nodeId={nodeId} />}
+      {isLocalHost && nodeId && <AgentHealthPanel   nodeId={nodeId} />}
     </div>
   );
 };

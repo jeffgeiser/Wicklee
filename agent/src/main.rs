@@ -2105,14 +2105,16 @@ fn start_metrics_broadcaster(
     proxy_listen_port:     Option<u16>,
     proxy_target_port:     Option<u16>,
     runtime_port_overrides: Option<String>,
+    config_node_id:        String,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
 
     tokio::spawn(async move {
         let mut sys = System::new_all();
-        let node_id = System::host_name()
-            .unwrap_or_else(|| "wicklee-sentinel-01".to_string());
+        let node_id = config_node_id;
+        let hostname = System::host_name()
+            .unwrap_or_else(|| node_id.clone());
 
         // Cache chip_name once — CPU model never changes at runtime.
         let linux_chip_name = read_linux_chip_name();
@@ -2160,7 +2162,7 @@ fn start_metrics_broadcaster(
 
             let payload = MetricsPayload {
                 node_id:                 node_id.clone(),
-                hostname:                node_id.clone(),
+                hostname:                hostname.clone(),
                 gpu_name:                nvidia.nvidia_gpu_name.clone().or(apple.gpu_name.clone()),
                 chip_name:               linux_chip_name.clone(),
                 cpu_usage_percent:       sys.global_cpu_info().cpu_usage(),
@@ -3755,6 +3757,7 @@ async fn main() {
         proxy_listen,
         proxy_target,
         runtime_overrides.clone(),
+        config.node_id.clone(),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
