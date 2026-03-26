@@ -6,6 +6,58 @@
 
 ---
 
+## March 25–26, 2026 — Phase 5: Postgres Migration + Observability Restructure
+
+### Cloud Database Migration: SQLite + DuckDB → Railway Postgres ✅
+- **Complete backend rewrite** — `cloud/src/main.rs` migrated from `rusqlite` + `duckdb` (bundled C libs) to `sqlx::PgPool` (async Postgres connection pool, 20 connections)
+- **All 13 tables in single Postgres** — 8 transactional (users, nodes, sessions, api_keys, notification_channels, alert_rules, alert_events, stream_tokens) + 5 time-series (metrics_raw, metrics_5min, node_events, fleet_observations, schema_breakpoints)
+- **TimescaleDB support** — hypertable + retention + compression policies applied when extension available (non-fatal if absent)
+- **Batch INSERT via UNNEST** — `metrics_writer_task` chunks 1000 rows per INSERT, respects Postgres 65K param limit
+- **TIMESTAMPTZ** for time-series columns — Postgres query planner skips chunks efficiently vs raw BIGINT
+- **Eliminated all `spawn_blocking`** — sqlx is async-native, no mutex contention
+- **Build speed** — removed DuckDB bundled C compile (~4 min), Railway deploys much faster
+- **Railway networking** — nginx internal proxy with Docker DNS resolver (`127.0.0.11`)
+
+### DuckDB Crash Resolution ✅
+- **Root cause:** `free(): corrupted unsorted chunks` — heap corruption from concurrent `Arc<Mutex<DuckConn>>` access across 6 background tasks + HTTP handlers on Railway's ephemeral containers
+- **Intermediate fixes:** mutex poisoning recovery (`duck_lock()`), schema drift migration (ALTER TABLE), INSERT-with-named-columns (replace Appender), `/health` diagnostic endpoint
+- **Final fix:** Complete migration to Postgres eliminates the DuckDB dependency on cloud entirely. Agent keeps DuckDB for local history.
+
+### Observability Tab Restructure ✅
+- **Unified 6-chart grid (3×2)** on both localhost + cloud: Tok/s, Power Draw, GPU Util, CPU Usage, Mem Pressure, Swap Write
+- **Cloud FleetMetricsMini** expanded from 4 (2×2) to 6 (3×2) charts
+- **swap_write** column added to Postgres pipeline (metrics_raw, metrics_5min rollup, history response)
+- **Localhost section reorder:** Sovereignty → Metric History → Inference Traces → Connection Events → Diagnostics
+- **DismissalLogPanel removed** — no longer needed
+- **Agent Health → Diagnostics** rename
+- **Sovereignty collapsible** on localhost (default collapsed, "Sovereign" badge)
+- **Merged FleetSovereigntyGuard + TelemetryInspector** on cloud — single component with expandable node rows. Click a node → inline field inspector (SYNCED vs LOCAL_ONLY fields, Copy JSON)
+- **Clock throttle indicator** on Power Draw chart — amber "⚡ Throttled X%" badge when `clock_throttle_pct > 0`
+
+### Agent Version Mismatch Alert ✅
+- New alert #5 in `fleet_alert_evaluator_task`: compares each node's `agent_version` against fleet majority (mode). Warning when mismatched. Auto-resolves on update.
+
+### Acknowledged Observations ✅
+- `acknowledged_by` column on `fleet_observations` — tracks who acknowledged
+- Server-side 1hr cooldown after resolve/acknowledge prevents flickering alerts
+- Client-side pattern engine per-(node, type) suppression key
+
+### Frontend Polish ✅
+- **"DuckDB" → "local store"** — 20+ user-facing string replacements across TracesView, WESHistoryChart, MetricsHistoryChart, PricingPage, ScaffoldingView
+- **Overview chart: 60s → 1hr** buffer (3600 samples at 1 Hz), HH:MM:SS labels
+- **Recharts minHeight={1}** fix — suppresses -1 dimension console warning
+- **`/api/pair/status` 404 fix** — gated behind `isLocalHost` on cloud
+- **Localhost idle watts setting** — Cost & Energy section, same `systemIdleW` path as cloud per-node table
+- **Settings Account & Data** — fleet status shows connected count, agent version mismatch indicator, "Managed Postgres" storage label
+
+### Key Bugs & Lessons
+- **DuckDB + Railway = fatal** — concurrent Mutex access + container kills → heap corruption. Postgres with connection pooling is the correct architecture for multi-tenant cloud.
+- **UNNEST batch INSERT** — Postgres 65K param limit means 18-column rows must be chunked to ≤1000 rows per INSERT
+- **Railway internal networking** — `service.railway.internal` DNS requires Docker resolver at `127.0.0.11` in nginx config
+- **`CREATE TABLE IF NOT EXISTS` doesn't update schema** — always pair with `ALTER TABLE ADD COLUMN IF NOT EXISTS` migrations for existing databases
+
+---
+
 ## March 24, 2026 (Session 3) — Phase 4B: Fleet Alerting & Observations
 
 ### Fleet Observations System (Cloud Backend) ✅
