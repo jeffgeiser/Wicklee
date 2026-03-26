@@ -73,6 +73,7 @@ import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
 import InsightsBriefingCard from './insights/InsightsBriefingCard';
 import { useMetricHistory, metricsToSample } from '../hooks/useMetricHistory';
+import { useLocalObservations } from '../hooks/useLocalObservations';
 import { evaluatePatterns } from '../lib/patternEngine';
 import type { DetectedInsight, FleetNodeSummary } from '../lib/patternEngine';
 import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle';
@@ -541,6 +542,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     state: 'all',
     skip: isLocalHost,
   });
+
+  // ── Local agent observations (Patterns A/B/J/L — localhost only) ───────────
+  const { observations: localAgentObs } = useLocalObservations(!isLocalHost);
 
   const appendToLog = useCallback((entry: AlertLogEntry) => {
     setAlertLog(prev => {
@@ -1496,7 +1500,68 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* Top Finding removed — observations accordion below is the primary triage interface */}
+              {/* ── Hardware Observations (localhost only — agent-side Patterns A/B/J/L) ──
+                  Server-evaluated against the DuckDB 1-hour buffer. Displayed as
+                  accordion cards identical to the pattern-engine observations below. */}
+              {isLocalHost && localAgentObs.length > 0 && (
+                <div className="space-y-2">
+                  <SectionHeader>Hardware Observations</SectionHeader>
+                  {localAgentObs.map(insight => (
+                    <AccordionObservationCard
+                      key={`${insight.patternId}-${insight.nodeId}`}
+                      insight={insight}
+                      showNodeHeader={false}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* ── Cloud-Only placeholders (localhost only) ─────────────────
+                  Show what patterns require fleet context so the user knows what
+                  they're missing without a cloud connection. */}
+              {isLocalHost && (
+                <div className="space-y-2 mt-2">
+                  {[
+                    {
+                      id: 'wes_velocity_drop',
+                      label: 'WES Velocity Drop',
+                      desc: 'Detects rapid WES score decline across 10-minute fleet-wide trending windows.',
+                    },
+                    {
+                      id: 'fleet_load_imbalance',
+                      label: 'Fleet Load Imbalance',
+                      desc: 'Identifies nodes under thermal stress while healthier peers have spare capacity.',
+                    },
+                    {
+                      id: 'efficiency_penalty_drag',
+                      label: 'Efficiency Penalty Drag',
+                      desc: 'Catches hidden WES penalties from context window, batch fragmentation, and KV cache overhead.',
+                    },
+                  ].map(p => (
+                    <div
+                      key={p.id}
+                      className="rounded-2xl border border-gray-800/40 bg-gray-900/30 p-4 flex items-center gap-3 opacity-50"
+                    >
+                      <Globe className="w-4 h-4 text-gray-600 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+                          {p.label}
+                          <span className="ml-2 text-[9px] font-normal tracking-normal text-gray-700">Cloud-Only</span>
+                        </p>
+                        <p className="text-xs text-gray-700 mt-0.5 truncate">{p.desc}</p>
+                      </div>
+                      <a
+                        href="https://wicklee.dev"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-indigo-400/50 hover:text-indigo-400 transition-colors whitespace-nowrap"
+                      >
+                        Pair with wicklee.dev →
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* ── Observations — pattern engine briefing feed ─────────────
                   Active observations are shown first; resolved (hold-period) entries
