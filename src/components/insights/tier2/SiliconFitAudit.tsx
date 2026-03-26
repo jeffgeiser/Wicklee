@@ -87,11 +87,13 @@ interface SiliconFitAuditProps {
   node: SentinelMetrics;
   nodes: SentinelMetrics[];
   onNavigateToPerformance?: () => void;
+  /** System idle power (watts) from Settings — subtracted from accelerator power for WES. */
+  systemIdleW?: number;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, nodes, onNavigateToPerformance }) => {
+const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, nodes, onNavigateToPerformance, systemIdleW = 0 }) => {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const node = selectedNodeId ? nodes.find(n => n.node_id === selectedNodeId) ?? defaultNode : defaultNode;
 
@@ -119,8 +121,12 @@ const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, no
   const quantLabel = rawQuant?.toUpperCase() ?? null;
   const family     = quantLabel ? quantFamily(quantLabel) : 'Unknown';
 
-  const tps   = node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null;
-  const watts = getNodePowerW(node);
+  const tps      = node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null;
+  const rawWatts = getNodePowerW(node);
+  // Subtract idle system power so WES reflects inference-attributable efficiency.
+  const watts    = rawWatts != null && systemIdleW > 0
+    ? Math.max(rawWatts - systemIdleW, 0.1)
+    : rawWatts;
   const w1k   = tps != null && watts != null && tps > 0 ? (watts / tps) * 1_000 : null;
   const wes   = tps != null && watts != null && tps > 0 && watts > 0
     ? computeWES(tps, watts, node.thermal_state)

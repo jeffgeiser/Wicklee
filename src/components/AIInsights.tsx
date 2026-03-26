@@ -72,6 +72,7 @@ import CompactMonitoringStrip from './insights/CompactMonitoringStrip';
 import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
 import InsightsBriefingCard from './insights/InsightsBriefingCard';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { useMetricHistory, metricsToSample } from '../hooks/useMetricHistory';
 import { useLocalObservations } from '../hooks/useLocalObservations';
 import { evaluatePatterns } from '../lib/patternEngine';
@@ -491,6 +492,137 @@ interface AIInsightsProps {
    */
   onNavigateToObservability?: (params?: ObservabilityNavParams) => void;
 }
+
+// ── LocalPerformanceHistory — DuckDB-backed multi-metric chart (localhost) ─────
+//
+// Fetches the last 1 hour of raw samples from GET /api/history and renders a
+// selectable multi-metric area chart (tok/s, power, GPU%, memory%).
+
+type PerfMetric = 'tps' | 'power' | 'gpu' | 'mem';
+const PERF_METRICS: { key: PerfMetric; label: string; unit: string; color: string }[] = [
+  { key: 'tps',   label: 'Tok/s',   unit: ' tok/s', color: '#22d3ee' },
+  { key: 'power', label: 'Power',   unit: 'W',      color: '#a78bfa' },
+  { key: 'gpu',   label: 'GPU %',   unit: '%',      color: '#34d399' },
+  { key: 'mem',   label: 'Memory %',unit: '%',      color: '#f472b6' },
+];
+
+const LocalPerformanceHistory: React.FC<{ nodeId: string }> = ({ nodeId }) => {
+  const [metric, setMetric] = React.useState<PerfMetric>('tps');
+  const [samples, setSamples] = React.useState<any[]>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    if (!nodeId) return;
+    setLoading(true);
+    try {
+      const to   = Date.now();
+      const from = to - 3_600_000; // 1 hour
+      const r = await fetch(`/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&to=${to}`);
+      if (r.ok) {
+        const data = await r.json();
+        setSamples(data.samples ?? []);
+      }
+    } catch { /* agent unavailable */ }
+    setLoading(false);
+  }, [nodeId]);
+
+  React.useEffect(() => { load(); }, [load]);
+  // Auto-refresh every 60s
+  React.useEffect(() => {
+    const id = setInterval(load, 60_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const cfg = PERF_METRICS.find(m => m.key === metric)!;
+  const getValue = (s: any): number | undefined => {
+    switch (metric) {
+      case 'tps':   return s.tps ?? s.tps_avg ?? undefined;
+      case 'power': return s.gpu_power_w ?? s.cpu_power_w ?? undefined;
+      case 'gpu':   return s.gpu_util_pct ?? undefined;
+      case 'mem':   return s.mem_pressure_pct ?? (s.mem_total_mb > 0 ? (s.mem_used_mb / s.mem_total_mb) * 100 : undefined);
+    }
+  };
+
+  const chartData = samples
+    .map(s => ({ ts: s.ts_ms, v: getValue(s) }))
+    .filter(d => d.v !== undefined);
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <BarChart2 className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Performance History</span>
+          <span className="text-[9px] text-gray-700 font-mono">1h</span>
+        </div>
+        <div className="flex items-center gap-1 bg-gray-950 border border-gray-800 rounded-lg p-0.5">
+          {PERF_METRICS.map(m => (
+            <button
+              key={m.key}
+              onClick={() => setMetric(m.key)}
+              className={`px-2 py-1 rounded text-[9px] font-semibold transition-colors ${
+                metric === m.key
+                  ? 'bg-gray-800 text-white'
+                  : 'text-gray-600 hover:text-gray-400'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {chartData.length > 1 ? (
+        <div style={{ width: '100%', height: 160 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id="perf-grad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor={cfg.color} stopOpacity={0.25} />
+                  <stop offset="95%" stopColor={cfg.color} stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <XAxis
+                dataKey="ts"
+                tick={{ fontSize: 9, fill: '#6b7280' }}
+                tickFormatter={(ts: number) => {
+                  const d = new Date(ts);
+                  return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+                }}
+                minTickGap={40}
+              />
+              <YAxis hide domain={['auto', 'auto']} />
+              <Tooltip
+                contentStyle={{ background: '#111', border: '1px solid #374151', borderRadius: 8, fontSize: 10 }}
+                formatter={(v: number) => [`${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}${cfg.unit}`, cfg.label]}
+                labelFormatter={(ts: number) => {
+                  const d = new Date(ts);
+                  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }}
+              />
+              <Area
+                type="monotone"
+                dataKey="v"
+                stroke={cfg.color}
+                strokeWidth={1.5}
+                fill="url(#perf-grad)"
+                dot={false}
+                isAnimationActive={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="h-40 flex flex-col items-center justify-center text-center">
+          <Database className="w-5 h-5 text-gray-700 mb-2" />
+          <p className="text-xs text-gray-600">{loading ? 'Loading…' : 'No samples in this window.'}</p>
+          <p className="text-[10px] text-gray-700 mt-1">Run some inference — history collects at 1 Hz.</p>
+        </div>
+      )}
+      <p className="text-[9px] text-gray-700">{chartData.length} samples</p>
+    </div>
+  );
+};
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
@@ -1813,11 +1945,56 @@ const AIInsights: React.FC<AIInsightsProps> = ({
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'performance' && (
             <>
-              {/* WES Leaderboard + Inference Density Map — 2-col */}
+              {/* Row 1: WES Leaderboard (cloud) / Model Efficiency (local) + Benchmarks */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
-                {/* WES Leaderboard */}
-                {canViewInsight(7) ? (
+                {/* Localhost: Model Efficiency summary (replaces WES Leaderboard) */}
+                {isLocalHost ? (
+                  <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+                    <div className="flex items-center gap-2">
+                      <Activity className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Model Efficiency</span>
+                    </div>
+                    {(() => {
+                      const n = effectiveNodes[0];
+                      if (!n) return <p className="text-xs text-gray-700">Waiting for telemetry…</p>;
+                      const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
+                      const watts = getNodePowerW(n);
+                      const idleW = getNodeSettings(n.node_id).systemIdleW;
+                      const adjW  = watts != null && idleW > 0 ? Math.max(watts - idleW, 0.1) : watts;
+                      const wes   = tps != null && adjW != null && tps > 0 && adjW > 0
+                        ? computeWES(tps, adjW, n.thermal_state) : null;
+                      const w1k   = tps != null && adjW != null && tps > 0 ? (adjW / tps) * 1_000 : null;
+                      const model = n.ollama_active_model ?? n.vllm_model_name ?? null;
+                      return (
+                        <div className="space-y-3">
+                          {model && <p className="text-xs font-telin text-gray-300 truncate">{model}</p>}
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <p className="text-[9px] text-gray-600 uppercase tracking-widest">tok/s</p>
+                              <p className="text-sm font-bold font-telin text-cyan-400">{tps != null ? tps.toFixed(1) : '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-[9px] text-gray-600 uppercase tracking-widest">WES</p>
+                              <p className={`text-sm font-bold font-telin ${wes != null && wes > 10 ? 'text-green-400' : wes != null && wes >= 1 ? 'text-amber-400' : 'text-gray-600'}`}>
+                                {wes != null ? (wes >= 100 ? wes.toFixed(0) : wes.toFixed(1)) : '—'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[9px] text-gray-600 uppercase tracking-widest">W/1K</p>
+                              <p className="text-sm font-bold font-telin text-gray-300">{w1k != null ? w1k.toFixed(1) : '—'}</p>
+                            </div>
+                          </div>
+                          {idleW > 0 && (
+                            <p className="text-[9px] text-gray-600">
+                              Idle offset applied: {idleW}W subtracted from {watts?.toFixed(1)}W accelerator power
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ) : canViewInsight(7) ? (
                   <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
                     <div className="flex items-center gap-2">
                       <BarChart2 className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -1841,7 +2018,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   <div className="flex items-center gap-2">
                     <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
                     <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 flex-1">
-                      Fleet Benchmarks
+                      {isLocalHost ? 'Node Benchmark' : 'Fleet Benchmarks'}
                     </span>
                   </div>
                   <HexHive rows={hiveRows} onNodeClick={(node) => setBenchmarkReport(buildReportFromLive(node))} />
@@ -1855,6 +2032,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   node={effectiveNodes[0]}
                   nodes={effectiveNodes}
                   onNavigateToPerformance={() => setActiveTab('performance')}
+                  systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
                 />
               ) : canViewInsight(10) ? (
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
@@ -1877,6 +2055,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   }
                 />
               )}
+
+              {/* Localhost: Performance History from DuckDB (1h window) */}
+              {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}
 
               {/* WES Trend Chart (cloud only) */}
               {!isLocalHost && getToken && (
