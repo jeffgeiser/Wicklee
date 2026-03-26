@@ -406,6 +406,39 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </p>
           </div>
 
+          {/* Localhost: single-node idle power setting (cloud uses per-node table) */}
+          {!isCloudMode && nodes.length > 0 && (() => {
+            const localNodeId = nodes[0].id;
+            const localOv = settings.nodes[localNodeId] ?? {};
+            const localIdleW = localOv.systemIdleW ?? 0;
+            return (
+              <div className="space-y-1.5">
+                <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">System Idle Power (Wall)</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number" min="0" step="1"
+                    defaultValue={localIdleW || ''}
+                    onBlur={e => {
+                      const v = parseFloat(e.target.value);
+                      if (e.target.value === '' || isNaN(v)) {
+                        setNodeOverride(localNodeId, { systemIdleW: undefined });
+                      } else if (v >= 0) {
+                        setNodeOverride(localNodeId, { systemIdleW: v });
+                      }
+                    }}
+                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    placeholder="0"
+                    className={`${inputCls(localIdleW > 0)} w-24 tabular-nums`}
+                  />
+                  <span className="text-[10px] text-gray-500">watts</span>
+                </div>
+                <p className="text-[10px] text-gray-500">
+                  System idle draw at the wall. Added to accelerator power for total cost estimates.
+                </p>
+              </div>
+            );
+          })()}
+
           {isCloudMode && (
             <p className="text-[11px] text-gray-400 dark:text-gray-500">
               These values apply to all nodes. Override any setting per-node in Node Configuration below.
