@@ -6,6 +6,34 @@
 
 ---
 
+## March 26, 2026 — v0.7.6: Local Observations + Localhost Performance Tab
+
+### Agent: Local Observations Endpoint ✅
+- **GET /api/observations** — server-side evaluation of 4 hardware patterns (A: Thermal Drain, B: Phantom Load, J: Swap Pressure, L: PCIe Degradation) against the DuckDB 1-hour buffer
+- `query_observation_window()` in `store.rs` — queries last 5 min of `metrics_raw`
+- `evaluate_local_observations()` — pure function, returns `Vec<LocalObservation>`
+- All observation structs gated behind `#[cfg(not(target_env = "musl"))]`
+- Cargo.toml version bumped to 0.7.6 (was stuck at 0.6.0)
+
+### Triage Tab: Local Observations ✅
+- Hardware observation accordion cards rendered from `/api/observations` on localhost
+- Cloud-Only placeholder cards for Patterns C (WES Drift), E (Fleet Imbalance), I (Efficiency Penalty) with "Pair with wicklee.dev →" CTA
+- `useLocalObservations` hook — polls agent every 30s
+
+### Performance Tab: Localhost Symmetry ✅
+- **Model Efficiency** card replaces WES Leaderboard — live tok/s, WES (with idle watt offset), W/1K TKN
+- **LocalPerformanceHistory** — multi-metric area chart (TPS, Power, GPU%, Memory%) from 1h DuckDB buffer, 60s auto-refresh
+- **Silicon Fit Audit** accepts `systemIdleW` prop — subtracts idle power from accelerator watts for WES
+
+### Bug Fixes ✅
+- **Collection "Disconnected" on localhost** — Diagnostics panel probed fleet SSE instead of local agent. Now uses direct HTTP probe.
+- **nodes[] empty on localhost** — Settings idle watts input never rendered because `nodes.length === 0`. Bootstrapped from `pairingInfo.node_id` in App.tsx.
+- **Cargo.toml version stale** — `env!("CARGO_PKG_VERSION")` reported 0.6.0 in all binaries since Phase 3B.
+- **Metric History 6h/24h on localhost** — removed; only 1h DuckDB buffer available locally.
+- **EventFeed footer** — removed "Full event history in Observability →" cross-link.
+
+---
+
 ## March 25–26, 2026 — Phase 5: Postgres Migration + Observability Restructure
 
 ### Cloud Database Migration: SQLite + DuckDB → Railway Postgres ✅
