@@ -4,6 +4,17 @@
 
 ---
 
+## ✅ Shipped — Phase 5: Postgres Migration + Observability Restructure (v0.8.0)
+
+- **Cloud database migration** — SQLite + DuckDB → single Railway Postgres via `sqlx::PgPool`. 13 tables, async connection pool, UNNEST batch INSERT. TimescaleDB-ready (non-fatal if absent). DuckDB bundled C compile removed → faster deploys.
+- **Unified 6-chart Observability grid** — Tok/s, Power, GPU%, CPU%, Mem Pressure, Swap Write on both localhost and cloud. `swap_write` column added to full Postgres pipeline.
+- **Sovereignty redesign** — localhost: collapsible card. Cloud: merged Guard + Inspector with expandable per-node field inspector rows.
+- **Fleet alerting matured** — Agent version mismatch alert (#5), acknowledged_by tracking, 1hr cooldown after resolve/acknowledge, per-(node, type) pattern suppression.
+- **Localhost polish** — 1hr chart buffer (3600 samples), idle watts setting, DuckDB→"local store" terminology, section reorder, DismissalLog removed, Agent Health→Diagnostics.
+- **Railway infrastructure** — internal nginx proxy with Docker DNS resolver, Postgres `DATABASE_URL` env var.
+
+---
+
 ## ✅ Shipped (v0.4.34–v0.4.38)
 
 **Silicon Truth + Live Activity Sprint (v0.4.34–v0.4.38)**

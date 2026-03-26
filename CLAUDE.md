@@ -15,7 +15,7 @@ agent/src/              Rust agent (Tokio/Axum, single binary)
   diagnostics.rs        Startup health-check (--status)
   process_discovery.rs  Runtime detection (Ollama, vLLM process scanning)
   store.rs              DuckDB local metrics storage (conditional, not on musl)
-cloud/src/main.rs       Fleet cloud backend (Axum, Railway, SQLite + DuckDB)
+cloud/src/main.rs       Fleet cloud backend (Axum, Railway, Postgres via sqlx)
 src/                    React 19 frontend (Vite, Tailwind, Recharts)
 docs/                   Architecture spec, roadmap, security, tier definitions
 ```
@@ -55,7 +55,9 @@ Tier hierarchy (first match wins):
 2. **Cloud** — `cloud/src/main.rs` `struct MetricsPayload` (the deserializer)
 3. **Frontend** — `src/types.ts` `SentinelMetrics` interface (the TypeScript consumer)
 
-**When adding a new field to the agent's MetricsPayload, you MUST also add it to the cloud struct and the frontend type.** The cloud uses `serde(default)` so missing fields are silently dropped — the field will simply never reach the fleet dashboard or DuckDB history. This silent failure caused the fleet power/WES divergence bug (cloud was missing `apple_soc_power_w` for months).
+**When adding a new field to the agent's MetricsPayload, you MUST also add it to the cloud struct and the frontend type.** The cloud uses `serde(default)` so missing fields are silently dropped — the field will simply never reach the fleet dashboard or Postgres history. This silent failure caused the fleet power/WES divergence bug (cloud was missing `apple_soc_power_w` for months).
+
+**When adding a new field to the Postgres `metrics_raw` table**, you MUST also: (1) add it to `MetricsRow` struct, (2) add it to the UNNEST batch INSERT in `flush_batch`, (3) add the AVG to `metrics_5min` rollup, (4) return it from the `/api/fleet/metrics-history` response. Use `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration for existing databases.
 
 Field names are frozen — do not rename any fields. The `inference_state` string values ("live", "idle-spd", "busy", "idle") are frozen.
 
@@ -71,22 +73,32 @@ Field names are frozen — do not rename any fields. The `inference_state` strin
 - Fleet cloud: `wicklee.dev` (not wicklee.app)
 - Agent port: 7700 (default)
 - Proxy port: 11434 (intercepts Ollama, forwards to configured backend port)
+- Cloud env: `DATABASE_URL` (Postgres, Railway auto-provides), `CLERK_JWKS_URL`, `RESEND_API_KEY`
+- Agent uses DuckDB for local history (`store.rs`); cloud uses Postgres — different databases for different roles
 
 ## Cloud Backend (Rust — `cloud/src/main.rs`)
 
-Fleet aggregation backend, deployed on Railway. Receives telemetry from agents, stores in SQLite (pairing/users) + DuckDB (metrics history), and serves the fleet dashboard via SSE.
+Fleet aggregation backend, deployed on Railway. Receives telemetry from agents, stores in **Postgres** (all tables — users, nodes, metrics, events, observations), and serves the fleet dashboard via SSE.
+
+**Database:** Single Railway Postgres instance via `sqlx::PgPool` (async connection pool, 20 connections). Replaced SQLite + DuckDB in Phase 5 migration. TimescaleDB extension used if available (non-fatal if absent — nightly task handles retention via DELETE).
+
+**Key tables:**
+- `users`, `nodes`, `sessions`, `api_keys`, `notification_channels`, `alert_rules`, `alert_events` — transactional
+- `metrics_raw` (TIMESTAMPTZ, 2-day retention), `metrics_5min` (rollup, 90-day retention) — time-series
+- `node_events` (30-day retention), `fleet_observations` (stateful alert triage) — events/alerts
 
 ### Data Flow
 ```
 Agent (2s push) → POST /api/telemetry → cloud MetricsPayload deserialize
   → in-memory HashMap<node_id, MetricsEntry> (live cache)
+  → metrics_writer_task (30s batch flush → Postgres UNNEST INSERT, 1000 rows/chunk)
   → SSE /api/fleet/stream (2s interval, reads from live cache)
   → Fleet frontend (wicklee.dev)
 ```
 
-The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any field dropped at the deserialization step is permanently lost — it never reaches the SSE stream, the fleet frontend, or DuckDB history.
+The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any field dropped at the deserialization step is permanently lost — it never reaches the SSE stream, the fleet frontend, or Postgres history.
 
-### Power Priority in DuckDB Rows
+### Power Priority in Metrics Rows
 `metrics_row_from_payload` resolves watts as: NVIDIA board power → Apple SoC (Combined CPU+GPU+ANE) → cpu_power_w fallback. `apple_soc_power_w` is the correct total for Apple Silicon WES; `cpu_power_w` alone is just the CPU cluster (~0.1W idle).
 
 ## Frontend (React)
