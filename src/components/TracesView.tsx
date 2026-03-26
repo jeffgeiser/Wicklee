@@ -4,17 +4,17 @@
  * Six sections:
  *   1. Sovereignty — always visible (cloud + local). Telemetry destination,
  *      outbound connection manifest, and live connection event log.
- *   2. Request Traces — localhost only. DuckDB-backed trace table with
+ *   2. Request Traces — localhost only. local-store-backed trace table with
  *      latency / TTFT / TPOT per inference request.
  *   3. Metric History — localhost only. Phase 4A: time-series charts from the
- *      agent DuckDB store (GET /api/history). Unblocks "View source →" links
+ *      agent local store (GET /api/history). Unblocks "View source →" links
  *      in AIInsights.
  *   4. Agent Health — localhost only. Phase 4A: harvester status, SSE
- *      connection health, DuckDB write-path availability.
+ *      connection health, local store write-path availability.
  *   5. Event History — localhost only. Phase 3B: persisted Live Activity events
- *      from agent DuckDB (node_events table). 7-day retention, paginated.
+ *      from agent local store (node_events table). 7-day retention, paginated.
  *   6. Dismissal Log — localhost only. Sprint 6: all active accepted_states
- *      rows from agent DuckDB. Audit trail for dismissed pattern insights.
+ *      rows from agent local store. Audit trail for dismissed pattern insights.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -336,7 +336,7 @@ const SovereigntySection: React.FC<{
 };
 
 // ── Metric History Panel — Phase 4A ──────────────────────────────────────────
-// Fetches GET /api/history from the local agent DuckDB store.
+// Fetches GET /api/history from the local agent local store.
 // Available in Cockpit mode (isLocalHost) only — the agent must be running.
 //
 // "View source →" links in AIInsights will deep-link here so operators can
@@ -437,7 +437,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       const data: HistoryResponse = await r.json();
       setResp(data);
     } catch {
-      setError('History unavailable — agent may not support DuckDB on this platform.');
+      setError('History unavailable — History unavailable on this platform.');
       setResp(null);
     }
     setLoading(false);
@@ -459,7 +459,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           <div>
             <h2 className="text-sm font-bold text-white">Metric History</h2>
             <p className="text-xs text-gray-500">
-              Raw samples from the local DuckDB store
+              Raw samples from the local store
               {resp && (
                 <span className="ml-2 font-mono text-[9px] text-indigo-400/60 bg-indigo-500/10 px-1.5 py-0.5 rounded">
                   {resp.resolution}
@@ -574,7 +574,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 // ── Agent Health Panel — Phase 4A ─────────────────────────────────────────────
 // Surfaces the internal health of the local Wicklee agent:
 //   - Collection layer  — is the SSE/WS harvester delivering telemetry?
-//   - DuckDB store      — does GET /api/history respond successfully?
+//   - Local Store      — does GET /api/history respond successfully?
 //   - Last telemetry    — when did the last metric frame arrive?
 //
 // Available in Cockpit mode (isLocalHost) only.
@@ -583,7 +583,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const { connectionState, lastTelemetryMs, transport } = useFleetStream();
   const [dbStatus, setDbStatus] = useState<'ok' | 'unavailable' | 'checking'>('checking');
 
-  // Lightweight DuckDB probe — tiny 30-second window to minimise query cost.
+  // Lightweight local store probe — tiny 30-second window to minimise query cost.
   useEffect(() => {
     if (!nodeId) return;
     const probe = async () => {
@@ -637,7 +637,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
         <div>
           <h2 className="text-sm font-bold text-white">Agent Health</h2>
-          <p className="text-xs text-gray-500">Collection layer · DuckDB store · Telemetry pipeline</p>
+          <p className="text-xs text-gray-500">Collection layer · Local Store · Telemetry pipeline</p>
         </div>
       </div>
 
@@ -661,11 +661,11 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           )}
         </div>
 
-        {/* DuckDB store */}
+        {/* Local Store */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Database className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">DuckDB Store</p>
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Local Store</p>
           </div>
           <div className="flex items-center gap-2">
             {dbStatus === 'checking' ? (
@@ -680,7 +680,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             </span>
           </div>
           <p className="text-[9px] text-gray-600">
-            {dbStatus === 'unavailable' ? 'musl target — DuckDB disabled' : '/api/history OK'}
+            {dbStatus === 'unavailable' ? 'musl target — local store disabled' : '/api/history OK'}
           </p>
         </div>
 
@@ -715,7 +715,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         <div className="flex items-center gap-2.5 pt-0.5 border-t border-gray-800 mt-2">
           <Zap className="w-3 h-3 text-indigo-400/60 shrink-0" />
           <span className="font-mono text-[10px] text-gray-600">
-            cadence: WS 100ms · SSE 1Hz · history 1Hz (DuckDB)
+            cadence: WS 100ms · SSE 1Hz · history 1Hz
           </span>
         </div>
       </div>
@@ -911,7 +911,7 @@ const TraceTable: React.FC<{
 };
 
 // ── Dismissal Log Panel — Sprint 6 ────────────────────────────────────────────
-// Renders all active (non-expired) accepted_states rows from the agent DuckDB.
+// Renders all active (non-expired) accepted_states rows from the agent local store.
 // Source: GET /api/insights/dismissed (proxied to localhost:7700 in dev;
 //         served directly by the embedded frontend in production).
 // Available in Cockpit mode (isLocalHost) only — same gate as Agent Health.
@@ -1013,7 +1013,7 @@ const DismissalLogPanel: React.FC = () => {
           <div>
             <h2 className="text-sm font-bold text-white">Dismissal Log</h2>
             <p className="text-xs text-gray-500">
-              Accepted states · agent-persisted · DuckDB
+              Accepted states · agent-persisted · local store
               {rows.length > 0 && (
                 <span className="ml-2 font-mono text-[9px] text-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 rounded">
                   {rows.length} active
@@ -1152,7 +1152,7 @@ const DismissalLogPanel: React.FC = () => {
 };
 
 // ── Event History Panel ──────────────────────────────────────────────────────
-// Persisted Live Activity events from the agent's DuckDB (node_events table).
+// Persisted Live Activity events from the agent's local store (node_events table).
 // 7-day retention. Cockpit-only — same gate as Agent Health and Metric History.
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
@@ -1229,7 +1229,7 @@ const EventHistoryPanel: React.FC = () => {
       {/* Empty state */}
       {!loading && !error && events.length === 0 && (
         <p className="text-xs text-gray-600 text-center py-4">
-          No events recorded yet. Events persist to DuckDB on agent startup, updates, and
+          No events recorded yet. Events persist to local store on agent startup, updates, and
           lifecycle changes.
         </p>
       )}

@@ -217,7 +217,7 @@ async fn main() {
             <FileCode className="w-5 h-5 text-cyan-400" />
             <div>
               <h3 className="font-semibold text-gray-200">Runtime Manifest</h3>
-              <p className="text-[10px] text-blue-400/60 mt-0.5 font-medium">The core engine definition, including embedded DuckDB and mTLS security stacks.</p>
+              <p className="text-[10px] text-blue-400/60 mt-0.5 font-medium">The core engine definition, including embedded local store and mTLS security stacks.</p>
             </div>
           </div>
           <button 

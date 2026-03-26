@@ -12,7 +12,7 @@ const PricingPage: React.FC = () => {
       description: 'Perfect for local experimentation and single-node setups.',
       features: [
         'Single-node monitoring',
-        'Local DuckDB traces',
+        'Local inference traces',
         'Community support',
         'Standard dashboard access'
       ],

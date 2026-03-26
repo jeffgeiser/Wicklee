@@ -1050,7 +1050,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; }
   const [history, setHistory]           = useState<HistoryPoint[]>([]);
   const [selectedMetric, setSelectedMetric] = useState<MetricKey>('gpu');
-  const MAX_HISTORY = 60;
+  const MAX_HISTORY = 3600; // 1 hour at 1 Hz — cloud unlocks longer history ranges
 
   const [metricOpen, setMetricOpen] = useState(false);
   const metricDropdownRef = useRef<HTMLDivElement>(null);
@@ -1132,7 +1132,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const pushHistoryPoint = useCallback((data: SentinelMetrics) => {
     setHistory(prev => {
       const ts  = new Date(data.timestamp_ms);
-      const lbl = `${ts.getMinutes().toString().padStart(2, '0')}:${ts.getSeconds().toString().padStart(2, '0')}`;
+      const lbl = `${ts.getHours().toString().padStart(2, '0')}:${ts.getMinutes().toString().padStart(2, '0')}:${ts.getSeconds().toString().padStart(2, '0')}`;
       const pt: HistoryPoint = {
         time:  lbl,
         gpu:   data.nvidia_gpu_utilization_percent ?? data.gpu_utilization_percent ?? null,
@@ -1306,7 +1306,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
     }
     // Note: client-side counter is an in-memory session-only fallback for localhost.
-    // On cloud, server-side /api/fleet/duty (DuckDB) is the SSOT.
+    // On cloud, server-side /api/fleet/duty (Postgres) is the SSOT.
   }, [dutyMetrics]);
 
   // While the initial fleet fetch is in-flight (nodesLoading), show a blank
@@ -1456,7 +1456,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   })();
 
   // ── Inference Duty Cycle ──
-  // Cloud: prefer server-side 24h duty from /api/fleet/duty (persisted in DuckDB).
+  // Cloud: prefer server-side 24h duty from /api/fleet/duty (persisted in Postgres).
   // Localhost: fall back to client-side tick counter.
   const clientDutyPct = dutyRef.current.total > 0
     ? Math.round((dutyRef.current.live / dutyRef.current.total) * 100) : null;
@@ -2184,7 +2184,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     <span className="text-xs text-gray-400 dark:text-gray-600">Collecting data…</span>
                   </div>
                 )}
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minHeight={1}>
                   <AreaChart data={isLive ? history : MOCK_HISTORY}>
                     <defs>
                       <linearGradient id={cfg.gradId} x1="0" y1="0" x2="0" y2="1">
@@ -2218,7 +2218,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 </ResponsiveContainer>
               </div>
               <p className="text-[10px] text-gray-600 dark:text-gray-700 mt-2 text-right">
-                Live window only — historical data coming in Team Edition
+                Live · 1 Hz · Current Session
               </p>
             </div>
 
