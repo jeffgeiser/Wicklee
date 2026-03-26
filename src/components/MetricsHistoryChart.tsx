@@ -403,7 +403,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
             </p>
             {!loading && subscriptionTier === 'community' && range === '24h' && (
               <p className="text-[11px] text-indigo-400/60">
-                DuckDB is active. Pro unlocks 7-day historical trends.
+                Fleet history is active. <strong>Pro</strong> unlocks 7-day historical trends.
               </p>
             )}
           </div>
