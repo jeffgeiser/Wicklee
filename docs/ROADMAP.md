@@ -415,6 +415,16 @@
 
 ---
 
+### v0.7.6 — Local Observations + Localhost Performance Tab ✅
+
+- [x] **Agent GET /api/observations** — server-side evaluation of Patterns A (Thermal Drain), B (Phantom Load), J (Swap Pressure), L (PCIe Degradation) against the DuckDB 1-hour buffer. Pure function, musl-gated.
+- [x] **Triage tab: local observations** — hardware observation accordion cards + Cloud-Only placeholders for Patterns C, E, I with pair CTA.
+- [x] **Performance tab: localhost symmetry** — Model Efficiency card (replaces WES Leaderboard), LocalPerformanceHistory multi-metric chart (TPS/Power/GPU%/Mem% from 1h DuckDB), Silicon Fit Audit with `systemIdleW` idle power offset.
+- [x] **Diagnostics fix** — Collection status probes local agent directly instead of fleet SSE.
+- [x] **Settings fix** — nodes[] bootstrapped from pairingInfo on localhost so idle watts input renders.
+
+---
+
 ### Sprint 6 — Pattern Dismissal Audit Trail
 
 > Move dismissals from ephemeral localStorage to `metrics.db` — persistent, cross-session,
