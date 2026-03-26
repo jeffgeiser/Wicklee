@@ -241,6 +241,7 @@ struct MetricsRow {
     cpu_pct:          Option<f32>,
     inference_state:  Option<String>,    // "live" | "idle-spd" | "busy" | "idle"
     wes_version:      u8,               // incremented when WES formula changes
+    swap_write:       Option<f32>,      // swap write MB/s — SSD degradation indicator
 }
 
 /// A Live Activity event destined for the `node_events` table.
@@ -455,9 +456,14 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
             inference_state  TEXT,
             wes_version      SMALLINT    NOT NULL DEFAULT 1,
             agent_version    TEXT,
+            swap_write       REAL,
             UNIQUE (tenant_id, node_id, ts)
         )
     ").execute(pool).await.expect("metrics_raw migration failed");
+
+    // Additive column migration (idempotent — silently ignored if column exists)
+    sqlx::query("ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write REAL")
+        .execute(pool).await.ok();
 
     // Convert to hypertable (idempotent check via exception handling)
     sqlx::query(
@@ -483,6 +489,7 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
             mem_pressure_pct_max REAL,
             gpu_pct_avg          REAL,
             inference_duty_pct   REAL,
+            swap_write_avg       REAL,
             sample_count         SMALLINT    NOT NULL DEFAULT 0,
             wes_version          SMALLINT    NOT NULL DEFAULT 1,
             wes_version_count    SMALLINT    NOT NULL DEFAULT 1,
@@ -490,6 +497,9 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
             UNIQUE (tenant_id, node_id, ts)
         )
     ").execute(pool).await.expect("metrics_5min migration failed");
+
+    sqlx::query("ALTER TABLE metrics_5min ADD COLUMN IF NOT EXISTS swap_write_avg REAL")
+        .execute(pool).await.ok();
 
     sqlx::query(
         "SELECT create_hypertable('metrics_5min', 'ts', if_not_exists => true)"
@@ -2232,17 +2242,19 @@ async fn handle_metrics_history(
                         AVG(watts)            AS watts,
                         AVG(gpu_pct)          AS gpu_pct,
                         AVG(mem_pressure_pct) AS mem_pct,
-                        (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::float8 / NULLIF(COUNT(*), 0)::float8 * 100.0) AS duty_pct
+                        (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::float8 / NULLIF(COUNT(*), 0)::float8 * 100.0) AS duty_pct,
+                        AVG(cpu_pct)          AS cpu_pct,
+                        AVG(swap_write)       AS swap_write
                  FROM metrics_raw
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
-            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
-                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
-                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty })
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap })
                 }).collect()
         } else {
             let sql = format!(
@@ -2252,17 +2264,19 @@ async fn handle_metrics_history(
                         AVG(watts_avg)            AS watts,
                         AVG(gpu_pct_avg)          AS gpu_pct,
                         AVG(mem_pressure_pct_avg) AS mem_pct,
-                        AVG(inference_duty_pct)   AS duty_pct
+                        AVG(inference_duty_pct)   AS duty_pct,
+                        NULL::float8              AS cpu_pct,
+                        AVG(swap_write_avg)       AS swap_write
                  FROM metrics_5min
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
-            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
-                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty)| {
-                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty })
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap })
                 }).collect()
         };
 
@@ -2644,6 +2658,7 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
         cpu_pct:          Some(m.cpu_usage_percent),
         inference_state:  m.inference_state.clone(),
         wes_version:      m.wes_version.unwrap_or(1),
+        swap_write:       m.swap_write_mb_s,
     }
 }
 
@@ -2670,18 +2685,19 @@ async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
         let cpu_pct:     Vec<Option<f32>>    = chunk.iter().map(|r| r.cpu_pct).collect();
         let inf_state:   Vec<Option<&str>>   = chunk.iter().map(|r| r.inference_state.as_deref()).collect();
         let wes_ver:     Vec<i16>            = chunk.iter().map(|r| r.wes_version as i16).collect();
+        let swap_write:  Vec<Option<f32>>    = chunk.iter().map(|r| r.swap_write).collect();
 
         let _ = sqlx::query(
             "INSERT INTO metrics_raw (ts, node_id, tenant_id, tok_s, watts, wes_raw, wes_penalized,
                 thermal_cost_pct, thermal_penalty, thermal_state, vram_used_mb, vram_total_mb,
-                mem_pressure_pct, gpu_pct, cpu_pct, inference_state, wes_version)
+                mem_pressure_pct, gpu_pct, cpu_pct, inference_state, wes_version, swap_write)
              SELECT to_timestamp(unnest($1::float8[]) / 1000.0),
                     unnest($2::text[]), unnest($3::text[]),
                     unnest($4::real[]), unnest($5::real[]), unnest($6::real[]), unnest($7::real[]),
                     unnest($8::real[]), unnest($9::real[]), unnest($10::text[]),
                     unnest($11::int[]), unnest($12::int[]),
                     unnest($13::real[]), unnest($14::real[]), unnest($15::real[]),
-                    unnest($16::text[]), unnest($17::smallint[])
+                    unnest($16::text[]), unnest($17::smallint[]), unnest($18::real[])
              ON CONFLICT DO NOTHING"
         )
         .bind(&ts_values).bind(&node_ids).bind(&tenant_ids)
@@ -2689,7 +2705,7 @@ async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
         .bind(&therm_cost).bind(&therm_pen).bind(&therm_state)
         .bind(&vram_used).bind(&vram_total)
         .bind(&mem_pct).bind(&gpu_pct).bind(&cpu_pct)
-        .bind(&inf_state).bind(&wes_ver)
+        .bind(&inf_state).bind(&wes_ver).bind(&swap_write)
         .execute(pool).await;
     }
 }
@@ -2752,7 +2768,7 @@ async fn run_rollup(pool: &sqlx::PgPool) {
             watts_avg, wes_raw_avg, wes_penalized_avg, wes_penalized_min,
             thermal_cost_pct_avg, thermal_cost_pct_max, thermal_state_worst,
             mem_pressure_pct_avg, mem_pressure_pct_max, gpu_pct_avg,
-            inference_duty_pct,
+            inference_duty_pct, swap_write_avg,
             sample_count, wes_version, wes_version_count, agent_version)
         SELECT
             to_timestamp(floor(EXTRACT(EPOCH FROM ts) / 300) * 300) AS bucket,
@@ -2773,6 +2789,7 @@ async fn run_rollup(pool: &sqlx::PgPool) {
                 ELSE 'Normal' END,
             AVG(mem_pressure_pct), MAX(mem_pressure_pct), AVG(gpu_pct),
             (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::real / NULLIF(COUNT(*), 0)::real * 100.0),
+            AVG(swap_write),
             COUNT(*)::smallint,
             MIN(wes_version)::smallint,
             COUNT(DISTINCT wes_version)::smallint,
