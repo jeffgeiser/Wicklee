@@ -89,6 +89,7 @@ struct BroadcastFrame {
     #[serde(default)] ollama_active_model:             Option<String>,
     #[serde(default)] vllm_model_name:                 Option<String>,
     #[serde(default)] cpu_power_w:                     Option<f32>,
+    #[serde(default)] apple_soc_power_w:               Option<f32>,
     #[serde(default)] nvidia_power_draw_w:             Option<f32>,
     #[serde(default)] nvidia_gpu_utilization_percent:  Option<f32>,
     #[serde(default)] gpu_utilization_percent:         Option<f32>,
@@ -118,9 +119,11 @@ impl BroadcastFrame {
             mem_used_mb:      self.used_memory_mb  as i64,
             mem_total_mb:     self.total_memory_mb as i64,
             cpu_power_w:      self.cpu_power_w.map(|v| v as f64),
-            // NVIDIA: nvidia_power_draw_w. Apple: gpu_utilization × budget (power not directly exposed).
-            // For now store only direct measurements; Apple GPU power estimation is Phase 2.2.
-            gpu_power_w:      self.nvidia_power_draw_w.map(|v| v as f64),
+            // NVIDIA: nvidia_power_draw_w. Apple: apple_soc_power_w (Combined CPU+GPU+ANE).
+            // Priority: NVIDIA board power → Apple SoC total → None.
+            gpu_power_w:      self.nvidia_power_draw_w
+                                  .or(self.apple_soc_power_w)
+                                  .map(|v| v as f64),
             // NVIDIA preferred; fall back to Apple Silicon iogpu utilization.
             gpu_util_pct:     self.nvidia_gpu_utilization_percent
                                   .or(self.gpu_utilization_percent)
@@ -218,6 +221,10 @@ pub struct HistorySample {
     pub vram_used_mb:  Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thermal_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_power_w:    Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mem_pressure_pct: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swap_write_mb_s: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -581,6 +588,7 @@ impl Store {
                 let mut stmt = conn.prepare(
                     "SELECT ts_ms, model, tps, cpu_usage_pct,
                             gpu_util_pct, gpu_power_w, vram_used_mb, thermal_state,
+                            cpu_power_w, mem_pressure_pct,
                             swap_write_mb_s, clock_throttle_pct
                      FROM metrics_raw
                      WHERE node_id = ? AND ts_ms >= ? AND ts_ms <= ?
@@ -599,8 +607,10 @@ impl Store {
                         gpu_power_w:    row.get(5)?,
                         vram_used_mb:   row.get(6)?,
                         thermal_state:  row.get(7)?,
-                        swap_write_mb_s: row.get(8)?,
-                        clock_throttle_pct: row.get(9)?,
+                        cpu_power_w:    row.get(8)?,
+                        mem_pressure_pct: row.get(9)?,
+                        swap_write_mb_s: row.get(10)?,
+                        clock_throttle_pct: row.get(11)?,
                     })
                 })?.collect::<Result<_, _>>()?
             }
@@ -626,6 +636,8 @@ impl Store {
                         gpu_power_w:    row.get(7)?,
                         vram_used_mb:   row.get(8)?,
                         thermal_state:  None,
+                        cpu_power_w:    None,
+                        mem_pressure_pct: None,
                         swap_write_mb_s: None,
                         clock_throttle_pct: None,
                     })
@@ -653,6 +665,8 @@ impl Store {
                         gpu_power_w:    row.get(7)?,
                         vram_used_mb:   row.get(8)?,
                         thermal_state:  None,
+                        cpu_power_w:    None,
+                        mem_pressure_pct: None,
                         swap_write_mb_s: None,
                         clock_throttle_pct: None,
                     })

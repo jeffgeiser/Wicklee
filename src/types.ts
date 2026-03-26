@@ -486,8 +486,12 @@ export interface HistorySample {
   tps_p95?:       number | null;
   cpu_usage_pct?: number | null;
   gpu_util_pct?:  number | null;
-  /** GPU power draw in watts (Apple Silicon cpu_power_w, NVIDIA power_draw_w). */
+  /** GPU power draw in watts (Apple SoC combined or NVIDIA board power). */
   gpu_power_w?:   number | null;
+  /** CPU cluster power in watts (Apple cpu_power_w — subset of SoC total). */
+  cpu_power_w?:   number | null;
+  /** Memory pressure percent (Apple Silicon). */
+  mem_pressure_pct?: number | null;
   vram_used_mb?:  number | null;
   thermal_state?: string | null;
   /** Swap write rate MB/s — raw tier only. Null on aggregated tiers (1min, 1hr). */
