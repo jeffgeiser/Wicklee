@@ -1496,68 +1496,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* ── Top Finding — highest-confidence active observation ──────
-                  Surfaces the single most important currently active pattern.
-                  Shows the recommendation + action copy buttons from the
-                  pattern engine. Hidden when all observations are resolved.    */}
-              {(() => {
-                const topObs = obsEntries.find(e => e.resolvedMs === null);
-                if (!topObs) return null;
-                const ins = topObs.insight;
-                return (
-                  <div className="bg-indigo-600/8 border border-indigo-600/20 rounded-2xl p-4 space-y-3">
-
-                    {/* Header row */}
-                    <div className="flex items-center gap-2">
-                      <Server className="w-3 h-3 text-indigo-400/60 shrink-0" />
-                      <p className="text-[9px] font-semibold uppercase tracking-widest text-indigo-400/70 flex-1">
-                        Top Finding
-                      </p>
-                      <span className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border ${
-                        ins.confidence === 'high'
-                          ? 'text-red-400/90 border-red-500/30 bg-red-500/10'
-                          : ins.confidence === 'moderate'
-                          ? 'text-amber-400/90 border-amber-500/30 bg-amber-500/10'
-                          : 'text-gray-400 border-gray-700 bg-gray-800/80'
-                      }`}>
-                        {ins.confidence ?? 'low'}
-                      </span>
-                    </div>
-
-                    {/* Finding body */}
-                    <div>
-                      <p className="text-sm font-semibold text-gray-200">{ins.title}</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5 truncate">
-                        {ins.hostname} · {ins.hook}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-2 leading-relaxed">
-                        {ins.recommendation}
-                      </p>
-                    </div>
-
-                    {/* Action copy buttons from pattern engine */}
-                    {ins.actions.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {ins.actions.map(action => (
-                          <InlineCopyAction key={action.copyText} text={action.copyText} label={action.label} />
-                        ))}
-                      </div>
-                    )}
-
-                    {/* View source → link (Cockpit: metric history, Fleet: Observability with node filter) */}
-                    {onNavigateToObservability && (
-                      <button
-                        onClick={() => onNavigateToObservability({ nodeId: ins.nodeId })}
-                        className="flex items-center gap-1.5 text-[10px] text-indigo-400/60 hover:text-indigo-400 transition-colors pt-1"
-                      >
-                        <Activity className="w-3 h-3" />
-                        View raw metric history →
-                      </button>
-                    )}
-
-                  </div>
-                );
-              })()}
+              {/* Top Finding removed — observations accordion below is the primary triage interface */}
 
               {/* ── Observations — pattern engine briefing feed ─────────────
                   Active observations are shown first; resolved (hold-period) entries
@@ -1896,25 +1835,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Export Benchmark Report — live snapshot */}
-              {effectiveNodes.length > 0 && wesValues.length > 0 && (
-                <div className="flex items-center justify-between bg-gray-900 border border-gray-800 rounded-2xl px-5 py-3.5">
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-                      Benchmark Report
-                    </p>
-                    <p className="text-xs text-gray-600 mt-0.5 truncate">
-                      Reproducible, citable WES snapshot — Raw · Penalized · Thermal Cost · Source
-                    </p>
-                  </div>
-                  <button
-                    onClick={handleExportBenchmark}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors shrink-0 ml-4"
-                  >
-                    Export snapshot
-                  </button>
-                </div>
-              )}
+              {/* Benchmark Report removed — accessible via Fleet Benchmarks hexagon click */}
             </>
           )}
 

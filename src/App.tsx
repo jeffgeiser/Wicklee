@@ -429,6 +429,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
           pairingInfo={pairingInfo}
           getToken={getToken}
           subscriptionTier={clerkTier}
+          isLocalHost={isLocalHost}
         />;
       case DashboardTab.PROFILE:
         return <ProfileView currentUser={currentUser} />;
