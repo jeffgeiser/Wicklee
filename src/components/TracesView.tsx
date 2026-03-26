@@ -540,19 +540,19 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           />
           <MiniChart
             data={samples}
+            getValue={s => s.mem_pressure_pct ?? null}
+            label="Mem Pressure"
+            unit="%"
+            color="text-blue-300"
+            colorFill="#93c5fd"
+          />
+          <MiniChart
+            data={samples}
             getValue={s => s.swap_write_mb_s ?? null}
             label="Swap Write"
             unit=" MB/s"
             color="text-rose-400"
             colorFill="#f43f5e"
-          />
-          <MiniChart
-            data={samples}
-            getValue={s => s.clock_throttle_pct ?? null}
-            label="Clock Throttle"
-            unit="%"
-            color="text-violet-400"
-            colorFill="#8b5cf6"
           />
         </div>
       )}
@@ -636,7 +636,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           <Server className="w-4 h-4 text-green-400" />
         </div>
         <div>
-          <h2 className="text-sm font-bold text-white">Agent Health</h2>
+          <h2 className="text-sm font-bold text-white">Diagnostics</h2>
           <p className="text-xs text-gray-500">Collection layer · Local Store · Telemetry pipeline</p>
         </div>
       </div>
@@ -1720,6 +1720,8 @@ interface FleetMetricPoint {
   watts: number | null;
   gpu_pct: number | null;
   mem_pct: number | null;
+  cpu_pct: number | null;
+  swap_write: number | null;
 }
 
 interface FleetMetricsNode {
@@ -1729,10 +1731,12 @@ interface FleetMetricsNode {
 }
 
 const FLEET_CHART_CONFIG: { key: keyof FleetMetricPoint; label: string; unit: string; color: string; gradId: string }[] = [
-  { key: 'tok_s',   label: 'Tok/s',      unit: 'tok/s', color: '#6366f1', gradId: 'fmcToks' },
-  { key: 'watts',   label: 'Power',      unit: 'W',     color: '#f59e0b', gradId: 'fmcWatt' },
-  { key: 'gpu_pct', label: 'GPU Util',   unit: '%',     color: '#06b6d4', gradId: 'fmcGpu' },
-  { key: 'mem_pct', label: 'Mem Press.', unit: '%',     color: '#3b82f6', gradId: 'fmcMem' },
+  { key: 'tok_s',      label: 'Tok/s',        unit: 'tok/s', color: '#6366f1', gradId: 'fmcToks' },
+  { key: 'watts',      label: 'Power',        unit: 'W',     color: '#f59e0b', gradId: 'fmcWatt' },
+  { key: 'gpu_pct',    label: 'GPU Util',     unit: '%',     color: '#06b6d4', gradId: 'fmcGpu' },
+  { key: 'cpu_pct',    label: 'CPU Usage',    unit: '%',     color: '#3b82f6', gradId: 'fmcCpu' },
+  { key: 'mem_pct',    label: 'Mem Pressure', unit: '%',     color: '#93c5fd', gradId: 'fmcMem' },
+  { key: 'swap_write', label: 'Swap Write',   unit: 'MB/s',  color: '#f43f5e', gradId: 'fmcSwap' },
 ];
 
 const RANGE_LIMITS: Record<SubscriptionTier, FleetMetricRange[]> = {
@@ -1797,16 +1801,16 @@ const FleetMetricsMini: React.FC<{
           const vals = pts.map(p => p[key]).filter((v): v is number => v != null);
           return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
         };
-        return { ts_ms, tok_s: avg('tok_s'), tok_s_p95: avg('tok_s_p95'), watts: avg('watts'), gpu_pct: avg('gpu_pct'), mem_pct: avg('mem_pct') };
+        return { ts_ms, tok_s: avg('tok_s'), tok_s_p95: avg('tok_s_p95'), watts: avg('watts'), gpu_pct: avg('gpu_pct'), mem_pct: avg('mem_pct'), cpu_pct: avg('cpu_pct'), swap_write: avg('swap_write') };
       });
   }, [data]);
 
   // CSV export
   const handleCsvExport = useCallback(() => {
     if (chartPoints.length === 0) return;
-    const header = 'timestamp,tok_s,watts,gpu_pct,mem_pct';
+    const header = 'timestamp,tok_s,watts,gpu_pct,cpu_pct,mem_pct,swap_write';
     const rows = chartPoints.map(p =>
-      `${new Date(p.ts_ms).toISOString()},${p.tok_s ?? ''},${p.watts ?? ''},${p.gpu_pct ?? ''},${p.mem_pct ?? ''}`
+      `${new Date(p.ts_ms).toISOString()},${p.tok_s ?? ''},${p.watts ?? ''},${p.gpu_pct ?? ''},${p.cpu_pct ?? ''},${p.mem_pct ?? ''},${p.swap_write ?? ''}`
     );
     const csv = [header, ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -1896,7 +1900,7 @@ const FleetMetricsMini: React.FC<{
           <p className="text-xs text-gray-600 mt-1">Run inference to start collecting fleet metrics.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 divide-x divide-y divide-gray-100 dark:divide-gray-800">
+        <div className="grid grid-cols-2 lg:grid-cols-3 divide-x divide-y divide-gray-100 dark:divide-gray-800">
           {FLEET_CHART_CONFIG.map(cfg => {
             const peak = chartPoints.reduce((max, p) => {
               const v = p[cfg.key];
@@ -1993,15 +1997,16 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
       )}
 
       {/* ── Localhost: Cockpit single-node diagnostics ─────────────────── */}
+      {/* 1. Sovereignty (collapsible) */}
       {isLocalHost && <SovereigntySection pairingInfo={pairingInfo} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} runtimeOverrides={runtimeOverrides} />}
-      {isLocalHost && <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />}
-      {/* Phase 4A — Raw Metric History + Agent Health (Cockpit / localhost only) */}
+      {/* 2. Metric History (6-chart 3×2 grid) */}
       {isLocalHost && pairingInfo !== null && <MetricHistoryPanel nodeId={nodeId} />}
-      {isLocalHost && pairingInfo !== null && <AgentHealthPanel   nodeId={nodeId} />}
-      {/* Phase 3B — Event History (Cockpit / localhost only) */}
+      {/* 3. Inference Traces */}
+      {isLocalHost && <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />}
+      {/* 4. Connection Event Log */}
       {isLocalHost && pairingInfo !== null && <EventHistoryPanel />}
-      {/* Sprint 6 — Dismissal Log (Cockpit / localhost only) */}
-      {isLocalHost && pairingInfo !== null && <DismissalLogPanel />}
+      {/* 5. Diagnostics (formerly Agent Health) */}
+      {isLocalHost && pairingInfo !== null && <AgentHealthPanel   nodeId={nodeId} />}
     </div>
   );
 };
