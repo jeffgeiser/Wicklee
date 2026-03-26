@@ -2697,6 +2697,7 @@ async fn handle_dismissed_list(
 // DuckDB buffer. Returned by GET /api/observations so the localhost frontend
 // can render them without needing a cloud connection.
 
+#[cfg(not(target_env = "musl"))]
 #[derive(Serialize, Clone)]
 struct LocalObservation {
     pattern_id:       &'static str,
@@ -2715,11 +2716,13 @@ struct LocalObservation {
 }
 
 /// PCIe state snapshot from live NvidiaMetrics (not stored in DuckDB).
+#[cfg(not(target_env = "musl"))]
 struct PcieSnapshot {
     link_width:     Option<u32>,
     link_max_width: Option<u32>,
 }
 
+#[cfg(not(target_env = "musl"))]
 /// Pure evaluation function — no side effects, no stored state.
 /// Takes a 5-minute window of DuckDB samples + live PCIe state and returns
 /// any observations that meet their gating criteria.
