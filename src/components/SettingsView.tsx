@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { version as pkgVersion } from '../../package.json';
 import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock } from 'lucide-react';
-import type { NodeAgent, PairingInfo } from '../types';
+import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
+import { useFleetStream } from '../contexts/FleetStreamContext';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
@@ -147,6 +148,7 @@ interface SettingsViewProps {
   pairingInfo: PairingInfo | null;
   getToken?: () => Promise<string | null>;
   subscriptionTier?: string;
+  isLocalHost?: boolean;
 }
 
 // ── Section ───────────────────────────────────────────────────────────────────
@@ -225,8 +227,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   pairingInfo,
   getToken,
   subscriptionTier = 'community',
+  isLocalHost = false,
 }) => {
   const isCloudMode = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
+  const { allNodeMetrics } = useFleetStream();
 
   // ── Fleet defaults drafts (numbers need validation before commit) ───────────
   const [kwhDraft, setKwhDraft] = useState(settings.fleet.kwhRate.toString());
@@ -604,26 +608,76 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         <div className="px-6 py-5 space-y-5">
 
           {/* Version & Fleet Status */}
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Agent Version</p>
-              <p className="text-sm font-telin text-gray-900 dark:text-white">v{(import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? pkgVersion}</p>
-            </div>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Fleet Status</p>
-              {pairingInfo?.status === 'connected' ? (
-                <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
-                  <p className="text-sm font-telin text-green-400">Connected</p>
+          {(() => {
+            // Compute agent version display from live metrics
+            const metricsArr: SentinelMetrics[] = Object.values(allNodeMetrics);
+            const versions = metricsArr
+              .map(m => m.agent_version)
+              .filter((v): v is string => !!v);
+            const uniqueVersions = [...new Set(versions)];
+            const majorityVersion = uniqueVersions.length > 0
+              ? uniqueVersions.reduce((a, b) =>
+                  versions.filter(v => v === a).length >= versions.filter(v => v === b).length ? a : b
+                )
+              : (import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? pkgVersion;
+            const isMixed = uniqueVersions.length > 1;
+            const outdatedNodes = isMixed
+              ? metricsArr
+                  .filter(m => m.agent_version && m.agent_version !== majorityVersion)
+                  .map(m => m.hostname ?? m.node_id)
+              : [];
+
+            // Fleet status
+            const onlineCount = nodes.filter(n => n.status === 'online').length;
+            const totalCount = nodes.length;
+            const isCloud = !isLocalHost && totalCount > 0;
+
+            return (
+              <div className="grid grid-cols-3 gap-6">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Agent Version</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-telin text-gray-900 dark:text-white">v{majorityVersion}</p>
+                    {isMixed && (
+                      <span
+                        className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded cursor-help"
+                        title={`Version mismatch: ${outdatedNodes.join(', ')} running different versions`}
+                      >
+                        Mixed
+                      </span>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-400 dark:bg-gray-600 shrink-0" />
-                  <p className="text-sm font-telin text-gray-500 dark:text-gray-400">Local mode</p>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Fleet Status</p>
+                  {isCloud ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                      <p className="text-sm font-telin text-green-400">
+                        Connected: {onlineCount} of {totalCount} active
+                      </p>
+                    </div>
+                  ) : pairingInfo?.status === 'connected' ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                      <p className="text-sm font-telin text-green-400">Connected</p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-400 dark:bg-gray-600 shrink-0" />
+                      <p className="text-sm font-telin text-gray-500 dark:text-gray-400">Local mode</p>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1.5">Storage</p>
+                  <p className="text-sm font-telin text-gray-500 dark:text-gray-400">
+                    {isCloud ? 'Managed Postgres' : 'Local DuckDB'}
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Export */}
           <div className="flex items-center justify-between py-4 border-t border-gray-100 dark:border-gray-800">
