@@ -389,8 +389,72 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                 ThermalPenalty is applied as a divisor — acting as a <strong className="text-gray-300">multiplicative penalty</strong> on your WES score. A penalty of 1.75 (Serious) reduces your effective score to ~57% of its thermal-ideal value.
               </p>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                On NVIDIA hardware, ThermalPenalty is derived from the NVML hardware throttle-reason bitmask rather than inferred from temperature — making it authoritative rather than estimated. Source is tagged <code className="text-gray-400">nvml</code> in the payload. On AMD CPUs (Ryzen/EPYC), penalty is derived from the CPU clock ratio (<code className="text-gray-400">scaling_cur_freq ÷ cpuinfo_max_freq</code>) using the k10temp hwmon driver — catching throttle as it happens rather than after temperature peaks. Source is tagged <code className="text-gray-400">clock_ratio</code>. Non-AMD Linux nodes use <code className="text-gray-400">sysfs</code> (thermal zone max temperature). macOS uses <code className="text-gray-400">iokit</code> (pmset thermal level).
+                Wicklee detects thermal state differently per platform, always preferring hardware-authoritative sources over inferred estimates. The <code className="text-gray-400">thermal_source</code> field in each payload identifies which path was used.
               </p>
+
+              {/* Platform thermal detection breakdown */}
+              <div className="mt-3 space-y-2">
+                <p className="text-[11px] font-semibold text-gray-300">Platform detection hierarchy</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr>
+                        <Th>Platform</Th>
+                        <Th>Source tag</Th>
+                        <Th>Detection method</Th>
+                        <Th>Penalty derivation</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <Td>NVIDIA GPU</Td>
+                        <Td mono>nvml</Td>
+                        <Td>NVML hardware throttle-reason bitmask — authoritative, not estimated</Td>
+                        <Td>Direct from bitmask flags (SW Thermal, HW Thermal, Power Brake, etc.)</Td>
+                      </tr>
+                      <tr>
+                        <Td>Apple Silicon</Td>
+                        <Td mono>iokit</Td>
+                        <Td><code className="text-gray-400">pmset -g therm</code> thermal level (IOKit framework)</Td>
+                        <Td>Mapped from macOS thermal pressure levels (Nominal → Normal, Fair → Fair, Serious, Critical)</Td>
+                      </tr>
+                      <tr>
+                        <Td>AMD Linux (k10temp)</Td>
+                        <Td mono>clock_ratio</Td>
+                        <Td>CPU clock ratio (<code className="text-gray-400">scaling_cur_freq ÷ cpuinfo_max_freq</code>) + Tdie temperature from k10temp hwmon</Td>
+                        <Td>≥0.95 Normal · ≥0.80 Fair · ≥0.60 Serious · &lt;0.60 Critical. Tdie &gt; 85°C forces at least Serious.</Td>
+                      </tr>
+                      <tr>
+                        <Td>Intel Linux (coretemp)</Td>
+                        <Td mono>coretemp</Td>
+                        <Td>Per-core temperature from coretemp hwmon + clock ratio as tie-breaker</Td>
+                        <Td>Same clock ratio thresholds as AMD, with max core temp as override. Without cpufreq: &lt;70°C Normal · 70–79 Fair · 80–89 Serious · ≥90 Critical.</Td>
+                      </tr>
+                      <tr>
+                        <Td>Generic Linux (no hwmon)</Td>
+                        <Td mono>clock_ratio</Td>
+                        <Td>CPU clock ratio only — no temperature sensor available</Td>
+                        <Td>Same ratio thresholds but <strong className="text-gray-300">capped at Fair</strong> without temp confirmation. Low clock ratio at idle is frequency scaling, not throttling.</Td>
+                      </tr>
+                      <tr>
+                        <Td>Linux (sysfs fallback)</Td>
+                        <Td mono>sysfs</Td>
+                        <Td>Thermal zone max temperature from <code className="text-gray-400">/sys/class/thermal/</code></Td>
+                        <Td>&lt;70°C Normal · 70–79 Fair · 80–89 Serious · ≥90 Critical</Td>
+                      </tr>
+                      <tr>
+                        <Td>Windows</Td>
+                        <Td mono>wmi</Td>
+                        <Td>WMI <code className="text-gray-400">MSAcpi_ThermalZoneTemperature</code> (tenths-of-Kelvin → Celsius)</Td>
+                        <Td>&lt;70°C Normal · 70–79 Fair · 80–89 Serious · ≥90 Critical</Td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[10px] text-gray-600 leading-relaxed">
+                  The agent tries each source in priority order (NVML → Apple → AMD/Intel hwmon → generic cpufreq → sysfs → WMI) and uses the first that returns data. If no thermal source is available, <code className="text-gray-500">thermal_state</code> is null and no WES penalty is applied.
+                </p>
+              </div>
             </div>
 
             {/* Penalty impact table */}
@@ -881,7 +945,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td><span className="text-gray-300 font-medium">What it shows</span></Td>
-                    <Td>Connectivity (online/offline), thermal transitions, model swaps, power anomalies, pattern onset/resolved/dismissed, keep warm actions</Td>
+                    <Td>Connectivity (online/offline), thermal transitions, model swaps, power anomalies, observation onset/resolved (zombied engine, thermal redline, OOM, WES cliff, version mismatch), pattern onset/resolved/dismissed</Td>
                     <Td>Alert card lifecycle only — when did thermal/power/memory/thermal-cost alerts fire and resolve, with duration</Td>
                   </tr>
                   <tr>
