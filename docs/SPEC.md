@@ -48,7 +48,7 @@ The hosted dashboard at `wicklee.dev` aggregates all paired agents for the opera
 - **Scope:** All paired nodes — full fleet in one view
 - **Pairing:** 6-digit code entered at `wicklee.dev` — no agent config required
 - **Auth:** Clerk (hosted signup/login, JWT). Stream tokens authenticate SSE connections.
-- **Tiers:** Community (3 nodes, free), Team (unlimited, paid ~$29/mo), Enterprise (sovereign, paid ~$199/mo)
+- **Tiers:** See `docs/TIERS.md` for current pricing and feature gates
 
 ---
 
@@ -106,43 +106,61 @@ The `#[serde(default)]` attribute on the cloud side means:
 
 ---
 
-## SSE Metrics Payload (current v0.4.5)
+## SSE Metrics Payload (current v0.7.7)
 
 ```json
 {
-  "node_id": "WK-1EFC",
-  "hostname": "Mac",
-  "timestamp_ms": 1234567890000,
+  "node_id": "WK-3A7F",
+  "hostname": "mac-studio-01",
+  "timestamp_ms": 1711540800000,
   "cpu_usage_percent": 19.6,
-  "cpu_core_count": 8,
-  "chip_name": "Apple M2",
-  "total_memory_mb": 8192,
-  "used_memory_mb": 5939,
-  "available_memory_mb": 2100,
-  "memory_pressure_percent": 68.0,
-  "gpu_utilization_percent": 32.0,
-  "thermal_state": "Normal",
-  "cpu_power_w": 0.6,
+  "cpu_core_count": 12,
+  "chip_name": "Apple M2 Ultra",
+  "gpu_name": "Apple M2 Ultra",
+  "total_memory_mb": 65536,
+  "used_memory_mb": 48200,
+  "available_memory_mb": 17336,
+  "memory_pressure_percent": 42.0,
+  "gpu_utilization_percent": 94.2,
+  "gpu_wired_limit_mb": 49152,
+  "thermal_state": "nominal",
+  "thermal_source": "pmset",
+  "cpu_power_w": 2.1,
+  "ecpu_power_w": 0.4,
+  "pcpu_power_w": 1.7,
+  "apple_gpu_power_w": 18.3,
+  "apple_soc_power_w": 28.6,
+  "inference_state": "live",
+  "swap_mb_s": 0.0,
   "nvidia_gpu_util_percent": null,
   "nvidia_vram_used_mb": null,
   "nvidia_vram_total_mb": null,
   "nvidia_gpu_temp_c": null,
   "nvidia_board_power_w": null,
+  "nvidia_gpu_clock_mhz": null,
+  "nvidia_gpu_max_clock_mhz": null,
+  "pcie_link_width": null,
+  "pcie_link_max_width": null,
   "ollama_running": true,
-  "ollama_active_model": "tinyllama:latest",
-  "ollama_model_size_gb": 0.7,
-  "ollama_quantization": "Q4_0",
-  "ollama_tokens_per_second": 108.9,
-  "wattage_per_1k_tokens": 5.4,
+  "ollama_active_model": "llama3:70b-q4_K_M",
+  "ollama_model_size_gb": 38.7,
+  "ollama_quantization": "Q4_K_M",
+  "ollama_tokens_per_second": 18.4,
+  "ollama_inference_active": true,
+  "ollama_is_probing": false,
+  "wes_score": 12.8,
+  "wes_penalty_pct": 0.0,
+  "wattage_per_1k_tokens": 1554.3,
   "vllm_running": false,
   "vllm_model_name": null,
   "vllm_tokens_per_sec": null,
   "vllm_cache_usage_perc": null,
-  "vllm_requests_running": null
+  "vllm_requests_running": null,
+  "live_activities": []
 }
 ```
 
-All fields are nullable. Null values display with honest gap labels in the UI — never as zero, never as an error.
+All fields are nullable. Null values display with honest gap labels in the UI — never as zero, never as an error. The `inference_state` field is frozen — values are `"live"`, `"idle-spd"`, `"busy"`, `"idle"`.
 
 ---
 
@@ -189,27 +207,43 @@ WES is the primary input to the **Fleet WES Leaderboard** (Insight #2), **Therma
 ## Cloud Backend Architecture
 
 ```
-wicklee-cloud (Rust + Axum, deployed on Railway)
+wicklee.dev — Two Railway services behind Railway's internal DNS
 │
-├── Auth (Clerk)
-│   ├── Clerk-managed signup/login (hosted UI, JWT issued by Clerk)
-│   ├── POST /api/auth/stream-token  → exchange Clerk JWT for short-lived SSE stream token (UUID, 60s TTL)
-│   └── Scheduled cleanup task       → purge expired stream_tokens every 5 minutes
+├── Frontend Service (nginx + React SPA)
+│   ├── Multi-stage Docker build: Node 22 → npm run build → nginx:alpine
+│   ├── Serves static assets from /usr/share/nginx/html
+│   ├── Proxies /api/* to cloud backend via Railway private networking
+│   │   └── vibrant-fulfillment.railway.internal:8080
+│   ├── SSE-aware proxy: /api/fleet/stream has buffering off, 24h read timeout
+│   ├── SPA fallback: all unmatched paths → index.html (React Router)
+│   └── Build-time env: VITE_CLERK_PUBLISHABLE_KEY, VITE_CLOUD_URL
 │
-├── Pairing
-│   ├── POST /api/pair/claim       → generate 6-digit code, store with account
-│   └── POST /api/pair/activate    → agent calls this on first pairing; stores node
-│
-├── Telemetry
-│   ├── POST /api/telemetry        → agent pushes MetricsPayload every 500ms
-│   └── GET  /api/fleet/stream?token=  → SSE stream to browser; token = stream_token from /api/auth/stream-token
-│
-└── Storage
-    ├── SQLite (rusqlite, bundled)  → users, sessions, nodes (persistent via Railway volume)
-    └── DuckDB (Phase 4A)          → time-series metric history, 90-day retention
+└── Cloud Backend Service (Rust + Axum)
+    ├── Auth (Clerk)
+    │   ├── Clerk-managed signup/login (hosted UI, JWT issued by Clerk)
+    │   ├── POST /api/auth/stream-token → exchange Clerk JWT for short-lived SSE stream token
+    │   └── Scheduled cleanup task      → purge expired stream_tokens every 5 minutes
+    │
+    ├── Pairing
+    │   ├── POST /api/pair/claim      → generate 6-digit code, store with account
+    │   └── POST /api/pair/activate   → agent calls this on first pairing; stores node
+    │
+    ├── Telemetry
+    │   ├── POST /api/telemetry       → agent pushes MetricsPayload every 2s
+    │   ├── In-memory HashMap cache   → live node state, served verbatim by SSE
+    │   ├── GET /api/fleet/stream     → SSE stream to browser (2s interval)
+    │   └── metrics_writer_task       → 30s batch flush to Postgres (UNNEST INSERT)
+    │
+    └── Storage (Postgres — single Railway instance via sqlx::PgPool)
+        ├── Transactional: users, nodes, sessions, api_keys, alert_rules, alert_events
+        ├── Time-series: metrics_raw (2-day retention), metrics_5min rollup (90-day)
+        ├── Events: node_events (30-day retention), fleet_observations
+        └── TimescaleDB extension used if available (non-fatal if absent)
 ```
 
 **Rate limits:** POST /api/pair/activate (10/5min). Auth rate limiting is handled by Clerk.
+
+**Agent local storage:** The agent uses DuckDB (bundled, `store.rs`) for local metric history at `localhost:7700`. DuckDB is gated to non-musl targets — musl builds skip the store and history API. The cloud backend uses Postgres exclusively — different databases for different roles.
 
 ---
 
@@ -325,6 +359,7 @@ Enterprise tier produces a tamper-evident PDF audit report signed by the agent's
 
 ## Build Pipeline
 
+### Local Development
 ```bash
 # 1. Build the React frontend
 npm ci && npm run build
@@ -339,9 +374,31 @@ wicklee
 # Dashboard: http://localhost:7700
 ```
 
-**Release pipeline:** tag push (`git tag vX.X.X && git push origin vX.X.X`) triggers 4-platform GitHub Actions build. Assets: `wicklee-agent-darwin-aarch64`, `wicklee-agent-linux-x86_64`, `wicklee-agent-linux-aarch64`, `wicklee-agent-windows-x86_64.exe`.
+### Release Pipeline (GitHub Actions)
 
-**Linux targets use musl** (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) for fully static binaries with no glibc dependency.
+Tag push (`git tag vX.X.X && git push origin vX.X.X`) triggers a 6-platform build via `.github/workflows/release.yml`:
+
+| Target | Binary | Notes |
+|---|---|---|
+| macOS Apple Silicon | `wicklee-agent-darwin-aarch64` | Native M-series runner |
+| Windows x64 | `wicklee-agent-windows-x86_64.exe` | CUDA toolkit for nvml.lib |
+| Linux x64 (musl) | `wicklee-agent-linux-x86_64` | Fully static, no glibc, no NVML |
+| Linux arm64 (musl) | `wicklee-agent-linux-aarch64` | Fully static, no glibc, no NVML |
+| Linux x64 (glibc+NVIDIA) | `wicklee-agent-linux-x86_64-nvidia` | dlopen libnvidia-ml at runtime |
+| Linux arm64 (glibc+NVIDIA) | `wicklee-agent-linux-aarch64-nvidia` | Grace Blackwell / DGX Spark |
+
+**Two release channels:**
+- **Nightly** — rolling pre-release, updated on every push to `main`. `curl | bash` always pulls nightly.
+- **Versioned** — permanent release on `v*` tag push, marked as GitHub "latest".
+
+**Linux musl targets** are fully static with no glibc dependency. They exclude DuckDB (C++ incompatible with musl static linking) and NVML. The `install.sh` auto-detects `nvidia-smi` and downloads the glibc+NVIDIA build when a GPU is present.
+
+### Cloud Deployment (Railway)
+
+Both services auto-deploy from `main`:
+- **Frontend:** `Dockerfile` (root) → Node 22 build → nginx:alpine → serves at `wicklee.dev`
+- **Cloud backend:** `cloud/Dockerfile` → Rust build → debian:bookworm-slim → port 8080
+- **Private networking:** Frontend nginx proxies `/api/*` to `vibrant-fulfillment.railway.internal:8080`
 
 ---
 
@@ -349,40 +406,9 @@ wicklee
 
 Wicklee is open-core. The agent is and will remain open source. The hosted fleet infrastructure and intelligence layer are the commercial layer.
 
-**Community Edition — Free**
-- Up to 3 paired nodes
-- Full local dashboard (localhost:7700), all hardware metrics
-- Full Fleet Overview with live data
-- Local Intelligence free cards (Fit Score, Thermal Degradation, Power Anomaly, Eviction Prediction, Cold Start)
-- Quantization ROI — live session snapshot (current model, current node — no history required)
-- 24h session history (localStorage with expiry — per-node insight persistence across page reloads)
-- Keep Warm: 1 node (silent 1-token ping to reset Ollama keep_alive before predicted eviction)
-- Fleet Intelligence panel: Efficiency Leaderboard, Thermal Diversity Score, Density Map, Idle Cost
-- Sovereignty audit log (view only)
+**Tier details:** See `docs/TIERS.md` for current pricing, feature gates, and node limits per tier (Community, Pro, Team, Enterprise).
 
-**Team Edition — ~$29/mo**
-- Unlimited paired nodes
-- All free tier features
-- 90-day metric history (DuckDB)
-- Trend-based Local Intelligence (Memory Forecast, Tok/s Regression, Quantization ROI historical comparison, Efficiency Regression)
-- Slack / PagerDuty webhook alerts with per-node, per-event-type configuration
-- Keep Warm: unlimited nodes (Community gets 1 node free)
-- Alert threshold configuration
-- CSV/JSON export
-- Signed audit log export
-
-**Enterprise / Sovereign — ~$199/mo**
-- All Team Edition features
-- Unlimited nodes
-- Sentinel Proxy (cross-node inference routing)
-- Sovereign Mode (no cloud pairing, fully airgapped)
-- Cryptographically signed audit export (CISO-ready compliance artifact)
-- On-premise Docker/Helm deployment
-- SSO / SAML
-- HIPAA / SOC2 BAA
-- Priority support + SLA
-
-The upgrade moment for Community → Team is natural: when inference quality degrades and you don't know why. When tok/s drops 20% and there's no alert. When idle nodes cost $200/month and nobody knows. Team Edition is when Wicklee stops being a monitor and starts being an operator.
+The upgrade moment for Community → Pro is natural: when inference quality degrades and you don't know why. When tok/s drops 20% and there's no alert. When idle nodes cost $200/month and nobody knows.
 
 ---
 
@@ -489,8 +515,8 @@ Wicklee has two runtime surfaces: the **agent dashboard** at `localhost:7700` an
 | **Fleet WES Leaderboard** | ❌ single node | ✅ | Cross-node ranking |
 | **Inference Density Map** | ❌ | ✅ | Multi-node visualization |
 | **Fleet Load Imbalance pattern (E)** | ❌ | ✅ | Cross-node comparison requires fleet context |
-| **DuckDB metric history** | ✅ `~/.wicklee/metrics.db` | ✅ Railway volume | Agent has local store; cloud has cloud store. Both independent. |
-| **WES Trend Chart** | ✅ (agent local DuckDB) | ✅ (cloud DuckDB) | Both have history — different retention |
+| **Metric history** | ✅ DuckDB (local 1h buffer) | ✅ Postgres (2d raw, 90d rollup) | Agent uses DuckDB; cloud uses Postgres. Independent stores. |
+| **WES Trend Chart** | ✅ (agent local DuckDB) | ✅ (cloud Postgres) | Both have history — different retention |
 | **Slack / email alerts** | ❌ | ✅ Team+ | Delivery layer lives in cloud backend |
 | **Team Management** | ❌ | ✅ | Identity and access managed by Clerk |
 | **API Keys** | ❌ | ✅ | Key management requires auth context |
@@ -507,7 +533,7 @@ Wicklee has two runtime surfaces: the **agent dashboard** at `localhost:7700` an
 
 ### Why Traces Are Localhost-Only
 
-Inference traces contain request timing data (TTFT, TPOT, latency) for every request that ran through the node. They do not contain prompt content or response content — Wicklee never touches inference content. But even request metadata (model, timestamp, latency) can be sensitive in regulated environments. Traces are stored in the agent's local SQLite and displayed only in the localhost dashboard. They never transit the cloud relay. This is not a technical limitation — it is a deliberate sovereignty boundary.
+Inference traces contain request timing data (TTFT, TPOT, latency) for every request that ran through the node. They do not contain prompt content or response content — Wicklee never touches inference content. But even request metadata (model, timestamp, latency) can be sensitive in regulated environments. Traces are stored in the agent's local DuckDB and displayed only in the localhost dashboard. They never transit the cloud relay. This is not a technical limitation — it is a deliberate sovereignty boundary.
 
 ### Why the Documentation Link Behaves Differently on Localhost
 
