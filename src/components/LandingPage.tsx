@@ -393,7 +393,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                 <div className="flex items-start gap-6">
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shrink-0 shadow-lg shadow-blue-500/20">3</div>
                   <div>
-                    <h4 className="text-white font-semibold text-lg mb-1">Sentinel watches your hardware</h4>
+                    <h4 className="text-white font-semibold text-lg mb-1">Wicklee watches your hardware</h4>
                     <p className="text-gray-500 leading-relaxed">Set custom thermal thresholds and receive Slack alerts when nodes throttle. Use the Agent API to drive your own failover logic and protect your silicon.</p>
                   </div>
                 </div>
@@ -415,10 +415,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                   <p className="pl-4">"inference_state": "<span className="text-green-400">live</span>",</p>
                   <p className="pl-4">"gpu_utilization_percent": 94.2,</p>
                   <p className="pl-4">"apple_soc_power_w": 28.6,</p>
-                  <p className="pl-4">"thermal_state": "nominal",</p>
-                  <p className="pl-4">"ollama_model": "llama3:70b-q4_K_M",</p>
-                  <p className="pl-4">"wes_score": 12.8,</p>
-                  <p className="pl-4">"tok_s": 18.4</p>
+                  <p className="pl-4">"thermal_state": "<span className="text-green-400">Normal</span>",</p>
+                  <p className="pl-4">"ollama_active_model": "llama3:70b-q4_K_M",</p>
+                  <p className="pl-4">"ollama_tokens_per_second": 18.4,</p>
+                  <p className="pl-4">"penalty_avg": 1.0</p>
                   <p className="text-gray-300">{"}"}</p>
                   <p className="mt-4 text-green-400">// localhost:7700 — no auth required</p>
                 </div>
