@@ -2106,6 +2106,38 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
 //   "sysfs"        — Linux /sys/class/thermal zone max (non-AMD fallback)
 //   "unavailable"  — no thermal data on this platform
 
+/// Resolve thermal state for the MetricsPayload, with idle CPU override.
+///
+/// When `thermal_source` is `clock_ratio` (Linux without hardware temp sensor),
+/// low clock frequencies at idle are normal power-saving — NOT thermal throttling.
+/// Force `Normal` when CPU usage is below 15% to avoid false thermal penalties.
+#[cfg(target_os = "linux")]
+fn resolve_thermal_state(
+    apple_state: &Option<String>,
+    linux_thermal: &Option<LinuxThermalResult>,
+    cpu_usage_pct: f32,
+) -> Option<String> {
+    let raw = apple_state.clone()
+        .or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone()));
+    let is_clock_ratio = linux_thermal.as_ref()
+        .map_or(false, |lt| lt.source == "clock_ratio");
+    if is_clock_ratio && cpu_usage_pct < 15.0 && raw.as_deref() != Some("Normal") {
+        Some("Normal".to_string())
+    } else {
+        raw
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn resolve_thermal_state(
+    apple_state: &Option<String>,
+    linux_thermal: &Option<LinuxThermalResult>,
+    _cpu_usage_pct: f32,
+) -> Option<String> {
+    apple_state.clone()
+        .or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone()))
+}
+
 /// Maps a thermal-state string to the WES v2 penalty factor.
 fn thermal_penalty_v2(state: &str) -> f32 {
     match state {
@@ -2145,6 +2177,7 @@ fn start_wes_sampler(
     apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
     nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
     linux_thermal_metrics: Arc<Mutex<Option<LinuxThermalResult>>>,
+    cpu_usage_pct:         Arc<std::sync::atomic::AtomicU32>,  // IEEE f32 bits
 ) -> Arc<Mutex<WesMetrics>> {
     let shared = Arc::new(Mutex::new(WesMetrics::default()));
     let shared_clone = Arc::clone(&shared);
@@ -2173,8 +2206,13 @@ fn start_wes_sampler(
                 } else if let Some(ref state) = apple.thermal_state {
                     (thermal_penalty_v2(state.as_str()), "iokit")
                 } else if let Some(ref lt) = linux {
-                    let p = lt.direct_penalty
-                        .unwrap_or_else(|| thermal_penalty_v2(lt.state.as_str()));
+                    let cpu_pct = f32::from_bits(cpu_usage_pct.load(std::sync::atomic::Ordering::Relaxed));
+                    // Idle CPU override: clock_ratio at low CPU is frequency scaling, not throttle.
+                    let p = if lt.source == "clock_ratio" && cpu_pct < 15.0 {
+                        1.0
+                    } else {
+                        lt.direct_penalty.unwrap_or_else(|| thermal_penalty_v2(lt.state.as_str()))
+                    };
                     (p, lt.source)
                 } else if let Some(ref state) = read_thermal_sysctl() {
                     // Windows WMI path — read_thermal_sysctl() returns thermal state
@@ -2239,6 +2277,7 @@ fn start_metrics_broadcaster(
     runtime_port_overrides: Option<String>,
     config_node_id:        String,
     model_baseline:        ModelBaselineCache,
+    cpu_usage_atomic:      Arc<std::sync::atomic::AtomicU32>,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -2261,6 +2300,11 @@ fn start_metrics_broadcaster(
             interval.tick().await;
             sys.refresh_all();
             sys.refresh_memory();
+            // Update shared CPU usage for WES sampler idle-thermal override.
+            cpu_usage_atomic.store(
+                sys.global_cpu_info().cpu_usage().to_bits(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
 
             let timestamp_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -2316,8 +2360,9 @@ fn start_metrics_broadcaster(
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
-                // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
-                thermal_state:           apple.thermal_state.or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone())),
+                // macOS: pmset/sysctl; Linux: clock_ratio/coretemp/sysfs; Windows: WMI
+                // Idle CPU override applied for clock_ratio source (see resolve_thermal_state).
+                thermal_state:           resolve_thermal_state(&apple.thermal_state, &linux_thermal, sys.global_cpu_info().cpu_usage()),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
@@ -3284,8 +3329,9 @@ async fn handle_metrics(
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
-                // macOS: pmset/sysctl; Linux: /sys/class/thermal (harvest_linux_thermal); Windows: null
-                thermal_state:           apple.thermal_state.or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone())),
+                // macOS: pmset/sysctl; Linux: clock_ratio/coretemp/sysfs; Windows: WMI
+                // Idle CPU override applied for clock_ratio source (see resolve_thermal_state).
+                thermal_state:           resolve_thermal_state(&apple.thermal_state, &linux_thermal, sys.global_cpu_info().cpu_usage()),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
                 nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
@@ -3869,12 +3915,16 @@ async fn main() {
     let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
     let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
 
+    // Shared CPU usage for idle-thermal override (IEEE f32 bits in AtomicU32).
+    let cpu_usage_atomic = Arc::new(std::sync::atomic::AtomicU32::new(0_f32.to_bits()));
+
     // WES v2 — 2 s thermal-penalty sampler (30-sample rolling window).
     // Must start after the platform harvesters above so it has data to read.
     let wes_metrics = start_wes_sampler(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         Arc::clone(&linux_thermal_metrics),
+        Arc::clone(&cpu_usage_atomic),
     );
 
     let swap_metrics = start_swap_harvester();
@@ -3908,6 +3958,7 @@ async fn main() {
         runtime_overrides.clone(),
         config.node_id.clone(),
         Arc::clone(&model_baseline_cache),
+        Arc::clone(&cpu_usage_atomic),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).

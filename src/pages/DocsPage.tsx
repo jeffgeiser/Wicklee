@@ -434,7 +434,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                         <Td>Generic Linux (no hwmon)</Td>
                         <Td mono>clock_ratio</Td>
                         <Td>CPU clock ratio only — no temperature sensor available</Td>
-                        <Td>Same ratio thresholds but <strong className="text-gray-300">capped at Fair</strong> without temp confirmation. Low clock ratio at idle is frequency scaling, not throttling.</Td>
+                        <Td>Same ratio thresholds but <strong className="text-gray-300">forced to Normal when CPU &lt; 15%</strong> (idle frequency scaling, not throttling). Capped at Fair without temp confirmation when CPU is active.</Td>
                       </tr>
                       <tr>
                         <Td>Linux (sysfs fallback)</Td>
