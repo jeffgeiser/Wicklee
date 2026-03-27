@@ -547,12 +547,26 @@ fn read_thermal_sysctl() -> Option<String> {
 /// total RAM. On M-series chips this is typically ~75% of physical memory.
 /// The sysctl exists only on Apple Silicon; returns None on Intel / non-macOS.
 /// No sudo required.
+///
+/// M4 chips use dynamic wired memory management (`iogpu.dynamic_lwm: 1`) and
+/// report `wired_limit_mb: 0`. When this happens, fall back to 75% of total
+/// physical RAM as the estimated GPU budget — matching Apple's documented
+/// unified memory allocation ratio.
 #[cfg(target_os = "macos")]
 fn read_iogpu_wired_limit_mb() -> Option<u64> {
     use sysctl::Sysctl;
     let ctl = sysctl::Ctl::new("iogpu.wired_limit_mb").ok()?;
     let s = ctl.value_string().ok()?;
-    s.trim().parse::<u64>().ok()
+    let val = s.trim().parse::<u64>().ok()?;
+    if val > 0 {
+        return Some(val);
+    }
+    // M4 dynamic wired memory: wired_limit_mb == 0 means no static cap.
+    // Estimate 75% of physical RAM as the effective GPU budget.
+    let memsize_ctl = sysctl::Ctl::new("hw.memsize").ok()?;
+    let memsize_str = memsize_ctl.value_string().ok()?;
+    let total_bytes = memsize_str.trim().parse::<u64>().ok()?;
+    Some(total_bytes * 3 / 4 / 1024 / 1024) // 75% of total, in MB
 }
 
 /// Thermal via `pmset -g therm` — works on Apple Silicon, no sudo.
