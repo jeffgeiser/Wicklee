@@ -1,12 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check, Clock, Flame, Target, Activity, TrendingDown, Gauge, MemoryStick, AlertTriangle } from 'lucide-react';
 import { FleetEvent } from '../types';
 
 interface EventFeedProps {
   events: FleetEvent[];
 }
-
-const DEFAULT_VISIBLE = 5;
 
 export const fmtAgo = (ts: number): string => {
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -156,11 +154,6 @@ export function eventMeta(ev: FleetEvent): EventMeta {
 }
 
 const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
-  const [expanded, setExpanded] = useState(false);
-
-  const visible = expanded ? events : events.slice(0, DEFAULT_VISIBLE);
-  const hiddenCount = events.length - DEFAULT_VISIBLE;
-
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl flex flex-col h-full overflow-hidden shadow-sm dark:shadow-none">
       {/* Header */}
@@ -180,7 +173,7 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
         )}
       </div>
 
-      {/* Event list */}
+      {/* Event list — scrollable, no expand/collapse */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1">
         {events.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full py-10 text-center">
@@ -189,46 +182,26 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
             <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Node events will appear here</p>
           </div>
         ) : (
-          <>
-            {visible.map(ev => {
-              const { icon, label, cls } = eventMeta(ev);
-              return (
-                <div
-                  key={ev.id}
-                  className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-                >
-                  {icon}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline gap-2 flex-wrap">
-                      <span className="font-telin text-xs font-bold text-gray-900 dark:text-gray-200 truncate">
-                        {ev.hostname ?? ev.nodeId}
-                      </span>
-                      <span className={`text-xs font-medium ${cls}`}>{label}</span>
-                    </div>
-                    <p className="text-[10px] text-gray-400 font-telin mt-0.5">{fmtAgo(ev.ts)}</p>
+          events.map(ev => {
+            const { icon, label, cls } = eventMeta(ev);
+            return (
+              <div
+                key={ev.id}
+                className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+              >
+                {icon}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className="font-telin text-xs font-bold text-gray-900 dark:text-gray-200 truncate">
+                      {ev.hostname ?? ev.nodeId}
+                    </span>
+                    <span className={`text-xs font-medium ${cls}`}>{label}</span>
                   </div>
+                  <p className="text-[10px] text-gray-400 font-telin mt-0.5">{fmtAgo(ev.ts)}</p>
                 </div>
-              );
-            })}
-
-            {/* Expand / collapse */}
-            {!expanded && hiddenCount > 0 && (
-              <button
-                onClick={() => setExpanded(true)}
-                className="w-full text-center text-[11px] text-gray-400 hover:text-gray-300 dark:text-gray-500 dark:hover:text-gray-400 py-1.5 transition-colors"
-              >
-                + {hiddenCount} more event{hiddenCount !== 1 ? 's' : ''}
-              </button>
-            )}
-            {expanded && hiddenCount > 0 && (
-              <button
-                onClick={() => setExpanded(false)}
-                className="w-full text-center text-[11px] text-gray-400 hover:text-gray-300 dark:text-gray-500 dark:hover:text-gray-400 py-1.5 transition-colors"
-              >
-                Show less
-              </button>
-            )}
-          </>
+              </div>
+            );
+          })
         )}
       </div>
 

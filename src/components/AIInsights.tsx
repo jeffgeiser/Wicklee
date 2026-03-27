@@ -2084,13 +2084,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               )}
 
               {/* Benchmark Report removed — accessible via Fleet Benchmarks hexagon click */}
-
-              {/* ── Live Activity Feed — scrollable fleet events ──────────── */}
-              {fleetEvents.length > 0 && (
-                <div className="h-[400px]">
-                  <EventFeed events={fleetEvents} />
-                </div>
-              )}
             </>
           )}
 
