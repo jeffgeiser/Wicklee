@@ -9,9 +9,10 @@
 set -e
 
 # Discover the DNS resolver from /etc/resolv.conf — Railway containers
-# use the Docker embedded DNS (127.0.0.11) or the host's resolver.
-# Fallback to 8.8.8.8 if no nameserver is found.
-RESOLVER=$(grep -m1 '^nameserver' /etc/resolv.conf | awk '{print $2}')
+# may use IPv6 (fd12::10) or IPv4 (127.0.0.11). nginx's resolver
+# directive chokes on bare IPv6 (colons parsed as port separator),
+# so we prefer the first IPv4 nameserver. Fallback to 8.8.8.8.
+RESOLVER=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep -v ':' | head -1)
 RESOLVER=${RESOLVER:-8.8.8.8}
 export RESOLVER
 
