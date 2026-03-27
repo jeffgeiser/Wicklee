@@ -9,11 +9,20 @@
 set -e
 
 # Discover the DNS resolver from /etc/resolv.conf — Railway containers
-# may use IPv6 (fd12::10) or IPv4 (127.0.0.11). nginx's resolver
-# directive chokes on bare IPv6 (colons parsed as port separator),
-# so we prefer the first IPv4 nameserver. Fallback to 8.8.8.8.
-RESOLVER=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep -v ':' | head -1)
-RESOLVER=${RESOLVER:-8.8.8.8}
+# may use IPv6 (fd12::10) or IPv4 (127.0.0.11). nginx requires IPv6
+# addresses in brackets: [fd12::10]. Prefer IPv4 if available, else
+# bracket the first IPv6 address. Fallback to 8.8.8.8.
+IPV4_NS=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep -v ':' | head -1)
+if [ -n "$IPV4_NS" ]; then
+  RESOLVER="$IPV4_NS"
+else
+  IPV6_NS=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep ':' | head -1)
+  if [ -n "$IPV6_NS" ]; then
+    RESOLVER="[$IPV6_NS]"
+  else
+    RESOLVER="8.8.8.8"
+  fi
+fi
 export RESOLVER
 
 envsubst '$PORT $RESOLVER' < /etc/nginx/conf.d/nginx.conf.template \
