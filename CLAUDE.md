@@ -122,6 +122,43 @@ The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any fie
 - Frontend: Tailwind utility classes only (no custom CSS). Strict typing in `types.ts`.
 - All metrics are real or explicitly labeled as unavailable — no mock values in production.
 
+## v0.7.7 — Patterns M/N/O, Pricing, API QA, Bug Fixes (2026-03-27)
+
+### Observations — 15 Hardware Patterns
+The observation engine now covers 15 patterns across three scopes:
+- **Localhost-only (4):** A (Thermal Drain), B (Phantom Load), J (Swap Pressure), L (PCIe Degradation) — evaluated by agent against DuckDB 1-hour buffer via `GET /api/observations`
+- **Cloud-only (4):** C (WES Velocity Drop), E (Fleet Load Imbalance), F (Memory Pressure Trajectory), I (Efficiency Penalty Drag) — require fleet context or multi-node comparison
+- **Both (7):** D (Power-GPU Decoupling), G (Bandwidth Saturation), H (Power Jitter), K (Clock Drift), M (vLLM KV Cache Saturation), N (NVIDIA Thermal Ceiling), O (VRAM Overcommit) — patterns M/N/O added in v0.7.7 with platform-aware action commands
+
+### Agent (Rust)
+- **Hostname in cloud_push** — `MetricsPayload.hostname` now populated from `gethostname()` so fleet dashboard shows real hostnames instead of only WK-XXXX identifiers
+- **gpu_wired_limit_mb fix** — Apple Silicon unified memory budget now falls back to 75% of total RAM when `sysctl iogpu.wired_limit_mb` returns 0 (common on M4)
+- **Power/memory in DuckDB history** — `store.rs` now writes `gpu_power_w` (resolved from SoC/NVIDIA/CPU sources) and `mem_pressure_pct` to `metrics_raw`, and reads them back in `query_observation_window()`. Fixes empty Power and Memory charts on Observability and Performance tabs.
+
+### Cloud Backend
+- **nginx IPv6 DNS fix** — Railway internal DNS (`fd12::10`) is IPv6; nginx `resolver` directive now brackets it as `[fd12::10]` to prevent parse errors. Resolves persistent 502s on `/api/v1/*` endpoints through `wicklee.dev`.
+- **i64::MAX overflow guard** — `events/history` endpoint now caps `before` param to `now + 1 day` instead of using `i64::MAX`, preventing potential Postgres overflow.
+- **Node online event dedup** — `ONLINE_DEBOUNCE_MS` (90s) prevents repeated "came online" events from telemetry jitter.
+
+### Frontend
+- **Pricing page** — three-tier grid (Community/Pro/Team) + Enterprise footer. State-aware buttons (Get Started / Upgrade / Current Plan). SubscriptionGuard wrapper for tier-gated content (40% opacity blur + upgrade CTA overlay).
+- **API Keys management** — Settings tab for creating, listing, and revoking API keys. One-time reveal on creation, SHA-256 hashed at rest.
+- **Live Activity seed fix** — DB event types that don't map to recognized FleetEvent types (startup, update, agent_version_mismatch) are now filtered out instead of defaulting to `node_online`. Fixes the "came online" flood.
+- **Intelligence layout** — Best Route + Node Cost side-by-side, Inference Density + Silicon Fit side-by-side. Live Activity scrollable with fixed height matching GPU Utilization panel.
+- **Documentation page updated** — full 15-pattern observation inventory, verified API endpoint reference for both localhost and cloud.
+
+### API Endpoints — Verified Working (QA'd 2026-03-27)
+**Localhost (no auth):**
+- `GET /api/metrics` (SSE), `/api/observations`, `/api/history?node_id=`, `/api/traces`, `/api/events/history`, `/api/events/recent`, `/api/export?format=json|csv`, `/api/tags`, `/api/pair/status`
+
+**Cloud v1 (X-API-Key auth):**
+- `GET /api/v1/fleet`, `/api/v1/fleet/wes`, `/api/v1/nodes/:id`, `/api/v1/route/best`, `/api/v1/insights/latest`
+
+### Build Pipeline
+- **Nightly builds** — GitHub Actions compiles agent binaries for 5 platforms on every push to main. `install.sh` pulls the latest nightly. Tagged releases (e.g., `v0.7.7`) are created manually.
+- **Frontend** — `npm run build` → `dist/` is deployed to Railway nginx container. Backend (Rust cloud binary) deploys separately on Railway from `cloud/` directory.
+- **Cargo.toml version** — must be bumped manually; `env!("CARGO_PKG_VERSION")` is baked into the binary at compile time.
+
 ## v0.7.6 — Local Observations + Performance Tab (2026-03-26)
 
 ### Agent (Rust)
@@ -130,18 +167,7 @@ The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any fie
 - All observation structs gated behind `#[cfg(not(target_env = "musl"))]` (musl has no DuckDB)
 - Cargo.toml version bumped to `0.7.6` (was stuck at 0.6.0 — caused stale version reporting)
 
-### Frontend
-- **Triage tab**: Local hardware observations as accordion cards + Cloud-Only placeholders (C, E, I)
-- **Performance tab (localhost)**:
-  - Model Efficiency card (replaces WES Leaderboard) — live tok/s, WES, W/1K TKN with idle watt offset
-  - LocalPerformanceHistory — multi-metric chart (TPS/Power/GPU%/Mem%) from 1h DuckDB, 60s refresh
-  - Silicon Fit Audit accepts `systemIdleW` — subtracts idle power for WES calculation
-- **Diagnostics**: Collection status probes local agent directly (was using fleet SSE → always "Disconnected")
-- **Settings**: Storage label → "Local Store"; idle watts input now visible (nodes[] bootstrapped from pairingInfo)
-- **Observability**: Metric History limited to 1h on localhost; removed 6h/24h options
-- **EventFeed**: Removed "Full event history in Observability →" footer
-
 ### Key bugs fixed
 - **nodes[] empty on localhost** — cloud node fetch was skipped, leaving `nodes.length === 0`. Now bootstrapped from `pairingInfo.node_id` in App.tsx
-- **Cargo.toml version stale** — `env!("CARGO_PKG_VERSION")` reported 0.6.0 in all binaries since Phase 3B. install.sh showed wrong version.
+- **Cargo.toml version stale** — `env!("CARGO_PKG_VERSION")` reported 0.6.0 in all binaries since Phase 3B
 - **musl CI failure** — observation structs referenced `store::ObsSample` without cfg gate

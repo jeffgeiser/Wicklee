@@ -11,7 +11,7 @@
 - **Sovereignty redesign** — localhost: collapsible card. Cloud: merged Guard + Inspector with expandable per-node field inspector rows.
 - **Fleet alerting matured** — Agent version mismatch alert (#5), acknowledged_by tracking, 1hr cooldown after resolve/acknowledge, per-(node, type) pattern suppression.
 - **Localhost polish** — 1hr chart buffer (3600 samples), idle watts setting, DuckDB→"local store" terminology, section reorder, DismissalLog removed, Agent Health→Diagnostics.
-- **Railway infrastructure** — internal nginx proxy with Docker DNS resolver, Postgres `DATABASE_URL` env var.
+- **Railway infrastructure** — internal nginx proxy with IPv6 DNS resolver (`[fd12::10]`), Postgres `DATABASE_URL` env var. Backend service hostname resolved via Railway private networking.
 
 ---
 
@@ -414,6 +414,19 @@
 - [x] **Agent Health panel** — `AgentHealthPanel` in `TracesView.tsx`. Three health indicators: Collection (SSE/WS connection state dot + transport badge), DuckDB Store (lightweight /api/history probe on mount → ok/unavailable), Last Frame (relative time from `lastTelemetryMs`). Harvester manifest table: four active collection threads + cadences. Cockpit (localhost) only.
 
 ---
+
+### v0.7.7 — Patterns M/N/O, Pricing, API QA (2026-03-27) ✅
+
+- [x] **Patterns M, N, O** — vLLM KV Cache Saturation, NVIDIA Thermal Ceiling, VRAM Overcommit. Platform-aware action commands. Completes 15-pattern observation engine.
+- [x] **Pricing page** — Three-tier grid (Community $0/Pro $9/Team $29) + Enterprise footer. SubscriptionGuard wrapper for tier-gated content.
+- [x] **API Keys settings** — Full CRUD UI: create (one-time reveal), list, revoke. SHA-256 hashed at rest.
+- [x] **Hostname in telemetry** — `cloud_push.rs` sends `gethostname()`. Fleet shows real hostnames.
+- [x] **gpu_wired_limit_mb fix** — Fallback to 75% of RAM when sysctl returns 0 (M4).
+- [x] **Power/memory in DuckDB** — `store.rs` writes `gpu_power_w` + `mem_pressure_pct`. Fixes blank charts.
+- [x] **nginx IPv6 DNS** — `[fd12::10]` bracketed resolver. Fixes 502s through wicklee.dev.
+- [x] **Live Activity seed fix** — Unrecognized event types filtered instead of defaulting to `node_online`.
+- [x] **Intelligence layout** — Best Route + Node Cost paired, Inference Density + Silicon Fit paired. Scrollable Live Activity.
+- [x] **Full API QA** — All 14 endpoints (9 localhost + 5 cloud v1) tested from command line through production URLs.
 
 ### v0.7.6 — Local Observations + Localhost Performance Tab ✅
 
