@@ -55,12 +55,14 @@ pub(crate) fn start_cloud_push(
             };
 
             // Patch the JSON frame: replace node_id with the WK-XXXX identifier
-            // so it matches the nodes table key; preserve the machine hostname
-            // in a separate `hostname` field for display in the fleet dashboard.
+            // so it matches the nodes table key. The `hostname` field is already
+            // set correctly by the broadcast loop (System::host_name()) — do NOT
+            // overwrite it. Previously this code copied node_id into hostname,
+            // which worked when node_id was the machine name but broke once
+            // node_id became the WK-XXXX config value.
             let patched = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&frame) {
-                let machine_hostname = val["node_id"].as_str().unwrap_or("").to_string();
                 val["node_id"] = serde_json::json!(wk_id);
-                val["hostname"] = serde_json::json!(machine_hostname);
+                // hostname already correct from broadcast — leave it untouched
                 val.to_string()
             } else {
                 frame
