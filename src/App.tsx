@@ -387,6 +387,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
         isLoggedIn={isLoggedIn}
         onNavigate={navigate}
         onCheckout={handleCheckoutTier}
+        onSignIn={() => navigate('/sign-in')}
+        onSignUp={() => navigate('/sign-up')}
       />
     );
   }

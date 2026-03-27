@@ -3,6 +3,7 @@ import {
   Check, Shield, Zap, Server, Crown, ArrowRight, Lock,
 } from 'lucide-react';
 import type { SubscriptionTier } from '../types';
+import Logo from './Logo';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,9 @@ interface PricingPageProps {
   onNavigate?: (path: string) => void;
   /** Trigger Stripe checkout for a given tier. */
   onCheckout?: (tier: 'pro' | 'team') => void;
+  /** Auth callbacks — rendered in the nav when logged out. */
+  onSignIn?: () => void;
+  onSignUp?: () => void;
 }
 
 // ── Tier data derived from TIERS.md ──────────────────────────────────────────
@@ -104,6 +108,8 @@ const PricingPage: React.FC<PricingPageProps> = ({
   isLoggedIn = false,
   onNavigate,
   onCheckout,
+  onSignIn,
+  onSignUp,
 }) => {
 
   const tierRank = (t: SubscriptionTier | null): number =>
@@ -134,8 +140,50 @@ const PricingPage: React.FC<PricingPageProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 px-4 py-16 sm:px-6 lg:px-8">
-      <div className="max-w-6xl mx-auto space-y-12">
+    <div className="min-h-screen bg-gray-950">
+      {/* ── Navigation — matches LandingPage nav ────────────────────── */}
+      <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
+        <button onClick={() => onNavigate?.('/')} className="cursor-pointer">
+          <Logo className="text-3xl" connectionState="connected" />
+        </button>
+        <div className="flex items-center gap-4 sm:gap-8">
+          <button onClick={() => onNavigate?.('/docs')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</button>
+          <button onClick={() => onNavigate?.('/pricing')} className="hidden sm:block text-sm font-medium text-white transition-colors">Pricing</button>
+          <a
+            href="https://github.com/jeffgeiser/Wicklee"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors"
+          >
+            GitHub
+          </a>
+          {!isLoggedIn ? (
+            <>
+              <button
+                onClick={onSignIn}
+                className="px-4 sm:px-6 py-2 border border-gray-700 hover:border-gray-500 text-white text-sm font-bold rounded-xl transition-all"
+              >
+                Sign In
+              </button>
+              <button
+                onClick={onSignUp}
+                className="px-4 sm:px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
+              >
+                Get Started
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => onNavigate?.('/')}
+              className="px-4 sm:px-6 py-2 border border-gray-700 hover:border-gray-500 text-white text-sm font-bold rounded-xl transition-all"
+            >
+              Dashboard
+            </button>
+          )}
+        </div>
+      </nav>
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16 space-y-12">
 
         {/* ── Header ─────────────────────────────────────────────────── */}
         <div className="text-center space-y-3">
@@ -149,7 +197,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
         </div>
 
         {/* ── Tier cards ─────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
           {TIERS.map(tier => {
             const isCurrent = tier.id === currentTier;
             const disabled  = isCtaDisabled(tier);
@@ -194,11 +242,11 @@ const PricingPage: React.FC<PricingPageProps> = ({
                   ))}
                 </div>
 
-                {/* CTA */}
+                {/* CTA — mt-auto pushes to bottom so buttons align across cards */}
                 <button
                   onClick={() => handleCta(tier)}
                   disabled={disabled}
-                  className={`w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
+                  className={`mt-auto w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
                     isCurrent
                       ? 'bg-gray-800 text-gray-500 cursor-default'
                       : disabled
