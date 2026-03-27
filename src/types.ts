@@ -164,7 +164,7 @@ export interface SentinelMetrics {
   penalty_avg?:    number | null;
   /** Peak thermal penalty seen in the sample window. */
   penalty_peak?:   number | null;
-  /** Source of thermal data: 'nvml' | 'iokit' | 'sysfs' | 'unavailable'. */
+  /** Source of thermal data: 'nvml' | 'iokit' | 'coretemp' | 'clock_ratio' | 'sysfs' | 'wmi' | 'unavailable'. */
   thermal_source?: string | null;
   /** Number of samples in the current WES window. */
   sample_count?:   number | null;

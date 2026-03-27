@@ -257,7 +257,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
                 <Code lang="powershell">wicklee --install-service</Code>
               </div>
               <NoteBox>
-                <code className="font-mono text-xs text-gray-300">sudo</code> is required here to write the launchd plist or systemd unit file — not to run inference. The agent process itself drops privileges after registration and runs as your user.
+                <code className="font-mono text-xs text-gray-300">sudo</code> is required because the agent installs as a system service (LaunchDaemon on macOS, systemd on Linux) and <strong className="text-gray-300">runs as root</strong>. Root access is needed for hardware sensor reads — <code className="font-mono text-xs text-gray-300">powermetrics</code> on macOS, RAPL powercap on Linux, and deeper thermal sensor access.
               </NoteBox>
             </div>
 
@@ -316,6 +316,10 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --version</td>
                     <td className="py-3 text-gray-400 align-top">Print the agent version and exit. Use this to confirm which build is running after an update.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --status</td>
+                    <td className="py-3 text-gray-400 align-top">Check if the agent is running on port 7700. Prints version, port status, and a hint if the agent is not detected.</td>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">sudo wicklee --install-service</td>
@@ -416,7 +420,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                         <Td>Apple Silicon</Td>
                         <Td mono>iokit</Td>
                         <Td><code className="text-gray-400">pmset -g therm</code> thermal level (IOKit framework)</Td>
-                        <Td>Mapped from macOS thermal pressure levels (Nominal → Normal, Fair → Fair, Serious, Critical)</Td>
+                        <Td>macOS reports "Nominal" which Wicklee maps to Normal. Fair, Serious, Critical map directly.</Td>
                       </tr>
                       <tr>
                         <Td>AMD Linux (k10temp)</Td>
@@ -726,8 +730,8 @@ WES Version:     2
             </p>
 
             {/* ── Localhost + Cloud patterns ── */}
-            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Localhost + Cloud (4 patterns)</p>
-            <p className="text-xs text-gray-500 mb-2">Run on both the local agent (DuckDB) and the client-side pattern engine. Available in standalone and fleet mode.</p>
+            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Localhost-Only (4 patterns)</p>
+            <p className="text-xs text-gray-500 mb-2">Evaluated by the agent against the local 1-hour DuckDB buffer via <code className="text-gray-400 font-mono text-xs">GET /api/observations</code>. No fleet connection required.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -773,8 +777,8 @@ WES Version:     2
             </div>
 
             {/* ── Cloud-only patterns ── */}
-            <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mt-6">Cloud / Fleet Context (6 patterns)</p>
-            <p className="text-xs text-gray-500 mb-2">Require sustained localStorage history or multi-node fleet context. Available when paired with wicklee.dev or running the fleet dashboard.</p>
+            <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mt-6">Cloud-Only (4 patterns)</p>
+            <p className="text-xs text-gray-500 mb-2">Require fleet context or multi-node comparison. Only available when paired with wicklee.dev.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -795,13 +799,6 @@ WES Version:     2
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-purple-400">D — Power-GPU Decoupling</span></Td>
-                    <Td>High power draw (&gt; 50W) with active inference but GPU utilization &lt; 20% — layers running on CPU instead of GPU</Td>
-                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Pro</Td>
-                  </tr>
-                  <tr>
                     <Td><span className="font-medium text-sky-400">E — Fleet Load Imbalance</span></Td>
                     <Td>Node thermally stressed or WES &lt; 50% of best peer while a healthier node has spare capacity</Td>
                     <Td><code className="text-[10px] text-gray-500">Route to healthier peer</code></Td>
@@ -809,16 +806,9 @@ WES Version:     2
                     <Td>Pro</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-teal-400">G — Bandwidth Saturation</span></Td>
-                    <Td>GPU utilization &lt; 40% but VRAM &gt; 80% full with WES dropping — memory bandwidth bottleneck, not compute</Td>
-                    <Td><code className="text-[10px] text-gray-500">Switch to smaller quantization</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Pro</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-yellow-400">H — Power Jitter</span></Td>
-                    <Td>Mean power &gt; 30W with active inference and coefficient of variation &gt; 20% — unstable power delivery or erratic batch scheduling</Td>
-                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
+                    <Td><span className="font-medium text-cyan-400">F — Memory Pressure Trajectory</span></Td>
+                    <Td>Memory pressure rising &gt; 1 pct/min sustained — projected to hit critical threshold before operator can react</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
@@ -834,8 +824,8 @@ WES Version:     2
             </div>
 
             {/* ── Localhost-only patterns ── */}
-            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-6">Localhost Only (5 patterns)</p>
-            <p className="text-xs text-gray-500 mb-2">Rely on local-only sensors or point-in-time checks not available in the fleet stream.</p>
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-6">Both — Localhost + Cloud (7 patterns)</p>
+            <p className="text-xs text-gray-500 mb-2">Evaluated on both the local agent and the cloud pattern engine. Available in standalone and fleet mode.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -849,9 +839,23 @@ WES Version:     2
                 </thead>
                 <tbody>
                   <tr>
-                    <Td><span className="font-medium text-cyan-400">F — Memory Trajectory</span></Td>
-                    <Td>Apple Silicon memory pressure rising &gt; 1 pct/min sustained — projected to hit critical threshold</Td>
+                    <Td><span className="font-medium text-purple-400">D — Power-GPU Decoupling</span></Td>
+                    <Td>High power draw (&gt; 50W) with active inference but GPU utilization &lt; 20% — layers running on CPU instead of GPU</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-teal-400">G — Bandwidth Saturation</span></Td>
+                    <Td>GPU utilization &lt; 40% but VRAM &gt; 80% full with WES dropping — memory bandwidth bottleneck, not compute</Td>
+                    <Td><code className="text-[10px] text-gray-500">Switch to smaller quantization</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-yellow-400">H — Power Jitter</span></Td>
+                    <Td>Mean power &gt; 30W with active inference and coefficient of variation &gt; 20% — unstable power delivery or erratic batch scheduling</Td>
+                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
@@ -1007,7 +1011,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td mono>GET /ws</Td>
-                    <Td>WebSocket — 10 Hz live telemetry for high-frequency charts</Td>
+                    <Td>WebSocket — 1 Hz live telemetry (same broadcast channel as SSE)</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/observations</Td>
@@ -1040,6 +1044,14 @@ WES Version:     2
                   <tr>
                     <Td mono>GET /api/tags</Td>
                     <Td>Ollama model tags — proxied from the local Ollama instance</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>POST /api/insights/dismiss</Td>
+                    <Td>Permanently dismiss a local observation pattern — writes to DuckDB audit trail. Pattern will not resurface.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/insights/dismissed</Td>
+                    <Td>List all permanently dismissed pattern IDs for this node</Td>
                   </tr>
                 </tbody>
               </table>
@@ -1112,6 +1124,18 @@ curl https://wicklee.dev/api/v1/fleet \\
                   <tr>
                     <Td mono>GET /api/v1/insights/latest</Td>
                     <Td>Fleet intelligence snapshot — fleet summary (online count, avg WES, fleet tok/s) + findings array (thermal stress, memory pressure, offline nodes, WES below baseline, low throughput)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>POST /api/v1/keys</Td>
+                    <Td>Create a new API key — returns the raw key once (prefix <code className="text-gray-400 text-xs">wk_live_</code>). Stored as SHA-256 hash at rest.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/v1/keys</Td>
+                    <Td>List all API keys for the authenticated user — returns key ID, prefix, created date. Hash is never exposed.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>DELETE /api/v1/keys/:key_id</Td>
+                    <Td>Revoke an API key by ID. Takes effect immediately — in-flight requests with the revoked key will fail.</Td>
                   </tr>
                 </tbody>
               </table>
@@ -1251,7 +1275,7 @@ curl https://wicklee.dev/api/v1/fleet \\
 
             <div>
               <p className="font-semibold text-white mb-2">Ollama transparent proxy (optional)</p>
-              <p>Enable the proxy in your <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">wicklee.toml</code> config to get zero-lag inference detection and exact tok/s from done packets instead of the 30s sampled probe:</p>
+              <p>Enable the proxy in your <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">config.toml</code> config to get zero-lag inference detection and exact tok/s from done packets instead of the 30s sampled probe:</p>
               <Code lang="toml">{`[ollama_proxy]
 enabled     = true
 ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
@@ -1301,7 +1325,7 @@ ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-800/50">
-                  <tr><td className="py-2 pr-4 text-gray-300">Ollama probe</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">localhost:11434</td><td className="py-2 text-gray-400">Local only — 3-token throughput sample</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Ollama probe</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">localhost:11434</td><td className="py-2 text-gray-400">Local only — 20-token throughput sample every ~30s</td></tr>
                   <tr><td className="py-2 pr-4 text-gray-300">Fleet telemetry</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">your fleet URL</td><td className="py-2 text-gray-400">System metrics + WES — paired nodes only</td></tr>
                   <tr><td className="py-2 pr-4 text-gray-300">Clerk auth</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">api.clerk.dev</td><td className="py-2 text-gray-400">Session JWT — cloud dashboard only</td></tr>
                 </tbody>
