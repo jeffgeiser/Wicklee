@@ -125,9 +125,12 @@ if [[ "$OS_TAG" == "darwin" ]]; then
 
   if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
     sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null && GHOST_KILLED=true || true
-    # launchd label deregistration is async — 3s lets it fully release before
-    # --install-service tries to re-bootstrap (prevents exit status 5 race).
-    sleep 3
+    # launchd label deregistration is async — poll until the label is actually
+    # gone instead of a fixed sleep. Prevents exit status 5 race in --install-service.
+    for i in $(seq 1 20); do
+      launchctl list dev.wicklee.agent &>/dev/null || break
+      sleep 0.5
+    done
   fi
   # Also kill any manual `sudo wicklee` process not managed by launchd.
   sudo pkill -x wicklee 2>/dev/null && GHOST_KILLED=true || true
@@ -195,7 +198,18 @@ green "  ✓ Wicklee agent installed successfully  —  ${VERSION_LABEL}"
 echo ""
 
 if [[ "$SERVICE_UPDATED" == "true" ]]; then
-  dim "  Service updated and restarted automatically."
+  # Verify the service is actually running before claiming success.
+  sleep 2
+  if curl -sf http://localhost:7700/api/pair/status &>/dev/null; then
+    dim "  Service updated and restarted automatically."
+  else
+    dim "  Service updated. If the dashboard is unreachable, run:"
+    if [[ "$OS_TAG" == "darwin" ]]; then
+      bold "    sudo wicklee --install-service"
+    else
+      bold "    sudo systemctl restart wicklee"
+    fi
+  fi
   echo ""
 else
   echo "  Start monitoring your node:"

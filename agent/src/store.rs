@@ -947,6 +947,40 @@ impl Store {
         Ok(rows)
     }
 
+    /// Query per-model baseline from Normal-thermal samples in the last 7 days.
+    /// Returns (median_tps, median_watts, sample_count) or None if < 100 samples.
+    pub fn query_model_baseline(
+        &self,
+        node_id: &str,
+        model:   &str,
+    ) -> Result<Option<(f64, f64, u32)>, duckdb::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let from = now - 7 * 24 * 3600 * 1000; // 7 days
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT MEDIAN(tps), MEDIAN(gpu_power_w), COUNT(*)
+             FROM metrics_raw
+             WHERE node_id = ? AND model = ? AND thermal_state = 'Normal'
+               AND tps > 0 AND gpu_power_w > 0 AND ts_ms >= ?",
+        )?;
+        let result = stmt.query_row(params![node_id, model, from], |row| {
+            let tps:     Option<f64> = row.get(0)?;
+            let watts:   Option<f64> = row.get(1)?;
+            let count:   u32         = row.get::<_, i64>(2)? as u32;
+            Ok((tps, watts, count))
+        });
+        match result {
+            Ok((Some(tps), Some(watts), count)) if count >= 100 && watts > 0.0 => {
+                Ok(Some((tps, watts, count)))
+            }
+            Ok(_) => Ok(None), // insufficient data
+            Err(e) => Err(e),
+        }
+    }
+
     /// Export a unified audit log joining events, traces, and dismissals.
     /// Returns flat records sorted newest-first, capped at `limit`.
     pub fn export_audit_log(

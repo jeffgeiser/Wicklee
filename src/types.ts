@@ -195,6 +195,12 @@ export interface SentinelMetrics {
    * stale cached interfaces and prompt a hard-reload.
    */
   agent_version?: string;
+  /** Per-model baseline tok/s from 7-day DuckDB history at Normal thermal state. */
+  model_baseline_tps?: number | null;
+  /** Per-model baseline WES (median tok/s / median watts at Normal thermal). */
+  model_baseline_wes?: number | null;
+  /** Number of Normal-thermal samples used to compute the baseline. */
+  model_baseline_samples?: number | null;
   /**
    * System-level lifecycle events from the agent (startup, update, service restart, etc.).
    * Embedded in the metrics stream — no separate endpoint needed.
