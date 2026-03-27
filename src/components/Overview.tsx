@@ -2359,90 +2359,63 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           </FleetCard>
         </div>
 
-        {/* ═══ Analysis Mid-Grid — 2-column ═══════════════════════════════════ */}
+        {/* ═══ Row 2 — Best Route Now + Node Cost / 1M Tokens ═════════════════ */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* ── Left: Inference Density + Silicon Fit Audit ────────────────── */}
-          <div className="space-y-3">
-            <div className="bg-slate-900/50 border border-gray-700/40 rounded-xl flex flex-col">
-              <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none px-4 pt-4">
-                Inference Density
-              </p>
-              <HexHive rows={nodeRows} />
-              <p className="text-[9px] text-gray-600 px-4 pb-3 leading-tight">
-                Amber pulse = active · gray = idle · red = throttling
-              </p>
-            </div>
-            {effectiveMetrics.length > 0 && (
-              <SiliconFitAudit
-                node={effectiveMetrics[0]}
-                nodes={effectiveMetrics}
-              />
-            )}
-          </div>
-
-          {/* ── Right: Best Route Now + Live Activity (observations) ───────── */}
-          <div className="space-y-3">
-            {/* Best Route Now — plain English routing targets */}
-            <FleetCard label="Best Route Now">
-              {activeEntries.length === 0 ? (
-                <p className="text-sm font-telin text-gray-600">— no active inference</p>
-              ) : activeEntries.length === 1 ? (
+          <FleetCard label="Best Route Now">
+            {activeEntries.length === 0 ? (
+              <p className="text-sm font-telin text-gray-600">— no active inference</p>
+            ) : activeEntries.length === 1 ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">→</span>
+                <button onClick={() => onNavigateToObservability?.({ nodeId: activeEntries[0].nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{activeEntries[0].hostname || activeEntries[0].nodeId}</button>
+                <span className="text-xs text-gray-500">(only active node)</span>
+              </div>
+            ) : sameNode && bestCostNode == null ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">→</span>
+                <button onClick={() => onNavigateToObservability?.({ nodeId: bestLatNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestLatNode!.hostname || bestLatNode!.nodeId}</button>
+                <span className="text-[10px] text-green-400">Best for latency and efficiency</span>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-500">→</span>
-                  <button onClick={() => onNavigateToObservability?.({ nodeId: activeEntries[0].nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{activeEntries[0].hostname || activeEntries[0].nodeId}</button>
-                  <span className="text-xs text-gray-500">(only active node)</span>
-                </div>
-              ) : sameNode && bestCostNode == null ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-500">→</span>
+                  <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Latency</span>
+                  <span className="text-xs text-gray-400">→</span>
                   <button onClick={() => onNavigateToObservability?.({ nodeId: bestLatNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestLatNode!.hostname || bestLatNode!.nodeId}</button>
-                  <span className="text-[10px] text-green-400">Best for latency and efficiency</span>
+                  <span className="text-xs font-telin text-green-400 ml-auto">{bestLatNode!.tps!.toFixed(1)} tok/s</span>
                 </div>
-              ) : (
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Latency</span>
-                    <span className="text-xs text-gray-400">→</span>
-                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestLatNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestLatNode!.hostname || bestLatNode!.nodeId}</button>
-                    <span className="text-xs font-telin text-green-400 ml-auto">{bestLatNode!.tps!.toFixed(1)} tok/s</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Efficiency</span>
+                  <span className="text-xs text-gray-400">→</span>
+                  <button onClick={() => onNavigateToObservability?.({ nodeId: bestEffNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestEffNode!.hostname || bestEffNode!.nodeId}</button>
+                  <div className="ml-auto flex flex-col items-end gap-0">
+                    <span className={`text-xs font-telin ${wesColorClass(bestEffNode!.wes)}`}>WES {formatWES(bestEffNode!.wes)}</span>
+                    {bestEffNode!.tcPct > 0 && (
+                      <span className="text-[9px] font-telin text-amber-400/70">-{bestEffNode!.tcPct}% thermal</span>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Efficiency</span>
-                    <span className="text-xs text-gray-400">→</span>
-                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestEffNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestEffNode!.hostname || bestEffNode!.nodeId}</button>
-                    <div className="ml-auto flex flex-col items-end gap-0">
-                      <span className={`text-xs font-telin ${wesColorClass(bestEffNode!.wes)}`}>WES {formatWES(bestEffNode!.wes)}</span>
-                      {bestEffNode!.tcPct > 0 && (
-                        <span className="text-[9px] font-telin text-amber-400/70">-{bestEffNode!.tcPct}% thermal</span>
-                      )}
-                    </div>
-                  </div>
-                  {bestCostNode != null && activeCostEntries.length >= 2 && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Cost</span>
-                      <span className="text-xs text-gray-400">→</span>
-                      <button onClick={() => onNavigateToObservability?.({ nodeId: bestCostNode.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestCostNode.hostname || bestCostNode.nodeId}</button>
-                      <span className="text-xs font-telin text-cyan-400 ml-auto">
-                        {bestCostNode.costPer1m! < 0.01 ? '< $0.01' : `$${bestCostNode.costPer1m!.toFixed(2)}`}/1M
-                      </span>
-                    </div>
-                  )}
-                  {(tpsDelta != null || wesDelta != null) && (
-                    <p className="text-[10px] text-gray-600 pt-0.5">
-                      {tpsDelta != null && `tok/s delta: ${tpsDelta.toFixed(1)}×`}
-                      {tpsDelta != null && wesDelta != null && '  ·  '}
-                      {wesDelta != null && `WES delta: ${wesDelta.toFixed(1)}×`}
-                    </p>
-                  )}
                 </div>
-              )}
-            </FleetCard>
+                {bestCostNode != null && activeCostEntries.length >= 2 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Cost</span>
+                    <span className="text-xs text-gray-400">→</span>
+                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestCostNode.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestCostNode.hostname || bestCostNode.nodeId}</button>
+                    <span className="text-xs font-telin text-cyan-400 ml-auto">
+                      {bestCostNode.costPer1m! < 0.01 ? '< $0.01' : `$${bestCostNode.costPer1m!.toFixed(2)}`}/1M
+                    </span>
+                  </div>
+                )}
+                {(tpsDelta != null || wesDelta != null) && (
+                  <p className="text-[10px] text-gray-600 pt-0.5">
+                    {tpsDelta != null && `tok/s delta: ${tpsDelta.toFixed(1)}×`}
+                    {tpsDelta != null && wesDelta != null && '  ·  '}
+                    {wesDelta != null && `WES delta: ${wesDelta.toFixed(1)}×`}
+                  </p>
+                )}
+              </div>
+            )}
+          </FleetCard>
 
-          </div>
-        </div>
-
-        {/* ═══ Audit Footer — Node Cost / 1M Tokens + Idle Fleet Cost ════════ */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {costEntries.some(e => e.costPer1mRaw != null || e.tps == null || e.tps <= 0) && (
             <FleetCard label="Node Cost / 1M Tokens">
               {(() => {
@@ -2490,41 +2463,60 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               })()}
             </FleetCard>
           )}
-
-          {/* Idle Fleet Cost */}
-          {(() => {
-            const idleNodes = effectiveMetrics.filter(n => {
-              const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
-              const watts = getNodePowerW(n);
-              return watts != null && (tps == null || tps <= 0);
-            });
-            if (idleNodes.length === 0) return null;
-            const idleCosts = idleNodes.map(n => {
-              const ns    = getNodeSettings?.(n.node_id) ?? { pue: 1.0, kwhRate: fleetKwhRate };
-              const watts = getNodePowerW(n) ?? 0;
-              return { hostname: n.hostname ?? n.node_id, dailyCost: watts * ns.pue * 24 * (ns.kwhRate / 1000) };
-            });
-            const fleetDailyTotal = idleCosts.reduce((sum, n) => sum + n.dailyCost, 0);
-            return (
-              <FleetCard label="Idle Fleet Cost" sub={<p className="text-[10px] text-gray-600 leading-tight">{idleNodes.length} idle node{idleNodes.length !== 1 ? 's' : ''} · est. electricity</p>}>
-                <div className="space-y-1 w-full">
-                  {idleCosts.map((n, i) => (
-                    <div key={i} className="flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-xs text-gray-500 truncate flex-1 min-w-0">{n.hostname}</span>
-                      <span className="font-telin text-xs text-amber-400 shrink-0">${n.dailyCost.toFixed(2)}/day</span>
-                    </div>
-                  ))}
-                  {idleCosts.length > 1 && (
-                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-700/50">
-                      <span className="text-[10px] text-gray-600 uppercase tracking-widest">Total</span>
-                      <span className="font-telin text-xs text-amber-400">${fleetDailyTotal.toFixed(2)}/day</span>
-                    </div>
-                  )}
-                </div>
-              </FleetCard>
-            );
-          })()}
         </div>
+
+        {/* ═══ Row 3 — Inference Density + Silicon Fit Audit ═══════════════════ */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-slate-900/50 border border-gray-700/40 rounded-xl flex flex-col">
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none px-4 pt-4">
+              Inference Density
+            </p>
+            <HexHive rows={nodeRows} />
+            <p className="text-[9px] text-gray-600 px-4 pb-3 leading-tight">
+              Amber pulse = active · gray = idle · red = throttling
+            </p>
+          </div>
+          {effectiveMetrics.length > 0 && (
+            <SiliconFitAudit
+              node={effectiveMetrics[0]}
+              nodes={effectiveMetrics}
+            />
+          )}
+        </div>
+
+        {/* ═══ Row 4 — Idle Fleet Cost (conditional) ══════════════════════════ */}
+        {(() => {
+          const idleNodes = effectiveMetrics.filter(n => {
+            const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
+            const watts = getNodePowerW(n);
+            return watts != null && (tps == null || tps <= 0);
+          });
+          if (idleNodes.length === 0) return null;
+          const idleCosts = idleNodes.map(n => {
+            const ns    = getNodeSettings?.(n.node_id) ?? { pue: 1.0, kwhRate: fleetKwhRate };
+            const watts = getNodePowerW(n) ?? 0;
+            return { hostname: n.hostname ?? n.node_id, dailyCost: watts * ns.pue * 24 * (ns.kwhRate / 1000) };
+          });
+          const fleetDailyTotal = idleCosts.reduce((sum, n) => sum + n.dailyCost, 0);
+          return (
+            <FleetCard label="Idle Fleet Cost" sub={<p className="text-[10px] text-gray-600 leading-tight">{idleNodes.length} idle node{idleNodes.length !== 1 ? 's' : ''} · est. electricity</p>}>
+              <div className="space-y-1 w-full">
+                {idleCosts.map((n, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 min-w-0">
+                    <span className="text-xs text-gray-500 truncate flex-1 min-w-0">{n.hostname}</span>
+                    <span className="font-telin text-xs text-amber-400 shrink-0">${n.dailyCost.toFixed(2)}/day</span>
+                  </div>
+                ))}
+                {idleCosts.length > 1 && (
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-700/50">
+                    <span className="text-[10px] text-gray-600 uppercase tracking-widest">Total</span>
+                    <span className="font-telin text-xs text-amber-400">${fleetDailyTotal.toFixed(2)}/day</span>
+                  </div>
+                )}
+              </div>
+            </FleetCard>
+          );
+        })()}
       </div>
       )} {/* end isLocalMode ternary — Fleet Intelligence / Fleet Preview CTA */}
 
