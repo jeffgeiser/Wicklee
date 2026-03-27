@@ -122,6 +122,28 @@ The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any fie
 - Frontend: Tailwind utility classes only (no custom CSS). Strict typing in `types.ts`.
 - All metrics are real or explicitly labeled as unavailable — no mock values in production.
 
+## v0.7.8 — Per-Model WES Baseline, Launchctl Fix, Intel/Windows Thermal (2026-03-27)
+
+### Per-Model WES Normalization
+- `query_model_baseline(node_id, model)` in `store.rs` — 7-day DuckDB median tok/s + watts at Normal thermal, min 100 samples
+- Background task (5s poll) detects model changes, caches `(baseline_tps, baseline_wes, sample_count)` in `Arc<Mutex<>>`
+- New fields on MetricsPayload: `model_baseline_tps`, `model_baseline_wes`, `model_baseline_samples` (three-way sync)
+
+### Launchctl Auto-Start Fix
+- `service.rs`: Check if label is loaded before bootout (skip on fresh install). Poll for deregistration instead of fixed 3s sleep. 3s retry backoff.
+- `install.sh`: Poll for label removal (10s timeout). Verify service running before success message.
+
+### Intel Thermal (Linux)
+- `coretemp` hwmon detection + per-core temp scanning + clock ratio tie-breaker
+- Generic cpufreq fallback for non-AMD/non-Intel CPUs
+- `thermal_source: "coretemp"` or `"clock_ratio"`
+
+### Windows Thermal (WMI)
+- `read_thermal_sysctl()` queries `MSAcpi_ThermalZoneTemperature` via wmic
+- Tenths-of-Kelvin → Celsius conversion, standard state mapping
+- WES sampler: NVML → Apple → Linux → WMI → unavailable
+- `thermal_source: "wmi"`
+
 ## v0.7.7 — Patterns M/N/O, Pricing, API QA, Bug Fixes (2026-03-27)
 
 ### Observations — 15 Hardware Patterns
