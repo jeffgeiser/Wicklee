@@ -251,19 +251,6 @@ const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, no
       {/* Fit context */}
       <p className="text-[10px] text-gray-600 leading-relaxed">{fitCfg.context}</p>
 
-      {/* Performance tab link */}
-      {onNavigateToPerformance ? (
-        <button
-          onClick={onNavigateToPerformance}
-          className="text-xs text-indigo-500 hover:text-indigo-400 transition-colors text-left"
-        >
-          View Detailed Benchmarks →
-        </button>
-      ) : (
-        <span className="text-xs text-gray-700 text-left">
-          View Detailed Benchmarks →
-        </span>
-      )}
     </div>
   );
 };

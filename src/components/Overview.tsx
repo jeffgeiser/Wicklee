@@ -2222,7 +2222,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               </p>
             </div>
 
-            <div className="lg:col-span-1 h-full min-h-[400px]">
+            <div className="lg:col-span-1 h-[400px]">
               <EventFeed events={activeEvents} />
             </div>
           </div>
