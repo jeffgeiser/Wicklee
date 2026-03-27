@@ -105,7 +105,8 @@ const NAV = [
   { id: 'wes',         label: 'WES Score' },
   { id: 'states',      label: 'Node States' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
-  { id: 'api',         label: 'Agent API v1' },
+  { id: 'api-local',   label: 'Localhost API' },
+  { id: 'api-fleet',   label: 'Fleet API v1' },
   { id: 'config',      label: 'Configuration' },
   { id: 'sovereignty', label: 'Sovereignty' },
   { id: 'platforms',   label: 'Platform Support' },
@@ -846,14 +847,101 @@ WES Version:     2
             </NoteBox>
           </Section>
 
-          {/* ── Agent API v1 ── */}
+          {/* ── Localhost API ── */}
           <Section
-            id="api"
+            id="api-local"
+            icon={<Globe className="w-5 h-5" />}
+            accent="border-emerald-500/20"
+            title="Localhost API"
+          >
+            <p>Every Wicklee agent exposes a local API at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. No authentication required. No internet connection needed. All endpoints return JSON.</p>
+
+            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Base URL</p>
+                <code className="font-mono text-sm text-emerald-300">http://localhost:7700</code>
+              </div>
+              <div className="sm:ml-auto">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Auth</p>
+                <code className="font-mono text-sm text-gray-400">None required</code>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <Th>Endpoint</Th>
+                    <Th>Description</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td mono>GET /api/metrics</Td>
+                    <Td>SSE stream — 1 Hz telemetry with full MetricsPayload (inference_state, WES, power, thermal, GPU, model)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /ws</Td>
+                    <Td>WebSocket — 10 Hz live telemetry for high-frequency charts</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/observations</Td>
+                    <Td>Local hardware pattern evaluation — 4 sovereign patterns (A: Thermal Drain, B: Phantom Load, J: Swap Pressure, L: PCIe Degradation) against 1h DuckDB buffer</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/history?node_id=WK-XXXX</Td>
+                    <Td>DuckDB metric history — 1h of raw samples (tok/s, GPU util, power, memory pressure, swap)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/traces</Td>
+                    <Td>Inference request traces — TTFT, TPOT, latency per request (localhost-only, never transmitted)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/events/history</Td>
+                    <Td>Persisted Live Activity events from DuckDB (startups, model swaps, thermal changes)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/events/recent</Td>
+                    <Td>Recent in-memory events (last ~50 from current session)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/export?format=json</Td>
+                    <Td>Full export of local events and metrics as JSON or CSV (<code className="text-gray-400 text-xs">format=csv</code>)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/pair/status</Td>
+                    <Td>Agent health — pairing state, node_id, fleet_url, agent version</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/tags</Td>
+                    <Td>Ollama model tags — proxied from the local Ollama instance</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <Code lang="shell">{`# Example: stream live metrics
+curl http://localhost:7700/api/metrics
+
+# Example: check agent health
+curl http://localhost:7700/api/pair/status | jq
+
+# Example: fetch 1h metric history
+curl "http://localhost:7700/api/history?node_id=WK-502B" | jq '.samples | length'`}</Code>
+
+            <NoteBox>
+              The localhost API is available on every tier including Community — no account, no pairing, no internet required. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
+            </NoteBox>
+          </Section>
+
+          {/* ── Fleet API v1 ── */}
+          <Section
+            id="api-fleet"
             icon={<Globe className="w-5 h-5" />}
             accent="border-cyan-500/20"
-            title="Agent API v1"
+            title="Fleet API v1"
           >
-            <p>The Agent API provides machine-readable access to your live fleet. All endpoints return JSON. Authenticate with your API key — create one in the <strong className="text-white">API Keys</strong> tab of your fleet dashboard.</p>
+            <p>The Fleet API provides cross-node intelligence, routing recommendations, and fleet-wide telemetry. Authenticate with an API key — create one in <strong className="text-white">Settings → API Keys</strong> in your fleet dashboard.</p>
 
             <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
               <div>
@@ -870,6 +958,7 @@ WES Version:     2
 curl https://wicklee.dev/api/v1/fleet \\
   -H "X-API-Key: wk_live_<your_key>"`}</Code>
 
+            <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mt-4">Fleet Status &amp; Routing</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -881,22 +970,52 @@ curl https://wicklee.dev/api/v1/fleet \\
                 <tbody>
                   <tr>
                     <Td mono>GET /api/v1/fleet</Td>
-                    <Td>All nodes — current state, live metrics, WES scores</Td>
+                    <Td>All nodes — node_id, hostname, online status, full MetricsPayload, WES score</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/fleet/wes</Td>
-                    <Td>WES leaderboard — all nodes ranked by efficiency</Td>
+                    <Td>WES leaderboard — node_id, WES score, and online status for every node</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/nodes/:id</Td>
-                    <Td>Single node — deep metrics snapshot</Td>
+                    <Td>Single node deep dive — full MetricsPayload with all hardware and runtime fields</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/route/best</Td>
-                    <Td>Routing recommendation — optimal node for next inference task</Td>
+                    <Td>Routing recommendation — returns two candidates: <code className="text-gray-400 text-xs">latency</code> (highest tok/s) and <code className="text-gray-400 text-xs">efficiency</code> (highest WES). Default: efficiency. Only online nodes considered.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/v1/insights/latest</Td>
+                    <Td>Fleet intelligence snapshot — fleet summary (online count, avg WES, fleet tok/s) + findings array (thermal stress, memory pressure, offline nodes, WES below baseline, low throughput)</Td>
                   </tr>
                 </tbody>
               </table>
+            </div>
+
+            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
+              <p className="text-xs font-bold text-white mb-2">Route response shape</p>
+              <Code lang="json">{`{
+  "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
+  "efficiency": { "node": "WK-502B", "tok_s": 19.5, "wes": 56.0, "reason": "Highest WES" },
+  "default":    "efficiency"
+}`}</Code>
+            </div>
+
+            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
+              <p className="text-xs font-bold text-white mb-2">Insights response shape</p>
+              <Code lang="json">{`{
+  "generated_at_ms": 1774624251478,
+  "fleet": { "online_count": 3, "total_count": 3, "avg_wes": 9.9, "fleet_tok_s": 79.0 },
+  "findings": [
+    {
+      "node_id": "WK-99E9", "hostname": "spark-c559",
+      "severity": "low", "pattern": "wes_below_baseline",
+      "title": "WES below fleet average on spark-c559",
+      "detail": "WES 3.3 vs fleet average 9.9",
+      "value": 3.3, "unit": "WES"
+    }
+  ]
+}`}</Code>
             </div>
 
             <TipBox>
@@ -906,18 +1025,9 @@ curl https://wicklee.dev/api/v1/fleet \\
               </span>
             </TipBox>
 
-            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
-              <p className="text-xs font-bold text-white mb-2">Route response shape</p>
-              <Code lang="json">{`{
-  "latency":    { "node": "WK-C133", "tok_s": 240, "reason": "Highest throughput" },
-  "efficiency": { "node": "WK-1EFC", "wes": 181.5,  "reason": "20x WES advantage" },
-  "default":    "efficiency"
-}`}</Code>
-            </div>
-
             <div>
               <p className="font-semibold text-white mb-1">Rate limits</p>
-              <p>Community: 60 req/min &nbsp;·&nbsp; Team: 600 req/min &nbsp;·&nbsp; Enterprise: unlimited. Rate limits are operational throttles, not feature gates — API access is available on all tiers.</p>
+              <p>Community: 60 req/min &nbsp;·&nbsp; Pro: 300 req/min &nbsp;·&nbsp; Team: 600 req/min &nbsp;·&nbsp; Enterprise: unlimited. Rate limits are operational throttles, not feature gates — API access is available on all tiers.</p>
             </div>
           </Section>
 
@@ -961,9 +1071,9 @@ curl https://wicklee.dev/api/v1/fleet \\
                   </thead>
                   <tbody>
                     <tr><Td mono>PORT</Td><Td mono>8080</Td><Td>HTTP listener port</Td></tr>
-                    <tr><Td mono>DATABASE_URL</Td><Td mono>—</Td><Td>SQLite path for fleet / auth data</Td></tr>
-                    <tr><Td mono>DUCK_DB_PATH</Td><Td mono>~/.wicklee/analytics.duckdb</Td><Td>DuckDB analytics volume (Railway mount)</Td></tr>
+                    <tr><Td mono>DATABASE_URL</Td><Td mono>—</Td><Td>Postgres connection string (Railway auto-provides)</Td></tr>
                     <tr><Td mono>CLERK_JWKS_URL</Td><Td mono>—</Td><Td>Clerk JWKS endpoint for JWT validation</Td></tr>
+                    <tr><Td mono>RESEND_API_KEY</Td><Td mono>—</Td><Td>Email delivery for alert notifications (optional)</Td></tr>
                   </tbody>
                 </table>
               </div>
@@ -977,34 +1087,40 @@ curl https://wicklee.dev/api/v1/fleet \\
                     <tr>
                       <Th>Tier</Th>
                       <Th>Fleet nodes</Th>
-                      <Th>Telemetry window</Th>
-                      <Th>DuckDB analytics archive</Th>
+                      <Th>Cloud history</Th>
+                      <Th>Alerts</Th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <Td><span className="text-gray-300 font-medium">Community</span></Td>
-                      <Td>3 nodes free</Td>
-                      <Td>24-hour rolling window</Td>
+                      <Td>3 nodes</Td>
+                      <Td>24h rolling</Td>
                       <Td>—</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-blue-400 font-medium">Team</span></Td>
-                      <Td>Unlimited</Td>
-                      <Td>24-hour rolling window</Td>
-                      <Td>90-day compressed archive</Td>
+                      <Td><span className="text-blue-400 font-medium">Pro ($9/mo)</span></Td>
+                      <Td>10 nodes</Td>
+                      <Td>7-day history</Td>
+                      <Td>Slack (1 channel)</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-amber-400 font-medium">Enterprise</span></Td>
+                      <Td><span className="text-amber-400 font-medium">Team ($29/mo)</span></Td>
                       <Td>Unlimited</Td>
-                      <Td>Configurable</Td>
+                      <Td>90-day history (Postgres rollups)</Td>
+                      <Td>Slack + PagerDuty + CSV/JSON export</Td>
+                    </tr>
+                    <tr>
+                      <Td><span className="text-purple-400 font-medium">Enterprise</span></Td>
+                      <Td>Unlimited</Td>
                       <Td>Configurable + signed export</Td>
+                      <Td>All + SIEM integration</Td>
                     </tr>
                   </tbody>
                 </table>
               </div>
               <p className="mt-2 text-xs text-gray-500">
-                Nodes 4+ on Community connect and send heartbeats but their metrics are restricted in the fleet dashboard. Upgrade to Team to unlock full telemetry, alert wiring, and 90-day DuckDB history. DuckDB traces are stored with zstd compression and streamed to the Traces view.
+                All tiers include the full localhost dashboard (1h DuckDB history), Agent API, and sovereign hardware patterns. The local agent stores metric history in DuckDB; the cloud uses Postgres — independent stores for different roles.
               </p>
             </div>
 
