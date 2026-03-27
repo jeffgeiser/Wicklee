@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck } from 'lucide-react';
+import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Search, Lightbulb, Wind, Server } from 'lucide-react';
 import Logo from './Logo';
 
 interface LandingPageProps {
@@ -61,30 +61,35 @@ const problemCards = [
 
 // ── All 15 observation patterns ──────────────────────────────────────────────
 
-interface ObsRow { id: string; title: string; trigger: string; tier: 'Community' | 'Pro'; }
+interface ObsTile {
+  id: string;
+  title: string;
+  trigger: string;
+  scope: 'Localhost + Cloud' | 'Cloud' | 'Localhost';
+  scopeColor: string;
+  icon: React.ReactElement;
+  hookColor: string;
+}
 
-const bothPatterns: ObsRow[] = [
-  { id: 'A', title: 'Thermal Performance Drain',  trigger: 'Sustained throttle state reducing tok/s > 8% vs. Normal baseline', tier: 'Community' },
-  { id: 'B', title: 'Phantom Load',               trigger: 'Model loaded + power > 5W + tok/s < 0.5 for 5 min', tier: 'Community' },
-  { id: 'J', title: 'Swap I/O Pressure',          trigger: 'Swap write rate > 2 MB/s sustained during inference', tier: 'Community' },
-  { id: 'L', title: 'PCIe Lane Degradation',      trigger: 'PCIe link width below rated maximum (NVIDIA)', tier: 'Pro' },
-];
-
-const cloudPatterns: ObsRow[] = [
-  { id: 'C', title: 'WES Velocity Drop',          trigger: 'Efficiency score declining > 10% before thermal change', tier: 'Community' },
-  { id: 'D', title: 'Power-GPU Decoupling',       trigger: 'High power (> 50W) + GPU util < 20% during inference', tier: 'Pro' },
-  { id: 'E', title: 'Fleet Load Imbalance',       trigger: 'Node stressed while healthier peer has spare capacity', tier: 'Pro' },
-  { id: 'G', title: 'Bandwidth Saturation',       trigger: 'GPU util < 40% + VRAM > 80% + WES dropping', tier: 'Pro' },
-  { id: 'H', title: 'Power Jitter',               trigger: 'Power CV > 20% during active inference (> 30W mean)', tier: 'Community' },
-  { id: 'I', title: 'Efficiency Penalty Drag',    trigger: 'WES penalty > 30% with Normal thermals and active GPU', tier: 'Pro' },
-];
-
-const localPatterns: ObsRow[] = [
-  { id: 'F', title: 'Memory Pressure Trajectory',  trigger: 'Apple Silicon memory pressure rising > 1 pct/min', tier: 'Community' },
-  { id: 'K', title: 'Clock Drift',                 trigger: 'Clock throttle > 15% during inference, Normal thermals', tier: 'Community' },
-  { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'KV cache > 90% — scheduler cannot admit new sequences', tier: 'Pro' },
-  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temp > 85°C sustained or > 90°C instantaneous', tier: 'Community' },
-  { id: 'O', title: 'VRAM Overcommit',             trigger: 'Loaded model > 90% of VRAM/unified memory', tier: 'Community' },
+const allPatterns: ObsTile[] = [
+  // Localhost + Cloud (4)
+  { id: 'A', title: 'Thermal Performance Drain',  trigger: 'Your GPU is thermally throttling, silently reducing throughput below its rated speed.',                                    scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <Thermometer className="w-4 h-4 text-amber-400" />,  hookColor: 'text-amber-400'  },
+  { id: 'B', title: 'Phantom Load',               trigger: 'A model is loaded in memory and drawing power, but nobody is using it.',                                                    scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <Zap         className="w-4 h-4 text-violet-400" />, hookColor: 'text-violet-400' },
+  { id: 'J', title: 'Swap I/O Pressure',          trigger: 'Model layers are spilling to disk during inference, causing latency spikes.',                                               scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <HardDrive   className="w-4 h-4 text-rose-400" />,   hookColor: 'text-rose-400'   },
+  { id: 'L', title: 'PCIe Lane Degradation',      trigger: 'GPU is running in a reduced PCIe lane width, limiting data transfer bandwidth.',                                            scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <Server      className="w-4 h-4 text-orange-400" />, hookColor: 'text-orange-400' },
+  // Cloud (6)
+  { id: 'C', title: 'WES Velocity Drop',          trigger: 'Efficiency score is declining steadily before thermal state has changed — an early warning.',                                scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <TrendingDown className="w-4 h-4 text-indigo-400" />, hookColor: 'text-indigo-400' },
+  { id: 'D', title: 'Power-GPU Decoupling',       trigger: 'High power draw but the GPU is barely active — inference is running on CPU instead of GPU.',                                 scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <Cpu         className="w-4 h-4 text-cyan-400" />,    hookColor: 'text-cyan-400'   },
+  { id: 'E', title: 'Fleet Load Imbalance',       trigger: 'This node is stressed while a healthier fleet peer has spare capacity.',                                                     scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <BarChart2   className="w-4 h-4 text-blue-400" />,    hookColor: 'text-blue-400'   },
+  { id: 'G', title: 'Bandwidth Saturation',       trigger: 'VRAM is nearly full but the GPU compute is barely used — a memory bandwidth bottleneck, not a compute one.',                 scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <Gauge       className="w-4 h-4 text-emerald-400" />, hookColor: 'text-emerald-400'},
+  { id: 'H', title: 'Power Jitter',               trigger: 'Power draw is swinging wildly during inference — unstable delivery or erratic batch scheduling.',                            scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <Waves       className="w-4 h-4 text-orange-400" />,  hookColor: 'text-orange-400' },
+  { id: 'I', title: 'Efficiency Penalty Drag',    trigger: 'Significant efficiency loss with normal thermals and no memory pressure — a hidden context-length or batch inefficiency.',   scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <TrendingDown className="w-4 h-4 text-yellow-400" />, hookColor: 'text-yellow-400' },
+  // Localhost (5)
+  { id: 'F', title: 'Memory Pressure Trajectory',  trigger: 'Memory pressure is climbing steadily — projected to reach critical levels and trigger swap.',                               scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <MemoryStick className="w-4 h-4 text-cyan-400" />,    hookColor: 'text-cyan-400'   },
+  { id: 'K', title: 'Clock Drift',                 trigger: 'GPU clocks are throttled during inference but thermals are normal — a power cap or driver limit is the bottleneck.',        scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <Gauge       className="w-4 h-4 text-lime-400" />,    hookColor: 'text-lime-400'   },
+  { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'The vLLM KV cache is nearly full — new sequences will queue or get rejected.',                                             scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <Database    className="w-4 h-4 text-pink-400" />,    hookColor: 'text-pink-400'   },
+  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temperature is dangerously high — the driver will aggressively throttle clocks.',                                      scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <Flame       className="w-4 h-4 text-red-400" />,     hookColor: 'text-red-400'    },
+  { id: 'O', title: 'VRAM Overcommit',             trigger: 'The loaded model consumes nearly all available memory — no headroom for KV cache or concurrency.',                         scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <MemoryStick className="w-4 h-4 text-emerald-400" />, hookColor: 'text-emerald-400'},
 ];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
@@ -265,23 +270,96 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             ))}
           </div>
 
-          {/* Observation tiles — mirrors the Insights → Triage tab */}
+          {/* Observation cards — exact replica of Insights → Triage ObservationCard */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {[
-              { color: 'red',    hook: '-33% tok/s', title: 'Thermal Performance Drain',  body: 'GPU at 100% but clock speed dropped — throughput silently halved.', confidence: 'High', cmd: 'sudo powermetrics --samplers gpu_power -i 5000 -n 1' },
-              { color: 'violet', hook: '+$1.47/day', title: 'Phantom Load',               body: 'Model loaded, 8.2W draw, zero inference — burning watts for nothing.', confidence: 'High', cmd: 'ollama stop llama3:70b' },
-              { color: 'amber',  hook: '4.8 MB/s',  title: 'Swap I/O During Inference',   body: 'Model layers spilling to disk — latency spiking 3× above baseline.', confidence: 'Moderate', cmd: 'ollama ps' },
-              { color: 'cyan',   hook: '-22% WES',  title: 'Efficiency Penalty Drag',     body: 'Normal thermals, active GPU, no memory pressure — hidden context-length inefficiency.', confidence: 'High', cmd: 'curl localhost:7700/api/metrics | jq .wes_score' },
-            ].map((obs) => (
-              <div key={obs.title} className="bg-gray-950 border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition-all">
-                <div className="flex items-center justify-between mb-2">
-                  <span className={`text-[10px] font-bold uppercase tracking-wider text-${obs.color}-400`}>{obs.confidence} confidence</span>
-                  <span className={`text-xs font-mono font-bold text-${obs.color}-400`}>{obs.hook}</span>
+            {([
+              {
+                icon: <Thermometer className="w-4 h-4 text-amber-400" />,
+                hookColor: 'text-amber-400',
+                hook: '-33% tok/s',
+                title: 'Thermal Performance Drain',
+                body: 'GPU utilization sustained at 100% but clock speed dropped 33%. Throughput silently halved while thermal state escalated to SERIOUS.',
+                recommendation: 'Improve chassis airflow or reduce sustained batch concurrency to keep thermal state in Normal range.',
+                actionLabel: 'Check thermal zone',
+                actionIcon: <Wind className="w-2.5 h-2.5" />,
+                actionCls: 'text-red-400 bg-red-500/10 border-red-500/20',
+                cmd: 'sudo powermetrics --samplers gpu_power -i 5000 -n 1',
+              },
+              {
+                icon: <Zap className="w-4 h-4 text-violet-400" />,
+                hookColor: 'text-violet-400',
+                hook: '+$1.47/day',
+                title: 'Phantom Load',
+                body: 'llama3:70b loaded in VRAM, drawing 8.2W with zero inference for 12 minutes. Idle model burning electricity with no active requests.',
+                recommendation: 'Evict the idle model to reclaim VRAM and reduce power draw.',
+                actionLabel: 'Evict idle models',
+                actionIcon: <Cpu className="w-2.5 h-2.5" />,
+                actionCls: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+                cmd: 'ollama stop llama3:70b',
+              },
+              {
+                icon: <HardDrive className="w-4 h-4 text-rose-400" />,
+                hookColor: 'text-rose-400',
+                hook: '4.8 MB/s swap',
+                title: 'Swap I/O During Inference',
+                body: 'Model layers spilling to disk at 4.8 MB/s during active inference. Latency spiking 3× above baseline as the kernel pages in/out.',
+                recommendation: 'Unload the largest idle model or switch to a smaller quantization to fit within physical memory.',
+                actionLabel: 'Evict idle models',
+                actionIcon: <Cpu className="w-2.5 h-2.5" />,
+                actionCls: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+                cmd: 'ollama ps',
+              },
+              {
+                icon: <TrendingDown className="w-4 h-4 text-yellow-400" />,
+                hookColor: 'text-yellow-400',
+                hook: '-22% WES',
+                title: 'Efficiency Penalty Drag',
+                body: 'WES penalty averaging 22% loss with Normal thermal state, active GPU, and no memory pressure. Hidden context-length or batch inefficiency.',
+                recommendation: 'Reduce context length or batch concurrency to eliminate the efficiency penalty.',
+                actionLabel: 'Reduce batch size',
+                actionIcon: <BarChart2 className="w-2.5 h-2.5" />,
+                actionCls: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+                cmd: 'curl localhost:7700/api/metrics | jq .wes_score',
+              },
+            ] as const).map((obs) => (
+              <div key={obs.title} className="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 space-y-3">
+                {/* Header row */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {obs.icon}
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                        Observation
+                      </p>
+                      <p className="text-sm font-semibold text-white truncate">{obs.title}</p>
+                    </div>
+                  </div>
+                  <p className={`text-base font-bold font-mono shrink-0 ${obs.hookColor}`}>
+                    {obs.hook}
+                  </p>
                 </div>
-                <p className="text-sm font-bold text-white mb-1">{obs.title}</p>
-                <p className="text-xs text-gray-500 leading-relaxed mb-3">{obs.body}</p>
-                <div className="flex items-center gap-2">
-                  <code className="text-[10px] font-mono text-gray-600 bg-gray-900 px-2 py-1 rounded truncate">{obs.cmd}</code>
+                {/* Body */}
+                <p className="text-xs text-gray-400 leading-relaxed">{obs.body}</p>
+                {/* Recommendation */}
+                <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+                  <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
+                  <div className="min-w-0 space-y-1.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400/70">
+                      Recommended Action
+                    </p>
+                    <p className="text-xs text-gray-300 leading-relaxed">{obs.recommendation}</p>
+                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[9px] font-semibold uppercase tracking-wider ${obs.actionCls}`}>
+                      {obs.actionIcon}
+                      {obs.actionLabel}
+                    </span>
+                  </div>
+                </div>
+                {/* Action copy button */}
+                <div className="flex flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-800 border border-gray-700">
+                    <code className="text-[10px] font-mono text-gray-300 truncate max-w-[180px]">{obs.cmd}</code>
+                    <Copy className="w-3 h-3 text-gray-500 shrink-0" />
+                  </div>
                 </div>
               </div>
             ))}
@@ -298,39 +376,20 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             Pure arithmetic over time-windowed telemetry. Every pattern requires sustained evidence before firing — single-frame spikes never produce an alert.
           </p>
 
-          {/* Observation table renderer */}
-          {([
-            { label: 'Localhost + Cloud', desc: 'Run on both the local agent and fleet dashboard', color: 'emerald', rows: bothPatterns },
-            { label: 'Cloud / Fleet Context', desc: 'Require sustained history or multi-node fleet context', color: 'blue', rows: cloudPatterns },
-            { label: 'Localhost Only', desc: 'Rely on local-only sensors not available in the fleet stream', color: 'amber', rows: localPatterns },
-          ] as const).map((group) => (
-            <div key={group.label} className="mb-6">
-              <p className={`text-xs font-bold text-${group.color}-400 uppercase tracking-wider mb-1`}>{group.label} ({group.rows.length} patterns)</p>
-              <p className="text-xs text-gray-600 mb-3">{group.desc}</p>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-gray-800">
-                      <th className="text-left text-gray-500 font-medium pb-2 pr-4 w-8">#</th>
-                      <th className="text-left text-gray-500 font-medium pb-2 pr-4">Pattern</th>
-                      <th className="text-left text-gray-500 font-medium pb-2 pr-4">Trigger</th>
-                      <th className="text-left text-gray-500 font-medium pb-2">Tier</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-800/50">
-                    {group.rows.map((r) => (
-                      <tr key={r.id}>
-                        <td className="py-2 pr-4 text-gray-600 font-mono">{r.id}</td>
-                        <td className="py-2 pr-4 text-white font-medium whitespace-nowrap">{r.title}</td>
-                        <td className="py-2 pr-4 text-gray-400">{r.trigger}</td>
-                        <td className="py-2 text-gray-500">{r.tier}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {allPatterns.map((p) => (
+              <div key={p.id} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all">
+                <div className="flex items-center gap-2 mb-3">
+                  {p.icon}
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-white truncate">{p.title}</p>
+                    <p className={`text-[10px] font-semibold uppercase tracking-wider ${p.scopeColor}`}>{p.scope}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 leading-relaxed">{p.trigger}</p>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         {/* Part 3 — Sovereign by design */}
