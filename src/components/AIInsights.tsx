@@ -34,6 +34,7 @@ import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier,
 import { useFleetObservations } from '../hooks/useFleetObservations';
 import type { FleetObservation } from '../hooks/useFleetObservations';
 import { useFleetStream } from '../contexts/FleetStreamContext';
+import EventFeed from './EventFeed';
 import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
 import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW } from '../utils/power';
@@ -736,7 +737,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const nodeHadActivityRef  = useRef<Record<string, boolean>>({});
 
   // Fleet data from SSE context
-  const { allNodeMetrics, lastSeenMsMap, addFleetEvent } = useFleetStream();
+  const { allNodeMetrics, lastSeenMsMap, addFleetEvent, fleetEvents } = useFleetStream();
 
   // Merged event emitter — prop takes precedence, falls back to context
   const emitFleetEvent = onFleetEvent ?? addFleetEvent;
@@ -2083,6 +2084,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               )}
 
               {/* Benchmark Report removed — accessible via Fleet Benchmarks hexagon click */}
+
+              {/* ── Live Activity Feed — scrollable fleet events ──────────── */}
+              {fleetEvents.length > 0 && (
+                <div className="h-[400px]">
+                  <EventFeed events={fleetEvents} />
+                </div>
+              )}
             </>
           )}
 
