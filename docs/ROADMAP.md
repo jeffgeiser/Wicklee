@@ -541,6 +541,35 @@
 - [x] **Cold Start Detection:** ✅ GPU spike + VRAM jump = cold start event. Hardware-pattern detection — no proxy or TTFT required. Sentinel Proxy (Phase 5) adds TTFT precision as an optional enhancement for advanced teams.
 - [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
 - [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
+
+### Team Workspaces — Shared Fleet Dashboard *(Team tier, $29/mo)*
+
+> Multiple accounts viewing the same fleet. The solo operator pairs nodes and
+> invites teammates — everyone sees the same Intelligence tab, same observations,
+> same Live Activity. No node re-pairing, no data duplication.
+
+**Data model changes:**
+- [ ] **`organizations` table** — `org_id` (UUID, PK), `name`, `owner_user_id`, `subscription_tier`, `created_at`. One org per paying account; Community users have an implicit single-member org.
+- [ ] **`org_memberships` table** — `user_id + org_id` (composite PK), `role` (`owner` | `admin` | `member` | `viewer`), `invited_at`, `accepted_at`. Viewer role = read-only dashboard, no Settings access.
+- [ ] **Tenant migration** — `nodes.tenant_id` currently = `clerk_user_id`. Migrate to `org_id` so all org members share the same fleet. Backwards-compatible: solo users get an auto-created org with themselves as owner.
+
+**Clerk Organizations integration:**
+- [ ] **Clerk org sync** — Use Clerk's built-in Organizations API (`useOrganization()`, `useOrganizationList()`). Clerk handles invites, email verification, role management. Wicklee stores `clerk_org_id` → `org_id` mapping.
+- [ ] **JWT org claim** — Clerk JWTs include `org_id` when user selects an org. Cloud backend extracts `org_id` from JWT instead of `sub` (user_id) for tenant scoping.
+- [ ] **Org switcher** — Clerk's `<OrganizationSwitcher />` component in the nav. Users who belong to multiple orgs can switch between them.
+
+**Access control:**
+- [ ] **SSE stream scoping** — `/api/fleet/stream` filters by `org_id` from JWT (currently filters by `tenant_id` = user_id). All org members receive the same live telemetry.
+- [ ] **API key scoping** — API keys belong to orgs, not users. Any org member with `admin+` role can create/revoke keys.
+- [ ] **Settings permissions** — Owner/Admin: full Settings access (billing, node config, alerts, API keys). Member: read Settings, configure personal preferences. Viewer: read-only dashboard, no Settings.
+- [ ] **Node pairing** — Only Owner/Admin can pair new nodes. Pairing codes bind to the org, not the individual user.
+
+**UI:**
+- [ ] **"Invite Teammate" in Settings → Team** — enters email, Clerk sends invite. Pending invites shown with resend/revoke. Role selector (Admin/Member/Viewer).
+- [ ] **Team Members list** — avatar, name, email, role badge, last active. Owner can change roles or remove members.
+- [ ] **Activity attribution** — observation acknowledges, alert dismissals, and Settings changes show "by [name]" in audit trail.
+
+**Prerequisite:** Stripe integration (need `subscription_tier` on the org to gate team features).
 - [ ] **Product Hunt launch**
 
 ---
