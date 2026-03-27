@@ -13,7 +13,6 @@
 | **Metric History** | 24-Hour Rolling | 7-Day | 90-Day | Custom / Audit Scope |
 | **Alerting** | Dashboard only | Slack (Single) | Slack & PagerDuty | SIEM / Webhooks |
 | **Insights** | Live + Core Educational | Persistent Cards | Trend Analysis | Predictive / Compliance |
-| **Keep Warm** | 1 Active Node | 3 Active Nodes | All Fleet Nodes | All Fleet Nodes |
 | **Sovereignty** | Cloud Relay | Cloud Relay | Cloud Relay | **Airgapped — no outbound telemetry** |
 | **Artifacts** | — | — | CSV Exports | Signed PDF Audits |
 | **Prometheus / Grafana Export** | — | — | — | ✅ |
@@ -53,7 +52,7 @@
   - Power Anomaly Detection
   - Unified Memory Exhaustion Warning (Apple Silicon / NVIDIA)
   - Model-to-Hardware Fit Score
-  - Model Eviction Prediction (with Keep Warm action — 1 node at Community)
+  - Model Eviction Prediction
   - **Idle Resource Notice** — node idle ≥ 1 hr; shows estimated $/hr cost. Community-free.
   - Quantization ROI (live snapshot — tok/s, W/1K TKN, WES with educational copy)
   - **Live WES Leaderboard** — ranks all connected nodes by penalized WES; shows TC% and thermal state badge per node. Community-free; no history required.
@@ -64,12 +63,6 @@
 - **Dashboard only** — no outbound delivery
 - Insight cards surface on the Insights tab when conditions fire
 - No email, Slack, webhook, or SIEM delivery
-
-### Keep Warm
-- **1 Active Node** — Keep Warm enabled for one node at a time
-- Fires a silent 1-token Ollama ping (`num_predict=1`) before predicted eviction to reset the keep_alive timer
-- Node selection: first node showing eviction warning
-- UI: Keep Warm button active on ModelEvictionCard; shows loading → "kept warm ✓" state
 
 ### Fleet Intelligence
 - View-only access to live fleet cards: Fleet Avg WES, Cost Efficiency, Tokens Per Watt, Thermal Diversity, Inference Density Map, Idle Fleet Cost (daily $/node estimate)
@@ -135,13 +128,6 @@ COMMUNITY_SOVEREIGN = false
 - No per-node alert routing — all alerts go to the single configured channel
 - UI: Settings → Alerts → Slack Webhook URL input field (enabled at Pro+)
 
-### Keep Warm
-- **3 Active Nodes**
-- Operator selects up to 3 nodes for Keep Warm protection (up from 1 at Community)
-- Wicklee sends silent 1-token ping to `localhost:11434` (or configured port) before predicted eviction
-- Pings logged in Live Activity
-- UI: Keep Warm toggle enabled on up to 3 nodes; additional nodes require Team tier
-
 ### Fleet Intelligence
 - Full view + alert delivery for: Thermal Diversity Score → Slack
 - Fleet WES Leaderboard with 7-day trend sparklines
@@ -206,11 +192,7 @@ PRO_SOVEREIGN = false
 - Per-node, per-event-type configuration in Settings → Alerts
 - Alert threshold customization: operators set their own tok/s floor, watt ceiling, thermal state trigger level
 
-### Keep Warm
-- **All Fleet Nodes**
-- Keep Warm enabled globally across every paired node
-- Per-node opt-out available in Node Settings
-- All pings logged in Live Activity with node ID, timestamp, model name
+
 
 ### Fleet Intelligence
 - Full access + alert delivery for all fleet cards
@@ -278,9 +260,6 @@ TEAM_INSIGHTS_API = true
 - SIEM integration: Splunk, Datadog, Elastic SIEM — event forwarding with structured JSON schema
 - All Team alerting capabilities included
 - Programmatic alert management via API
-
-### Keep Warm
-- **All Fleet Nodes** (same as Team)
 
 ### Fleet Intelligence
 - Full Team capabilities plus compliance-layer overlays
@@ -370,7 +349,7 @@ interface Permissions {
 
 ### Upgrade Prompts
 - **Node limit hit:** Inline banner on Add Node modal — "You've reached your X-node limit. Upgrade to [next tier] to add more nodes."
-- **Locked feature (Keep Warm):** Toggle rendered but disabled with lock icon; hover shows tier required.
+- **Locked feature:** Toggle rendered but disabled with lock icon; hover shows tier required.
 - **Locked tab/card:** Gray overlay with "Available on [Tier]" and upgrade CTA.
 - **No dark patterns:** Never block existing nodes retroactively if a user downgrades — grandfather in existing paired nodes until they are manually removed.
 
