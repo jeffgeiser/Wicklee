@@ -668,6 +668,7 @@ WES Version:     2
                   <tr>
                     <Th>Pattern</Th>
                     <Th>What it detects</Th>
+                    <Th>Primary action</Th>
                     <Th>Window</Th>
                     <Th>Tier</Th>
                   </tr>
@@ -676,24 +677,28 @@ WES Version:     2
                   <tr>
                     <Td><span className="font-medium text-amber-400">A — Thermal Drain</span></Td>
                     <Td>Sustained throttle state reducing tok/s vs. the node's own Normal-temperature baseline (&gt; 8% degradation)</Td>
+                    <Td><code className="text-[10px] text-gray-500">sudo powermetrics --samplers gpu_power</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-violet-400">B — Phantom Load</span></Td>
                     <Td>Model loaded + power &gt; 5W + tok/s &lt; 0.5 — idle model burning electricity with no inference</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama stop &lt;model&gt;</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-rose-400">J — Swap I/O Pressure</span></Td>
                     <Td>Swap write rate &gt; 2 MB/s sustained — model layers spilling to disk, degrading throughput. Escalates to "Swap Storm" at &gt; 10 MB/s</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-orange-400">L — PCIe Degradation</span></Td>
                     <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only</Td>
+                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d PCIE</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>
                   </tr>
@@ -710,6 +715,7 @@ WES Version:     2
                   <tr>
                     <Th>Pattern</Th>
                     <Th>What it detects</Th>
+                    <Th>Primary action</Th>
                     <Th>Window</Th>
                     <Th>Tier</Th>
                   </tr>
@@ -718,36 +724,42 @@ WES Version:     2
                   <tr>
                     <Td><span className="font-medium text-indigo-400">C — WES Velocity Drop</span></Td>
                     <Td>Efficiency score declining &gt; 10% over a sustained period before thermal state has changed — early warning</Td>
+                    <Td><code className="text-[10px] text-gray-500">curl localhost:7700/api/metrics</code></Td>
                     <Td mono>10 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-purple-400">D — Power-GPU Decoupling</span></Td>
                     <Td>High power draw (&gt; 50W) with active inference but GPU utilization &lt; 20% — layers running on CPU instead of GPU</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-sky-400">E — Fleet Load Imbalance</span></Td>
                     <Td>Node thermally stressed or WES &lt; 50% of best peer while a healthier node has spare capacity</Td>
+                    <Td><code className="text-[10px] text-gray-500">Route to healthier peer</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-teal-400">G — Bandwidth Saturation</span></Td>
                     <Td>GPU utilization &lt; 40% but VRAM &gt; 80% full with WES dropping — memory bandwidth bottleneck, not compute</Td>
+                    <Td><code className="text-[10px] text-gray-500">Switch to smaller quantization</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-yellow-400">H — Power Jitter</span></Td>
                     <Td>Mean power &gt; 30W with active inference and coefficient of variation &gt; 20% — unstable power delivery or erratic batch scheduling</Td>
+                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-fuchsia-400">I — Efficiency Penalty Drag</span></Td>
                     <Td>WES penalty_avg &gt; 30% loss with Normal thermal state, active GPU, and no memory pressure — hidden context/batch inefficiency</Td>
+                    <Td><code className="text-[10px] text-gray-500">Reduce context length / batch</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>
                   </tr>
@@ -764,6 +776,7 @@ WES Version:     2
                   <tr>
                     <Th>Pattern</Th>
                     <Th>What it detects</Th>
+                    <Th>Primary action</Th>
                     <Th>Window</Th>
                     <Th>Tier</Th>
                   </tr>
@@ -772,30 +785,35 @@ WES Version:     2
                   <tr>
                     <Td><span className="font-medium text-cyan-400">F — Memory Trajectory</span></Td>
                     <Td>Apple Silicon memory pressure rising &gt; 1 pct/min sustained — projected to hit critical threshold</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-lime-400">K — Clock Drift</span></Td>
                     <Td>Clock throttle &gt; 15% during inference with Normal thermal state — power cap or driver limit constraining clocks, not heat</Td>
+                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d CLOCK</code> / <code className="text-[10px] text-gray-500">sudo cpupower frequency-info</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-pink-400">M — vLLM Cache Saturation</span></Td>
                     <Td>vLLM KV cache &gt; 90% full — scheduler cannot admit new sequences, requests will queue or return 503</Td>
+                    <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep cache</code></Td>
                     <Td mono>3 min</Td>
                     <Td>Pro</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-red-400">N — NVIDIA Thermal Redline</span></Td>
                     <Td>GPU temperature &gt; 85°C sustained or &gt; 90°C instantaneous — driver will aggressively throttle clocks. NVIDIA only</Td>
+                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d TEMPERATURE</code></Td>
                     <Td mono>2 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-emerald-400">O — VRAM Overcommit</span></Td>
                     <Td>Loaded model consumes &gt; 90% of VRAM/unified memory — no headroom for KV cache, context, or concurrency</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code> / <code className="text-[10px] text-gray-500">nvidia-smi</code></Td>
                     <Td mono>instant</Td>
                     <Td>Community</Td>
                   </tr>
