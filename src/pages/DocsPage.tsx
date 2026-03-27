@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {
@@ -105,6 +105,7 @@ const NAV = [
   { id: 'wes',         label: 'WES Score' },
   { id: 'states',      label: 'Node States' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
+  { id: 'event-feeds', label: 'Event Feeds' },
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
   { id: 'config',      label: 'Configuration' },
@@ -844,6 +845,66 @@ WES Version:     2
 
             <NoteBox>
               Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window. Point-in-time patterns (Pattern O) always fire at High confidence since a single observation provides complete evidence.
+            </NoteBox>
+          </Section>
+
+          {/* ── Event Feeds ── */}
+          <Section
+            id="event-feeds"
+            icon={<Activity className="w-5 h-5" />}
+            accent="border-blue-500/20"
+            title="Event Feeds"
+          >
+            <p>
+              Wicklee has two distinct event surfaces that serve different purposes. They are intentionally separate — one for real-time awareness, one for post-incident review.
+            </p>
+
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <Th></Th>
+                    <Th>Live Activity</Th>
+                    <Th>Recent Activity</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td><span className="text-gray-300 font-medium">Location</span></Td>
+                    <Td>Intelligence page (scrollable feed)</Td>
+                    <Td>Insights → Triage (expand on click)</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="text-gray-300 font-medium">Data source</span></Td>
+                    <Td>Fleet events from SSE stream (FleetStreamContext)</Td>
+                    <Td>Alert quartet latch system (AIInsights)</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="text-gray-300 font-medium">What it shows</span></Td>
+                    <Td>Connectivity (online/offline), thermal transitions, model swaps, power anomalies, pattern onset/resolved/dismissed, keep warm actions</Td>
+                    <Td>Alert card lifecycle only — when did thermal/power/memory/thermal-cost alerts fire and resolve, with duration</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="text-gray-300 font-medium">Trigger</span></Td>
+                    <Td>Immediate — fires on every state transition in the telemetry stream</Td>
+                    <Td>Delayed — only fires after the 15-second onset gate, records resolved timestamp + duration</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="text-gray-300 font-medium">Persistence</span></Td>
+                    <Td>Current session only (React state)</Td>
+                    <Td>sessionStorage — survives page refresh, cleared on tab close</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="text-gray-300 font-medium">Purpose</span></Td>
+                    <Td>Real-time operational awareness — what is happening right now</Td>
+                    <Td>Post-incident review — which alerts fired, how long did they last</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <NoteBox>
+              The Fleet Event Timeline on the Observability tab is a third, separate surface — it shows persisted <code className="font-mono text-xs text-gray-300">node_events</code> from Postgres (cloud) or DuckDB (localhost) with 30-day retention. This is the permanent audit record. Live Activity and Recent Activity are session-scoped and intended for real-time operations, not compliance.
             </NoteBox>
           </Section>
 
