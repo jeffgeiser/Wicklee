@@ -6,6 +6,39 @@
 
 ---
 
+## March 27, 2026 — v0.7.8: Per-Model WES Baseline, Launchctl Fix, Intel/Windows Thermal
+
+### Per-Model WES Normalization ✅
+- **`query_model_baseline(node_id, model)`** in `store.rs` — 7-day DuckDB median tok/s and watts at Normal thermal state, minimum 100 samples for reliability
+- **Background model-change watcher** — 5s polling task detects `ollama_active_model` changes, queries DuckDB, caches `(baseline_tps, baseline_wes, sample_count)` in `Arc<Mutex<>>`
+- **Three-way sync** — `model_baseline_tps`, `model_baseline_wes`, `model_baseline_samples` added to MetricsPayload (agent), cloud struct (serde default), and SentinelMetrics (frontend)
+- WES 180 on a 3B model vs WES 24 on a 70B is now contextual — "92% of baseline" vs "67% of baseline" tells the operator if their hardware is underperforming for this specific model
+
+### Launchctl Auto-Start Fix ✅
+- **service.rs:** Check if label is loaded before bootout (skip on fresh install — eliminates the race entirely). After bootout, poll `launchctl list` every 500ms for up to 10s instead of fixed 3s sleep. Retry backoff increased to 3s.
+- **install.sh:** Poll for label removal after bootout (20 × 500ms = 10s max). Verify service is running via `curl localhost:7700` before printing "Service updated and restarted automatically". If not running, print platform-specific hint (`sudo wicklee --install-service` on macOS, `sudo systemctl restart wicklee` on Linux).
+- **Root cause:** Double bootout race — `install.sh` + `--install-service` both called `launchctl bootout`. The async deregistration from the first was still in flight when the second tried to bootstrap. Polling confirms deregistration before proceeding.
+
+### Intel Thermal (Linux) ✅
+- **coretemp hwmon** — scans `/sys/class/hwmon/*/name` for "coretemp", reads all `temp*_input` entries, takes max across cores
+- **Clock ratio + coretemp** — same ratio-to-state mapping as AMD (`cpuinfo_max_freq / scaling_cur_freq`), with coretemp temperature as tie-breaker (Tdie > 85°C → at least Serious)
+- **Generic cpufreq fallback** — for CPUs without k10temp or coretemp hwmon, uses clock ratio alone
+- **thermal_source:** `"coretemp"` (Intel with hwmon) or `"clock_ratio"` (generic)
+
+### Windows Thermal (WMI) ✅
+- **`read_thermal_sysctl()`** on Windows now queries `MSAcpi_ThermalZoneTemperature` via wmic
+- Temperature in tenths of Kelvin → Celsius: `(value / 10) - 273.15`
+- State mapping: Normal <70°C, Fair <80°C, Serious <90°C, Critical ≥90°C
+- WES sampler falls through NVML → Apple → Linux → **WMI** → unavailable
+- **thermal_source:** `"wmi"` — annotated as "estimated" in UI (lowest data quality platform)
+
+### Key Decisions
+- **100-sample minimum** for model baseline — prevents cold-start noise from producing misleading "vs baseline" indicators. A 3B model needs ~2 minutes of Normal-thermal inference to establish baseline.
+- **Polling over fixed sleep** for launchctl — eliminates both under-waiting (exit status 5) and over-waiting (unnecessary delay on fast systems)
+- **coretemp priority over generic sysfs** — direct per-core readings are more accurate than thermal_zone max, which often includes chipset/VRM temps
+
+---
+
 ## March 27, 2026 — v0.7.7: Patterns M/N/O, Pricing, API QA, Production Fixes
 
 ### Observation Patterns M, N, O ✅
