@@ -1801,9 +1801,12 @@ async fn handle_fleet_events_history(
         .and_then(|v| v.parse().ok())
         .unwrap_or(50)
         .min(200);
+    // Default to "now + 1 day" (in epoch ms) instead of i64::MAX.
+    // i64::MAX overflows Postgres to_timestamp(), producing a 500/502.
+    let default_before = (now_ms() + 86_400_000) as i64;
     let before: i64 = params.get("before")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(i64::MAX);
+        .unwrap_or(default_before);
     let node_id_filter = params.get("node_id").cloned();
     let event_type_filter = params.get("event_type").cloned();
 
