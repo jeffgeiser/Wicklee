@@ -467,21 +467,28 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
         };
         if (!data.events?.length) return;
 
-        const seeded: FleetEvent[] = data.events.map(row => {
-          let type: FleetEvent['type'] = 'node_online';
-          if (row.level === 'error')                    type = 'error';
-          else if (row.event_type === 'model_swap')     type = 'model_swap';
-          else if (row.event_type === 'thermal_change') type = 'thermal_change';
-          else if (row.event_type === 'node_offline')   type = 'node_offline';
-          else if (row.event_type === 'power_anomaly')  type = 'power_anomaly';
-          return {
+        // Map DB event_type → FleetEvent type. Only seed events we have
+        // explicit display support for — unrecognized types (startup, update,
+        // etc.) are skipped to avoid flooding Live Activity with generic entries.
+        const EVENT_TYPE_MAP: Record<string, FleetEvent['type']> = {
+          node_online:    'node_online',
+          node_offline:   'node_offline',
+          model_swap:     'model_swap',
+          thermal_change: 'thermal_change',
+          power_anomaly:  'power_anomaly',
+        };
+        const seeded: FleetEvent[] = data.events
+          .filter(row => {
+            if (row.level === 'error') return true;
+            return row.event_type != null && row.event_type in EVENT_TYPE_MAP;
+          })
+          .map(row => ({
             id:       `seed-${row.ts_ms}-${row.node_id}`,
             ts:       row.ts_ms,
-            type,
+            type:     row.level === 'error' ? 'error' as const : EVENT_TYPE_MAP[row.event_type!],
             nodeId:   row.node_id,
             detail:   row.message,
-          };
-        });
+          }));
 
         setFleetEvents(prev => {
           const existingIds = new Set(prev.map(e => e.id));
