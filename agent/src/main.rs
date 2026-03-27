@@ -371,6 +371,17 @@ struct MetricsPayload {
     /// Maximum PCIe link width the GPU + slot support. Paired with pcie_link_width.
     #[serde(skip_serializing_if = "Option::is_none")]
     pcie_link_max_width: Option<u32>,
+    /// Per-model baseline tok/s from 7-day DuckDB history at Normal thermal state.
+    /// Populated on model change, cached until model changes again. None when
+    /// insufficient history (< 100 Normal-thermal samples) or musl builds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_baseline_tps: Option<f32>,
+    /// Per-model baseline WES computed from historical median tok/s and watts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_baseline_wes: Option<f32>,
+    /// Number of Normal-thermal samples used to compute the baseline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_baseline_samples: Option<u32>,
     /// Compile-time agent version from Cargo.toml (e.g. "0.4.36").
     /// The frontend compares this against its own build-time UI version to detect
     /// stale cached interfaces and prompt a hard-reload.
@@ -535,10 +546,40 @@ fn read_thermal_sysctl() -> Option<String> {
     }.to_string())
 }
 
-/// Windows has no sysctl — thermal state deferred to Phase 3 (WMI).
+/// Windows thermal via WMI — queries MSAcpi_ThermalZoneTemperature.
+/// Temperature is in tenths of Kelvin; convert to Celsius for state mapping.
+/// Annotated as "estimated" in UI (thermal_source: "wmi").
 #[cfg(target_os = "windows")]
 fn read_thermal_sysctl() -> Option<String> {
-    None
+    // Use wmic to query thermal zone temperature.
+    let output = std::process::Command::new("wmic")
+        .args([
+            "/namespace:\\\\root\\wmi",
+            "path", "MSAcpi_ThermalZoneTemperature",
+            "get", "CurrentTemperature",
+            "/format:value",
+        ])
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Parse "CurrentTemperature=NNNNN" — value is tenths of Kelvin.
+    let temp_dk: f64 = stdout.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("CurrentTemperature=")
+                .and_then(|v| v.trim().parse::<f64>().ok())
+        })
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))?;
+
+    let temp_c = (temp_dk / 10.0) - 273.15;
+    let state = match temp_c {
+        t if t < 70.0 => "Normal",
+        t if t < 80.0 => "Fair",
+        t if t < 90.0 => "Serious",
+        _              => "Critical",
+    };
+    Some(state.to_string())
 }
 
 /// GPU wired memory limit via `sysctl iogpu.wired_limit_mb` — Apple Silicon only.
@@ -1087,6 +1128,26 @@ fn amd_clock_ratio_result(ratio: f64, tdie_c: Option<f64>) -> LinuxThermalResult
 }
 
 #[cfg(target_os = "linux")]
+/// Read Intel coretemp max temperature (millidegrees → °C).
+/// Scans all temp*_input entries and returns the highest.
+fn read_coretemp_max_c(hwmon: &std::path::Path) -> Option<f64> {
+    let mut max_c: Option<f64> = None;
+    for entry in std::fs::read_dir(hwmon).ok()?.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("temp") && name_str.ends_with("_input") {
+            if let Ok(raw) = std::fs::read_to_string(entry.path()) {
+                if let Ok(mc) = raw.trim().parse::<i64>() {
+                    let c = mc as f64 / 1000.0;
+                    max_c = Some(max_c.map_or(c, |p: f64| p.max(c)));
+                }
+            }
+        }
+    }
+    max_c
+}
+
+#[cfg(target_os = "linux")]
 fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult> {
     // ── AMD path: k10temp + clock ratio ──────────────────────────────────────
     if let Some(hwmon) = find_hwmon("k10temp") {
@@ -1098,6 +1159,51 @@ fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult
             }
         }
         // k10temp present but cpufreq unavailable — fall through to generic path.
+    }
+
+    // ── Intel path: coretemp hwmon + clock ratio ─────────────────────────────
+    // coretemp provides direct per-core temperature readings on Intel CPUs.
+    // Combined with clock ratio for thermal state determination.
+    if let Some(hwmon) = find_hwmon("coretemp") {
+        let temp_c = read_coretemp_max_c(&hwmon);
+        // Try clock ratio first (same approach as AMD)
+        if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
+            if max_khz > 0 {
+                let ratio = cur_khz as f64 / max_khz as f64;
+                // Use same clock ratio mapping as AMD, with coretemp as tie-breaker
+                let mut result = amd_clock_ratio_result(ratio, temp_c);
+                result.source = "coretemp";
+                return Some(result);
+            }
+        }
+        // coretemp present but cpufreq unavailable — use temperature directly
+        if let Some(tc) = temp_c {
+            let state = match tc {
+                t if t < 70.0 => "Normal",
+                t if t < 80.0 => "Fair",
+                t if t < 90.0 => "Serious",
+                _              => "Critical",
+            };
+            return Some(LinuxThermalResult {
+                state:          state.to_string(),
+                source:         "coretemp",
+                direct_penalty: None,
+                clock_ratio:    None,
+            });
+        }
+    }
+
+    // ── Generic Intel/other: clock ratio without dedicated hwmon ─────────────
+    // If no k10temp or coretemp hwmon, but cpufreq is available, use clock ratio.
+    if find_hwmon("k10temp").is_none() && find_hwmon("coretemp").is_none() {
+        if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
+            if max_khz > 0 {
+                let ratio = cur_khz as f64 / max_khz as f64;
+                let mut result = amd_clock_ratio_result(ratio, None);
+                result.source = "clock_ratio";
+                return Some(result);
+            }
+        }
     }
 
     // ── Generic path: /sys/class/thermal zone max ─────────────────────────────
@@ -2066,6 +2172,10 @@ fn start_wes_sampler(
                     let p = lt.direct_penalty
                         .unwrap_or_else(|| thermal_penalty_v2(lt.state.as_str()));
                     (p, lt.source)
+                } else if let Some(ref state) = read_thermal_sysctl() {
+                    // Windows WMI path — read_thermal_sysctl() returns thermal state
+                    // string on Windows via WMI MSAcpi_ThermalZoneTemperature.
+                    (thermal_penalty_v2(state.as_str()), "wmi")
                 } else {
                     (1.0, "unavailable")
                 };
@@ -2104,6 +2214,10 @@ fn start_wes_sampler(
 /// 1 Hz keeps the display-layer rolling windows (8–12 samples) covering 8–12 s,
 /// matching the effective smoothing depth of the cloud fleet dashboard.
 /// The broadcast channel has capacity 64 — lagged subscribers simply skip frames.
+/// Shared per-model baseline cache. Updated by the broadcast loop when model changes.
+/// Tuple: (baseline_tps, baseline_wes, sample_count).
+type ModelBaselineCache = Arc<Mutex<Option<(f32, f32, u32)>>>;
+
 fn start_metrics_broadcaster(
     apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
     nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
@@ -2120,6 +2234,7 @@ fn start_metrics_broadcaster(
     proxy_target_port:     Option<u16>,
     runtime_port_overrides: Option<String>,
     config_node_id:        String,
+    model_baseline:        ModelBaselineCache,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -2161,6 +2276,9 @@ fn start_metrics_broadcaster(
             let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let swap_mb_s     = swap_metrics.read();
+
+            // Read per-model baseline from shared cache (updated by store task on model change).
+            let model_baseline_cache = model_baseline.lock().map(|g| *g).unwrap_or(None);
 
             // Drain any pending live-activity events (normally empty, non-zero during update).
             let pending_events: Vec<LiveActivityEvent> = live_events
@@ -2244,6 +2362,9 @@ fn start_metrics_broadcaster(
                 }),
                 pcie_link_width:     nvidia.pcie_link_width,
                 pcie_link_max_width: nvidia.pcie_link_max_width,
+                model_baseline_tps:     model_baseline_cache.as_ref().map(|b| b.0),
+                model_baseline_wes:     model_baseline_cache.as_ref().map(|b| b.1),
+                model_baseline_samples: model_baseline_cache.as_ref().map(|b| b.2),
                 agent_version:       env!("CARGO_PKG_VERSION").to_string(),
                 inference_state:     inference_state_val,
             };
@@ -3210,6 +3331,9 @@ async fn handle_metrics(
                 }),
                 pcie_link_width:     nvidia.pcie_link_width,
                 pcie_link_max_width: nvidia.pcie_link_max_width,
+                model_baseline_tps:     None,
+                model_baseline_wes:     None,
+                model_baseline_samples: None,
                 agent_version:       env!("CARGO_PKG_VERSION").to_string(),
                 inference_state:     inference_state_val,
             };
@@ -3761,6 +3885,8 @@ async fn main() {
     let recent_events_log: Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>> =
         Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(20)));
 
+    let model_baseline_cache: ModelBaselineCache = Arc::new(Mutex::new(None));
+
     let broadcast_tx          = start_metrics_broadcaster(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
@@ -3777,6 +3903,7 @@ async fn main() {
         proxy_target,
         runtime_overrides.clone(),
         config.node_id.clone(),
+        Arc::clone(&model_baseline_cache),
     );
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
@@ -3856,6 +3983,55 @@ async fn main() {
                             let _ = tokio::task::spawn_blocking(move || {
                                 st.write_trace(&trace);
                             }).await;
+                        }
+                    });
+                }
+
+                // Model baseline updater — watches for model changes and queries
+                // DuckDB for per-model Normal-thermal baseline (median tok/s, watts).
+                {
+                    let store_clone = s.clone();
+                    let ollama_clone = Arc::clone(&ollama_metrics);
+                    let baseline_clone = Arc::clone(&model_baseline_cache);
+                    let node_id_clone = config.node_id.clone();
+                    tokio::spawn(async move {
+                        let mut last_model: Option<String> = None;
+                        let mut interval = tokio::time::interval(Duration::from_secs(5));
+                        loop {
+                            interval.tick().await;
+                            let current = ollama_clone
+                                .lock()
+                                .map(|g| g.ollama_active_model.clone())
+                                .unwrap_or(None);
+                            let changed = match (&last_model, &current) {
+                                (Some(prev), Some(cur)) => prev != cur,
+                                (None, Some(_))         => true,
+                                (Some(_), None)         => {
+                                    if let Ok(mut b) = baseline_clone.lock() { *b = None; }
+                                    last_model = None;
+                                    continue;
+                                }
+                                (None, None) => false,
+                            };
+                            if changed {
+                                if let Some(ref model_name) = current {
+                                    let st = store_clone.clone();
+                                    let nid = node_id_clone.clone();
+                                    let mn = model_name.clone();
+                                    let result = tokio::task::spawn_blocking(move || {
+                                        st.query_model_baseline(&nid, &mn)
+                                    }).await;
+                                    if let Ok(Ok(Some((tps, watts, count)))) = result {
+                                        let wes = if watts > 0.0 { (tps / watts) as f32 } else { 0.0 };
+                                        if let Ok(mut b) = baseline_clone.lock() {
+                                            *b = Some((tps as f32, wes, count));
+                                        }
+                                    } else {
+                                        if let Ok(mut b) = baseline_clone.lock() { *b = None; }
+                                    }
+                                    last_model = current;
+                                }
+                            }
                         }
                     });
                 }

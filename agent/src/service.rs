@@ -192,25 +192,50 @@ pub(crate) async fn install_service() {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status().await;
-        // Bootout any existing registration so we can replace it cleanly.
-        // `launchctl load -w` (deprecated) fails with I/O error 5 when the
-        // label is already live in the system domain. The modern approach is
-        // bootout (ignore error if not registered) then bootstrap.
-        // Suppress launchctl's own stderr — "Boot-out failed: 3: No such process" is
-        // expected on a fresh install (nothing registered yet) and is not an error.
-        let _ = tokio::process::Command::new("launchctl")
-            .args(["bootout", "system/dev.wicklee.agent"])
+        // ── Bootout existing registration ─────────────────────────────────────
+        // Check if the label is currently loaded before attempting bootout.
+        // On a fresh install (no prior registration) we skip bootout entirely,
+        // eliminating the async deregistration race that causes exit status 5.
+        let label_loaded = tokio::process::Command::new("launchctl")
+            .args(["list", "dev.wicklee.agent"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status().await;
-        // Give the kernel time to release port 7700 after the old process exits.
-        // The install script may have already done a bootout seconds ago, but launchd's
-        // internal label deregistration can lag behind the process exit. 3000ms covers
-        // the observed worst case — install.sh's bootout + our own bootout can leave
-        // launchd's internal state dirty for up to ~2.5s (exit status 5).
-        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
-        // Bootstrap with retry — launchd label deregistration is asynchronous and
-        // can race even after the sleep above. Retry up to 5 times with 2s backoff.
+            .status().await
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if label_loaded {
+            let _ = tokio::process::Command::new("launchctl")
+                .args(["bootout", "system/dev.wicklee.agent"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status().await;
+
+            // Poll for label removal instead of a fixed sleep. launchd's internal
+            // deregistration is async — polling avoids both under-waiting (exit 5)
+            // and over-waiting (unnecessary delay on fast systems).
+            let poll_start = std::time::Instant::now();
+            let poll_timeout = std::time::Duration::from_secs(10);
+            loop {
+                let still_loaded = tokio::process::Command::new("launchctl")
+                    .args(["list", "dev.wicklee.agent"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status().await
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if !still_loaded { break; }
+                if poll_start.elapsed() >= poll_timeout {
+                    eprintln!("warning: launchd label still registered after 10s — proceeding with bootstrap");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+
+        // ── Bootstrap with retry ─────────────────────────────────────────────
+        // Even after confirmed deregistration, bootstrap can race on heavily
+        // loaded systems. Retry up to 5 times with 3s backoff.
         let mut bootstrap_ok = false;
         for attempt in 0..5u32 {
             let status = tokio::process::Command::new("launchctl")
@@ -222,19 +247,19 @@ pub(crate) async fn install_service() {
                 Ok(s) if s.success() => { bootstrap_ok = true; break; }
                 Ok(_) if attempt < 4 => {
                     eprintln!("  launchctl bootstrap attempt {} failed, retrying…", attempt + 1);
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
                 Ok(s) => {
                     eprintln!("error: launchctl bootstrap failed after 5 attempts (last status: {s})");
                     eprintln!("       The service plist is installed — try manually:");
-                    eprintln!("       sudo wicklee --install-service");
+                    eprintln!("       sudo launchctl bootstrap system {plist_path}");
                 }
                 Err(e) => { eprintln!("error: launchctl: {e}"); break; }
             }
         }
         if bootstrap_ok {
             // Brief pause so launchd can start the process before we verify.
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             // Confirm the service is actually running (guards against launchd throttle).
             let running = tokio::process::Command::new("launchctl")
                 .args(["list", "dev.wicklee.agent"])
@@ -251,7 +276,7 @@ pub(crate) async fn install_service() {
             if !running {
                 eprintln!("warning: service registered but not yet visible in launchctl list.");
                 eprintln!("         If http://localhost:7700 is unreachable, run:");
-                eprintln!("         sudo launchctl start dev.wicklee.agent");
+                eprintln!("         sudo launchctl bootstrap system {plist_path}");
             }
         }
     }

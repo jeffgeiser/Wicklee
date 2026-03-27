@@ -136,6 +136,13 @@ struct MetricsPayload {
     pcie_link_width:     Option<u32>,
     #[serde(default)]
     pcie_link_max_width: Option<u32>,
+    // ── Per-model WES baseline (v0.7.8+) ───────────────────────────────────────
+    #[serde(default)]
+    model_baseline_tps:     Option<f32>,
+    #[serde(default)]
+    model_baseline_wes:     Option<f32>,
+    #[serde(default)]
+    model_baseline_samples: Option<u32>,
     // ── Agent identity + state (v0.5.10+) ─────────────────────────────────────
     /// Compile-time agent version from Cargo.toml.
     #[serde(default)]
