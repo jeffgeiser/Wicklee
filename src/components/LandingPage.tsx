@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Search, Lightbulb, Wind, Server } from 'lucide-react';
+import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Server } from 'lucide-react';
 import Logo from './Logo';
 
 interface LandingPageProps {
@@ -270,96 +270,30 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             ))}
           </div>
 
-          {/* Observation cards — exact replica of Insights → Triage ObservationCard */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Collapsed observation rows — matches AccordionObservationCard collapsed state */}
+          <div className="space-y-2">
             {([
-              {
-                icon: <Thermometer className="w-4 h-4 text-amber-400" />,
-                hookColor: 'text-amber-400',
-                hook: '-33% tok/s',
-                title: 'Thermal Performance Drain',
-                body: 'GPU utilization sustained at 100% but clock speed dropped 33%. Throughput silently halved while thermal state escalated to SERIOUS.',
-                recommendation: 'Improve chassis airflow or reduce sustained batch concurrency to keep thermal state in Normal range.',
-                actionLabel: 'Check thermal zone',
-                actionIcon: <Wind className="w-2.5 h-2.5" />,
-                actionCls: 'text-red-400 bg-red-500/10 border-red-500/20',
-                cmd: 'sudo powermetrics --samplers gpu_power -i 5000 -n 1',
-              },
-              {
-                icon: <Zap className="w-4 h-4 text-violet-400" />,
-                hookColor: 'text-violet-400',
-                hook: '+$1.47/day',
-                title: 'Phantom Load',
-                body: 'llama3:70b loaded in VRAM, drawing 8.2W with zero inference for 12 minutes. Idle model burning electricity with no active requests.',
-                recommendation: 'Evict the idle model to reclaim VRAM and reduce power draw.',
-                actionLabel: 'Evict idle models',
-                actionIcon: <Cpu className="w-2.5 h-2.5" />,
-                actionCls: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-                cmd: 'ollama stop llama3:70b',
-              },
-              {
-                icon: <HardDrive className="w-4 h-4 text-rose-400" />,
-                hookColor: 'text-rose-400',
-                hook: '4.8 MB/s swap',
-                title: 'Swap I/O During Inference',
-                body: 'Model layers spilling to disk at 4.8 MB/s during active inference. Latency spiking 3× above baseline as the kernel pages in/out.',
-                recommendation: 'Unload the largest idle model or switch to a smaller quantization to fit within physical memory.',
-                actionLabel: 'Evict idle models',
-                actionIcon: <Cpu className="w-2.5 h-2.5" />,
-                actionCls: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-                cmd: 'ollama ps',
-              },
-              {
-                icon: <TrendingDown className="w-4 h-4 text-yellow-400" />,
-                hookColor: 'text-yellow-400',
-                hook: '-22% WES',
-                title: 'Efficiency Penalty Drag',
-                body: 'WES penalty averaging 22% loss with Normal thermal state, active GPU, and no memory pressure. Hidden context-length or batch inefficiency.',
-                recommendation: 'Reduce context length or batch concurrency to eliminate the efficiency penalty.',
-                actionLabel: 'Reduce batch size',
-                actionIcon: <BarChart2 className="w-2.5 h-2.5" />,
-                actionCls: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
-                cmd: 'curl localhost:7700/api/metrics | jq .wes_score',
-              },
+              { icon: <TrendingDown className="w-4 h-4 text-indigo-400" />, title: 'WES Velocity Drop',           node: 'WK-502B',  hook: '-0.7 WES/min · 47% drop',                          hookCls: 'text-indigo-400' },
+              { icon: <BarChart2    className="w-4 h-4 text-blue-400" />,   title: 'Fleet Load Imbalance',        node: '2 nodes',   hook: '81% WES gap vs WK-502B',                            hookCls: 'text-blue-400', isGrouped: true },
+              { icon: <Gauge        className="w-4 h-4 text-lime-400" />,   title: 'Clock Drift During Inference', node: 'spark-c559', hook: '21% throttled · running at 79% of rated clock · 31.8 tok/s', hookCls: 'text-violet-400' },
+              { icon: <Server       className="w-4 h-4 text-orange-400" />, title: 'PCIe Lane Degradation',       node: 'spark-c559', hook: 'x1 of x16 lanes · 94% PCIe bandwidth loss',        hookCls: 'text-violet-400' },
             ] as const).map((obs) => (
-              <div key={obs.title} className="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 space-y-3">
-                {/* Header row */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {obs.icon}
-                    <div className="min-w-0">
-                      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-                        Observation
-                      </p>
-                      <p className="text-sm font-semibold text-white truncate">{obs.title}</p>
-                    </div>
-                  </div>
-                  <p className={`text-base font-bold font-mono shrink-0 ${obs.hookColor}`}>
-                    {obs.hook}
-                  </p>
-                </div>
-                {/* Body */}
-                <p className="text-xs text-gray-400 leading-relaxed">{obs.body}</p>
-                {/* Recommendation */}
-                <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
-                  <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
-                  <div className="min-w-0 space-y-1.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400/70">
-                      Recommended Action
-                    </p>
-                    <p className="text-xs text-gray-300 leading-relaxed">{obs.recommendation}</p>
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[9px] font-semibold uppercase tracking-wider ${obs.actionCls}`}>
-                      {obs.actionIcon}
-                      {obs.actionLabel}
+              <div key={obs.title} className="bg-gray-900/60 border border-gray-800 rounded-2xl">
+                <div className="flex items-center gap-2.5 px-4 py-3">
+                  <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />
+                  <span className="shrink-0">{obs.icon}</span>
+                  <span className="flex-1 text-sm font-semibold text-white truncate min-w-0">{obs.title}</span>
+                  {'isGrouped' in obs && obs.isGrouped ? (
+                    <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded-md">
+                      {obs.node}
                     </span>
-                  </div>
-                </div>
-                {/* Action copy button */}
-                <div className="flex flex-wrap gap-2">
-                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-800 border border-gray-700">
-                    <code className="text-[10px] font-mono text-gray-300 truncate max-w-[180px]">{obs.cmd}</code>
-                    <Copy className="w-3 h-3 text-gray-500 shrink-0" />
-                  </div>
+                  ) : (
+                    <span className="shrink-0 text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
+                      {obs.node}
+                    </span>
+                  )}
+                  <span className={`shrink-0 text-xs font-bold font-mono ${obs.hookCls}`}>{obs.hook}</span>
+                  <ChevronRight className="shrink-0 w-3.5 h-3.5 text-gray-600" />
                 </div>
               </div>
             ))}
