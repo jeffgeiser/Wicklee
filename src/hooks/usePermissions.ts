@@ -105,14 +105,6 @@ export const usePermissions = (user: User | null) => {
       { community: 1, pro: 7, team: 90, enterprise: Infinity } as Record<SubscriptionTier, number>
     )[subscriptionTier],
 
-    // ── Keep Warm ─────────────────────────────────────────────────────────
-    // All tiers can use Keep Warm; the limit varies by tier.
-    canKeepWarm: true,
-    keepWarmNodeLimit:
-      subscriptionTier === 'community' ? 1
-      : subscriptionTier === 'pro'     ? 3
-      : Infinity,
-
     // ── Enterprise capabilities ───────────────────────────────────────────
     // canGoSovereign: Enterprise-only. Airgapped mode — no outbound telemetry,
     //   no cloud pairing. On-prem Docker/Helm deployment path.
