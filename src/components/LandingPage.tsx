@@ -22,43 +22,6 @@ const FeatureCard: React.FC<{ icon: React.ElementType, title: string, descriptio
 
 // ── Why Wicklee — Part 1 ──────────────────────────────────────────────────────
 
-const problemCards = [
-  {
-    accent: 'border-red-500/40',
-    iconBg: 'bg-red-500/10',
-    icon: Flame,
-    iconColor: 'text-red-400',
-    title: 'GPU Throttling',
-    body: 'GPU util shows 100% but clock speed dropped 33%. Your tokens/sec silently halved. No alert fired.',
-  },
-  {
-    accent: 'border-amber-500/40',
-    iconBg: 'bg-amber-500/10',
-    icon: Database,
-    iconColor: 'text-amber-400',
-    title: 'KV Cache Saturation (vLLM)',
-    body: 'KV cache pressure detected natively via the vLLM Prometheus endpoint. Queue backlogs surface before they stall your inference stream.',
-  },
-  {
-    accent: 'border-red-500/40',
-    iconBg: 'bg-red-500/10',
-    icon: Thermometer,
-    iconColor: 'text-red-400',
-    title: 'Thermal Degradation',
-    body: 'Node-3 crossed into SERIOUS thermal state. Wicklee quantifies the throughput cost in real time — not two unrelated graphs.',
-  },
-  {
-    accent: 'border-amber-500/40',
-    iconBg: 'bg-amber-500/10',
-    icon: MemoryStick,
-    iconColor: 'text-amber-400',
-    title: 'Memory Exhaustion',
-    body: 'Your 70B model needs 40GB. You have 2GB of unified memory headroom. You\'ll find out when it swaps.',
-  },
-];
-
-// ── Why Wicklee — Part 2 ──────────────────────────────────────────────────────
-
 // ── All 15 observation patterns ──────────────────────────────────────────────
 
 interface ObsTile {
@@ -166,7 +129,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           Free forever · Up to 3 nodes · No account needed for local-only
         </p>
         <p className="mt-1 text-xs text-gray-600">
-          1h real-time local store · 24h cloud relay history · Keep Warm (1 node)
+          1h real-time local store · 24h cloud relay history
         </p>
       </section>
 
@@ -254,21 +217,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
             While standard tools report raw utilization, Wicklee surfaces the invisible metrics—WES scores, wattage-per-token, and runtime health—that define your real-world performance.
           </p>
-
-          {/* Problem cards 2x2 */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-            {problemCards.map((card) => (
-              <div key={card.title} className={`bg-gray-900 border border-gray-800 border-l-2 ${card.accent} rounded-2xl p-5 flex gap-4`}>
-                <div className={`shrink-0 w-9 h-9 ${card.iconBg} rounded-lg flex items-center justify-center mt-0.5`}>
-                  <card.icon className={`w-4 h-4 ${card.iconColor}`} />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-white mb-1">{card.title}</p>
-                  <p className="text-xs text-gray-400 leading-relaxed">{card.body}</p>
-                </div>
-              </div>
-            ))}
-          </div>
 
           {/* Collapsed observation rows — matches AccordionObservationCard collapsed state */}
           <div className="space-y-2">
