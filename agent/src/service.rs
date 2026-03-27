@@ -205,14 +205,14 @@ pub(crate) async fn install_service() {
             .status().await;
         // Give the kernel time to release port 7700 after the old process exits.
         // The install script may have already done a bootout seconds ago, but launchd's
-        // internal label deregistration can lag behind the process exit. 1500ms covers
-        // the observed worst case (the previous 500ms was insufficient when install.sh
-        // had already hammered launchctl, causing "error 5: Input/output error").
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        // internal label deregistration can lag behind the process exit. 3000ms covers
+        // the observed worst case — install.sh's bootout + our own bootout can leave
+        // launchd's internal state dirty for up to ~2.5s (exit status 5).
+        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
         // Bootstrap with retry — launchd label deregistration is asynchronous and
-        // can race even after the sleep above. Retry up to 3 times with 1s backoff.
+        // can race even after the sleep above. Retry up to 5 times with 2s backoff.
         let mut bootstrap_ok = false;
-        for attempt in 0..3u32 {
+        for attempt in 0..5u32 {
             let status = tokio::process::Command::new("launchctl")
                 .args(["bootstrap", "system", plist_path])
                 .stdout(std::process::Stdio::null())
@@ -220,14 +220,14 @@ pub(crate) async fn install_service() {
                 .status().await;
             match status {
                 Ok(s) if s.success() => { bootstrap_ok = true; break; }
-                Ok(_) if attempt < 2 => {
+                Ok(_) if attempt < 4 => {
                     eprintln!("  launchctl bootstrap attempt {} failed, retrying…", attempt + 1);
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
                 Ok(s) => {
-                    eprintln!("error: launchctl bootstrap failed after 3 attempts (last status: {s})");
+                    eprintln!("error: launchctl bootstrap failed after 5 attempts (last status: {s})");
                     eprintln!("       The service plist is installed — try manually:");
-                    eprintln!("       sudo launchctl bootstrap system {plist_path}");
+                    eprintln!("       sudo wicklee --install-service");
                 }
                 Err(e) => { eprintln!("error: launchctl: {e}"); break; }
             }

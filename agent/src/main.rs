@@ -3522,7 +3522,12 @@ async fn main() {
             }
             _ => {
                 eprintln!("wicklee agent is not running on port {port}.");
-                eprintln!("Start it with: wicklee  (or: sudo systemctl start wicklee)");
+                #[cfg(target_os = "macos")]
+                eprintln!("Start it with: sudo wicklee --install-service");
+                #[cfg(target_os = "linux")]
+                eprintln!("Start it with: sudo wicklee --install-service  (or: sudo systemctl start wicklee)");
+                #[cfg(target_os = "windows")]
+                eprintln!("Start it with: wicklee --install-service");
                 std::process::exit(1);
             }
         }

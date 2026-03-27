@@ -125,7 +125,9 @@ if [[ "$OS_TAG" == "darwin" ]]; then
 
   if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
     sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null && GHOST_KILLED=true || true
-    sleep 1
+    # launchd label deregistration is async — 3s lets it fully release before
+    # --install-service tries to re-bootstrap (prevents exit status 5 race).
+    sleep 3
   fi
   # Also kill any manual `sudo wicklee` process not managed by launchd.
   sudo pkill -x wicklee 2>/dev/null && GHOST_KILLED=true || true
