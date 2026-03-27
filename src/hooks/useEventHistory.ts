@@ -8,7 +8,7 @@
  * Cursor-based pagination via the `before` parameter (ts_ms of the last event).
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { EventHistoryRecord } from '../types';
 
 interface UseEventHistoryOptions {
@@ -46,6 +46,10 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
   const [error,   setError]   = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
 
+  // Track whether the last fetch failed — prevents infinite retry loops when
+  // the token refresh interval (50s) recreates fetchPage and re-triggers useEffect.
+  const lastFetchFailed = useRef(false);
+
   const fetchPage = useCallback(async (before?: number) => {
     setLoading(true);
     setError(null);
@@ -71,6 +75,7 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       const page: EventHistoryRecord[] = data.events ?? [];
 
       setHasMore(page.length >= limit);
+      lastFetchFailed.current = false;
 
       if (before != null) {
         // Append (pagination)
@@ -81,14 +86,19 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Unknown error');
+      lastFetchFailed.current = true;
     } finally {
       setLoading(false);
     }
   }, [limit, opts.eventType, opts.nodeId, opts.token, isFleet]);
 
-  // Initial load (skipped while waiting for auth)
+  // Initial load (skipped while waiting for auth).
+  // Don't auto-retry when the last fetch failed — the token refresh interval
+  // recreates fetchPage every 50s, which would otherwise loop 502s forever.
+  // The user can still manually retry via the refresh button.
   useEffect(() => {
     if (opts.skip) return;
+    if (lastFetchFailed.current) return;
     fetchPage();
   }, [fetchPage, opts.skip]);
 
@@ -102,6 +112,7 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
   const refresh = useCallback(() => {
     setEvents([]);
     setHasMore(true);
+    lastFetchFailed.current = false;
     fetchPage();
   }, [fetchPage]);
 
