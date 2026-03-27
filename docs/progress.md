@@ -6,6 +6,54 @@
 
 ---
 
+## March 27, 2026 — v0.7.7: Patterns M/N/O, Pricing, API QA, Production Fixes
+
+### Observation Patterns M, N, O ✅
+- **Pattern M — vLLM KV Cache Saturation (Community, Cloud+Localhost):** `vllm_cache_usage_pct > 85%` sustained 3 min during active inference. Hook: `"KV cache {pct}% — queue backlog risk"`. Action: `nvidia-smi` + vLLM cache config. vLLM-only (Linux).
+- **Pattern N — NVIDIA Thermal Ceiling (Community, Cloud+Localhost):** `nvidia_gpu_temp_c > 83°C` sustained 3 min. Hook: `"{temp}°C — approaching TJmax"`. Action: `nvidia-smi -q -d TEMPERATURE`. NVIDIA-only.
+- **Pattern O — VRAM Overcommit (Community, Cloud+Localhost):** Model size > 90% of available VRAM/unified memory. Hook: `"Model needs {need}GB, {avail}GB available"`. Platform-aware actions: Apple Silicon uses `ollama` commands, NVIDIA uses `nvidia-smi`.
+
+### Pricing Page + SubscriptionGuard ✅
+- Three-column pricing grid (Community/Pro/Team) + Enterprise footer
+- State-aware buttons: logged-out → "Get Started", logged-in → "Upgrade to [Tier]", current tier → disabled "Current Plan"
+- `SubscriptionGuard` wrapper component: `requiredTier` prop, renders children at 40% opacity blur with centered upgrade CTA when user tier < required
+- Wired from nav header ("Pricing") and profile menu ("Billing")
+
+### API Keys Settings Tab ✅
+- Full CRUD UI for API key management in Settings
+- Create key → one-time reveal modal, SHA-256 hashed at rest
+- List keys with created date, last-used, revoke button
+- Backend endpoints: `POST/GET/DELETE /api/v1/keys`
+
+### Agent Fixes ✅
+- **Hostname in telemetry** — `cloud_push.rs` now sends `gethostname()` in MetricsPayload. Fleet dashboard shows real hostnames (macmini.local, GeiserBMC, spark-c559) instead of only WK-XXXX.
+- **gpu_wired_limit_mb** — Falls back to 75% of total RAM when sysctl returns 0 (M4). Fixes zero VRAM budget in WES calculation and fleet VRAM aggregation.
+- **Power/memory in DuckDB** — `store.rs` writes `gpu_power_w` (resolved from SoC/NVIDIA/CPU priority) and `mem_pressure_pct` to metrics_raw. Fixes blank Power Draw and Memory charts on Observability and Performance tabs.
+
+### Cloud Backend Fixes ✅
+- **nginx IPv6 DNS** — Railway internal DNS is IPv6 (`fd12::10`); nginx `resolver` now brackets it as `[fd12::10]`. Fixes 502s on all `/api/v1/*` endpoints through wicklee.dev.
+- **i64::MAX overflow** — `/api/fleet/events/history` capped `before` param to `now + 1 day` instead of `i64::MAX`.
+- **Node online dedup** — `ONLINE_DEBOUNCE_MS = 90_000` prevents repeated "came online" events from telemetry timing jitter.
+
+### Frontend Fixes ✅
+- **Live Activity seed** — DB events without recognized FleetEvent types (startup, update, agent_version_mismatch) now filtered instead of defaulting to `node_online`. Stops the "came online" flood.
+- **Intelligence layout** — Best Route + Node Cost side-by-side (50/50), Inference Density + Silicon Fit side-by-side. Live Activity fixed-height scrollable, matches GPU Utilization panel. Removed "View Detailed Benchmarks" link from Silicon Fit.
+- **useEventHistory** — Uses `CLOUD_URL` for API calls, `lastFetchFailed` ref prevents infinite retry on transient errors.
+- **Documentation page** — Full 15-pattern observation inventory, verified API endpoint reference.
+
+### Full API QA ✅
+All endpoints tested from command line, both via `localhost:7700` (agent) and `wicklee.dev` (production nginx proxy):
+- **Localhost (9 endpoints):** metrics SSE, observations, history, traces, events/history, events/recent, export, tags, pair/status
+- **Cloud v1 (5 endpoints):** fleet, fleet/wes, nodes/:id, route/best, insights/latest
+- **Cloud health:** /health returns ok with metrics_raw stats
+
+### Key Bugs & Lessons
+- **nginx IPv6 in resolver directive** — `fd12::10` parsed as host:port by nginx. Must bracket as `[fd12::10]`. Railway containers may use IPv6-only internal DNS.
+- **Event seed default type** — Any unmapped `event_type` from DB falling through to `node_online` caused cascading false connectivity events in Live Activity.
+- **gpu_wired_limit_mb = 0 on M4** — `sysctl iogpu.wired_limit_mb` silently returns 0 on some Apple Silicon. Agent must fallback to `total_memory_mb * 0.75`.
+
+---
+
 ## March 26, 2026 — v0.7.6: Local Observations + Localhost Performance Tab
 
 ### Agent: Local Observations Endpoint ✅
