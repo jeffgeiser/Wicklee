@@ -1116,6 +1116,10 @@ fn amd_clock_ratio_result(ratio: f64, tdie_c: Option<f64>) -> LinuxThermalResult
     // Temperature tie-breaker: Tdie > 85 °C → at least Serious.
     let (state, penalty) = match tdie_c {
         Some(t) if t > 85.0 && penalty < 1.75 => ("Serious", 1.75_f32),
+        // No temperature sensor: low clock ratio is likely demand-based frequency
+        // scaling (idle CPU), not thermal throttling. Cap at "Fair" since we can't
+        // confirm actual thermal stress without a temp reading.
+        None if penalty > 1.25 => ("Fair", 1.25_f32),
         _ => (state, penalty),
     };
 
