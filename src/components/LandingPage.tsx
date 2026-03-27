@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Cpu, Zap, Activity, Terminal, BrainCircuit, ChevronRight, Lock, Database, Thermometer, Github, Copy, Check, AlertTriangle, Flame, MemoryStick, TrendingDown, Eye, ShieldCheck, BarChart3, Snowflake, Route, ClipboardCheck } from 'lucide-react';
+import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck } from 'lucide-react';
 import Logo from './Logo';
 
 interface LandingPageProps {
@@ -59,49 +59,32 @@ const problemCards = [
 
 // ── Why Wicklee — Part 2 ──────────────────────────────────────────────────────
 
-const metricCards = [
-  {
-    iconBg: 'bg-red-500/10',
-    icon: Flame,
-    iconColor: 'text-red-400',
-    title: 'Thermal Degradation Correlation',
-    body: 'When thermal state changes, tok/s follows. The gap between your hardware\'s rated speed and its throttled reality is your Thermal Cost — Wicklee quantifies it in real time, not two unrelated graphs.',
-  },
-  {
-    iconBg: 'bg-cyan-500/10',
-    icon: Zap,
-    iconColor: 'text-cyan-400',
-    title: 'Wattage / 1K Tokens',
-    body: 'M3 Max vs RTX 4090 vs Jetson Orin — which is cheapest per token for your model? Live answer across mixed hardware.',
-  },
-  {
-    iconBg: 'bg-blue-500/10',
-    icon: MemoryStick,
-    iconColor: 'text-blue-400',
-    title: 'Unified Memory Pressure %',
-    body: 'Beyond used/available. The kernel\'s own stress signal — the metric that predicts swap storms before they hit.',
-  },
-  {
-    iconBg: 'bg-amber-500/10',
-    icon: AlertTriangle,
-    iconColor: 'text-amber-400',
-    title: 'Power Anomaly Detection',
-    body: '450W draw at 30% GPU util is wrong. Wicklee flags the mismatch. Standard tools see two unrelated numbers.',
-  },
-  {
-    iconBg: 'bg-purple-500/10',
-    icon: Activity,
-    iconColor: 'text-purple-400',
-    title: 'Cold Start Detection',
-    body: 'GPU spike + VRAM jump = cold start. Wicklee correlates the hardware pattern directly — no HTTP proxy required. Every TOK/S reading is labeled LIVE, IDLE-SPD, or BUSY so you always know what you\'re looking at.',
-  },
-  {
-    iconBg: 'bg-green-500/10',
-    icon: ShieldCheck,
-    iconColor: 'text-green-400',
-    title: 'Sovereignty Audit Trail',
-    body: 'Ensure your inference data never leaves your network. A structural guarantee, not a privacy policy. Audit the open-source agent for total peace of mind.',
-  },
+// ── All 15 observation patterns ──────────────────────────────────────────────
+
+interface ObsRow { id: string; title: string; trigger: string; tier: 'Community' | 'Pro'; }
+
+const bothPatterns: ObsRow[] = [
+  { id: 'A', title: 'Thermal Performance Drain',  trigger: 'Sustained throttle state reducing tok/s > 8% vs. Normal baseline', tier: 'Community' },
+  { id: 'B', title: 'Phantom Load',               trigger: 'Model loaded + power > 5W + tok/s < 0.5 for 5 min', tier: 'Community' },
+  { id: 'J', title: 'Swap I/O Pressure',          trigger: 'Swap write rate > 2 MB/s sustained during inference', tier: 'Community' },
+  { id: 'L', title: 'PCIe Lane Degradation',      trigger: 'PCIe link width below rated maximum (NVIDIA)', tier: 'Pro' },
+];
+
+const cloudPatterns: ObsRow[] = [
+  { id: 'C', title: 'WES Velocity Drop',          trigger: 'Efficiency score declining > 10% before thermal change', tier: 'Community' },
+  { id: 'D', title: 'Power-GPU Decoupling',       trigger: 'High power (> 50W) + GPU util < 20% during inference', tier: 'Pro' },
+  { id: 'E', title: 'Fleet Load Imbalance',       trigger: 'Node stressed while healthier peer has spare capacity', tier: 'Pro' },
+  { id: 'G', title: 'Bandwidth Saturation',       trigger: 'GPU util < 40% + VRAM > 80% + WES dropping', tier: 'Pro' },
+  { id: 'H', title: 'Power Jitter',               trigger: 'Power CV > 20% during active inference (> 30W mean)', tier: 'Community' },
+  { id: 'I', title: 'Efficiency Penalty Drag',    trigger: 'WES penalty > 30% with Normal thermals and active GPU', tier: 'Pro' },
+];
+
+const localPatterns: ObsRow[] = [
+  { id: 'F', title: 'Memory Pressure Trajectory',  trigger: 'Apple Silicon memory pressure rising > 1 pct/min', tier: 'Community' },
+  { id: 'K', title: 'Clock Drift',                 trigger: 'Clock throttle > 15% during inference, Normal thermals', tier: 'Community' },
+  { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'KV cache > 90% — scheduler cannot admit new sequences', tier: 'Pro' },
+  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temp > 85°C sustained or > 90°C instantaneous', tier: 'Community' },
+  { id: 'O', title: 'VRAM Overcommit',             trigger: 'Loaded model > 90% of VRAM/unified memory', tier: 'Community' },
 ];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
@@ -174,23 +157,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
-        <p className="mt-3 text-xs text-gray-600">
-          Free forever · up to 3 nodes · no credit card required
+        <p className="mt-3 text-xs text-gray-500">
+          Free forever · Up to 3 nodes · No account needed for local-only
         </p>
         <p className="mt-1 text-xs text-gray-600">
-          24h rolling history · Keep Warm (1 node) · Quantization ROI
-        </p>
-        <p className="mt-3 text-sm text-gray-600">
-          Prefer local-only? The agent runs a full dashboard at{' '}
-          <a
-            href="http://localhost:7700"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gray-500 hover:text-gray-300 underline underline-offset-2 transition-colors"
-          >
-            localhost:7700
-          </a>
-          {' '}— no account needed.
+          1h real-time local store · 24h cloud relay history · Keep Warm (1 node)
         </p>
       </section>
 
@@ -294,46 +265,72 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             ))}
           </div>
 
-          {/* Terminal log card */}
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-            <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-800 bg-gray-950/60">
-              <div className="w-2.5 h-2.5 rounded-full bg-red-500/50" />
-              <div className="w-2.5 h-2.5 rounded-full bg-amber-500/50" />
-              <div className="w-2.5 h-2.5 rounded-full bg-green-500/50" />
-              <span className="ml-2 text-[10px] text-gray-600 font-mono">wicklee · fleet log</span>
-            </div>
-            <div className="p-5 font-mono text-xs space-y-1.5">
-              <p className="text-gray-500">[09:37] Node-3 &nbsp; GPU: 100% &nbsp; Thermal: <span className="text-green-400">NORMAL</span> &nbsp;&nbsp; tok/s: <span className="text-white">42</span></p>
-              <p className="text-gray-500">[09:41] Node-3 &nbsp; GPU: 100% &nbsp; Thermal: <span className="text-red-400">SERIOUS</span> &nbsp; tok/s: <span className="text-red-300">28 ↓</span></p>
-              <div className="pt-2 border-t border-gray-800 mt-2">
-                <p className="text-green-400">→ Wicklee correlated thermal state → throttling → 33% throughput drop</p>
-                <p className="text-green-400/70">&nbsp;&nbsp; Before users notice slower responses</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Part 2 — The metrics that matter */}
-        <div>
-          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">What Wicklee surfaces</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center mx-auto">
-            The metrics that matter. The ones you can't get elsewhere.
-          </h2>
-          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
-            Purpose-built for inference. Every signal is chosen because it directly predicts performance degradation or cost.
-          </p>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {metricCards.map((card) => (
-              <div key={card.title} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all">
-                <div className={`w-9 h-9 ${card.iconBg} rounded-lg flex items-center justify-center mb-4`}>
-                  <card.icon className={`w-4 h-4 ${card.iconColor}`} />
+          {/* Observation tiles — mirrors the Insights → Triage tab */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {[
+              { color: 'red',    hook: '-33% tok/s', title: 'Thermal Performance Drain',  body: 'GPU at 100% but clock speed dropped — throughput silently halved.', confidence: 'High', cmd: 'sudo powermetrics --samplers gpu_power -i 5000 -n 1' },
+              { color: 'violet', hook: '+$1.47/day', title: 'Phantom Load',               body: 'Model loaded, 8.2W draw, zero inference — burning watts for nothing.', confidence: 'High', cmd: 'ollama stop llama3:70b' },
+              { color: 'amber',  hook: '4.8 MB/s',  title: 'Swap I/O During Inference',   body: 'Model layers spilling to disk — latency spiking 3× above baseline.', confidence: 'Moderate', cmd: 'ollama ps' },
+              { color: 'cyan',   hook: '-22% WES',  title: 'Efficiency Penalty Drag',     body: 'Normal thermals, active GPU, no memory pressure — hidden context-length inefficiency.', confidence: 'High', cmd: 'curl localhost:7700/api/metrics | jq .wes_score' },
+            ].map((obs) => (
+              <div key={obs.title} className="bg-gray-950 border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition-all">
+                <div className="flex items-center justify-between mb-2">
+                  <span className={`text-[10px] font-bold uppercase tracking-wider text-${obs.color}-400`}>{obs.confidence} confidence</span>
+                  <span className={`text-xs font-mono font-bold text-${obs.color}-400`}>{obs.hook}</span>
                 </div>
-                <p className="text-sm font-bold text-white mb-1.5">{card.title}</p>
-                <p className="text-xs text-gray-400 leading-relaxed">{card.body}</p>
+                <p className="text-sm font-bold text-white mb-1">{obs.title}</p>
+                <p className="text-xs text-gray-500 leading-relaxed mb-3">{obs.body}</p>
+                <div className="flex items-center gap-2">
+                  <code className="text-[10px] font-mono text-gray-600 bg-gray-900 px-2 py-1 rounded truncate">{obs.cmd}</code>
+                </div>
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Part 2 — 15 Hardware Observation Patterns */}
+        <div>
+          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">What Wicklee surfaces</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center mx-auto">
+            15 hardware observation patterns. Zero AI hallucination.
+          </h2>
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
+            Pure arithmetic over time-windowed telemetry. Every pattern requires sustained evidence before firing — single-frame spikes never produce an alert.
+          </p>
+
+          {/* Observation table renderer */}
+          {([
+            { label: 'Localhost + Cloud', desc: 'Run on both the local agent and fleet dashboard', color: 'emerald', rows: bothPatterns },
+            { label: 'Cloud / Fleet Context', desc: 'Require sustained history or multi-node fleet context', color: 'blue', rows: cloudPatterns },
+            { label: 'Localhost Only', desc: 'Rely on local-only sensors not available in the fleet stream', color: 'amber', rows: localPatterns },
+          ] as const).map((group) => (
+            <div key={group.label} className="mb-6">
+              <p className={`text-xs font-bold text-${group.color}-400 uppercase tracking-wider mb-1`}>{group.label} ({group.rows.length} patterns)</p>
+              <p className="text-xs text-gray-600 mb-3">{group.desc}</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-800">
+                      <th className="text-left text-gray-500 font-medium pb-2 pr-4 w-8">#</th>
+                      <th className="text-left text-gray-500 font-medium pb-2 pr-4">Pattern</th>
+                      <th className="text-left text-gray-500 font-medium pb-2 pr-4">Trigger</th>
+                      <th className="text-left text-gray-500 font-medium pb-2">Tier</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800/50">
+                    {group.rows.map((r) => (
+                      <tr key={r.id}>
+                        <td className="py-2 pr-4 text-gray-600 font-mono">{r.id}</td>
+                        <td className="py-2 pr-4 text-white font-medium whitespace-nowrap">{r.title}</td>
+                        <td className="py-2 pr-4 text-gray-400">{r.trigger}</td>
+                        <td className="py-2 text-gray-500">{r.tier}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Part 3 — Sovereign by design */}
@@ -470,17 +467,19 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                   <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
                 </div>
                 <div className="space-y-1">
-                  <p className="text-cyan-400">GET /api/traces</p>
+                  <p className="text-cyan-400">GET /api/metrics  <span className="text-gray-600">— 1 Hz SSE stream</span></p>
                   <p className="text-gray-300">{"{"}</p>
-                  <p className="pl-4">"node_id": "wicklee-worker-01",</p>
-                  <p className="pl-4">"model": "llama3:70b",</p>
-                  <p className="pl-4">"metrics": {"{"}</p>
-                  <p className="pl-8">"ttft": 245.2,</p>
-                  <p className="pl-8">"latency": 1202.4,</p>
-                  <p className="pl-8">"gpu_temp": 68.2</p>
-                  <p className="pl-4">{"}"}</p>
+                  <p className="pl-4">"node_id": "<span className="text-blue-400">WK-3A7F</span>",</p>
+                  <p className="pl-4">"hostname": "mac-studio-01",</p>
+                  <p className="pl-4">"inference_state": "<span className="text-green-400">live</span>",</p>
+                  <p className="pl-4">"gpu_utilization_percent": 94.2,</p>
+                  <p className="pl-4">"apple_soc_power_w": 28.6,</p>
+                  <p className="pl-4">"thermal_state": "nominal",</p>
+                  <p className="pl-4">"ollama_model": "llama3:70b-q4_K_M",</p>
+                  <p className="pl-4">"wes_score": 12.8,</p>
+                  <p className="pl-4">"tok_s": 18.4</p>
                   <p className="text-gray-300">{"}"}</p>
-                  <p className="mt-4 text-green-400">// Scoped to tenant_id: tnt-01</p>
+                  <p className="mt-4 text-green-400">// localhost:7700 — no auth required</p>
                 </div>
               </div>
               {/* Floating decorative elements */}
