@@ -3219,12 +3219,31 @@ fn deliver_alert(channel_type: &str, config_json: &str, node_id: &str, event_typ
 async fn node_offline_alert_task(state: AppState) {
     let mut known_offline: HashSet<String> = HashSet::new();
 
+    // Pre-populate known_offline from Postgres so a redeploy doesn't fire
+    // "came online" for every node. Any node whose last_seen is already stale
+    // at startup is assumed to be offline — matching the steady-state that
+    // existed before the restart.
+    let offline_threshold_ms = 5 * 60_000_u64;
+    {
+        let boot_now = now_ms();
+        let seed_nodes: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT wk_id, last_seen FROM nodes WHERE user_id IS NOT NULL"
+        ).fetch_all(&state.pool).await.unwrap_or_default();
+        for (nid, last_seen) in seed_nodes {
+            if boot_now.saturating_sub(last_seen as u64) >= offline_threshold_ms {
+                known_offline.insert(nid);
+            }
+        }
+        if !known_offline.is_empty() {
+            println!("[alerts] seeded {} node(s) as offline from DB on startup", known_offline.len());
+        }
+    }
+
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     interval.tick().await;
     loop {
         interval.tick().await;
         let now = now_ms();
-        let offline_threshold_ms = 5 * 60_000_u64;
 
         let nodes: Vec<(String, String, i64)> = sqlx::query_as(
             "SELECT user_id, wk_id, last_seen FROM nodes WHERE user_id IS NOT NULL"
