@@ -475,6 +475,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
             setTheme(effective);
           }}
           onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
+          onNavigateToApiKeys={() => setActiveTab(DashboardTab.API_KEYS)}
+          onNavigateToPricing={() => navigate('/pricing')}
           pairingInfo={pairingInfo}
           getToken={getToken}
           subscriptionTier={clerkTier}

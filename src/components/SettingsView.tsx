@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { version as pkgVersion } from '../../package.json';
-import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock } from 'lucide-react';
+import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock, Key, ChevronRight } from 'lucide-react';
 import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import {
@@ -145,6 +145,8 @@ interface SettingsViewProps {
   theme: 'light' | 'dark';
   onThemeChange: (t: 'dark' | 'light' | 'system') => void;
   onNavigateToManagement: () => void;
+  onNavigateToApiKeys?: () => void;
+  onNavigateToPricing?: () => void;
   pairingInfo: PairingInfo | null;
   getToken?: () => Promise<string | null>;
   subscriptionTier?: string;
@@ -224,6 +226,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   theme,
   onThemeChange,
   onNavigateToManagement,
+  onNavigateToApiKeys,
+  onNavigateToPricing,
   pairingInfo,
   getToken,
   subscriptionTier = 'community',
@@ -634,7 +638,36 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         subscriptionTier={subscriptionTier}
         getToken={getToken}
         nodes={nodes}
+        onNavigateToPricing={onNavigateToPricing}
       />
+
+      {/* ── ④½ API KEYS ───────────────────────────────────────────────────── */}
+      {isCloudMode && (
+        <Section id="api-keys" title="API Keys" icon={Key} iconBg="bg-cyan-500/10" iconCls="text-cyan-400">
+          <div className="px-6 py-5 space-y-4">
+            <p className="text-xs text-gray-500 leading-relaxed">
+              API keys authenticate programmatic access to the Fleet API v1 — routing recommendations, fleet status, WES leaderboard, and intelligence findings.
+            </p>
+            <div className="flex items-center gap-3 p-4 rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40">
+              <Key size={16} className="text-cyan-400 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-gray-200">Manage API Keys</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Create, view, and revoke keys for the Fleet API v1.</p>
+              </div>
+              <button
+                onClick={() => onNavigateToApiKeys?.()}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-xs font-semibold text-white transition-colors shrink-0"
+              >
+                Open <ChevronRight size={12} />
+              </button>
+            </div>
+            <div className="text-[10px] text-gray-600 font-mono space-y-1">
+              <p>GET /api/v1/fleet · GET /api/v1/fleet/wes · GET /api/v1/nodes/:id</p>
+              <p>GET /api/v1/route/best · GET /api/v1/insights/latest</p>
+            </div>
+          </div>
+        </Section>
+      )}
 
       {/* ── ⑤ ACCOUNT & DATA ─────────────────────────────────────────────── */}
       <Section id="account" title="Account & Data" icon={User} iconBg="bg-gray-500/10" iconCls="text-gray-400">
@@ -781,7 +814,8 @@ const AlertsSection: React.FC<{
   subscriptionTier: string;
   getToken?: () => Promise<string | null>;
   nodes: NodeAgent[];
-}> = ({ pairingInfo: _pairingInfo, subscriptionTier, getToken, nodes }) => {
+  onNavigateToPricing?: () => void;
+}> = ({ pairingInfo: _pairingInfo, subscriptionTier, getToken, nodes, onNavigateToPricing }) => {
   // Cloud mode = any build that isn't the embedded agent binary (localhost:7700).
   // pairingInfo.status tracks whether a local node is paired — irrelevant here.
   // On wicklee.dev the user is already in the fleet regardless of local pairing state.
@@ -904,7 +938,10 @@ const AlertsSection: React.FC<{
               </div>
             ))}
           </div>
-          <button className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors">
+          <button
+            onClick={() => onNavigateToPricing?.()}
+            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
+          >
             Upgrade to Team — $29/mo
           </button>
         </div>
