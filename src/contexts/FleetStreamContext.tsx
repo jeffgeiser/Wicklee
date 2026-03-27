@@ -476,6 +476,18 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
           model_swap:     'model_swap',
           thermal_change: 'thermal_change',
           power_anomaly:  'power_anomaly',
+          // Observation onset
+          zombied_engine:          'zombied_engine',
+          thermal_redline:         'thermal_redline',
+          oom_warning:             'oom_warning',
+          wes_cliff:               'wes_cliff',
+          agent_version_mismatch:  'agent_version_mismatch',
+          // Observation resolved
+          zombied_engine_resolved:         'zombied_engine_resolved',
+          thermal_redline_resolved:        'thermal_redline_resolved',
+          oom_warning_resolved:            'oom_warning_resolved',
+          wes_cliff_resolved:              'wes_cliff_resolved',
+          agent_version_mismatch_resolved: 'agent_version_mismatch_resolved',
         };
         const seeded: FleetEvent[] = data.events
           .filter(row => {

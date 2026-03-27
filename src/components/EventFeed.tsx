@@ -144,6 +144,17 @@ export function eventMeta(ev: FleetEvent): EventMeta {
         label: ev.detail ?? 'agent version mismatch',
         cls: 'text-amber-400',
       };
+    // Resolved observation variants
+    case 'zombied_engine_resolved':
+    case 'thermal_redline_resolved':
+    case 'oom_warning_resolved':
+    case 'wes_cliff_resolved':
+    case 'agent_version_mismatch_resolved':
+      return {
+        icon: <Check className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" />,
+        label: ev.detail ?? ev.type.replace('_resolved', '').replaceAll('_', ' ') + ' resolved',
+        cls: 'text-green-400',
+      };
     default:
       return {
         icon: <Activity className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />,

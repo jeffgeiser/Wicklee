@@ -1533,9 +1533,12 @@ const FleetSovereigntyGuard: React.FC<{ nodes: NodeAgent[] }> = ({ nodes: _nodes
 
 // ── Section 3: Fleet Event Timeline ───────────────────────────────────────────
 
-const EVENT_TYPE_FILTERS = ['startup', 'update', 'model_swap', 'thermal_change', 'node_offline', 'node_online', 'error'] as const;
+const EVENT_TYPE_FILTERS = [
+  'startup', 'update', 'model_swap', 'thermal_change',
+  'node_offline', 'node_online', 'observation', 'error',
+] as const;
 const EVENT_LEVEL_DOT: Record<string, string> = {
-  info: 'bg-gray-400', warn: 'bg-amber-400', error: 'bg-red-500',
+  info: 'bg-gray-400', warn: 'bg-amber-400', warning: 'bg-amber-400', error: 'bg-red-500',
 };
 const EVENT_TYPE_BADGE: Record<string, string> = {
   startup: 'text-emerald-400 bg-emerald-500/10',
@@ -1545,7 +1548,25 @@ const EVENT_TYPE_BADGE: Record<string, string> = {
   node_offline: 'text-red-400 bg-red-500/10',
   node_online: 'text-emerald-400 bg-emerald-500/10',
   error: 'text-red-400 bg-red-500/10',
+  // Observation events from fleet evaluator
+  zombied_engine: 'text-red-400 bg-red-500/10',
+  thermal_redline: 'text-orange-400 bg-orange-500/10',
+  oom_warning: 'text-amber-400 bg-amber-500/10',
+  wes_cliff: 'text-purple-400 bg-purple-500/10',
+  agent_version_mismatch: 'text-yellow-400 bg-yellow-500/10',
+  // Resolved variants
+  zombied_engine_resolved: 'text-emerald-400 bg-emerald-500/10',
+  thermal_redline_resolved: 'text-emerald-400 bg-emerald-500/10',
+  oom_warning_resolved: 'text-emerald-400 bg-emerald-500/10',
+  wes_cliff_resolved: 'text-emerald-400 bg-emerald-500/10',
+  agent_version_mismatch_resolved: 'text-emerald-400 bg-emerald-500/10',
 };
+// Map observation event_types to the "observation" filter category
+const OBSERVATION_EVENT_TYPES = new Set([
+  'zombied_engine', 'thermal_redline', 'oom_warning', 'wes_cliff', 'agent_version_mismatch',
+  'zombied_engine_resolved', 'thermal_redline_resolved', 'oom_warning_resolved',
+  'wes_cliff_resolved', 'agent_version_mismatch_resolved',
+]);
 
 const FleetEventTimeline: React.FC<{
   nodes: NodeAgent[];
@@ -1567,14 +1588,19 @@ const FleetEventTimeline: React.FC<{
     return () => { cancelled = true; clearInterval(iv); };
   }, [getToken]);
 
-  const { events, loading, error, hasMore, loadMore, refresh } = useEventHistory({
+  // "observation" is a meta-filter that matches multiple event_types client-side
+  const serverEventType = selectedType && selectedType !== 'observation' ? selectedType : undefined;
+  const { events: rawEvents, loading, error, hasMore, loadMore, refresh } = useEventHistory({
     isFleet: true,
     token: token ?? undefined,
-    eventType: selectedType || undefined,
+    eventType: serverEventType,
     nodeId: selectedNode || undefined,
     limit: 50,
     skip: !tokenReady, // Don't fetch until auth token is resolved
   });
+  const events = selectedType === 'observation'
+    ? rawEvents.filter(ev => ev.event_type != null && OBSERVATION_EVENT_TYPES.has(ev.event_type))
+    : rawEvents;
 
   // Authenticated export download
   const handleExport = useCallback(async (format: 'csv' | 'json') => {
@@ -1656,7 +1682,7 @@ const FleetEventTimeline: React.FC<{
                   : 'text-gray-500 hover:text-gray-300 bg-gray-100 dark:bg-gray-800'
               }`}
             >
-              {t.replace('_', ' ')}
+              {t.replaceAll('_', ' ')}
             </button>
           ))}
         </div>
@@ -1687,7 +1713,7 @@ const FleetEventTimeline: React.FC<{
               </div>
               {ev.event_type && (
                 <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${badgeCls}`}>
-                  {ev.event_type.replace('_', ' ')}
+                  {ev.event_type.replaceAll('_', ' ')}
                 </span>
               )}
             </div>

@@ -326,7 +326,12 @@ export interface FleetEvent {
     | 'thermal_redline'
     | 'oom_warning'
     | 'wes_cliff'
-    | 'agent_version_mismatch';
+    | 'agent_version_mismatch'
+    | 'zombied_engine_resolved'
+    | 'thermal_redline_resolved'
+    | 'oom_warning_resolved'
+    | 'wes_cliff_resolved'
+    | 'agent_version_mismatch_resolved';
   nodeId: string;
   hostname?: string;
   /** Human-readable transition detail, e.g. "Normal → Serious" or "phi3:mini → llama3:8b" */
