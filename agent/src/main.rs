@@ -2132,10 +2132,19 @@ fn resolve_thermal_state(
 fn resolve_thermal_state(
     apple_state: &Option<String>,
     linux_thermal: &Option<LinuxThermalResult>,
-    _cpu_usage_pct: f32,
+    cpu_usage_pct: f32,
 ) -> Option<String> {
     apple_state.clone()
-        .or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone()))
+        .or_else(|| linux_thermal.as_ref().map(|lt| {
+            // Idle CPU override: clock_ratio at low CPU is frequency scaling, not throttle.
+            // Must match the same logic in start_wes_sampler() so thermal_state and
+            // penalty_avg stay consistent in the payload.
+            if lt.source == "clock_ratio" && cpu_usage_pct < 15.0 {
+                "Normal".to_string()
+            } else {
+                lt.state.clone()
+            }
+        }))
 }
 
 /// Maps a thermal-state string to the WES v2 penalty factor.
