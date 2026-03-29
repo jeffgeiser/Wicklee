@@ -519,6 +519,19 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
             </div>
 
 
+            {/* tok/W */}
+            <div className="bg-gray-950 border border-blue-500/20 rounded-xl p-5">
+              <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-3">tok/W — Tokens Per Watt</p>
+              <pre className="font-mono text-sm text-white leading-loose">
+{`tok/W = tok/s ÷ Watts`}</pre>
+              <p className="mt-3 text-xs text-gray-400 leading-relaxed">
+                Raw inference efficiency without thermal adjustment. When thermal state is Normal (penalty = 1.0), tok/W and WES are identical. When the node is thermally stressed, tok/W stays higher than WES — the gap between them is the thermal penalty. Displayed alongside WES in the Fleet Status table and as a summary tile on both localhost and cloud dashboards.
+              </p>
+              <p className="mt-2 text-xs text-gray-500 leading-relaxed">
+                tok/W uses the same color scale as WES: <span className="text-blue-400">&gt; 10 Excellent</span> · <span className="text-green-400">3–10 Good</span> · <span className="text-yellow-400">1–3 Acceptable</span> · <span className="text-red-400">&lt; 1 Low</span>.
+              </p>
+            </div>
+
             {/* Score interpretation table */}
             <div>
               <p className="font-semibold text-white mb-2">Reading WES scores</p>

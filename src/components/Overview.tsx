@@ -151,10 +151,10 @@ const fmtAgo = (ms: number): string => {
 };
 
 // ── Fleet Status grid ────────────────────────────────────────────────────────
-// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/S · W/1K · WATTS · GPU% · THERMAL · SPACER
+// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/W · TOK/S · W/1K · WATTS · GPU% · THERMAL · SPACER
 // Responsive priority — always visible: NODE, MODEL, WES, TOK/S
 //   sm+  adds: THERMAL
-//   md+  adds: MEMORY, VRAM, W/1K, WATTS, GPU%
+//   md+  adds: MEMORY, VRAM, TOK/W, W/1K, WATTS, GPU%
 // SPACER (1fr) absorbs excess space on wide screens.
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
@@ -162,8 +162,8 @@ const FLEET_GRID_CLS = [
   '[grid-template-columns:140px_200px_80px_80px_1fr]',
   // sm: + THERMAL
   'sm:[grid-template-columns:140px_200px_80px_80px_100px_1fr]',
-  // md: full set — VRAM bumped 80→100px; 1fr spacer absorbs the difference
-  'md:[grid-template-columns:140px_120px_100px_200px_80px_80px_80px_80px_80px_100px_1fr]',
+  // md: full set — TOK/W added between WES and TOK/S
+  'md:[grid-template-columns:140px_120px_100px_200px_80px_65px_80px_80px_80px_80px_100px_1fr]',
 ].join(' ');
 
 const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
@@ -187,6 +187,20 @@ const FleetStatusHeader: React.FC = () => (
       ]}
     >
       <p className={FS_HDR}>WES</p>
+    </MetricTooltip>
+    <MetricTooltip
+      metricId="tok-w"
+      name="tok/W — Tokens Per Watt"
+      oneLiner="Raw inference efficiency: tok/s ÷ watts. Same as WES when thermal is Normal."
+      wrapperClassName="hidden md:block"
+      ranges={[
+        { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+        { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
+        { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
+        { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
+      ]}
+    >
+      <p className={FS_HDR}>TOK/W</p>
     </MetricTooltip>
     <MetricTooltip
       metricId="tok-s"
@@ -639,6 +653,18 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       )}
 
+      {/* 4b. TOK/W — raw tok/s ÷ watts, same as WES when Normal thermal */}
+      <div className="hidden md:block overflow-hidden">
+        <span
+          className={`${V} font-semibold ${rawWes != null ? wesColorClass(rawWes) : 'text-gray-500 dark:text-gray-600'}`}
+          title={rawWes != null
+            ? `tok/W = tok/s ÷ watts = ${tps?.toFixed(1) ?? '?'} ÷ ${(hasPower ? totalPowerW : 0).toFixed(1)} = ${rawWes.toFixed(2)} tok/W\nNo thermal penalty applied — raw hardware efficiency.`
+            : 'tok/W — tokens per watt (raw, no thermal penalty)'}
+        >
+          {rawWes != null ? formatWES(rawWes) : '—'}
+        </span>
+      </div>
+
       {/* 5. TOK/S */}
       {/* 5. TOK/S — three-state: LIVE (green ~), IDLE-SPD (gray baseline), BUSY (amber last-probe) */}
       {restricted ? (
@@ -1078,6 +1104,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const wattPer1kBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 6: W / 1k tokens — tok/s-derived
   const costPer1kBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 7: $ / 1M — tok/s-derived
   const fleetWesBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 5 + Fleet Intelligence WES card
+  const fleetTokWBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 8: tok/W (raw, no penalty)
   const costPer1kNewBuf = useRollingBuffer(FLEET_ROLLING_WINDOW); // Fleet Intelligence cost card
   const fleetWattsBuf   = useRollingBuffer();                     // Fleet Intelligence Tokens Per Watt (watts-only, steadier)
 
@@ -1508,6 +1535,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const rankedWES    = sortedWES.filter(e => e.wes != null);
   const fleetAvgWES  = rankedWES.length > 0
     ? rankedWES.reduce((acc, e) => acc + e.wes!, 0) / rankedWES.length : null;
+  const rankedTokW     = sortedWES.filter(e => e.rawWes != null);
+  const fleetAvgTokW   = rankedTokW.length > 0
+    ? rankedTokW.reduce((acc, e) => acc + e.rawWes!, 0) / rankedTokW.length : null;
   const efficiencyRatio = rankedWES.length >= 2
     ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes! : null;
 
@@ -1656,6 +1686,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const displayWattPer1k    = wattPer1kBuf.push(wattPer1k,            fleetTs);
   const displayCostPer1k    = costPer1kBuf.push(costPer1k,            fleetTs);
   const displayFleetAvgWES  = fleetWesBuf.push(fleetAvgWES,           fleetTs);
+  const displayFleetAvgTokW = fleetTokWBuf.push(fleetAvgTokW,         fleetTs);
   const displayCostPer1kNew = costPer1kNewBuf.push(costPer1kTokensNew, fleetTs);
   // Smoothed fleet total watts — same node set as fleetTps (tpsNodes with power data).
   const displayFleetWatts   = fleetWattsBuf.push(totalPowerOfTpsNodes, fleetTs);
@@ -1962,35 +1993,32 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             : 'text-indigo-400'}
         />
 
-        {/* 8. INFERENCE DUTY CYCLE — % of session time with active inference */}
+        {/* 8. TOK/W — raw tokens per watt (no thermal penalty) */}
         <InsightTile
           label={
             <MetricTooltip
-              metricId="fleet-duty"
-              name="Inference Duty Cycle"
-              oneLiner="Percentage of this browser session where at least one node was actively generating tokens. Resets on page reload. Reflects real utilisation — not capacity."
+              metricId="fleet-tokw"
+              name="tok/W — Tokens Per Watt"
+              oneLiner="Raw inference efficiency: tok/s ÷ watts. Same as WES when thermal state is Normal. Diverges from WES when thermal penalty is active — the gap is the cost of heat."
               ranges={[
-                { threshold: '> 50%', color: 'green', label: 'High utilisation · fleet is earning its keep' },
-                { threshold: '10–50%', color: 'amber', label: 'Moderate · typical for interactive workloads' },
-                { threshold: '< 10%', color: 'gray', label: 'Low · fleet is mostly idle this session' },
+                { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+                { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
+                { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
+                { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
               ]}
             >
-              {isLocalMode ? 'Node Duty' : 'Fleet Duty'}
+              {isLocalMode ? 'Node tok/W' : 'Fleet tok/W'}
             </MetricTooltip>
           }
-          value={dutyPct != null ? `${dutyPct}%` : '—'}
-          valueCls={dutyPct == null ? 'text-gray-400 dark:text-gray-600'
-            : dutyPct > 50 ? undefined
-            : dutyPct > 10 ? 'text-amber-400'
-            : 'text-gray-500'}
-          sub={!isLocalHost && serverDutyPct != null
-            ? `${serverDutyRange} from fleet history`
-            : dutyRef.current.total > 0
-              ? `${dutyRef.current.total} ticks this session`
-              : 'collecting…'}
-          icon={Activity}
-          iconCls={dutyPct != null && dutyPct > 50 ? 'text-emerald-400'
-            : dutyPct != null && dutyPct > 10 ? 'text-amber-400'
+          value={displayFleetAvgTokW != null ? formatWES(displayFleetAvgTokW) : '—'}
+          valueCls={wesColorClass(displayFleetAvgTokW)}
+          sub={fleetAvgTokW != null
+            ? `${rankedTokW.length} node${rankedTokW.length !== 1 ? 's' : ''} reporting`
+            : 'no active inference'}
+          icon={Zap}
+          iconCls={displayFleetAvgTokW != null && displayFleetAvgTokW > 10 ? 'text-blue-400'
+            : displayFleetAvgTokW != null && displayFleetAvgTokW >= 3 ? 'text-green-400'
+            : displayFleetAvgTokW != null && displayFleetAvgTokW >= 1 ? 'text-yellow-400'
             : 'text-gray-500'}
         />
 
