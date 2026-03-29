@@ -101,6 +101,21 @@ The SSE stream serves `entry.metrics` verbatim from the in-memory cache. Any fie
 ### Power Priority in Metrics Rows
 `metrics_row_from_payload` resolves watts as: NVIDIA board power → Apple SoC (Combined CPU+GPU+ANE) → cpu_power_w fallback. `apple_soc_power_w` is the correct total for Apple Silicon WES; `cpu_power_w` alone is just the CPU cluster (~0.1W idle).
 
+### WES — Wicklee Efficiency Score
+WES = tok/s ÷ (watts × thermal_penalty). When thermal is Normal (penalty=1.0), WES = tok/s ÷ watts — a direct measure of tokens per watt. There is NO ×10 multiplier.
+
+**Thermal penalties:** Normal=1.0, Fair=1.25, Serious=1.75, Critical=2.0
+
+**Color scale (frozen — used by `wesColorClass` in `src/utils/wes.ts` and must match everywhere):**
+- `> 10` → Blue (Excellent)
+- `3–10` → Green (Good)
+- `1–3` → Yellow (Acceptable)
+- `< 1` → Red (Low)
+
+These thresholds appear in: `wes.ts`, `Overview.tsx` (3 MetricTooltip ranges), `MetricsPage.tsx`, `AIInsights.tsx` (2 inline conditionals), `FleetHeaderBar.tsx`, `SiliconFitAudit.tsx`, `DocsPage.tsx`, and `public/metrics.md`. When changing the scale, ALL locations must be updated.
+
+WES is computed client-side at render time from the live SSE payload — the agent sends `penalty_avg`, `penalty_peak`, `thermal_source` but does NOT pre-compute WES. The cloud backend computes WES for Postgres storage (`metrics_row_from_payload`) and the fleet alert evaluator.
+
 ## Frontend (React)
 
 ### Tech Stack
