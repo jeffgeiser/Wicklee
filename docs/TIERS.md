@@ -57,7 +57,7 @@
   - Quantization ROI (live snapshot — tok/s, W/1K TKN, WES with educational copy)
   - **Live WES Leaderboard** — ranks all connected nodes by penalized WES; shows TC% and thermal state badge per node. Community-free; no history required.
 - Cards persist via localStorage with 24h expiry; dismissed state survives tab close within the 24h window
-- **Pattern Engine (Community patterns):** Patterns A (Thermal Drain), B (Phantom Load), C (WES Velocity Drop), F (Memory Trajectory) fire for all tiers. Each finding now includes a `recommendation` string (prescriptive directed action) and `action_id` badge in the ObservationCard UI.
+- **Pattern Engine (9 Community patterns):** A (Thermal Drain), B (Phantom Load), C (WES Velocity Drop), F (Memory Trajectory), H (Power Jitter), J (Swap I/O Pressure), K (Clock Drift), N (NVIDIA Thermal Redline), O (VRAM Overcommit) fire for all tiers. Each finding includes a `recommendation` string and `action_id` badge in the ObservationCard UI.
 
 ### Alerting
 - **Dashboard only** — no outbound delivery
@@ -115,7 +115,7 @@ COMMUNITY_SOVEREIGN = false
 - **Persistent Cards** — insight cards survive session; state stored server-side (Clerk metadata or DB)
 - Cards resurface on reconnect if condition still active
 - All Community insight cards plus persistent state
-- **Pattern Engine (Pro patterns):** Pattern D (Power-GPU Decoupling) and Pattern E (Fleet Load Imbalance) are Pro-tier — they require multi-node fleet context (Pattern E) or historical GPU utilization data dense enough for meaningful comparison (Pattern D). Both carry `recommendation` + `action_id` for agent automation.
+- **Pattern Engine (6 Pro patterns):** D (Power-GPU Decoupling), E (Fleet Load Imbalance), G (Bandwidth Saturation), I (Efficiency Penalty Drag), L (PCIe Lane Degradation), M (vLLM KV Cache Saturation). These require multi-node fleet context, historical GPU data, or advanced sensor access. All 15 patterns available at Pro. Each carries `recommendation` + `action_id` for agent automation.
 - Trend-based cards unlock *only* after 7 days of history accumulates:
   - NOT available at day 0 — cards show "Collecting history…" state
   - Available once history threshold met

@@ -50,8 +50,8 @@ const TIERS: TierDef[] = [
     features: [
       '3 Nodes',
       '24-Hour Rolling History',
-      'Sovereign Hardware Patterns (A, B, J, L)',
-      'WES v2 Diagnostics',
+      '9 Sovereign Patterns (A, B, C, F, H, J, K, N, O)',
+      'WES v2 + tok/W Diagnostics',
       'Cloud Relay Telemetry',
       'Agent API v1',
     ],
@@ -70,7 +70,7 @@ const TIERS: TierDef[] = [
     features: [
       '10 Nodes',
       '7-Day Metric History',
-      'All 15 Patterns (incl. Pro: D, E, G, I, L, M)',
+      'All 15 Patterns (+Pro: D, E, G, I, L, M)',
       'Persistent Insight Cards',
       'Slack Alerts (Single Channel)',
       'Fleet WES Leaderboard + Trend Sparklines',
