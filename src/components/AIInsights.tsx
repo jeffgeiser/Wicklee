@@ -1978,7 +1978,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                             </div>
                             <div>
                               <p className="text-[9px] text-gray-600 uppercase tracking-widest">WES</p>
-                              <p className={`text-sm font-bold font-telin ${wes != null && wes > 10 ? 'text-green-400' : wes != null && wes >= 1 ? 'text-amber-400' : 'text-gray-600'}`}>
+                              <p className={`text-sm font-bold font-telin ${wes != null && wes > 10 ? 'text-blue-400' : wes != null && wes >= 3 ? 'text-green-400' : wes != null && wes >= 1 ? 'text-yellow-400' : wes != null ? 'text-red-400' : 'text-gray-600'}`}>
                                 {wes != null ? (wes >= 100 ? wes.toFixed(0) : wes.toFixed(1)) : '—'}
                               </p>
                             </div>
@@ -2115,7 +2115,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       {fleetWes != null ? (
                         <div className="flex items-baseline gap-2">
                           <span className={`font-telin text-xl font-bold ${
-                            fleetWes >= 3 ? 'text-green-400' : fleetWes >= 1.5 ? 'text-amber-400' : 'text-red-400'
+                            fleetWes > 10 ? 'text-blue-400' : fleetWes >= 3 ? 'text-green-400' : fleetWes >= 1 ? 'text-yellow-400' : 'text-red-400'
                           }`}>
                             {fleetWes.toFixed(1)}
                           </span>

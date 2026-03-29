@@ -73,11 +73,12 @@ Ollama LIVE values are prefixed with `~` (estimated). vLLM LIVE values are exact
 
 ### WES Color
 
-| Color | Range | Meaning |
-|-------|-------|---------|
-| 🟢 Green | > 10 | Efficient — Apple Silicon territory |
-| 🟡 Amber | 1–10 | Moderate — high-power GPU or mild throttle |
-| 🔴 Red | < 1 | Poor — CPU inference or severe thermal throttling |
+| Color | Range | Rating | Meaning |
+|-------|-------|--------|---------|
+| 🔵 Blue | > 10 | Excellent | Highly efficient inference |
+| 🟢 Green | 3–10 | Good | Efficient for the power envelope |
+| 🟡 Yellow | 1–3 | Acceptable | Typical high-power hardware |
+| 🔴 Red | < 1 | Low | Check thermal state or model sizing |
 
 *Source: `src/utils/wes.ts` → `wesColorClass()`*
 
@@ -327,9 +328,10 @@ The single number that captures true inference efficiency. WES is tok/watt made 
 | Critical | 2.0× | WES = 50% of raw tok/watt |
 
 **Color ranges:**
-- `> 10` 🟢 Excellent · Apple Silicon territory
-- `1–10` 🟡 Fair · high-power GPU or mild throttle
-- `< 1` 🔴 Poor · CPU inference or thermal throttling
+- `> 10` 🔵 Excellent · highly efficient inference
+- `3–10` 🟢 Good · efficient for the power envelope
+- `1–3` 🟡 Acceptable · typical high-power hardware
+- `< 1` 🔴 Low · check thermal state or model sizing
 
 **If this is low:** Check thermal state first. If throttling, reduce load or improve airflow. If thermal is Normal, the hardware is simply less efficient per watt — compare models or quantizations.
 

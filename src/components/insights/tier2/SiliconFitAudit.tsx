@@ -70,8 +70,8 @@ type FitLevel = 'optimal' | 'sub-optimal' | 'poor';
 
 function computeFit(wes: number | null): FitLevel {
   if (wes == null) return 'poor';
-  if (wes > 100) return 'optimal';
-  if (wes >= 10) return 'sub-optimal';
+  if (wes > 10) return 'optimal';
+  if (wes >= 3) return 'sub-optimal';
   return 'poor';
 }
 
