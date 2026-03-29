@@ -534,13 +534,38 @@
 - [ ] **`wes_config.json` auto-write:** After sufficient observation, the agent writes its own calibrated thresholds to `~/.wicklee/wes_config.json`. Versioned + timestamped. Human-readable but never needs manual editing.
 - [ ] **"Efficiency vs. Performance" slider in Settings:** Replaces any direct JSON editing. Slide toward Efficiency: agent penalizes heat more aggressively (saves power, lower sustained throughput). Slide toward Performance: agent tolerates heat until hardware literally throttles. Slider position stored in `wes_config.json`; agent re-computes penalty curve on save.
 
-- [x] **Clerk Auth:** ✅ Shipped. Clerk-managed signup/login with JWT. Stream tokens (UUID, 60s TTL) authenticate SSE connections.
-- [ ] **Stripe + Team Edition Gate:** 3-node free limit enforcement with upgrade flow.
-- [x] **Keep Warm (Community: 1 node · Paid: unlimited):** ✅ Wicklee sends a silent 1-token `/api/generate` ping to reset Ollama `keep_alive` timer before predicted eviction. All actions logged in Live Activity with precise timestamp. Always opt-in, always logged, always reversible.
-- [ ] **CSV / JSON Export:** Any metric, any time range, any node.
-- [x] **Cold Start Detection:** ✅ GPU spike + VRAM jump = cold start event. Hardware-pattern detection — no proxy or TTFT required. Sentinel Proxy (Phase 5) adds TTFT precision as an optional enhancement for advanced teams.
-- [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
+- [x] **Clerk Auth:** ✅ Shipped. Clerk-managed signup/login with JWT (production domain: clerk.wicklee.dev). Google OAuth configured.
+- [x] **Cold Start Detection:** ✅ GPU spike + VRAM jump = cold start event. Hardware-pattern detection — no proxy or TTFT required.
+- [x] **Pricing Page:** ✅ Three-tier grid with SubscriptionGuard component built (but not yet wired to UI sections).
+
+### Subscription Gating — In Progress
+
+**Frontend gating (not yet enforced):**
+- [ ] **Pattern tier filtering** — patternEngine.ts returns `tier` on each result but nothing filters Pro patterns (D, E, G, I, L, M) from Community users. Wire `subscriptionTier` into the evaluation pipeline.
+- [ ] **SubscriptionGuard wiring** — Component exists but is never imported. Apply to: alert config (Pro+), export buttons (Team+), trend analysis cards (Team+), MCP/Insights API docs (Team+).
+- [ ] **Insight tier gates** — `canViewInsight()` exists in usePermissions but verify it's checked for insights 8-14 (Team/Enterprise).
+- [ ] **History depth enforcement** — Frontend should limit time-range selectors (1d Community, 7d Pro, 90d Team). Backend should cap query ranges per tier.
+
+**Backend gating (not yet enforced):**
+- [ ] **Export endpoint gate** — `GET /api/fleet/export` should return 402 for Community/Pro (Team+ only per TIERS.md).
+- [ ] **Insights API gate** — `GET /api/v1/insights/latest` should return 402 for Community/Pro (Team+ only).
+- [ ] **History query depth** — Backend should cap `from` parameter based on tier (24h Community, 7d Pro, 90d Team).
+- [ ] **Slack alert delivery gate** — Only deliver Slack webhooks for Pro+ users. Currently evaluator runs for all tiers.
+
+**Stripe integration:**
+- [ ] **Stripe Checkout flow** — Pricing page buttons → Stripe Checkout with `clerk_user_id` as `client_reference_id`.
+- [ ] **Stripe webhook** — `checkout.session.completed` → update `users.subscription_tier` in Postgres.
+- [ ] **Stripe portal** — "Manage Subscription" in Settings → Stripe Customer Portal for upgrades/cancellations.
 - [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
+
+### Pro Features — Not Yet Deployed
+- [ ] **Custom alert thresholds** — Community alerts fire at defaults. Pro users can set custom WES floor, temperature ceiling, memory pressure threshold in Settings → Alerts.
+- [ ] **Node naming/tags** — Community users see hostname. Pro users can assign custom names (e.g., "Primary-Inference-Node-1") and tags for fleet organization.
+- [ ] **Persistent Insight Cards** — Server-side state (currently localStorage with 24h expiry). Cards survive across devices/sessions.
+- [ ] **7-Day history enforcement** — Frontend time-range selectors gated. Backend query depth capped.
+- [ ] **Trend sparklines on WES Leaderboard** — 7-day mini sparklines next to each node's WES in the leaderboard.
+- [ ] **CSV / JSON Export:** Any metric, any time range, any node. (Team+ only)
+- [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
 
 ### Team Workspaces — Shared Fleet Dashboard *(Team tier, $29/mo)*
 

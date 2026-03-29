@@ -33,6 +33,7 @@ interface TierDef {
   accentBg: string;         // subtle background
   accentText: string;       // text color
   badge?: string;
+  badgeCls?: string;        // badge color override (default: blue)
   features: string[];
   highlight: boolean;
 }
@@ -71,9 +72,10 @@ const TIERS: TierDef[] = [
       '10 Nodes',
       '7-Day Metric History',
       'All 15 Patterns (+Pro: D, E, G, I, L, M)',
-      'Persistent Insight Cards',
+      'Custom Alert Thresholds',
+      'Node Naming & Tags',
       'Slack Alerts (Single Channel)',
-      'Fleet WES Leaderboard + Trend Sparklines',
+      'Persistent Insight Cards',
     ],
     highlight: true,
   },
@@ -86,6 +88,8 @@ const TIERS: TierDef[] = [
     accent: 'border-amber-500/50',
     accentBg: 'bg-amber-500/5',
     accentText: 'text-amber-400',
+    badge: 'Coming Soon',
+    badgeCls: 'bg-amber-600 shadow-amber-600/30',
     features: [
       'Unlimited Nodes',
       '90-Day Metric History',
@@ -93,6 +97,7 @@ const TIERS: TierDef[] = [
       'Slack & PagerDuty Alerts',
       'CSV / JSON Exports',
       'MCP Server + Insights API',
+      'Shared Team Dashboard',
     ],
     highlight: false,
   },
@@ -210,7 +215,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
               >
                 {/* Badge */}
                 {tier.badge && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 bg-blue-600 text-white text-[9px] font-bold uppercase tracking-widest rounded-full shadow-lg shadow-blue-600/30">
+                  <div className={`absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 text-white text-[9px] font-bold uppercase tracking-widest rounded-full shadow-lg ${tier.badgeCls ?? 'bg-blue-600 shadow-blue-600/30'}`}>
                     {tier.badge}
                   </div>
                 )}

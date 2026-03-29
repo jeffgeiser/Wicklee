@@ -905,6 +905,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         kwhRate:      ns.kwhRate,
         wesTier:      m.wes_tier ?? null,
         os:           m.os ?? null,
+        subscriptionTier: subscriptionTier as 'community' | 'pro' | 'team' | 'enterprise',
       });
       allObservations.push(...results);
     }

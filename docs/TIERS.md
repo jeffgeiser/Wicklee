@@ -105,11 +105,19 @@ COMMUNITY_SOVEREIGN = false
 - Maximum 10 paired nodes
 - Enforcement: checked at `/api/pair/activate` — reject if `node_count >= 10` and tier = Pro
 - UI: 10-node cap with upgrade prompt
+- **Node Naming & Tags** — Pro users can assign custom display names (e.g., "Primary-Inference-Node-1") and tags for fleet organization. Community users see hostname only.
 
 ### Metrics & History
-- **7-day rolling history** stored in cloud DuckDB (or SQLite equivalent at current scale)
+- **7-day rolling history** stored in cloud Postgres
 - All community metrics plus historical time series
 - History enables trend-based insight cards and sparkline charts
+
+### Custom Alert Thresholds
+- Community alerts fire at default thresholds. Pro users can configure custom thresholds in Settings → Alerts:
+  - WES floor (alert when WES drops below)
+  - Temperature ceiling (alert when thermal state exceeds)
+  - Memory pressure threshold (alert when memory pressure exceeds %)
+- Per-node override: set different thresholds for different hardware profiles
 
 ### Insights
 - **Persistent Cards** — insight cards survive session; state stored server-side (Clerk metadata or DB)

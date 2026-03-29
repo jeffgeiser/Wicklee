@@ -1306,6 +1306,15 @@ async fn handle_v1_insights_latest(
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
 
+    // Insights API is Team+ only
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if !is_team_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Insights API requires Team tier or above", "upgrade": true }))).into_response();
+    }
+
     let node_ids: Vec<String> = sqlx::query_scalar(
         "SELECT wk_id FROM nodes WHERE user_id = $1"
     ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
@@ -1975,6 +1984,15 @@ async fn handle_fleet_export(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+
+    // Export is Team+ only
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if !is_team_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "CSV/JSON export requires Team tier or above", "upgrade": true }))).into_response();
+    }
 
     let now_ms_val = now_ms() as i64;
     let from_ms: i64 = params.get("from").and_then(|v| v.parse().ok()).unwrap_or(now_ms_val - 24 * 60 * 60 * 1000);

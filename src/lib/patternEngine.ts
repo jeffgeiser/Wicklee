@@ -1971,7 +1971,11 @@ export interface PatternEvaluatorInput {
   wesTier?: 'workstation' | 'server' | 'accelerator' | null;
   /** Agent-reported OS: "macOS" | "Linux" | "Windows". Platform-aware action commands. */
   os?: string | null;
+  /** User's subscription tier — used to filter Pro/Team-gated patterns. Defaults to 'community'. */
+  subscriptionTier?: 'community' | 'pro' | 'team' | 'enterprise';
 }
+
+const TIER_RANK: Record<string, number> = { community: 0, pro: 1, team: 2, enterprise: 3 };
 
 /**
  * evaluatePatterns — run all enabled patterns against a node's history.
@@ -1979,11 +1983,15 @@ export interface PatternEvaluatorInput {
  * Returns an array of DetectedInsight objects (0 or more).
  * Stable: same inputs → same outputs (no randomness, no time.now() divergence).
  * Call this from a useMemo or useEffect after each new sample is pushed.
+ *
+ * Patterns are tier-gated: results whose `tier` exceeds the user's
+ * subscriptionTier are filtered out.
  */
 export function evaluatePatterns(
   input: PatternEvaluatorInput,
 ): DetectedInsight[] {
   const { nodeId, hostname, history, kwhRate, wesTier, os } = input;
+  const userTierRank = TIER_RANK[input.subscriptionTier ?? 'community'] ?? 0;
   const fleetContext = input.fleetContext ?? [];
   const now = Date.now();
   const results: DetectedInsight[] = [];
@@ -2033,5 +2041,6 @@ export function evaluatePatterns(
   const o = evaluatePatternO(nodeId, hostname, history, now, os);
   if (o) results.push(o);
 
-  return results;
+  // Filter out patterns that require a higher tier than the user has.
+  return results.filter(r => (TIER_RANK[r.tier] ?? 0) <= userTierRank);
 }
