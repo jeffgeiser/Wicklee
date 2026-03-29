@@ -258,10 +258,10 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
               formula="tok/s ÷ (Watts × ThermalPenalty)"
               description="The single number that captures true inference efficiency. WES is tok/watt made thermally honest — when a node is healthy, WES equals tok/watt. When it's throttling, WES is lower, and the gap is exactly how much efficiency heat is costing you."
               ranges={[
-                { threshold: '> 50',  color: 'green',  label: 'Excellent · Apple Silicon territory' },
-                { threshold: '10–50', color: 'amber',  label: 'Good · efficient GPU at load' },
-                { threshold: '1–10',  color: 'orange', label: 'Fair · high-power GPU or mild throttle' },
-                { threshold: '< 1',   color: 'red',    label: 'Poor · CPU inference or thermal throttling' },
+                { threshold: '> 10',  color: 'green',  label: 'Excellent · highly efficient (Apple M-series idle)' },
+                { threshold: '3–10',  color: 'amber',  label: 'Good · efficient for the power envelope' },
+                { threshold: '1–3',   color: 'orange', label: 'Acceptable · typical high-power hardware' },
+                { threshold: '< 1',   color: 'red',    label: 'Low · check thermal state or model sizing' },
               ]}
               action="Check thermal state first. If throttling, reduce load or improve airflow. If thermal is Normal, the hardware is simply less efficient per watt — compare models or quantizations."
             />

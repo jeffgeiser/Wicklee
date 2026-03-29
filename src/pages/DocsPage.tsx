@@ -532,10 +532,11 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr><Td mono>&gt; 150</Td><Td>Excellent — efficient high-throughput</Td><Td>Apple M-series</Td></tr>
-                    <tr><Td mono>50 – 150</Td><Td>Good — typical desktop GPU range</Td><Td>RTX 4070 / RX 7900</Td></tr>
-                    <tr><Td mono>10 – 50</Td><Td>Acceptable — power-hungry server GPUs</Td><Td>A100, H100 at full load</Td></tr>
-                    <tr><Td mono>&lt; 10</Td><Td>Investigate — thermal throttle likely</Td><Td>Any platform under sustained load</Td></tr>
+                    <tr><Td mono>&gt; 10</Td><Td>Excellent — highly efficient inference</Td><Td>Apple M4 / M3 at low-to-moderate load</Td></tr>
+                    <tr><Td mono>3 – 10</Td><Td>Good — efficient for the power envelope</Td><Td>Apple M-series at full load, efficient NVIDIA setups</Td></tr>
+                    <tr><Td mono>1 – 3</Td><Td>Acceptable — typical for high-power hardware</Td><Td>EPYC / Xeon CPU-only, midrange GPUs</Td></tr>
+                    <tr><Td mono>0.1 – 1</Td><Td>Low — high power draw relative to throughput</Td><Td>Server GPUs (A100, H100), large models on desktop GPUs</Td></tr>
+                    <tr><Td mono>&lt; 0.1</Td><Td>Investigate — thermal throttle or misconfiguration</Td><Td>Any platform under sustained thermal stress</Td></tr>
                   </tbody>
                 </table>
               </div>
