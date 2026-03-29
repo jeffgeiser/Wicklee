@@ -236,8 +236,8 @@ struct MetricsRow {
     tenant_id:        String,           // user_id; set after node lookup
     tok_s:            Option<f32>,
     watts:            Option<f32>,
-    wes_raw:          Option<f32>,      // tok_s / watts × 10, no penalty
-    wes_penalized:    Option<f32>,      // tok_s / (watts × penalty) × 10
+    wes_raw:          Option<f32>,      // tok_s / watts, no penalty
+    wes_penalized:    Option<f32>,      // tok_s / (watts × penalty)
     thermal_cost_pct: Option<f32>,
     thermal_penalty:  Option<f32>,      // 1.0 / 1.25 / 1.75 / 2.0
     thermal_state:    Option<String>,
@@ -822,7 +822,8 @@ fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
     let watts = m.nvidia_power_draw_w.or(m.cpu_power_w)?;
     if watts <= 0.0 { return None; }
     let penalty = thermal_penalty_for(m.thermal_state.as_deref());
-    Some(((tok_s / (watts * penalty)) * 10.0).round() / 10.0)
+    let raw = tok_s / (watts * penalty);
+    Some((raw * 10.0).round() / 10.0)  // round to 1 decimal place
 }
 
 /// Validate a raw API key, enforce rate limits, return (key_id, user_id, is_pro).
@@ -3454,7 +3455,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
                 let tok_s = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
                 match (tok_s, watts) {
-                    (Some(t), Some(w)) if w > 0.0 => Some(t / (w * thermal_penalty_for(m.thermal_state.as_deref())) * 10.0),
+                    (Some(t), Some(w)) if w > 0.0 => Some(t / (w * thermal_penalty_for(m.thermal_state.as_deref()))),
                     _ => None,
                 }
             };
