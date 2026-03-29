@@ -83,7 +83,7 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
         <div className="flex items-center gap-1">
           <span className={`font-mono text-sm font-bold ${
             topWes != null
-              ? topWes >= 3 ? 'text-green-400' : topWes >= 1.5 ? 'text-amber-400' : 'text-red-400'
+              ? topWes > 10 ? 'text-blue-400' : topWes >= 3 ? 'text-green-400' : topWes >= 1 ? 'text-yellow-400' : 'text-red-400'
               : 'text-gray-600'
           }`}>
             {topWes != null ? topWes.toFixed(1) : '—'}

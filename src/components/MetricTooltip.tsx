@@ -3,7 +3,7 @@ import { ArrowRight } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type DotColor = 'green' | 'amber' | 'orange' | 'red' | 'gray';
+type DotColor = 'blue' | 'green' | 'amber' | 'yellow' | 'orange' | 'red' | 'gray';
 
 export interface TooltipRange {
   threshold: string;
@@ -29,11 +29,13 @@ export interface MetricTooltipProps {
 
 const Dot: React.FC<{ color: DotColor }> = ({ color }) => {
   const cls: Record<DotColor, string> = {
-    green:  'bg-green-500',
-    amber:  'bg-amber-400',
-    orange: 'bg-orange-400',
-    red:    'bg-red-500',
-    gray:   'bg-gray-500',
+    blue:    'bg-blue-500',
+    green:   'bg-green-500',
+    amber:   'bg-amber-400',
+    yellow:  'bg-yellow-400',
+    orange:  'bg-orange-400',
+    red:     'bg-red-500',
+    gray:    'bg-gray-500',
   };
   return (
     <span

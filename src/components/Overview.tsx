@@ -180,9 +180,10 @@ const FleetStatusHeader: React.FC = () => (
       name="WES — Wicklee Efficiency Score"
       oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
       ranges={[
-        { threshold: '> 10', color: 'green',  label: 'Excellent · efficient inference hardware' },
-        { threshold: '1–10', color: 'amber',  label: 'Good · typical GPU at load' },
-        { threshold: '< 1',  color: 'red',    label: 'Fair / Poor · throttling or CPU inference' },
+        { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+        { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
+        { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
+        { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
       ]}
     >
       <p className={FS_HDR}>WES</p>
@@ -240,7 +241,8 @@ const FleetStatusHeader: React.FC = () => (
       ranges={[
         { threshold: 'Normal',  color: 'green', label: '1.0× penalty — within design limits' },
         { threshold: 'Fair',    color: 'amber', label: '1.25× penalty — mild throttling' },
-        { threshold: 'Serious', color: 'red',   label: '2.0× penalty — active throttling' },
+        { threshold: 'Serious', color: 'orange', label: '1.75× penalty — significant throttling' },
+        { threshold: 'Critical', color: 'red',  label: '2.0× penalty — critical throttling' },
       ]}
       wrapperClassName="hidden sm:block"
     >
@@ -1882,9 +1884,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               name="WES — Wicklee Efficiency Score"
               oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
               ranges={[
-                { threshold: '> 10', color: 'green', label: 'Excellent · efficient inference hardware' },
-                { threshold: '1–10', color: 'amber', label: 'Good · typical GPU at load' },
-                { threshold: '< 1',  color: 'red',   label: 'Fair / Poor · throttling' },
+                { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+                { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
+                { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
+                { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
               ]}
             >
               {isLocalMode ? 'Node WES' : 'Avg WES'}
@@ -2302,9 +2305,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 name="FLEET AVG WES"
                 oneLiner="Average WES score across all online nodes."
                 ranges={[
-                  { threshold: '> 10', color: 'green', label: 'Excellent fleet efficiency' },
-                  { threshold: '1–10', color: 'amber', label: 'Good · typical GPU fleet' },
-                  { threshold: '< 1',  color: 'red',   label: 'Poor · thermal or CPU inference' },
+                  { threshold: '> 10', color: 'blue',   label: 'Excellent fleet efficiency' },
+                  { threshold: '3–10', color: 'green',  label: 'Good · efficient fleet' },
+                  { threshold: '1–3',  color: 'yellow', label: 'Acceptable · mixed hardware fleet' },
+                  { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state across fleet' },
                 ]}
               >
                 Fleet Avg WES
