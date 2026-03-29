@@ -547,7 +547,7 @@ function evaluatePatternC(
         ? `${altNode.hostname} is the healthier peer — consider shifting workloads manually if the decline continues`
         : `Reduce active inference load: lower \`OLLAMA_NUM_PARALLEL\` to 1 to slow the WES decline`,
       `Check if any background processes (backups, updates, builds) started recently and pause them`,
-      `If WES drops below 50 within the next 5 min, treat as Pattern A (Thermal Drain) — enact physical cooling steps`,
+      `If WES drops below 5 within the next 5 min, treat as Pattern A (Thermal Drain) — enact physical cooling steps`,
       `After stabilization, review Wicklee history to correlate the drop with specific request types or model loads`,
     ],
     action_id:       'check_thermal_zone',
@@ -768,7 +768,7 @@ function evaluatePatternE(
       `Compare fleet WES scores on the Performance tab to identify the efficiency gap`,
       isThermallySressed
         ? `Investigate thermal root cause on ${hostname}: check airflow, dust, and ambient temperature — allow 15 min cooldown`
-        : `Monitor ${hostname}'s WES over the next 10 min — if it stabilizes above 60, the imbalance may self-resolve`,
+        : `Monitor ${hostname}'s WES over the next 10 min — if it stabilizes above 6, the imbalance may self-resolve`,
       `Check ${altNode.hostname}'s VRAM headroom and thermal state to confirm it can absorb additional load`,
       `Review the WES Trend chart for both nodes over 1H to identify whether this is transient or sustained`,
     ],
