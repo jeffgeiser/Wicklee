@@ -8,13 +8,14 @@
 
 | Feature Area | Community | Pro | Team | Enterprise |
 |---|---|---|---|---|
-| **Max Nodes** | 3 | 10 | Unlimited | Unlimited |
-| **Price** | Free | ~$9/mo | ~$29/mo | ~$199/mo |
+| **Max Nodes** | 3 | 10 | 25 (+50 packs) | Unlimited |
+| **Price** | Free | $9/mo | $19/seat/mo (3-seat min) | From $200/mo |
 | **Metric History** | 24-Hour Rolling | 7-Day | 90-Day | Custom / Audit Scope |
 | **Alerting** | Dashboard only | Slack (Single) | Slack & PagerDuty | SIEM / Webhooks |
 | **Insights** | Live + Core Educational | Persistent Cards | Trend Analysis | Predictive / Compliance |
 | **Sovereignty** | Cloud Relay | Cloud Relay | Cloud Relay | **Airgapped — no outbound telemetry** |
-| **Artifacts** | — | — | CSV Exports | Signed PDF Audits |
+| **Artifacts** | — | — | CSV / JSON Exports | Signed PDF Audits |
+| **Proxy** | — | — | — | Sentinel Proxy (inference tracing) |
 | **Prometheus / Grafana Export** | — | — | — | ✅ |
 | **Kubernetes Operator** | — | — | — | ✅ |
 | **SSO / SAML** | — | — | — | ✅ |
@@ -167,14 +168,14 @@ PRO_SOVEREIGN = false
 
 ---
 
-## Team — ~$29/mo
+## Team — $19/seat/mo (3-seat minimum)
 
-**Target user:** Engineering team, on-call rotation, production inference fleet. Needs PagerDuty, trend analysis, and exportable data.
+**Target user:** Engineering team, on-call rotation, production inference fleet. Needs shared dashboards, PagerDuty, trend analysis, and exportable data.
 
 ### Nodes
-- **Unlimited** paired nodes
-- No enforcement gate at activation
-- UI: no upgrade prompt on node add
+- **25 paired nodes** included
+- +50 Node Expansion Pack: $50/mo per pack
+- Enforcement: checked at `/api/pair/activate` — reject if `node_count >= limit` for tier
 
 ### Metrics & History
 - **90-day rolling history** in cloud DuckDB
@@ -237,7 +238,7 @@ TEAM_INSIGHTS_API = true
 
 ---
 
-## Enterprise — ~$199/mo
+## Enterprise — From $200/mo
 
 **Target user:** Defense contractor, HIPAA-governed healthcare, financial institution, or any operator with a compliance requirement that data never leave their sovereign boundary.
 
@@ -268,6 +269,13 @@ TEAM_INSIGHTS_API = true
 - SIEM integration: Splunk, Datadog, Elastic SIEM — event forwarding with structured JSON schema
 - All Team alerting capabilities included
 - Programmatic alert management via API
+
+### Sentinel Proxy
+- **Enterprise exclusive** — transparent Ollama proxy (:11434 → configurable backend port)
+- Zero-lag inference detection from actual request/response interception
+- Exact tok/s from done packets instead of 30s sampled probe
+- Per-request tracing with TTFT (time to first token), total duration, model, prompt size
+- Inference traces available at `GET /api/traces`
 
 ### Fleet Intelligence
 - Full Team capabilities plus compliance-layer overlays

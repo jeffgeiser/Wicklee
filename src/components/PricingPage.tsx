@@ -82,22 +82,23 @@ const TIERS: TierDef[] = [
   {
     id: 'team',
     name: 'Team',
-    price: '$29',
-    period: '/mo',
-    tagline: 'Production fleet with PagerDuty, trend analysis, and exports.',
+    price: '$19',
+    period: '/seat/mo',
+    tagline: 'Production fleet with shared dashboards, exports, and PagerDuty.',
     accent: 'border-amber-500/50',
     accentBg: 'bg-amber-500/5',
     accentText: 'text-amber-400',
     badge: 'Coming Soon',
     badgeCls: 'bg-amber-600 shadow-amber-600/30',
     features: [
-      'Unlimited Nodes',
+      '3-Seat Minimum · 25 Nodes Included',
+      '+50 Nodes Expansion Pack ($50/mo)',
       '90-Day Metric History',
-      'Trend Analysis + Regression Detection',
-      'Slack & PagerDuty Alerts',
-      'CSV / JSON Exports',
-      'MCP Server + Insights API',
       'Shared Team Dashboard',
+      'CSV / JSON Exports',
+      'Slack & PagerDuty Alerts',
+      'Trend Analysis + Regression Detection',
+      'MCP Server + Insights API',
     ],
     highlight: false,
   },
@@ -278,12 +279,12 @@ const PricingPage: React.FC<PricingPageProps> = ({
               <h4 className="text-base font-bold text-white flex items-center gap-2">
                 Enterprise — Airgapped / Sovereign
                 <span className="text-[9px] font-bold uppercase tracking-widest text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full">
-                  ~$199/mo
+                  From $200/mo
                 </span>
               </h4>
               <p className="text-sm text-gray-500 mt-0.5">
-                On-premise deployment. No outbound telemetry. Kubernetes Operator, Prometheus export,
-                SSO/SAML, signed PDF audits, and SIEM integration.
+                On-premise deployment. No outbound telemetry. Sentinel Proxy for inference tracing,
+                Kubernetes Operator, Prometheus export, SSO/SAML, signed PDF audits, and SIEM integration.
               </p>
             </div>
           </div>
