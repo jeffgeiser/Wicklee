@@ -249,12 +249,12 @@ const MetricsHistoryChart: React.FC<Props> = ({
   const liveNode  = selectedId ? allNodeMetrics[selectedId] : null;
   const liveValue = liveNode ? cfg.getLive(liveNode) : null;
 
+  const tierRank: Record<string, number> = { community: 0, pro: 1, team: 2, enterprise: 3 };
+  const userRank = tierRank[subscriptionTier] ?? 0;
   const isRangeLocked = (r: TimeRange): boolean => {
     const rc = RANGE_CONFIG[r];
-    if (rc.minTier === 'community') return false;
-    if (rc.minTier === 'pro')   return historyDays < 7;
-    if (rc.minTier === 'team')  return historyDays < 30;
-    return false;
+    const requiredRank = tierRank[rc.minTier] ?? 0;
+    return userRank < requiredRank;
   };
 
   const ago = lastFetch > 0
