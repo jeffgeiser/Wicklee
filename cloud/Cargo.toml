@@ -19,7 +19,7 @@ jsonwebtoken   = "9"
 ureq           = { version = "2", features = ["json"] }
 # SHA-256 for API key hashing.
 sha2           = "0.10"
-# HMAC-SHA256 for Stripe webhook signature verification.
+# HMAC-SHA256 for Paddle webhook signature verification.
 hmac           = "0.12"
 # Hex encoding for HMAC digest comparison.
 hex            = "0.4"

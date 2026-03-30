@@ -333,11 +333,19 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
             clerk_id               TEXT,
             subscription_tier      TEXT NOT NULL DEFAULT 'community',
             stripe_customer_id     TEXT,
-            stripe_subscription_id TEXT
+            stripe_subscription_id TEXT,
+            paddle_customer_id     TEXT,
+            paddle_subscription_id TEXT
         )
     ").execute(pool).await.expect("users migration failed");
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON users(clerk_id)")
+        .execute(pool).await.ok();
+
+    // Paddle columns migration (for existing databases that only have stripe columns)
+    sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS paddle_customer_id TEXT")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS paddle_subscription_id TEXT")
         .execute(pool).await.ok();
 
     sqlx::query("
@@ -3946,8 +3954,8 @@ async fn handle_test_channel(
 
 // ── Billing handlers ──────────────────────────────────────────────────────────
 
-/// POST /api/billing/checkout
-async fn handle_billing_checkout(
+/// GET /api/billing/config — returns Paddle client-side config for Paddle.js overlay
+async fn handle_billing_config(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -3956,14 +3964,6 @@ async fn handle_billing_checkout(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
-
-    let secret_key = match std::env::var("STRIPE_SECRET_KEY") {
-        Ok(k) if !k.is_empty() => k,
-        _ => return (StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "Billing not configured" }))).into_response(),
-    };
-    let price_id = std::env::var("STRIPE_PRICE_ID").unwrap_or_else(|_| "price_placeholder".to_string());
-    let base_url = std::env::var("APP_URL").unwrap_or_else(|_| "https://wicklee.dev".to_string());
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
@@ -3976,47 +3976,33 @@ async fn handle_billing_checkout(
         "SELECT email FROM users WHERE id = $1"
     ).bind(&user_id).fetch_optional(&state.pool).await.ok().flatten();
 
-    let email = match email {
-        Some(e) => e,
-        None => return (StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Invalid session" }))).into_response(),
-    };
+    let paddle_env = std::env::var("PADDLE_ENV").unwrap_or_else(|_| "sandbox".to_string());
+    let pro_price_id = std::env::var("PADDLE_PRO_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_pro".to_string());
+    let team_price_id = std::env::var("PADDLE_TEAM_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_team".to_string());
 
-    let result = tokio::task::spawn_blocking(move || {
-        let body = format!(
-            "mode=subscription&line_items[0][price]={price_id}&line_items[0][quantity]=1&customer_email={email}&success_url={base_url}/dashboard?upgraded=1&cancel_url={base_url}/dashboard"
-        );
-        match ureq::post("https://api.stripe.com/v1/checkout/sessions")
-            .set("Authorization", &format!("Bearer {secret_key}"))
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .send_string(&body)
-        {
-            Ok(r) => r.into_json::<serde_json::Value>().ok(),
-            Err(e) => { eprintln!("[billing] checkout failed: {e}"); None }
-        }
-    }).await.unwrap();
-
-    match result.and_then(|v| v["url"].as_str().map(|s| s.to_string())) {
-        Some(url) => Json(serde_json::json!({ "url": url })).into_response(),
-        None => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to create checkout session" }))).into_response(),
-    }
+    Json(serde_json::json!({
+        "environment": paddle_env,
+        "prices": { "pro": pro_price_id, "team": team_price_id },
+        "custom_data": { "user_id": user_id },
+        "customer_email": email,
+    })).into_response()
 }
 
-/// POST /api/webhooks/stripe
-async fn handle_stripe_webhook(
+/// POST /api/webhooks/paddle — handles Paddle subscription lifecycle events.
+/// Signature verification uses HMAC-SHA256 with PADDLE_WEBHOOK_SECRET.
+async fn handle_paddle_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    if let Ok(secret) = std::env::var("STRIPE_WEBHOOK_SECRET") {
-        let sig_header = headers.get("stripe-signature")
+    if let Ok(secret) = std::env::var("PADDLE_WEBHOOK_SECRET") {
+        let sig_header = headers.get("paddle-signature")
             .and_then(|v| v.to_str().ok()).unwrap_or("");
-        let ts = sig_header.split(',').find(|p| p.starts_with("t="))
-            .and_then(|p| p.strip_prefix("t=")).unwrap_or("");
-        let expected = sig_header.split(',').find(|p| p.starts_with("v1="))
-            .and_then(|p| p.strip_prefix("v1=")).unwrap_or("");
-        let payload = format!("{}.{}", ts, String::from_utf8_lossy(&body));
+        let ts = sig_header.split(';').find(|p| p.starts_with("ts="))
+            .and_then(|p| p.strip_prefix("ts=")).unwrap_or("");
+        let expected = sig_header.split(';').find(|p| p.starts_with("h1="))
+            .and_then(|p| p.strip_prefix("h1=")).unwrap_or("");
+        let payload = format!("{}:{}", ts, String::from_utf8_lossy(&body));
         use hmac::{Hmac, Mac};
         type HmacSha256 = Hmac<sha2::Sha256>;
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC key");
@@ -4028,7 +4014,7 @@ async fn handle_stripe_webhook(
                 Json(serde_json::json!({ "error": "Invalid signature" }))).into_response();
         }
     } else {
-        eprintln!("[billing] STRIPE_WEBHOOK_SECRET not set \u{2014} skipping signature verification");
+        eprintln!("[billing] PADDLE_WEBHOOK_SECRET not set \u{2014} skipping signature verification");
     }
 
     let event: serde_json::Value = match serde_json::from_slice(&body) {
@@ -4037,26 +4023,44 @@ async fn handle_stripe_webhook(
             Json(serde_json::json!({ "error": format!("Invalid JSON: {e}") }))).into_response(),
     };
 
-    let event_type = event["type"].as_str().unwrap_or("");
+    let event_type = event["event_type"].as_str().unwrap_or("");
+    let data = &event["data"];
     match event_type {
-        "checkout.session.completed" => {
-            let customer_id     = event["data"]["object"]["customer"].as_str().unwrap_or("").to_string();
-            let subscription_id = event["data"]["object"]["subscription"].as_str().unwrap_or("").to_string();
-            let customer_email  = event["data"]["object"]["customer_email"].as_str().unwrap_or("").to_string();
-            let _ = sqlx::query(
-                "UPDATE users SET subscription_tier = 'team', stripe_customer_id = $1, stripe_subscription_id = $2 WHERE email = $3"
-            ).bind(&customer_id).bind(&subscription_id).bind(&customer_email)
-            .execute(&state.pool).await;
-            println!("[billing] upgraded {customer_email} \u{2192} team");
+        "subscription.activated" | "subscription.updated" => {
+            let customer_id     = data["customer_id"].as_str().unwrap_or("").to_string();
+            let subscription_id = data["id"].as_str().unwrap_or("").to_string();
+            let user_id = data["custom_data"]["user_id"].as_str().unwrap_or("").to_string();
+
+            // Determine tier from price — check items[0].price.id
+            let price_id = data["items"].as_array()
+                .and_then(|items| items.first())
+                .and_then(|item| item["price"]["id"].as_str())
+                .unwrap_or("");
+            let pro_price = std::env::var("PADDLE_PRO_PRICE_ID").unwrap_or_default();
+            let team_price = std::env::var("PADDLE_TEAM_PRICE_ID").unwrap_or_default();
+            let tier = if price_id == team_price { "team" }
+                       else if price_id == pro_price { "pro" }
+                       else { "pro" };
+
+            let status = data["status"].as_str().unwrap_or("active");
+            if status == "active" || status == "trialing" {
+                let _ = sqlx::query(
+                    "UPDATE users SET subscription_tier = $1, paddle_customer_id = $2, paddle_subscription_id = $3 WHERE id = $4"
+                ).bind(tier).bind(&customer_id).bind(&subscription_id).bind(&user_id)
+                .execute(&state.pool).await;
+                println!("[billing] paddle: {user_id} \u{2192} {tier} (sub={subscription_id})");
+            }
         }
-        "customer.subscription.deleted" => {
-            let customer_id = event["data"]["object"]["customer"].as_str().unwrap_or("").to_string();
+        "subscription.canceled" | "subscription.past_due" => {
+            let customer_id = data["customer_id"].as_str().unwrap_or("").to_string();
             let _ = sqlx::query(
-                "UPDATE users SET subscription_tier = 'community', stripe_subscription_id = NULL WHERE stripe_customer_id = $1"
+                "UPDATE users SET subscription_tier = 'community', paddle_subscription_id = NULL WHERE paddle_customer_id = $1"
             ).bind(&customer_id).execute(&state.pool).await;
-            println!("[billing] downgraded customer={customer_id} \u{2192} community");
+            println!("[billing] paddle: downgraded customer={customer_id} \u{2192} community");
         }
-        _ => {}
+        _ => {
+            println!("[billing] paddle: unhandled event_type={event_type}");
+        }
     }
 
     StatusCode::OK.into_response()
@@ -4195,8 +4199,8 @@ async fn main() {
         .route("/api/alerts/rules",             post(handle_create_rule))
         .route("/api/alerts/rules",             get(handle_list_rules))
         .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
-        .route("/api/billing/checkout",  post(handle_billing_checkout))
-        .route("/api/webhooks/stripe",   post(handle_stripe_webhook))
+        .route("/api/billing/config",    get(handle_billing_config))
+        .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
         .with_state(state)
         .layer(middleware::from_fn(cors));
 
