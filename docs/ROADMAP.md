@@ -558,14 +558,35 @@
 - [ ] **Stripe portal** — "Manage Subscription" in Settings → Stripe Customer Portal for upgrades/cancellations.
 - [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
 
-### Pro Features — Not Yet Deployed
-- [ ] **Custom alert thresholds** — Community alerts fire at defaults. Pro users can set custom WES floor, temperature ceiling, memory pressure threshold in Settings → Alerts.
-- [ ] **Node naming/tags** — Community users see hostname. Pro users can assign custom names (e.g., "Primary-Inference-Node-1") and tags for fleet organization.
-- [ ] **Persistent Insight Cards** — Server-side state (currently localStorage with 24h expiry). Cards survive across devices/sessions.
-- [ ] **7-Day history enforcement** — Frontend time-range selectors gated. Backend query depth capped.
-- [ ] **Trend sparklines on WES Leaderboard** — 7-day mini sparklines next to each node's WES in the leaderboard.
-- [ ] **CSV / JSON Export:** Any metric, any time range, any node. (Team+ only)
-- [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
+### Pro Features ($9/mo)
+
+| Feature | Status | Notes |
+|---|---|---|
+| Custom Alert Thresholds | Not started | Primary Pro upgrade driver. Custom WES floor, temp ceiling, memory pressure threshold in Settings → Alerts. Per-node overrides. |
+| Node Naming & Tags | Not started | Custom display names (e.g., "Primary-Inference-Node-1") and tags. Stored in Postgres `nodes` table. |
+| Persistent Insight Cards | ✅ Shipped | Server-side state — cards survive across devices/sessions. Currently localStorage with 24h expiry; needs migration to Postgres. |
+| 7-Day History Enforcement | Not started | Frontend time-range selectors gated. Backend query depth capped at 7d for Pro. |
+| Trend Sparklines | Not started | 7-day mini sparklines next to each node's WES in the leaderboard. |
+| Event Detail Panel | Not started | Clickable Live Activity events with metrics snapshot, precise timestamp, trigger reason, duration. |
+
+### Team Features ($19/seat/mo, 3-seat min)
+
+| Feature | Status | Notes |
+|---|---|---|
+| Shared Dashboards (Clerk Orgs) | Not started | Foundational for multi-user collaboration. See Team Workspaces below. |
+| Unified Audit Log Tab | Not started | Merges all 3 event streams into one searchable, filterable timeline. Necessary for professional triage and accountability. |
+| Trend Analysis & Regression | In progress | Requires 90-day history depth. Regression detection, degradation curves, fleet-wide trend overlays. |
+| CSV / JSON Export | ✅ Gated | Backend returns 402 for non-Team users. UI export buttons need SubscriptionGuard blur. |
+
+### Enterprise Features (From $200/mo)
+
+| Feature | Status | Notes |
+|---|---|---|
+| Wicklee Nexus (Sentinel Proxy) | Phase 5 | Transparent Ollama proxy for inference tracing, TTFT, per-request traces. Active orchestration — massive premium. |
+| Airgapped Deployment | Not started | No outbound telemetry, self-hosted control plane, Kubernetes Operator. |
+| Signed PDF Audits | Not started | Compliance audit exports with timestamp-range scoping. |
+| SSO/SAML | Not started | Enterprise identity provider integration. |
+| SIEM Integration | Not started | Splunk, Datadog, Elastic — structured JSON event forwarding. |
 
 ### Team Workspaces — Shared Fleet Dashboard *(Team tier, $19/seat/mo, 3-seat min)*
 
