@@ -261,7 +261,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
               formula="tok/s ÷ (Watts × ThermalPenalty)"
               description="The single number that captures true inference efficiency. WES is tok/watt made thermally honest — when a node is healthy, WES equals tok/watt. When it's throttling, WES is lower, and the gap is exactly how much efficiency heat is costing you."
               ranges={[
-                { threshold: '> 10',  color: 'blue',   label: 'Excellent · highly efficient (Apple M-series idle)' },
+                { threshold: '> 10',  color: 'emerald', label: 'Excellent · highly efficient (Apple M-series idle)' },
                 { threshold: '3–10',  color: 'green',  label: 'Good · efficient for the power envelope' },
                 { threshold: '1–3',   color: 'yellow', label: 'Acceptable · typical high-power hardware' },
                 { threshold: '< 1',   color: 'red',    label: 'Low · check thermal state or model sizing' },

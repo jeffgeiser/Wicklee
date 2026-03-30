@@ -180,7 +180,7 @@ const FleetStatusHeader: React.FC = () => (
       name="WES — Wicklee Efficiency Score"
       oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
       ranges={[
-        { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+        { threshold: '> 10', color: 'emerald', label: 'Excellent · highly efficient inference' },
         { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
         { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
         { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
@@ -194,7 +194,7 @@ const FleetStatusHeader: React.FC = () => (
       oneLiner="Raw inference efficiency: tok/s ÷ watts. Same as WES when thermal is Normal."
       wrapperClassName="hidden md:block"
       ranges={[
-        { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+        { threshold: '> 10', color: 'emerald', label: 'Excellent · highly efficient inference' },
         { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
         { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
         { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
@@ -1915,7 +1915,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               name="WES — Wicklee Efficiency Score"
               oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
               ranges={[
-                { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+                { threshold: '> 10', color: 'emerald', label: 'Excellent · highly efficient inference' },
                 { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
                 { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
                 { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
@@ -2001,7 +2001,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               name="tok/W — Tokens Per Watt"
               oneLiner="Raw inference efficiency: tok/s ÷ watts. Same as WES when thermal state is Normal. Diverges from WES when thermal penalty is active — the gap is the cost of heat."
               ranges={[
-                { threshold: '> 10', color: 'blue',   label: 'Excellent · highly efficient inference' },
+                { threshold: '> 10', color: 'emerald', label: 'Excellent · highly efficient inference' },
                 { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
                 { threshold: '1–3',  color: 'yellow', label: 'Acceptable · typical high-power hardware' },
                 { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state or model sizing' },
@@ -2016,8 +2016,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             ? `${rankedTokW.length} node${rankedTokW.length !== 1 ? 's' : ''} reporting`
             : 'no active inference'}
           icon={Zap}
-          iconCls={displayFleetAvgTokW != null && displayFleetAvgTokW > 10 ? 'text-blue-400'
-            : displayFleetAvgTokW != null && displayFleetAvgTokW >= 3 ? 'text-green-400'
+          iconCls={displayFleetAvgTokW != null && displayFleetAvgTokW > 10 ? 'text-emerald-400'
+            : displayFleetAvgTokW != null && displayFleetAvgTokW >= 3 ? 'text-green-300'
             : displayFleetAvgTokW != null && displayFleetAvgTokW >= 1 ? 'text-yellow-400'
             : 'text-gray-500'}
         />
@@ -2333,7 +2333,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 name="FLEET AVG WES"
                 oneLiner="Average WES score across all online nodes."
                 ranges={[
-                  { threshold: '> 10', color: 'blue',   label: 'Excellent fleet efficiency' },
+                  { threshold: '> 10', color: 'emerald', label: 'Excellent fleet efficiency' },
                   { threshold: '3–10', color: 'green',  label: 'Good · efficient fleet' },
                   { threshold: '1–3',  color: 'yellow', label: 'Acceptable · mixed hardware fleet' },
                   { threshold: '< 1',  color: 'red',    label: 'Low · check thermal state across fleet' },
