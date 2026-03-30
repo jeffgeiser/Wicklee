@@ -246,6 +246,21 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const kwhDirty = kwhDraft !== settings.fleet.kwhRate.toString();
   const pueDirty = pueDraft !== settings.fleet.pue.toString();
 
+  // Save display name to cloud backend (Pro+ only)
+  const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const saveDisplayNameToCloud = React.useCallback(async (nodeId: string, name: string) => {
+    if (!isProOrAbove || !isCloudMode || !getToken) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      await fetch(`${CLOUD_URL}/api/nodes/${nodeId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display_name: name.trim() || null }),
+      });
+    } catch { /* best-effort sync */ }
+  }, [isProOrAbove, isCloudMode, getToken]);
+
   const commitKwh = () => {
     const v = parseFloat(kwhDraft);
     if (!isNaN(v) && v >= 0) updateFleet({ kwhRate: Math.round(v * 10000) / 10000 });
@@ -509,7 +524,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   <tr className="border-b border-gray-100 dark:border-gray-800">
                     <th className="text-left px-4 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Node ID</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
-                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Location Label</th>
+                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Display Name</th>
                     <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
                       <div>kWh Rate</div>
                       <ClearColumnButton
@@ -576,6 +591,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         ov={ov}
                         fleetSettings={settings.fleet}
                         onOverride={(patch) => setNodeOverride(node.id, patch)}
+                        onSaveDisplayName={saveDisplayNameToCloud}
                       />
                     );
                   })}
@@ -1304,7 +1320,8 @@ const NodeOverrideRow: React.FC<{
   ov: NodeOverride;
   fleetSettings: FleetSettings;
   onOverride: (patch: Partial<NodeOverride>) => void;
-}> = ({ node, eff, ov, fleetSettings, onOverride }) => {
+  onSaveDisplayName?: (nodeId: string, name: string) => void;
+}> = ({ node, eff, ov, fleetSettings, onOverride, onSaveDisplayName }) => {
   const [kwhDraft,  setKwhDraft]  = useState(ov.kwhRate?.toString() ?? '');
   const [pueDraft,  setPueDraft]  = useState(ov.pue?.toString()  ?? '');
   const [idleDraft, setIdleDraft] = useState(ov.systemIdleW?.toString() ?? '');
@@ -1368,15 +1385,17 @@ const NodeOverrideRow: React.FC<{
         <span className="text-xs font-telin text-gray-500 truncate block">{node.hostname || '—'}</span>
       </td>
 
-      {/* Location Label */}
+      {/* Display Name */}
       <td className="px-3 py-3 max-w-[180px]">
         <div className="flex items-center gap-1.5">
           <input
             type="text"
             value={ov.locationLabel ?? ''}
             onChange={e => { onOverride({ locationLabel: e.target.value || undefined }); flashSaved('loc'); }}
-            placeholder="e.g. Home lab, Hetzner Frankfurt"
+            onBlur={e => { onSaveDisplayName?.(node.id, e.target.value); }}
+            placeholder="e.g. Primary Inference Node"
             title={ov.locationLabel ?? ''}
+            maxLength={64}
             className={`${cellBase} truncate ${valCls(!!ov.locationLabel)}`}
           />
           {savedCell === 'loc' && <SavedMark />}

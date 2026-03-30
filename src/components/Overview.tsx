@@ -1740,23 +1740,29 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   // Build Fleet Status row data — include peakTps so each row can estimate throughput.
   const nodeRows: NodeRowProps[] = isLocalHost
-    ? (sentinel ? [{
-        nodeId: sentinel.node_id,
-        hostname: sentinel.hostname ?? sentinel.node_id,
-        metrics: sentinel,
-        pue: getNodeSettings?.(sentinel.node_id)?.pue ?? 1.0,
-        peakTps: peakTpsMap[sentinel.node_id],
-      }] : [])
-    : nodes.map(n => ({
-        nodeId: n.id,
-        hostname: n.hostname,
-        metrics: allNodeMetrics[n.id] ?? null,
-        lastSeenMs: lastSeenMsMap[n.id],
-        pue: getNodeSettings?.(n.id)?.pue ?? 1.0,
-        peakTps: peakTpsMap[n.id],
-        restricted: n.restricted ?? false,
-        onUpgrade,
-      }));
+    ? (sentinel ? [(() => {
+        const ns = getNodeSettings?.(sentinel.node_id);
+        return {
+          nodeId: sentinel.node_id,
+          hostname: ns?.locationLabel || sentinel.hostname || sentinel.node_id,
+          metrics: sentinel,
+          pue: ns?.pue ?? 1.0,
+          peakTps: peakTpsMap[sentinel.node_id],
+        };
+      })()] : [])
+    : nodes.map(n => {
+        const ns = getNodeSettings?.(n.id);
+        return {
+          nodeId: n.id,
+          hostname: ns?.locationLabel || n.hostname,
+          metrics: allNodeMetrics[n.id] ?? null,
+          lastSeenMs: lastSeenMsMap[n.id],
+          pue: ns?.pue ?? 1.0,
+          peakTps: peakTpsMap[n.id],
+          restricted: n.restricted ?? false,
+          onUpgrade,
+        };
+      });
 
   // "Show Active Only" filter — hides nodes not currently inferring
   const visibleRows = showActiveOnly
