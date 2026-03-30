@@ -4,7 +4,7 @@ use axum::{
     http::{header, HeaderMap, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use sha2::{Sha256, Digest};
@@ -366,11 +366,18 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
             last_seen            BIGINT NOT NULL,
             hostname             TEXT,
             user_id              TEXT,
-            last_telemetry_json  JSONB
+            last_telemetry_json  JSONB,
+            display_name         TEXT,
+            tags                 TEXT
         )
     ").execute(pool).await.expect("nodes migration failed");
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_nodes_user_id ON nodes(user_id)")
+        .execute(pool).await.ok();
+    // Migration for existing databases
+    sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS display_name TEXT")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS tags TEXT")
         .execute(pool).await.ok();
 
     sqlx::query("
@@ -619,6 +626,10 @@ const ALERT_QUIET_PERIOD_MS: u64 = 300_000; // 5 minutes
 /// Returns true if the account has Team or Enterprise tier (alerting unlocked).
 fn is_team_or_above(tier: &str) -> bool {
     matches!(tier, "team" | "enterprise")
+}
+
+fn is_pro_or_above(tier: &str) -> bool {
+    matches!(tier, "pro" | "team" | "enterprise")
 }
 
 /// Number of nodes available for free on the Community tier.
@@ -3682,6 +3693,87 @@ async fn fleet_alert_evaluator_task(state: AppState) {
     }
 }
 
+// ── Node naming (Pro+) ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct UpdateNodeRequest {
+    display_name: Option<String>,
+    tags: Option<String>,
+}
+
+/// PATCH /api/nodes/:node_id — update display name and/or tags (Pro+ only)
+async fn handle_update_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(node_id): axum::extract::Path<String>,
+    Json(body): Json<UpdateNodeRequest>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if !is_pro_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Node naming requires Pro tier or above" }))).into_response();
+    }
+
+    // Verify the node belongs to this user
+    let owns: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM nodes WHERE wk_id = $1 AND user_id = $2"
+    ).bind(&node_id).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0);
+    if owns == 0 {
+        return (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response();
+    }
+
+    if let Some(ref name) = body.display_name {
+        let trimmed = name.trim();
+        if trimmed.len() > 64 {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Display name must be 64 characters or fewer" }))).into_response();
+        }
+        let val = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+        let _ = sqlx::query("UPDATE nodes SET display_name = $1 WHERE wk_id = $2")
+            .bind(&val).bind(&node_id).execute(&state.pool).await;
+    }
+    if let Some(ref tags) = body.tags {
+        let trimmed = tags.trim();
+        let val = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+        let _ = sqlx::query("UPDATE nodes SET tags = $1 WHERE wk_id = $2")
+            .bind(&val).bind(&node_id).execute(&state.pool).await;
+    }
+
+    // Return updated node info
+    let row: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT wk_id, hostname, display_name, tags FROM nodes WHERE wk_id = $1"
+    ).bind(&node_id).fetch_optional(&state.pool).await.ok().flatten();
+
+    match row {
+        Some((wk_id, hostname, display_name, tags)) => {
+            Json(serde_json::json!({
+                "node_id": wk_id,
+                "hostname": hostname,
+                "display_name": display_name,
+                "tags": tags,
+            })).into_response()
+        }
+        None => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
+    }
+}
+
 // ── Alerting — CRUD handlers ──────────────────────────────────────────────────
 
 /// POST /api/alerts/channels
@@ -3710,9 +3802,9 @@ async fn handle_create_channel(
     let tier: String = sqlx::query_scalar::<_, String>(
         "SELECT subscription_tier FROM users WHERE id = $1"
     ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
-    if !is_team_or_above(&tier) {
+    if !is_pro_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
-            Json(serde_json::json!({ "error": "Alerting requires Team tier" }))).into_response();
+            Json(serde_json::json!({ "error": "Alerting requires Pro tier or above" }))).into_response();
     }
 
     let id = Uuid::new_v4().to_string();
@@ -3818,9 +3910,9 @@ async fn handle_create_rule(
     let tier: String = sqlx::query_scalar::<_, String>(
         "SELECT subscription_tier FROM users WHERE id = $1"
     ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
-    if !is_team_or_above(&tier) {
+    if !is_pro_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
-            Json(serde_json::json!({ "error": "Alerting requires Team tier" }))).into_response();
+            Json(serde_json::json!({ "error": "Alerting requires Pro tier or above" }))).into_response();
     }
 
     // Verify channel belongs to user.
@@ -4199,6 +4291,7 @@ async fn main() {
         .route("/api/alerts/rules",             post(handle_create_rule))
         .route("/api/alerts/rules",             get(handle_list_rules))
         .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
+        .route("/api/nodes/:node_id",    patch(handle_update_node))
         .route("/api/billing/config",    get(handle_billing_config))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
         .with_state(state)

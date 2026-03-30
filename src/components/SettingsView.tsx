@@ -819,10 +819,11 @@ const AlertsSection: React.FC<{
   // Cloud mode = any build that isn't the embedded agent binary (localhost:7700).
   // pairingInfo.status tracks whether a local node is paired — irrelevant here.
   // On wicklee.dev the user is already in the fleet regardless of local pairing state.
-  const isCloudMode  = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
-  const isTeam       = subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isCloudMode    = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
+  const isProOrAbove   = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isTeam         = subscriptionTier === 'team' || subscriptionTier === 'enterprise';
   const { channels, rules, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule } =
-    useAlerts(getToken, isCloudMode && isTeam);
+    useAlerts(getToken, isCloudMode && isProOrAbove);
 
   // ── Channel form state ────────────────────────────────────────────────────
   const [showChanForm,  setShowChanForm]  = useState(false);
@@ -915,16 +916,16 @@ const AlertsSection: React.FC<{
   }
 
   // ── Locked — Community tier ───────────────────────────────────────────────
-  if (!isTeam) {
+  if (!isProOrAbove) {
     return (
       <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
         <div className="px-6 py-6 space-y-4">
           <div className="rounded-xl bg-indigo-500/5 border border-indigo-500/20 px-5 py-4 flex items-start gap-3">
             <Bell size={14} className="text-indigo-400 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-200">Alerts & Notifications — Team Edition</p>
+              <p className="text-xs font-semibold text-gray-200">Alerts & Notifications — Pro+</p>
               <p className="text-[11px] text-gray-500 leading-relaxed">
-                Slack and email alerts for thermal events, node offline, WES drops, and memory pressure. Stateful — fires once per outage, resolves automatically, 5-min flap suppression.
+                Custom alert thresholds, Slack notifications, and stateful alerting. Pro: single Slack channel with custom thresholds. Team: unlimited channels + PagerDuty.
               </p>
             </div>
           </div>
@@ -942,14 +943,18 @@ const AlertsSection: React.FC<{
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Team — $29/mo
+            Upgrade to Pro — $9/mo
           </button>
         </div>
       </Section>
     );
   }
 
-  // ── Full UI — Team+ ───────────────────────────────────────────────────────
+  // Pro channel limit: 1 Slack channel. Team+: unlimited.
+  const channelLimit = isTeam ? Infinity : 1;
+  const canAddChannel = channels.length < channelLimit;
+
+  // ── Full UI — Pro+ ─────────────────────────────────────────────────────────
   return (
     <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
       <div className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -970,9 +975,15 @@ const AlertsSection: React.FC<{
             </div>
             <button
               onClick={() => { setShowChanForm(v => !v); setChanError(null); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400 transition-colors"
+              disabled={!canAddChannel}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors ${
+                canAddChannel
+                  ? 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400'
+                  : 'border-gray-800 text-gray-600 cursor-not-allowed'
+              }`}
+              title={canAddChannel ? undefined : 'Pro plan: 1 channel max. Upgrade to Team for unlimited.'}
             >
-              <Plus size={11} /> Add channel
+              <Plus size={11} /> {canAddChannel ? 'Add channel' : 'Channel limit reached'}
             </button>
           </div>
 
