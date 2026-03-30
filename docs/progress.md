@@ -6,6 +6,41 @@
 
 ---
 
+## March 30, 2026 — v0.7.9: Subscription Gating, WES Cleanup, Event Unification, Clerk Production
+
+### WES Formula Cleanup ✅
+- **Removed ×10 multiplier** from all WES calculations (agent `cloud/src/main.rs`, frontend `wes.ts`). WES now equals tok/watt when thermal is Normal — clean, intuitive, matches what users see.
+- **tok/W column added** to Fleet Status table and summary tiles (replaces Fleet Duty on cloud, Node Duty on localhost). Formula: `tok/s ÷ watts`. Same color scale as WES.
+- **Color scale updated** across all components: Excellent (>10) emerald-400, Good (3–10) green-300, Acceptable (1–3) yellow-400, Low (<1) red-400. Previous blue for Excellent replaced with emerald.
+- Updated in: `wes.ts`, `MetricTooltip`, `Overview`, `MetricsPage`, `FleetHeaderBar`, `AIInsights`, `DocsPage`, `CLAUDE.md`.
+
+### Subscription Gating ✅
+- **Pattern tier filtering** — `evaluatePatterns()` accepts `subscriptionTier` param and filters Pro patterns (D, E, G, I, L, M) from Community users at evaluation time.
+- **Backend export gate** — `GET /api/fleet/export` returns 402 for Community/Pro (Team+ only).
+- **Backend insights API gate** — `GET /api/v1/insights/latest` returns 402 for Community/Pro (Team+ only).
+- **Pricing page updated** — Team: $19/seat/mo (3-seat min), 25 nodes, +50 expansion packs ($50/mo). Enterprise: "From $200/mo" with Sentinel Proxy exclusive. Pro: added Custom Alert Thresholds and Node Naming/Tags.
+- **TIERS.md updated** — Proxy row added (Enterprise only), correct node counts and pricing.
+
+### Event Stream Unification ✅
+- **Observation events in Fleet Event Timeline** — new "observation" filter chip matching all 5 cloud evaluator types + resolved variants. Color-coded badges.
+- **Live Activity seeds from history** — observation onset/resolved events now persist across page loads via DB seed.
+- **EventFeed resolved rendering** — green check icon for all `_resolved` variants (zombied_engine, thermal_redline, oom_warning, wes_cliff, agent_version_mismatch).
+- **"Came online" flood fix** — DB events without recognized FleetEvent types no longer default to `node_online`.
+
+### Thermal Improvements ✅
+- **Idle CPU thermal override** — nodes using `clock_ratio` thermal source with CPU usage < 15% now forced to Normal. Fixes false Fair/Serious on EPYC/Xeon CPUs that aggressively frequency-scale at idle.
+- **Documentation** — full platform thermal detection table added to DocsPage (NVML, IOKit, coretemp, clock_ratio, sysfs, WMI).
+
+### Clerk Production Migration ✅
+- Migrated from Clerk development instance to production (clerk.wicklee.dev proxy domain, Google OAuth configured).
+- nginx IPv6 DNS fix: bracketed `[fd12::10]` for Railway internal resolver.
+- Nodes re-paired under production Clerk user ID.
+
+### Documentation Audit ✅
+- 10 accuracy fixes: WebSocket 1Hz (not 10Hz), agent runs as root, Ollama probe 20-token, config.toml filename, --status CLI command, API key endpoints, dismiss endpoints, thermal_source values, pattern scope groupings (4 localhost / 4 cloud / 7 both), macOS Nominal mapping.
+
+---
+
 ## March 27, 2026 — v0.7.8: Per-Model WES Baseline, Launchctl Fix, Intel/Windows Thermal
 
 ### Per-Model WES Normalization ✅
