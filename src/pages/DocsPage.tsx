@@ -528,28 +528,29 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                 Raw inference efficiency without thermal adjustment. When thermal state is Normal (penalty = 1.0), tok/W and WES are identical. When the node is thermally stressed, tok/W stays higher than WES — the gap between them is the thermal penalty. Displayed alongside WES in the Fleet Status table and as a summary tile on both localhost and cloud dashboards.
               </p>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                tok/W uses the same color scale as WES: <span className="text-blue-400">&gt; 10 Excellent</span> · <span className="text-green-400">3–10 Good</span> · <span className="text-yellow-400">1–3 Acceptable</span> · <span className="text-red-400">&lt; 1 Low</span>.
+                tok/W uses the same color scale as WES: <span className="text-emerald-400">&gt; 10 Excellent</span> · <span className="text-green-300">3–10 Good</span> · <span className="text-yellow-400">1–3 Acceptable</span> · <span className="text-red-400">&lt; 1 Low</span>.
               </p>
             </div>
 
             {/* Score interpretation table */}
             <div>
-              <p className="font-semibold text-white mb-2">Reading WES scores</p>
+              <p className="font-semibold text-white mb-2">Reading WES and tok/W scores</p>
+              <p className="text-xs text-gray-500 mb-2">Both WES and tok/W use the same four-tier color scale. The scale applies to both metrics identically.</p>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr>
                       <Th>Score range</Th>
-                      <Th>Interpretation</Th>
+                      <Th>Color</Th>
+                      <Th>Label</Th>
                       <Th>Typical hardware</Th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr><Td mono>&gt; 10</Td><Td>Excellent — highly efficient inference</Td><Td>Apple M4 / M3 at low-to-moderate load</Td></tr>
-                    <tr><Td mono>3 – 10</Td><Td>Good — efficient for the power envelope</Td><Td>Apple M-series at full load, efficient NVIDIA setups</Td></tr>
-                    <tr><Td mono>1 – 3</Td><Td>Acceptable — typical for high-power hardware</Td><Td>EPYC / Xeon CPU-only, midrange GPUs</Td></tr>
-                    <tr><Td mono>0.1 – 1</Td><Td>Low — high power draw relative to throughput</Td><Td>Server GPUs (A100, H100), large models on desktop GPUs</Td></tr>
-                    <tr><Td mono>&lt; 0.1</Td><Td>Investigate — thermal throttle or misconfiguration</Td><Td>Any platform under sustained thermal stress</Td></tr>
+                    <tr><Td mono>&gt; 10</Td><Td><span className="text-emerald-400 font-medium">Emerald</span></Td><Td>Excellent — highly efficient inference</Td><Td>Apple M4 / M3 at low-to-moderate load</Td></tr>
+                    <tr><Td mono>3 – 10</Td><Td><span className="text-green-300 font-medium">Light Green</span></Td><Td>Good — efficient for the power envelope</Td><Td>Apple M-series at full load, efficient NVIDIA setups</Td></tr>
+                    <tr><Td mono>1 – 3</Td><Td><span className="text-yellow-400 font-medium">Yellow</span></Td><Td>Acceptable — typical for high-power hardware</Td><Td>EPYC / Xeon CPU-only, midrange GPUs</Td></tr>
+                    <tr><Td mono>&lt; 1</Td><Td><span className="text-red-400 font-medium">Red</span></Td><Td>Low — check thermal state or model sizing</Td><Td>Server GPUs under load, thermal throttle, or misconfigured</Td></tr>
                   </tbody>
                 </table>
               </div>

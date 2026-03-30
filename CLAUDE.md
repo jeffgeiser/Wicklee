@@ -106,11 +106,11 @@ WES = tok/s ÷ (watts × thermal_penalty). When thermal is Normal (penalty=1.0),
 
 **Thermal penalties:** Normal=1.0, Fair=1.25, Serious=1.75, Critical=2.0
 
-**Color scale (frozen — used by `wesColorClass` in `src/utils/wes.ts` and must match everywhere):**
-- `> 10` → Blue (Excellent)
-- `3–10` → Green (Good)
-- `1–3` → Yellow (Acceptable)
-- `< 1` → Red (Low)
+**Color scale (frozen — used by `wesColorClass` in `src/utils/wes.ts` and must match everywhere). Applies to both WES and tok/W:**
+- `> 10` → Emerald (`text-emerald-400`) — Excellent
+- `3–10` → Light Green (`text-green-300`) — Good
+- `1–3` → Yellow (`text-yellow-400`) — Acceptable
+- `< 1` → Red (`text-red-400`) — Low
 
 These thresholds appear in: `wes.ts`, `Overview.tsx` (3 MetricTooltip ranges), `MetricsPage.tsx`, `AIInsights.tsx` (2 inline conditionals), `FleetHeaderBar.tsx`, `SiliconFitAudit.tsx`, `DocsPage.tsx`, and `public/metrics.md`. When changing the scale, ALL locations must be updated.
 

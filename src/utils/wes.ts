@@ -99,24 +99,28 @@ export function thermalSourceLabel(source: string | null | undefined): string {
   const map: Record<string, string> = {
     nvml:        'NVML',
     iokit:       'IOKit',
+    coretemp:    'coretemp',
+    clock_ratio: 'clock ratio',
     sysfs:       'sysfs',
+    wmi:         'WMI',
     unavailable: 'unavailable',
   };
   return map[source.toLowerCase()] ?? source;
 }
 
 /**
- * Tailwind color class for a WES score value.
+ * Tailwind color class for a WES or tok/W score value.
  *
- * > 10  → green
- * 1–10  → amber
- * < 1   → red
+ * > 10  → emerald (Excellent)
+ * 3–10  → light green (Good)
+ * 1–3   → yellow (Acceptable)
+ * < 1   → red (Low)
  * null  → muted gray
  */
 export function wesColorClass(score: number | null): string {
   if (score == null) return 'text-gray-400 dark:text-gray-600';
-  if (score > 10)    return 'text-blue-500 dark:text-blue-400';     // Excellent — blue
-  if (score >= 3)    return 'text-green-500 dark:text-green-400';   // Good — green
-  if (score >= 1)    return 'text-yellow-500 dark:text-yellow-400'; // Acceptable — yellow
-  return 'text-red-500 dark:text-red-400';                          // Low — red
+  if (score > 10)    return 'text-emerald-500 dark:text-emerald-400';  // Excellent — bright emerald
+  if (score >= 3)    return 'text-green-400 dark:text-green-300';      // Good — lighter green
+  if (score >= 1)    return 'text-yellow-500 dark:text-yellow-400';    // Acceptable — yellow
+  return 'text-red-500 dark:text-red-400';                              // Low — red
 }
