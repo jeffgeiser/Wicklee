@@ -325,20 +325,39 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   const handleCheckoutTier = useCallback(async (tier: 'pro' | 'team') => {
     try {
       const token = await getToken();
-      const r = await fetch(`${CLOUD_URL}/api/billing/checkout`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ tier }),
+      const r = await fetch(`${CLOUD_URL}/api/billing/config`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
-      if (r.ok) {
-        const { url } = await r.json();
-        if (url) window.location.href = url;
+      if (!r.ok) return;
+      const config = await r.json() as {
+        environment: 'sandbox' | 'production';
+        prices: { pro: string; team: string };
+        custom_data: { user_id: string };
+        customer_email: string | null;
+      };
+
+      const Paddle = window.Paddle;
+      if (!Paddle) {
+        console.error('[billing] Paddle.js not loaded');
+        return;
       }
-    } catch {
-      // Billing unavailable — silently fail, user can try again
+
+      // Initialize Paddle with environment (idempotent)
+      Paddle.Environment.set(config.environment);
+
+      const priceId = tier === 'team' ? config.prices.team : config.prices.pro;
+      Paddle.Checkout.open({
+        items: [{ priceId, quantity: tier === 'team' ? 3 : 1 }],
+        customData: config.custom_data,
+        customer: config.customer_email ? { email: config.customer_email } : undefined,
+        settings: {
+          displayMode: 'overlay',
+          theme: 'dark',
+          successUrl: `${window.location.origin}/dashboard?upgraded=1`,
+        },
+      });
+    } catch (e) {
+      console.error('[billing] checkout failed:', e);
     }
   }, [getToken]);
 
