@@ -148,7 +148,7 @@ NVIDIA/NVML support, Fleet Connect pairing, hosted fleet aggregation on Railway.
 Wattage-per-Token, Thermal Rerouting (Sentinel), Apple Neural Engine (ANE).
 
 ### 📋 Phase 4 — The Commercial Layer
-Team Edition, Stripe, alert integrations (Slack/PagerDuty), curl install script.
+Team Edition, Paddle, alert integrations (Slack/PagerDuty), curl install script.
 
 ---
 

@@ -552,11 +552,11 @@
 - [ ] **History query depth** — Backend should cap `from` parameter based on tier (24h Community, 7d Pro, 90d Team).
 - [ ] **Slack alert delivery gate** — Only deliver Slack webhooks for Pro+ users. Currently evaluator runs for all tiers.
 
-**Stripe integration:**
-- [ ] **Stripe Checkout flow** — Pricing page buttons → Stripe Checkout with `clerk_user_id` as `client_reference_id`.
-- [ ] **Stripe webhook** — `checkout.session.completed` → update `users.subscription_tier` in Postgres.
-- [ ] **Stripe portal** — "Manage Subscription" in Settings → Stripe Customer Portal for upgrades/cancellations.
-- [ ] **LLC Formation:** Wyoming or Delaware via Stripe Atlas or Doola.
+**Paddle integration:**
+- [ ] **Paddle Checkout flow** — Pricing page buttons → Paddle Checkout with `clerk_user_id` as `custom_data`.
+- [ ] **Paddle webhook** — `subscription.activated` → update `users.subscription_tier` in Postgres.
+- [ ] **Paddle portal** — "Manage Subscription" in Settings → Paddle Customer Portal for upgrades/cancellations.
+- [ ] **LLC Formation:** Wyoming or Delaware via Doola.
 
 ### Pro Features ($9/mo)
 
@@ -615,7 +615,7 @@
 - [ ] **Team Members list** — avatar, name, email, role badge, last active. Owner can change roles or remove members.
 - [ ] **Activity attribution** — observation acknowledges, alert dismissals, and Settings changes show "by [name]" in audit trail.
 
-**Prerequisite:** Stripe integration (need `subscription_tier` on the org to gate team features).
+**Prerequisite:** Paddle integration (need `subscription_tier` on the org to gate team features).
 - [ ] **Product Hunt launch**
 
 ---

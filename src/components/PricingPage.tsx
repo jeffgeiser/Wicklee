@@ -14,7 +14,7 @@ interface PricingPageProps {
   isLoggedIn?: boolean;
   /** Navigate within the SPA. */
   onNavigate?: (path: string) => void;
-  /** Trigger Stripe checkout for a given tier. */
+  /** Trigger Paddle checkout for a given tier. */
   onCheckout?: (tier: 'pro' | 'team') => void;
   /** Auth callbacks — rendered in the nav when logged out. */
   onSignIn?: () => void;

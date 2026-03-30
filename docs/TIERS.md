@@ -1,6 +1,6 @@
 # Wicklee — Subscription Tiers
 
-> **Authoritative reference for feature gating.** All subscription logic in the frontend (`usePermissions`, gate guards, upgrade prompts) and backend (Clerk metadata, Stripe entitlements) should derive from this document.
+> **Authoritative reference for feature gating.** All subscription logic in the frontend (`usePermissions`, gate guards, upgrade prompts) and backend (Clerk metadata, Paddle entitlements) should derive from this document.
 
 ---
 
@@ -337,7 +337,7 @@ ENTERPRISE_SSO = true
 ## Gating Implementation Notes
 
 ### Clerk Metadata
-Tier is stored in Clerk user public metadata: `{ "tier": "community" | "pro" | "team" | "enterprise" }`. Read in the frontend via `useUser().user.publicMetadata.tier`. Set by the Stripe webhook handler on subscription events.
+Tier is stored in Clerk user public metadata: `{ "tier": "community" | "pro" | "team" | "enterprise" }`. Read in the frontend via `useUser().user.publicMetadata.tier`. Set by the Paddle webhook handler on subscription events.
 
 ### `usePermissions` Hook
 `src/hooks/usePermissions.ts` should derive all gate booleans from the tier string. No hardcoded per-feature checks scattered across components — always go through `usePermissions`.
