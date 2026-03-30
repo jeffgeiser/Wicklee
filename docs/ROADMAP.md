@@ -540,15 +540,15 @@
 
 ### Subscription Gating — In Progress
 
-**Frontend gating (not yet enforced):**
-- [ ] **Pattern tier filtering** — patternEngine.ts returns `tier` on each result but nothing filters Pro patterns (D, E, G, I, L, M) from Community users. Wire `subscriptionTier` into the evaluation pipeline.
+**Frontend gating:**
+- [x] **Pattern tier filtering** — ✅ `evaluatePatterns()` accepts `subscriptionTier` and filters Pro patterns (D, E, G, I, L, M) from Community users.
 - [ ] **SubscriptionGuard wiring** — Component exists but is never imported. Apply to: alert config (Pro+), export buttons (Team+), trend analysis cards (Team+), MCP/Insights API docs (Team+).
 - [ ] **Insight tier gates** — `canViewInsight()` exists in usePermissions but verify it's checked for insights 8-14 (Team/Enterprise).
 - [ ] **History depth enforcement** — Frontend should limit time-range selectors (1d Community, 7d Pro, 90d Team). Backend should cap query ranges per tier.
 
-**Backend gating (not yet enforced):**
-- [ ] **Export endpoint gate** — `GET /api/fleet/export` should return 402 for Community/Pro (Team+ only per TIERS.md).
-- [ ] **Insights API gate** — `GET /api/v1/insights/latest` should return 402 for Community/Pro (Team+ only).
+**Backend gating:**
+- [x] **Export endpoint gate** — ✅ `GET /api/fleet/export` returns 402 for Community/Pro (Team+ only).
+- [x] **Insights API gate** — ✅ `GET /api/v1/insights/latest` returns 402 for Community/Pro (Team+ only).
 - [ ] **History query depth** — Backend should cap `from` parameter based on tier (24h Community, 7d Pro, 90d Team).
 - [ ] **Slack alert delivery gate** — Only deliver Slack webhooks for Pro+ users. Currently evaluator runs for all tiers.
 
@@ -567,7 +567,7 @@
 - [ ] **CSV / JSON Export:** Any metric, any time range, any node. (Team+ only)
 - [ ] **Event Detail Panel (Live Activity):** Clickable events with metrics snapshot at moment of event, precise timestamp, trigger reason, duration.
 
-### Team Workspaces — Shared Fleet Dashboard *(Team tier, $29/mo)*
+### Team Workspaces — Shared Fleet Dashboard *(Team tier, $19/seat/mo, 3-seat min)*
 
 > Multiple accounts viewing the same fleet. The solo operator pairs nodes and
 > invites teammates — everyone sees the same Intelligence tab, same observations,
