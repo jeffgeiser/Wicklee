@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {
@@ -104,6 +104,7 @@ const NAV = [
   { id: 'cli',         label: 'CLI Reference' },
   { id: 'wes',         label: 'WES Score' },
   { id: 'states',      label: 'Node States' },
+  { id: 'latency',     label: 'Latency & TTFT' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'event-feeds', label: 'Event Feeds' },
   { id: 'api-local',   label: 'Localhost API' },
@@ -728,6 +729,104 @@ WES Version:     2
             <NoteBox>
               The <code className="font-mono text-xs text-gray-300">inference_state</code> field is frozen in the wire format — the agent sends it identically to the local WebSocket dashboard and the fleet cloud backend. The fleet dashboard must display this value directly and never attempt to re-derive it from other fields like <code className="font-mono text-xs text-gray-300">gpu_utilization_percent</code> or <code className="font-mono text-xs text-gray-300">ollama_inference_active</code>.
             </NoteBox>
+          </Section>
+
+          {/* ── Latency & TTFT ── */}
+          <Section
+            id="latency"
+            icon={<Clock className="w-5 h-5" />}
+            accent="border-cyan-500/20"
+            title="Latency & TTFT"
+          >
+            <p>
+              Wicklee measures Time To First Token (TTFT) from three independent sources, each with different characteristics. Understanding which source is active helps interpret the values shown in the Fleet Status table and summary tiles.
+            </p>
+
+            <div className="overflow-x-auto mt-4">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr>
+                    <Th>Source</Th>
+                    <Th>Field</Th>
+                    <Th>Type</Th>
+                    <Th>What it measures</Th>
+                    <Th>When available</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td><span className="font-medium text-blue-400">Ollama Probe</span></Td>
+                    <Td mono>ollama_ttft_ms</Td>
+                    <Td><span className="text-amber-400 text-[10px] font-semibold">SYNTHETIC</span></Td>
+                    <Td>Prompt eval duration from a 20-token probe request every ~30s. Measures hardware capability under no contention — a baseline, not production latency.</Td>
+                    <Td>Ollama running, model loaded</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-green-400">vLLM Histogram</span></Td>
+                    <Td mono>vllm_avg_ttft_ms</Td>
+                    <Td><span className="text-emerald-400 text-[10px] font-semibold">PRODUCTION</span></Td>
+                    <Td>Rolling average from the <code className="text-gray-400">vllm:time_to_first_token_seconds</code> Prometheus histogram. Real production latency including queue wait and scheduling overhead.</Td>
+                    <Td>vLLM running + at least 1 request completed</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-purple-400">Proxy</span></Td>
+                    <Td mono>ollama_proxy_avg_ttft_ms</Td>
+                    <Td><span className="text-emerald-400 text-[10px] font-semibold">PRODUCTION</span></Td>
+                    <Td>Rolling average of <code className="text-gray-400">prompt_eval_duration</code> extracted from Ollama done packets flowing through the Wicklee transparent proxy. Real production latency.</Td>
+                    <Td>Proxy enabled + requests flowing</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-4 mt-4">
+              <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-2">Resolution priority</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                The dashboard resolves TTFT using the best available source: <strong className="text-gray-300">vLLM histogram</strong> (most accurate, real production data) → <strong className="text-gray-300">Proxy rolling average</strong> (real data, Ollama-specific) → <strong className="text-gray-300">Ollama probe</strong> (synthetic baseline). When the source is synthetic, the value represents the hardware floor — actual production TTFT will be higher under concurrent load.
+              </p>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-2">Additional latency metrics</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr>
+                      <Th>Field</Th>
+                      <Th>Source</Th>
+                      <Th>Description</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <Td mono>vllm_avg_e2e_latency_ms</Td>
+                      <Td>vLLM histogram</Td>
+                      <Td>End-to-end request latency (queue + prefill + decode). Production only.</Td>
+                    </tr>
+                    <tr>
+                      <Td mono>vllm_avg_queue_time_ms</Td>
+                      <Td>vLLM histogram</Td>
+                      <Td>Time spent waiting in the scheduler queue before processing begins.</Td>
+                    </tr>
+                    <tr>
+                      <Td mono>ollama_proxy_avg_latency_ms</Td>
+                      <Td>Proxy done packets</Td>
+                      <Td>Total request duration (prompt eval + generation) for Ollama requests through the proxy.</Td>
+                    </tr>
+                    <tr>
+                      <Td mono>ollama_prompt_eval_tps</Td>
+                      <Td>Ollama probe</Td>
+                      <Td>Prompt processing speed (tokens/sec). Synthetic baseline — indicates prefill throughput capability.</Td>
+                    </tr>
+                    <tr>
+                      <Td mono>ollama_load_duration_ms</Td>
+                      <Td>Ollama probe</Td>
+                      <Td>Time to load the model into memory on the most recent probe. High values indicate cold starts or memory pressure.</Td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </Section>
 
           {/* ── Pattern Intelligence ── */}
