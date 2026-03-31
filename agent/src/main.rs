@@ -130,9 +130,31 @@ pub(crate) struct VllmMetrics {
     pub(crate) vllm_tokens_per_sec:   Option<f32>,
     pub(crate) vllm_cache_usage_perc: Option<f32>,
     pub(crate) vllm_requests_running: Option<u32>,
+    // Phase 1: queue/saturation gauges
+    pub(crate) vllm_requests_waiting:     Option<u32>,
+    pub(crate) vllm_requests_swapped:     Option<u32>,
+    // Phase 3: windowed histogram averages (computed from _sum/_count deltas)
+    pub(crate) vllm_avg_ttft_ms:              Option<f32>,
+    pub(crate) vllm_avg_e2e_latency_ms:       Option<f32>,
+    pub(crate) vllm_avg_queue_time_ms:        Option<f32>,
+    pub(crate) vllm_prompt_tokens_total:      Option<u64>,
+    pub(crate) vllm_generation_tokens_total:  Option<u64>,
     /// Set when the 30s idle probe completes. Used for IDLE-SPD display state.
     #[serde(skip)]
     pub(crate) last_probe_end: Option<std::time::Instant>,
+    // Histogram delta tracking (not serialized — internal state for windowed averages)
+    #[serde(skip)]
+    pub(crate) prev_ttft_sum:        Option<f64>,
+    #[serde(skip)]
+    pub(crate) prev_ttft_count:      Option<u64>,
+    #[serde(skip)]
+    pub(crate) prev_e2e_sum:         Option<f64>,
+    #[serde(skip)]
+    pub(crate) prev_e2e_count:       Option<u64>,
+    #[serde(skip)]
+    pub(crate) prev_queue_time_sum:  Option<f64>,
+    #[serde(skip)]
+    pub(crate) prev_queue_time_count: Option<u64>,
 }
 
 impl VllmMetrics {
@@ -312,6 +334,20 @@ struct MetricsPayload {
     vllm_cache_usage_perc: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vllm_requests_running: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_requests_waiting: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_requests_swapped: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_avg_ttft_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_avg_e2e_latency_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_avg_queue_time_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_prompt_tokens_total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_generation_tokens_total: Option<u64>,
     // llama.cpp / llama-box runtime (null/false when not running)
     #[serde(default)]
     llamacpp_running:          bool,
@@ -2393,6 +2429,13 @@ fn start_metrics_broadcaster(
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,
+                vllm_requests_waiting:        vllm.vllm_requests_waiting,
+                vllm_requests_swapped:        vllm.vllm_requests_swapped,
+                vllm_avg_ttft_ms:             vllm.vllm_avg_ttft_ms,
+                vllm_avg_e2e_latency_ms:      vllm.vllm_avg_e2e_latency_ms,
+                vllm_avg_queue_time_ms:       vllm.vllm_avg_queue_time_ms,
+                vllm_prompt_tokens_total:     vllm.vllm_prompt_tokens_total,
+                vllm_generation_tokens_total: vllm.vllm_generation_tokens_total,
                 llamacpp_running:          llamacpp.llamacpp_running,
                 llamacpp_model_name:       llamacpp.llamacpp_model_name,
                 llamacpp_tokens_per_sec:   llamacpp.llamacpp_tokens_per_sec,
@@ -3362,6 +3405,13 @@ async fn handle_metrics(
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,
+                vllm_requests_waiting:        vllm.vllm_requests_waiting,
+                vllm_requests_swapped:        vllm.vllm_requests_swapped,
+                vllm_avg_ttft_ms:             vllm.vllm_avg_ttft_ms,
+                vllm_avg_e2e_latency_ms:      vllm.vllm_avg_e2e_latency_ms,
+                vllm_avg_queue_time_ms:       vllm.vllm_avg_queue_time_ms,
+                vllm_prompt_tokens_total:     vllm.vllm_prompt_tokens_total,
+                vllm_generation_tokens_total: vllm.vllm_generation_tokens_total,
                 llamacpp_running:          llamacpp.llamacpp_running,
                 llamacpp_model_name:       llamacpp.llamacpp_model_name,
                 llamacpp_tokens_per_sec:   llamacpp.llamacpp_tokens_per_sec,
