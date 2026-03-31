@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint, Clock } from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint, Clock, HardDrive } from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
@@ -1840,8 +1840,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   return (
     <div className="space-y-6">
-      {/* ── 8-tile Insight Engine: 2 rows × 4 cols ───────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      {/* ── 10-tile Insight Engine: 2 rows × 5 cols ──────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
 
         {/* ── Row 1: Performance & Health ─────────────────────────────────── */}
 
@@ -1942,29 +1942,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-blue-400"
         />
 
-        {/* 4. FLEET NODES (cloud) / RUNTIME STATUS (local) */}
-        {isLocalMode ? (
-          <InsightTile
-            label="Runtime"
-            value={
-              sentinel?.vllm_running  ? (sentinel.vllm_model_name ?? 'vLLM') :
-              sentinel?.ollama_running ? (sentinel.ollama_active_model ?? 'Ollama') :
-              sentinel ? 'No runtime' : '—'
-            }
-            valueCls={
-              (sentinel?.ollama_running || sentinel?.vllm_running)
-                ? 'text-green-400'
-                : 'text-gray-400 dark:text-gray-600'
-            }
-            sub={
-              sentinel?.vllm_running  ? 'vLLM · active' :
-              sentinel?.ollama_running ? 'Ollama · active' :
-              sentinel ? 'Ollama + vLLM not detected' : undefined
-            }
-            icon={Cpu}
-            iconCls="text-green-400"
-          />
-        ) : (() => {
+        {/* 4. TTFT — Time To First Token (both modes) */}
+        {(() => {
           const ttftValues = effectiveMetrics
             .map(m => m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms ?? null)
             .filter((v): v is number => v != null && v > 0);
@@ -1988,7 +1967,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     { threshold: '> 500ms', color: 'red', label: 'Slow · check model size or queue depth' },
                   ]}
                 >
-                  Fleet TTFT
+                  {isLocalMode ? 'Node TTFT' : 'Fleet TTFT'}
                 </MetricTooltip>
               }
               value={avgTtft != null ? (avgTtft < 1000 ? `${Math.round(avgTtft)}ms` : `${(avgTtft / 1000).toFixed(1)}s`) : '—'}
@@ -2001,6 +1980,40 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             />
           );
         })()}
+
+        {/* 5. RUNTIME (local) / FLEET NODES (cloud) */}
+        {isLocalMode ? (
+          <InsightTile
+            label="Runtime"
+            value={
+              sentinel?.vllm_running  ? (sentinel.vllm_model_name ?? 'vLLM') :
+              sentinel?.ollama_running ? (sentinel.ollama_active_model ?? 'Ollama') :
+              sentinel ? 'No runtime' : '—'
+            }
+            valueCls={
+              (sentinel?.ollama_running || sentinel?.vllm_running)
+                ? 'text-green-400'
+                : 'text-gray-400 dark:text-gray-600'
+            }
+            sub={
+              sentinel?.vllm_running  ? 'vLLM · active' :
+              sentinel?.ollama_running ? 'Ollama · active' :
+              sentinel ? 'Ollama + vLLM not detected' : undefined
+            }
+            icon={Cpu}
+            iconCls="text-green-400"
+          />
+        ) : (
+          <InsightTile
+            label="Fleet Nodes"
+            value={fleetTotalCount > 0 ? `${fleetLiveCount} / ${fleetTotalCount}` : '—'}
+            sub={fleetLiveCount > 0
+              ? `${fleetLiveCount} online`
+              : fleetTotalCount > 0 ? 'no nodes live' : undefined}
+            icon={Server}
+            iconCls="text-green-400"
+          />
+        )}
 
         {/* ── Row 2: Efficiency & ROI ──────────────────────────────────────── */}
 
@@ -2118,6 +2131,82 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             : displayFleetAvgTokW != null && displayFleetAvgTokW >= 1 ? 'text-yellow-400'
             : 'text-gray-500'}
         />
+
+        {/* 9. AVG LATENCY — fleet/node average E2E latency */}
+        {(() => {
+          const latValues = effectiveMetrics
+            .map(m => m.vllm_avg_e2e_latency_ms ?? m.ollama_proxy_avg_latency_ms ?? m.ollama_ttft_ms ?? null)
+            .filter((v): v is number => v != null && v > 0);
+          const avgLat = latValues.length > 0
+            ? latValues.reduce((a, b) => a + b, 0) / latValues.length
+            : null;
+          const latCls = avgLat == null ? 'text-gray-400 dark:text-gray-600'
+            : avgLat < 200 ? 'text-emerald-400'
+            : avgLat < 1000 ? 'text-yellow-400'
+            : 'text-red-400';
+          return (
+            <InsightTile
+              label={
+                <MetricTooltip
+                  metricId="fleet-latency"
+                  name="Avg Latency — End-to-End Response Time"
+                  oneLiner="Average time to complete a full request. Best available: vLLM E2E histogram, proxy rolling average, or Ollama probe TTFT."
+                  ranges={[
+                    { threshold: '< 200ms', color: 'green', label: 'Fast · real-time quality' },
+                    { threshold: '200ms–1s', color: 'amber', label: 'Moderate · noticeable wait' },
+                    { threshold: '> 1s', color: 'red', label: 'Slow · investigate bottleneck' },
+                  ]}
+                >
+                  {isLocalMode ? 'Node Latency' : 'Avg Latency'}
+                </MetricTooltip>
+              }
+              value={avgLat != null ? (avgLat < 1000 ? `${Math.round(avgLat)}ms` : `${(avgLat / 1000).toFixed(1)}s`) : '—'}
+              valueCls={latCls}
+              sub={avgLat != null
+                ? `${latValues.length} node${latValues.length !== 1 ? 's' : ''} · response time`
+                : 'no latency data'}
+              icon={Activity}
+              iconCls="text-cyan-400"
+            />
+          );
+        })()}
+
+        {/* 10. SWAP WRITE — disk spill rate */}
+        {(() => {
+          const swapValues = effectiveMetrics
+            .map(m => m.swap_write_mb_s ?? null)
+            .filter((v): v is number => v != null);
+          const maxSwap = swapValues.length > 0 ? Math.max(...swapValues) : null;
+          const swapCls = maxSwap == null ? 'text-gray-400 dark:text-gray-600'
+            : maxSwap < 0.1 ? 'text-emerald-400'
+            : maxSwap < 2 ? 'text-yellow-400'
+            : 'text-red-400';
+          return (
+            <InsightTile
+              label={
+                <MetricTooltip
+                  metricId="fleet-swap"
+                  name="Swap Write — Disk Spill Rate"
+                  oneLiner="Rate at which data is being written to swap/disk. Non-zero during inference means model layers are spilling out of RAM — degrading throughput."
+                  ranges={[
+                    { threshold: '0 MB/s', color: 'green', label: 'Clean · all in memory' },
+                    { threshold: '0.1–2 MB/s', color: 'amber', label: 'Minor spill · watch for degradation' },
+                    { threshold: '> 2 MB/s', color: 'red', label: 'Swap storm · model too large for RAM' },
+                  ]}
+                >
+                  {isLocalMode ? 'Swap Write' : 'Fleet Swap'}
+                </MetricTooltip>
+              }
+              value={maxSwap != null ? (maxSwap < 0.1 ? '0' : `${maxSwap.toFixed(1)}`) : '—'}
+              valueCls={swapCls}
+              sub={maxSwap != null
+                ? maxSwap < 0.1 ? 'MB/s · no swap activity' : 'MB/s to disk'
+                : 'no swap data'}
+              icon={HardDrive}
+              iconCls="text-rose-400"
+            />
+          );
+        })()}
 
       </div>
 
