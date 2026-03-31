@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint } from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint, Clock } from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
@@ -151,10 +151,10 @@ const fmtAgo = (ms: number): string => {
 };
 
 // ── Fleet Status grid ────────────────────────────────────────────────────────
-// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/W · TOK/S · W/1K · WATTS · GPU% · THERMAL · SPACER
+// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/W · TOK/S · W/1K · WATTS · TTFT · GPU% · THERMAL · SPACER
 // Responsive priority — always visible: NODE, MODEL, WES, TOK/S
 //   sm+  adds: THERMAL
-//   md+  adds: MEMORY, VRAM, TOK/W, W/1K, WATTS, GPU%
+//   md+  adds: MEMORY, VRAM, TOK/W, W/1K, WATTS, TTFT, GPU%
 // SPACER (1fr) absorbs excess space on wide screens.
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
@@ -162,8 +162,8 @@ const FLEET_GRID_CLS = [
   '[grid-template-columns:140px_200px_80px_80px_1fr]',
   // sm: + THERMAL
   'sm:[grid-template-columns:140px_200px_80px_80px_100px_1fr]',
-  // md: full set — TOK/W added between WES and TOK/S
-  'md:[grid-template-columns:140px_120px_100px_200px_80px_65px_80px_80px_80px_80px_100px_1fr]',
+  // md: full set — TTFT added between WATTS and GPU%
+  'md:[grid-template-columns:140px_120px_100px_200px_80px_65px_80px_80px_80px_60px_80px_100px_1fr]',
 ].join(' ');
 
 const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
@@ -234,6 +234,19 @@ const FleetStatusHeader: React.FC = () => (
       wrapperClassName="hidden md:block"
     >
       <p className={FS_HDR}>WATTS</p>
+    </MetricTooltip>
+    <MetricTooltip
+      metricId="ttft"
+      name="TTFT — Time To First Token"
+      oneLiner="Latency from request to first generated token. Lower is more responsive."
+      ranges={[
+        { threshold: '< 100ms', color: 'green', label: 'Fast · interactive quality' },
+        { threshold: '100–500ms', color: 'amber', label: 'Moderate · noticeable delay' },
+        { threshold: '> 500ms', color: 'red', label: 'Slow · check model size or queue depth' },
+      ]}
+      wrapperClassName="hidden md:block"
+    >
+      <p className={FS_HDR}>TTFT</p>
     </MetricTooltip>
     <MetricTooltip
       metricId="gpu-pct"
@@ -723,6 +736,16 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         >
           {hasPower && isOnline ? `${totalPowerW.toFixed(1)}W` : '—'}
         </span>
+      </div>
+
+      {/* 7b. TTFT — best available (vLLM histogram > proxy rolling > Ollama probe) */}
+      <div className="hidden md:block min-w-0 overflow-hidden" title="Time to first token — latency from request to first generated token.">
+        {(() => {
+          const ttft = m?.vllm_avg_ttft_ms ?? m?.ollama_proxy_avg_ttft_ms ?? m?.ollama_ttft_ms ?? null;
+          if (ttft == null || !isOnline) return <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>;
+          const cls = ttft < 100 ? 'text-emerald-400' : ttft < 500 ? 'text-yellow-400' : 'text-red-400';
+          return <span className={`${V} ${cls}`}>{ttft < 1000 ? `${Math.round(ttft)}ms` : `${(ttft / 1000).toFixed(1)}s`}</span>;
+        })()}
       </div>
 
       {/* 8. GPU% — Apple Silicon (IOKit/AGX) or NVIDIA (NVML); no progress bar */}
@@ -2027,6 +2050,45 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             : displayFleetAvgTokW != null && displayFleetAvgTokW >= 1 ? 'text-yellow-400'
             : 'text-gray-500'}
         />
+
+        {/* 9. FLEET TTFT — average time to first token across active nodes */}
+        {(() => {
+          const ttftValues = effectiveMetrics
+            .map(m => m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms ?? null)
+            .filter((v): v is number => v != null && v > 0);
+          const avgTtft = ttftValues.length > 0
+            ? ttftValues.reduce((a, b) => a + b, 0) / ttftValues.length
+            : null;
+          const ttftCls = avgTtft == null ? 'text-gray-400 dark:text-gray-600'
+            : avgTtft < 100 ? 'text-emerald-400'
+            : avgTtft < 500 ? 'text-yellow-400'
+            : 'text-red-400';
+          return (
+            <InsightTile
+              label={
+                <MetricTooltip
+                  metricId="fleet-ttft"
+                  name="TTFT — Time To First Token"
+                  oneLiner="Average time from request to first generated token. Best available: vLLM histogram, proxy rolling average, or Ollama probe."
+                  ranges={[
+                    { threshold: '< 100ms', color: 'green', label: 'Fast · interactive quality' },
+                    { threshold: '100–500ms', color: 'amber', label: 'Moderate · noticeable delay' },
+                    { threshold: '> 500ms', color: 'red', label: 'Slow · check model size or queue depth' },
+                  ]}
+                >
+                  {isLocalMode ? 'Node TTFT' : 'Fleet TTFT'}
+                </MetricTooltip>
+              }
+              value={avgTtft != null ? (avgTtft < 1000 ? `${Math.round(avgTtft)}ms` : `${(avgTtft / 1000).toFixed(1)}s`) : '—'}
+              valueCls={ttftCls}
+              sub={avgTtft != null
+                ? `${ttftValues.length} node${ttftValues.length !== 1 ? 's' : ''} · avg latency`
+                : 'no latency data'}
+              icon={Clock}
+              iconCls="text-cyan-400"
+            />
+          );
+        })()}
 
       </div>
 
