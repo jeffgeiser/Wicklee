@@ -732,6 +732,51 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const cloudObsIdRef = useRef(new Map<string, string>());
   const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
 
+  // Seed obsCacheRef from server observations on mount (Pro+ persistent cards)
+  const serverSeededRef = useRef(false);
+  useEffect(() => {
+    if (serverSeededRef.current || !isProOrAbove || serverObservations.length === 0) return;
+    serverSeededRef.current = true;
+    const cache = obsCacheRef.current;
+    for (const obs of serverObservations) {
+      if (obs.state === 'acknowledged') continue; // dismissed — don't resurface
+      const key = `${obs.alert_type}:${obs.node_id}`;
+      if (cache.has(key)) {
+        // Client already has this pattern — just store the cloud ID
+        cloudObsIdRef.current.set(key, obs.id);
+        continue;
+      }
+      // Inject server observation as a cache entry so it renders as a card
+      cache.set(key, {
+        insight: {
+          patternId:       obs.alert_type,
+          nodeId:          obs.node_id,
+          hostname:        obs.node_id, // will be resolved later by pattern engine
+          title:           obs.title,
+          hook:            obs.detail,
+          body:            obs.detail,
+          recommendation:  '',
+          resolution_steps: [],
+          action_id:       'check_thermal_zone' as any,
+          requiredMs:      0,
+          observedMs:      0,
+          confidence:      obs.severity === 'critical' ? 'high' : 'moderate',
+          confidenceRatio: 1.0,
+          tier:            'community',
+          actions:         [],
+          firstFiredMs:    obs.fired_at_ms,
+          best_node_id:    null,
+          best_node_hostname: null,
+        },
+        firstFiredMs: obs.fired_at_ms,
+        resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
+      });
+      cloudObsIdRef.current.set(key, obs.id);
+    }
+    // Trigger re-render with seeded entries
+    setObsEntries(Array.from(cache.values()));
+  }, [serverObservations, isProOrAbove]);
+
   /**
    * Onset suppression map — tracks the last timestamp a pattern_onset event was
    * emitted for each `${patternId}:${nodeId}` key.
@@ -1833,17 +1878,31 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                         showNodeHeader={effectiveNodes.length > 1}
                         resolvedMs={entry.resolvedMs}
                         groupedNodes={entry.groupedNodes}
-                        onDismiss={() => emitFleetEvent({
-                          id:        crypto.randomUUID(),
-                          ts:        Date.now(),
-                          type:      'pattern_dismissed',
-                          nodeId:    entry.insight.nodeId,
-                          hostname:  entry.insight.hostname,
-                          patternId: entry.insight.patternId,
-                          action_id: entry.insight.action_id,
-                          hook:      entry.insight.hook,
-                          detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
-                        })}
+                        onDismiss={() => {
+                          emitFleetEvent({
+                            id:        crypto.randomUUID(),
+                            ts:        Date.now(),
+                            type:      'pattern_dismissed',
+                            nodeId:    entry.insight.nodeId,
+                            hostname:  entry.insight.hostname,
+                            patternId: entry.insight.patternId,
+                            action_id: entry.insight.action_id,
+                            hook:      entry.insight.hook,
+                            detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
+                          });
+                          // Pro+: acknowledge on cloud so dismiss syncs across devices
+                          const cloudKey = `${entry.insight.patternId}:${entry.insight.nodeId}`;
+                          const cloudId = cloudObsIdRef.current.get(cloudKey);
+                          if (cloudId && getToken) {
+                            getToken().then(t => {
+                              if (!t) return;
+                              fetch(`${CLOUD_URL}/api/fleet/observations/${cloudId}/acknowledge`, {
+                                method: 'POST',
+                                headers: { Authorization: `Bearer ${t}` },
+                              }).catch(() => {});
+                            });
+                          }
+                        }}
                       />
                     ))}
                   </div>
@@ -2002,6 +2061,56 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   )}
                 </div>
               )}
+
+              {/* ── Resolved History (Pro+ — server-backed, 24h) ───────────── */}
+              {isProOrAbove && !isLocalHost && (() => {
+                const now24h = Date.now() - 24 * 60 * 60 * 1000;
+                const resolved = serverObservations
+                  .filter(o => o.state === 'resolved' && o.resolved_at_ms != null && o.resolved_at_ms > now24h)
+                  .sort((a, b) => (b.resolved_at_ms ?? 0) - (a.resolved_at_ms ?? 0));
+                if (resolved.length === 0) return null;
+                return (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                      <CheckCircle className="w-3.5 h-3.5 text-green-400" />
+                      Resolved — Last 24h ({resolved.length})
+                    </div>
+                    <div className="rounded-2xl border border-gray-800 overflow-hidden">
+                      {resolved.map((obs, i) => {
+                        const durationMs = (obs.resolved_at_ms ?? 0) - obs.fired_at_ms;
+                        const ago = Date.now() - (obs.resolved_at_ms ?? Date.now());
+                        return (
+                          <div
+                            key={obs.id}
+                            className={`flex items-center gap-3 px-4 py-2.5 ${
+                              i < resolved.length - 1 ? 'border-b border-gray-800/60' : ''
+                            } bg-gray-900`}
+                          >
+                            <div className="w-1.5 h-1.5 rounded-full shrink-0 bg-green-500/50" />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-gray-400">{obs.title}</span>
+                              <span className="text-[10px] text-gray-600 ml-2 font-telin">{obs.node_id}</span>
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0">
+                              <span className="font-telin text-[10px] text-green-500/70 flex items-center gap-1">
+                                <Check className="w-2.5 h-2.5" />
+                                {durationMs < 60000 ? `${Math.round(durationMs / 1000)}s` :
+                                 durationMs < 3600000 ? `${Math.round(durationMs / 60000)}m` :
+                                 `${(durationMs / 3600000).toFixed(1)}h`}
+                              </span>
+                              <span className="font-telin text-[10px] text-gray-700">
+                                {ago < 60000 ? 'just now' :
+                                 ago < 3600000 ? `${Math.round(ago / 60000)}m ago` :
+                                 `${Math.round(ago / 3600000)}h ago`}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
 
