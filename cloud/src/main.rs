@@ -2442,17 +2442,19 @@ async fn handle_metrics_history(
                         AVG(mem_pressure_pct) AS mem_pct,
                         (SUM(CASE WHEN inference_state = 'live' THEN 1 ELSE 0 END)::float8 / NULLIF(COUNT(*), 0)::float8 * 100.0) AS duty_pct,
                         AVG(cpu_pct)          AS cpu_pct,
-                        AVG(swap_write)       AS swap_write
+                        AVG(swap_write)       AS swap_write,
+                        AVG(ttft_ms)          AS ttft_ms,
+                        AVG(e2e_latency_ms)   AS e2e_latency_ms
                  FROM metrics_raw
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
-            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
-                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap)| {
-                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap })
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e })
                 }).collect()
         } else {
             let sql = format!(
@@ -2464,17 +2466,19 @@ async fn handle_metrics_history(
                         AVG(mem_pressure_pct_avg) AS mem_pct,
                         AVG(inference_duty_pct)   AS duty_pct,
                         NULL::float8              AS cpu_pct,
-                        AVG(swap_write_avg)       AS swap_write
+                        AVG(swap_write_avg)       AS swap_write,
+                        NULL::float8              AS ttft_ms,
+                        NULL::float8              AS e2e_latency_ms
                  FROM metrics_5min
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
-            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
-                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap)| {
-                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap })
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e })
                 }).collect()
         };
 

@@ -34,15 +34,17 @@ const CLOUD_URL = (() => {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type TimeRange  = '1h' | '24h' | '7d' | '30d' | '90d';
-type MetricKey  = 'tok_s' | 'watts' | 'gpu_pct' | 'mem_pct';
+type MetricKey  = 'tok_s' | 'watts' | 'gpu_pct' | 'mem_pct' | 'ttft_ms' | 'e2e_latency_ms';
 
 interface MetricPoint {
-  ts_ms:      number;
-  tok_s:      number | null;
-  tok_s_p95:  number | null;
-  watts:      number | null;
-  gpu_pct:    number | null;
-  mem_pct:    number | null;
+  ts_ms:            number;
+  tok_s:            number | null;
+  tok_s_p95:        number | null;
+  watts:            number | null;
+  gpu_pct:          number | null;
+  mem_pct:          number | null;
+  ttft_ms?:         number | null;
+  e2e_latency_ms?:  number | null;
 }
 
 interface MetricsNode {
@@ -118,9 +120,31 @@ const METRIC_CONFIG: Record<MetricKey, {
     decimals: 0,
     domain:   [0, 100],
   },
+  ttft_ms: {
+    label:    'TTFT',
+    unit:     'ms',
+    color:    '#22d3ee',
+    gradId:   'gradTtft',
+    getPoint: (p) => p.ttft_ms ?? null,
+    getLive:  (m) => m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms ?? null,
+    getP95:   () => null,
+    decimals: 0,
+    domain:   [0, 'auto'],
+  },
+  e2e_latency_ms: {
+    label:    'E2E Latency',
+    unit:     'ms',
+    color:    '#a78bfa',
+    gradId:   'gradE2e',
+    getPoint: (p) => p.e2e_latency_ms ?? null,
+    getLive:  (m) => m.vllm_avg_e2e_latency_ms ?? m.ollama_proxy_avg_latency_ms ?? null,
+    getP95:   () => null,
+    decimals: 0,
+    domain:   [0, 'auto'],
+  },
 };
 
-const METRICS: MetricKey[] = ['tok_s', 'watts', 'gpu_pct', 'mem_pct'];
+const METRICS: MetricKey[] = ['tok_s', 'watts', 'gpu_pct', 'mem_pct', 'ttft_ms', 'e2e_latency_ms'];
 
 // ── Range config ──────────────────────────────────────────────────────────────
 
