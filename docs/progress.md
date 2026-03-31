@@ -28,6 +28,21 @@
 - **Enterprise tier** — "From $200/month". Proxy exclusive to Enterprise.
 - **Pro features added** — Custom Alert Thresholds, Node Naming & Tags.
 
+### Dashboard ✅
+- **10-tile Intelligence layout** — both localhost and cloud now have 10 summary tiles (5 per row). Cloud: Fleet Nodes tile replaced with Fleet TTFT. Localhost: added Inference State tile (Live/Busy/Idle-SPD/Idle with color-coded states).
+- **TTFT column in Fleet Status** — resolves best-available source (vLLM histogram → proxy rolling → Ollama probe). Color-coded: <100ms green, 100-500ms yellow, >500ms red.
+- **tok/W column + tile** — replaces Duty on both dashboards. Raw tok/s ÷ watts, same color scale as WES.
+- **WES color scale** — emerald (>10), green (3-10), yellow (1-3), red (<1). Applied consistently across all components.
+- **Landing page** — runtime comparison tiles (vLLM/Ollama native vs Wicklee-exclusive metrics), 18 patterns with simplified scope labels (only cloud-only patterns flagged).
+
+### Bug Fixes ✅
+- **Ollama probe carry-forward** — TTFT, prefill speed, load duration wiped every 5s harvester tick. Now carried forward like tok/s.
+- **nginx IPv6 DNS** — Railway internal DNS `[fd12::10]` bracketed correctly, resolves persistent 502 on `/api/v1/*`.
+- **gpu_wired_limit_mb** — M4 fallback to 75% of total RAM when sysctl returns 0.
+- **False thermal on idle CPU** — clock_ratio source with <15% CPU usage forced to Normal.
+- **Live Activity flood** — DB seed events with unrecognized types no longer default to `node_online`.
+- **10 documentation accuracy fixes** — WebSocket Hz, agent privilege, probe token count, config filename, CLI reference, API endpoints, pattern scopes, thermal mapping.
+
 ---
 
 ## March 30, 2026 — v0.7.9: Subscription Gating, WES Cleanup, Event Unification, Clerk Production
