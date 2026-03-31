@@ -1793,18 +1793,13 @@ const FleetMetricsMini: React.FC<{
       const token = await getToken();
       const params = new URLSearchParams({ range: r });
       if (selectedNode) params.set('node_id', selectedNode);
-      const url = `${CLOUD_URL}/api/fleet/metrics-history?${params}`;
-      console.log('[metrics-history] fetch', url, 'token:', token ? `${token.slice(0, 20)}...` : 'NULL');
-      const res = await fetch(url, {
+      const res = await fetch(`${CLOUD_URL}/api/fleet/metrics-history?${params}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      console.log('[metrics-history] status:', res.status);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      console.log('[metrics-history] nodes:', json.nodes?.length, 'points:', json.nodes?.reduce((s: number, n: { points?: unknown[] }) => s + (n.points?.length ?? 0), 0));
       setData(json.nodes ?? []);
     } catch (e: unknown) {
-      console.error('[metrics-history] error:', e);
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setLoading(false);
