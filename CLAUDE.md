@@ -137,6 +137,36 @@ WES is computed client-side at render time from the live SSE payload — the age
 - Frontend: Tailwind utility classes only (no custom CSS). Strict typing in `types.ts`.
 - All metrics are real or explicitly labeled as unavailable — no mock values in production.
 
+## v0.7.10 — Inference Metrics Expansion, Patterns P/Q/R, Pro Features (2026-03-31)
+
+### Inference Metrics (13 new fields, three-way sync)
+- **vLLM gauges:** `vllm_requests_waiting`, `vllm_requests_swapped` from `/metrics` Prometheus endpoint
+- **Ollama probe:** `ollama_prompt_eval_tps`, `ollama_ttft_ms`, `ollama_load_duration_ms` from 20-token probe
+- **vLLM histograms:** `vllm_avg_ttft_ms`, `vllm_avg_e2e_latency_ms`, `vllm_avg_queue_time_ms` via delta tracking + `vllm_total_prompt_tokens`, `vllm_total_generation_tokens`
+- **Proxy aggregates:** `ollama_proxy_avg_ttft_ms`, `ollama_proxy_avg_latency_ms`, `ollama_proxy_request_count` from done-packet accumulators
+
+### Patterns P/Q/R (total: 18 patterns A–R)
+- **P — TTFT Regression (Pro):** 2min recent TTFT > 2× 5min baseline → fires
+- **Q — Latency Spike (Pro):** E2E latency > 2s for 3+ consecutive samples
+- **R — vLLM Queue Saturation (Pro):** requests_waiting > 5 sustained → horizontal scaling needed
+- Pattern M enhanced with queue depth context in body text
+
+### Pro Features
+- **Node Display Names** — `PATCH /api/nodes/:node_id`, SSE stream includes `display_name`, syncs across devices
+- **7-Day History Enforcement** — `isRangeLocked()` uses `subscriptionTier` instead of `historyDays` proxy
+- **Pattern Tier Filtering** — `evaluatePatterns()` filters by user tier. Community: 9 patterns, Pro: 18
+
+### Pricing & Subscriptions
+- **Paddle** replaces Stripe for payment processing
+- **Team: $19/seat/mo** (3-seat min), 25 nodes, $50/50-node expansion
+- **Enterprise: From $200/mo** — Proxy exclusive
+
+### WES Color Scale (updated — replaces blue with emerald)
+- `> 10` → Emerald (`text-emerald-400`) — Excellent
+- `3–10` → Light Green (`text-green-300`) — Good
+- `1–3` → Yellow (`text-yellow-400`) — Acceptable
+- `< 1` → Red (`text-red-400`) — Low
+
 ## v0.7.8 — Per-Model WES Baseline, Launchctl Fix, Intel/Windows Thermal (2026-03-27)
 
 ### Per-Model WES Normalization
