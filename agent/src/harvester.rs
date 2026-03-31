@@ -299,6 +299,10 @@ pub(crate) fn start_ollama_harvester(
                     last_user_request_ts:     prev_state.last_user_request_ts,
                     probe_caused_next_reset:  prev_state.probe_caused_next_reset,
                     validated_port:           prev_state.validated_port,
+                    // Carry forward probe-derived latency fields (set every ~30s by probe task)
+                    ollama_prompt_eval_tps:   prev_state.ollama_prompt_eval_tps,
+                    ollama_ttft_ms:           prev_state.ollama_ttft_ms,
+                    ollama_load_duration_ms:  prev_state.ollama_load_duration_ms,
                     ..Default::default()
                 };
 
