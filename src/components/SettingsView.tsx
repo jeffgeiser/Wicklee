@@ -45,6 +45,8 @@ const EVENT_TYPES: { value: string; label: string; hasThreshold: boolean; thresh
   { value: 'node_offline',         label: 'Node offline (>5 min)',           hasThreshold: false },
   { value: 'memory_pressure_high', label: 'Memory pressure high',            hasThreshold: true, thresholdLabel: '% threshold', defaultThreshold: 85 },
   { value: 'wes_drop',             label: 'WES drops below threshold',       hasThreshold: true, thresholdLabel: 'Min WES',     defaultThreshold: 5  },
+  { value: 'ttft_regression',      label: 'TTFT exceeds threshold',          hasThreshold: true, thresholdLabel: 'Max TTFT (ms)', defaultThreshold: 500 },
+  { value: 'throughput_low',       label: 'Throughput drops below threshold', hasThreshold: true, thresholdLabel: 'Min tok/s',   defaultThreshold: 5  },
 ];
 
 const URGENCY_OPTIONS = [

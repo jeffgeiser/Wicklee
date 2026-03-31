@@ -3291,6 +3291,18 @@ async fn evaluate_alerts(
                 let lo_threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 65.0 };
                 metrics.memory_pressure_percent.map(|p| p >= lo_threshold && p < 80.0).unwrap_or(false)
             }
+            "ttft_regression" => {
+                let threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 500.0 };
+                let ttft = metrics.vllm_avg_ttft_ms.or(metrics.ollama_proxy_avg_ttft_ms).or(metrics.ollama_ttft_ms);
+                let is_active = matches!(metrics.inference_state.as_deref(), Some("live") | Some("idle-spd"));
+                is_active && ttft.map(|t| t > threshold).unwrap_or(false)
+            }
+            "throughput_low" => {
+                let threshold = if threshold_value > 0.0 { threshold_value as f32 } else { 5.0 };
+                let tok_s = if metrics.vllm_running { metrics.vllm_tokens_per_sec } else { metrics.ollama_tokens_per_second };
+                let is_live = matches!(metrics.inference_state.as_deref(), Some("live"));
+                is_live && tok_s.map(|t| t < threshold).unwrap_or(false)
+            }
             _ => continue,
         };
 
@@ -4076,6 +4088,7 @@ async fn handle_create_rule(
 ) -> impl IntoResponse {
     const VALID_TYPES: &[&str] = &[
         "thermal_serious", "thermal_critical", "memory_pressure_high", "wes_drop", "node_offline",
+        "ttft_regression", "throughput_low",
     ];
     if !VALID_TYPES.contains(&body.event_type.as_str()) {
         return (StatusCode::BAD_REQUEST,
