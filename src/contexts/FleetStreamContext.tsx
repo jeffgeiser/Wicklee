@@ -162,7 +162,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
 
           for (const n of fleet.nodes) {
             const nodeId   = n.node_id;
-            const hostname = n.metrics?.hostname ?? nodeId;
+            const hostname = n.display_name ?? n.metrics?.hostname ?? nodeId;
 
             updatedLastSeen[nodeId] = n.last_seen_ms;
 
