@@ -782,28 +782,42 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       </div>
     </div>
 
-    {/* ── Expanded detail panel ─────────────────────────────────────────── */}
-    {expanded && isOnline && m && (
-      <div className="px-6 py-3 bg-gray-950/40 border-b border-gray-800/60">
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-2 text-xs">
-          {/* Latency metrics */}
-          <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={m.vllm_avg_ttft_ms != null ? 'vllm' : m.ollama_proxy_avg_ttft_ms != null ? 'proxy' : 'probe'} />
-          <DetailCell label="E2E Latency" value={m.vllm_avg_e2e_latency_ms ?? m.ollama_proxy_avg_latency_ms} unit="ms" />
-          <DetailCell label="Queue Time" value={m.vllm_avg_queue_time_ms} unit="ms" />
-          <DetailCell label="Load Duration" value={m.ollama_load_duration_ms} unit="ms" />
-          <DetailCell label="Prefill Speed" value={m.ollama_prompt_eval_tps} unit="tok/s" />
-          {/* Queue & cache */}
-          <DetailCell label="Queue Depth" value={m.vllm_requests_waiting} unit="req" />
-          <DetailCell label="Requests Running" value={m.vllm_requests_running} unit="" />
-          <DetailCell label="KV Cache" value={m.vllm_cache_usage_perc} unit="%" />
-          {/* Infrastructure */}
-          <DetailCell label="Swap Write" value={m.swap_write_mb_s} unit="MB/s" />
-          <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%" />
-          <DetailCell label="Proxy Requests" value={m.ollama_proxy_request_count} unit="total" />
-          <DetailCell label="Thermal Source" value={m.thermal_source} />
+    {/* ── Expanded detail panel — only shows metrics applicable to this node ── */}
+    {expanded && isOnline && m && (() => {
+      const isVllm  = m.vllm_running === true;
+      const isOllama = m.ollama_running === true;
+      const hasProxy = m.ollama_proxy_active === true;
+      const ttftSource = m.vllm_avg_ttft_ms != null ? 'vllm' : m.ollama_proxy_avg_ttft_ms != null ? 'proxy' : m.ollama_ttft_ms != null ? 'probe' : null;
+
+      return (
+        <div className="px-6 py-3 bg-gray-950/40 border-b border-gray-800/60">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-2 text-xs">
+            {/* Always show TTFT + thermal source */}
+            <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={ttftSource} />
+            <DetailCell label="Thermal Source" value={m.thermal_source} />
+            <DetailCell label="Swap Write" value={m.swap_write_mb_s} unit="MB/s" />
+
+            {/* Ollama-specific */}
+            {isOllama && <DetailCell label="Load Duration" value={m.ollama_load_duration_ms} unit="ms" />}
+            {isOllama && <DetailCell label="Prefill Speed" value={m.ollama_prompt_eval_tps} unit="tok/s" />}
+
+            {/* vLLM-specific */}
+            {isVllm && <DetailCell label="E2E Latency" value={m.vllm_avg_e2e_latency_ms} unit="ms" />}
+            {isVllm && <DetailCell label="Queue Time" value={m.vllm_avg_queue_time_ms} unit="ms" />}
+            {isVllm && <DetailCell label="Queue Depth" value={m.vllm_requests_waiting} unit="req" />}
+            {isVllm && <DetailCell label="Running" value={m.vllm_requests_running} unit="req" />}
+            {isVllm && <DetailCell label="KV Cache" value={m.vllm_cache_usage_perc} unit="%" />}
+
+            {/* Proxy-specific */}
+            {hasProxy && <DetailCell label="E2E Latency" value={m.ollama_proxy_avg_latency_ms} unit="ms" />}
+            {hasProxy && <DetailCell label="Proxy Requests" value={m.ollama_proxy_request_count} unit="total" />}
+
+            {/* Clock throttle — only on platforms that report it */}
+            {m.clock_throttle_pct != null && <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%" />}
+          </div>
         </div>
-      </div>
-    )}
+      );
+    })()}
     </>
   );
 };
@@ -2093,6 +2107,32 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             }
           />
         )}
+
+        {/* ── Cloud-only tiles to fill row 2 (replace Runtime + Inference State) ── */}
+        {!isLocalMode && (() => {
+          const liveNodes = effectiveMetrics.filter(m => m.inference_state === 'live' || m.inference_state === 'idle-spd').length;
+          const modelNodes = effectiveMetrics.filter(m => m.ollama_active_model || m.vllm_model_name).length;
+          return (
+            <>
+              <InsightTile
+                label="Active Models"
+                value={modelNodes > 0 ? `${modelNodes}` : '—'}
+                valueCls={modelNodes > 0 ? 'text-green-400' : 'text-gray-400 dark:text-gray-600'}
+                sub={modelNodes > 0 ? `${modelNodes} node${modelNodes !== 1 ? 's' : ''} with models loaded` : 'no models loaded'}
+                icon={Cpu}
+                iconCls="text-green-400"
+              />
+              <InsightTile
+                label="Inference Active"
+                value={liveNodes > 0 ? `${liveNodes}` : '0'}
+                valueCls={liveNodes > 0 ? 'text-green-400' : 'text-gray-400 dark:text-gray-600'}
+                sub={liveNodes > 0 ? `${liveNodes} node${liveNodes !== 1 ? 's' : ''} live or ready` : 'no active inference'}
+                icon={Activity}
+                iconCls={liveNodes > 0 ? 'text-green-400' : 'text-gray-500'}
+              />
+            </>
+          );
+        })()}
 
         {/* ── Row 2: Efficiency & ROI ──────────────────────────────────────── */}
 
