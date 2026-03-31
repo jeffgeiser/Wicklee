@@ -76,6 +76,12 @@ struct MetricsPayload {
     ollama_quantization:  Option<String>,
     #[serde(default)]
     ollama_tokens_per_second: Option<f32>,
+    #[serde(default)]
+    ollama_prompt_eval_tps: Option<f32>,
+    #[serde(default)]
+    ollama_ttft_ms: Option<f32>,
+    #[serde(default)]
+    ollama_load_duration_ms: Option<f32>,
     /// True when a user request completed within the last 35s (Tier 2 attribution).
     #[serde(default)]
     ollama_inference_active: Option<bool>,
