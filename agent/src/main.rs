@@ -68,6 +68,12 @@ pub(crate) struct OllamaMetrics {
     /// Sustained tok/s: eval_rate from Ollama /api/generate probe every 30s.
     /// Reflects actual node throughput under current thermal/load conditions.
     pub(crate) ollama_tokens_per_second: Option<f32>,
+    /// Prefill speed from probe: prompt_eval_count / prompt_eval_duration (tok/s).
+    pub(crate) ollama_prompt_eval_tps: Option<f32>,
+    /// Cold TTFT from probe: prompt_eval_duration in milliseconds.
+    pub(crate) ollama_ttft_ms: Option<f32>,
+    /// Model load duration from probe (ms). 0 = warm, >0 = cold start.
+    pub(crate) ollama_load_duration_ms: Option<f32>,
     /// True when a request completed within the last 35s (one probe interval).
     /// Derived from expires_at resets observed in /api/ps polls.
     /// None = not yet determined (no expires_at change seen since agent start).
@@ -302,6 +308,12 @@ struct MetricsPayload {
     /// Sustained tok/s from 30s probe (eval_rate field from Ollama). None until first probe completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_tokens_per_second: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_prompt_eval_tps: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_ttft_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_load_duration_ms: Option<f32>,
     /// True when a request completed within the last 35s. Derived from /api/ps expires_at resets.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_inference_active: Option<bool>,
@@ -2423,7 +2435,10 @@ fn start_metrics_broadcaster(
                 runtime_port_overrides: runtime_port_overrides.clone(),
                 ollama_is_probing:        ollama_is_probing_flag,
                 ollama_quantization:      ollama.ollama_quantization,
-                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                ollama_tokens_per_second:  ollama.ollama_tokens_per_second,
+                ollama_prompt_eval_tps:    ollama.ollama_prompt_eval_tps,
+                ollama_ttft_ms:            ollama.ollama_ttft_ms,
+                ollama_load_duration_ms:   ollama.ollama_load_duration_ms,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
@@ -3399,7 +3414,10 @@ async fn handle_metrics(
                 runtime_port_overrides: runtime_port_overrides.clone(),
                 ollama_is_probing:        ollama_is_probing_flag,
                 ollama_quantization:      ollama.ollama_quantization,
-                ollama_tokens_per_second: ollama.ollama_tokens_per_second,
+                ollama_tokens_per_second:  ollama.ollama_tokens_per_second,
+                ollama_prompt_eval_tps:    ollama.ollama_prompt_eval_tps,
+                ollama_ttft_ms:            ollama.ollama_ttft_ms,
+                ollama_load_duration_ms:   ollama.ollama_load_duration_ms,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,

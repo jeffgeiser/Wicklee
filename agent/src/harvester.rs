@@ -43,10 +43,20 @@ async fn discover_first_ollama_model(client: &reqwest::Client, port: u16) -> Opt
     Some(name)
 }
 
-/// Fires a non-streaming 20-token generate probe and returns tok/s derived from
-/// eval_count / eval_duration returned by Ollama. Non-streaming responses do not
-/// include eval_rate, so tok/s is calculated from the raw timing fields.
-async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> Option<f32> {
+/// Result of the 20-token Ollama probe — expanded from bare tok/s to include
+/// prefill speed, TTFT, and model load time.
+#[derive(Default)]
+struct OllamaProbeResult {
+    tps:                Option<f32>,   // existing: eval_count / eval_duration
+    prompt_eval_tps:    Option<f32>,   // prefill speed: prompt_eval_count / prompt_eval_duration
+    ttft_ms:            Option<f32>,   // time-to-first-token: prompt_eval_duration in ms
+    load_duration_ms:   Option<f32>,   // model load time: 0 = warm, >0 = cold start
+}
+
+/// Fires a non-streaming 20-token generate probe and returns timing metrics
+/// derived from eval_count, eval_duration, prompt_eval_count, prompt_eval_duration,
+/// and load_duration returned by Ollama.
+async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> OllamaProbeResult {
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
     let url = format!("http://127.0.0.1:{port}/api/generate");
     let resp = match client
@@ -61,27 +71,56 @@ async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> O
         .await
     {
         Ok(r)  => { eprintln!("[ollama] probe {} → HTTP {}", url, r.status()); r }
-        Err(e) => { eprintln!("[ollama] probe {} → error: {}", url, e); return None; }
+        Err(e) => { eprintln!("[ollama] probe {} → error: {}", url, e); return OllamaProbeResult::default(); }
     };
 
-    if !resp.status().is_success() { return None; }
+    if !resp.status().is_success() { return OllamaProbeResult::default(); }
 
-    let text = resp.text().await.ok()?;
+    let text = match resp.text().await {
+        Ok(t) => t,
+        Err(_) => return OllamaProbeResult::default(),
+    };
 
-    // Non-streaming response is a single JSON object with eval_count (u64, tokens
-    // generated) and eval_duration (u64, nanoseconds). Derive tok/s from these.
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let (Some(count), Some(dur_ns)) = (
-            json["eval_count"].as_u64(),
-            json["eval_duration"].as_u64(),
-        ) {
-            if count > 0 && dur_ns > 0 {
-                let tps = count as f64 / (dur_ns as f64 / 1_000_000_000.0);
-                if tps > 0.0 { return Some(tps as f32); }
+    let json = match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(j) => j,
+        Err(_) => return OllamaProbeResult::default(),
+    };
+
+    let mut result = OllamaProbeResult::default();
+
+    // Generation tok/s (existing logic)
+    if let (Some(count), Some(dur_ns)) = (
+        json["eval_count"].as_u64(),
+        json["eval_duration"].as_u64(),
+    ) {
+        if count > 0 && dur_ns > 0 {
+            let tps = count as f64 / (dur_ns as f64 / 1_000_000_000.0);
+            if tps > 0.0 { result.tps = Some(tps as f32); }
+        }
+    }
+
+    // Prefill speed + TTFT (Phase 2: new)
+    if let (Some(pe_count), Some(pe_dur_ns)) = (
+        json["prompt_eval_count"].as_u64(),
+        json["prompt_eval_duration"].as_u64(),
+    ) {
+        // TTFT = prompt_eval_duration in milliseconds
+        if pe_dur_ns > 0 {
+            result.ttft_ms = Some(pe_dur_ns as f64 / 1_000_000.0 as f64).map(|v| v as f32);
+            // Prefill tok/s
+            if pe_count > 0 {
+                let pe_tps = pe_count as f64 / (pe_dur_ns as f64 / 1_000_000_000.0);
+                if pe_tps > 0.0 { result.prompt_eval_tps = Some(pe_tps as f32); }
             }
         }
     }
-    None
+
+    // Model load duration (Phase 2: new — 0 when warm, >0 on cold start)
+    if let Some(load_ns) = json["load_duration"].as_u64() {
+        result.load_duration_ms = Some(load_ns as f64 / 1_000_000.0 as f64).map(|v| v as f32);
+    }
+
+    result
 }
 
 /// Fires a non-streaming 20-token completions probe against the vLLM
@@ -425,9 +464,12 @@ pub(crate) fn start_ollama_harvester(
                 scopeguard::defer! {
                     probe_active_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
-                let new_tps = probe_ollama_tps(&probe_client, port, &model).await;
+                let probe_result = probe_ollama_tps(&probe_client, port, &model).await;
                 if let Ok(mut g) = shared_probe.lock() {
-                    g.ollama_tokens_per_second = new_tps;
+                    g.ollama_tokens_per_second   = probe_result.tps;
+                    g.ollama_prompt_eval_tps     = probe_result.prompt_eval_tps;
+                    g.ollama_ttft_ms             = probe_result.ttft_ms;
+                    g.ollama_load_duration_ms    = probe_result.load_duration_ms;
                     g.last_probe_end = Some(std::time::Instant::now());
                     // Tell the harvester: the next expires_at change you see is mine.
                     // The harvester will consume this flag and skip attribution for

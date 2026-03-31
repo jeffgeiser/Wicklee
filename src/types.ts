@@ -111,6 +111,12 @@ export interface SentinelMetrics {
   ollama_quantization?:      string | null;
   /** Sampled tok/s from 20-token /api/generate probe every 30s. Null until first probe completes. */
   ollama_tokens_per_second?: number | null;
+  /** Prefill speed from probe: prompt_eval_count / prompt_eval_duration (tok/s). */
+  ollama_prompt_eval_tps?: number | null;
+  /** Cold TTFT from probe: prompt_eval_duration in milliseconds. */
+  ollama_ttft_ms?: number | null;
+  /** Model load duration from probe (ms). 0 = warm, >0 = cold start. */
+  ollama_load_duration_ms?: number | null;
   /**
    * True when a request completed within the last 35s (one probe interval).
    * Derived from /api/ps expires_at resets. False until first reset observed.
