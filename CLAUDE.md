@@ -161,6 +161,14 @@ WES is computed client-side at render time from the live SSE payload — the age
 - **Team: $19/seat/mo** (3-seat min), 25 nodes, $50/50-node expansion
 - **Enterprise: From $200/mo** — Proxy exclusive
 
+### Dashboard Layout
+- **Intelligence tiles (10 per dashboard):**
+  - Cloud: Capacity · Fleet Health · Fleet VRAM · Fleet TTFT · Avg WES · Fleet GPU% · Fleet Cost/Day · W/1K · Fleet Memory · Fleet tok/W
+  - Localhost: Capacity · Node Cost/Day · Node VRAM · Node TTFT · Runtime · Inference State · Node WES · W/1K · Node Memory · Node tok/W
+- **Expandable Fleet Status rows** — click node row → detail panel with runtime-filtered metrics (Ollama: Load Duration, Prefill Speed; vLLM: E2E Latency, Queue Depth, KV Cache). ChevronDown indicator.
+- **Two-column Diagnostics rail (localhost)** — Column 1: core hardware. Column 2: inference + latency metrics. Metrics conditionally shown by runtime.
+- **TTFT resolution priority:** vLLM histogram (production) → proxy rolling avg (production) → Ollama probe (synthetic baseline)
+
 ### WES Color Scale (updated — replaces blue with emerald)
 - `> 10` → Emerald (`text-emerald-400`) — Excellent
 - `3–10` → Light Green (`text-green-300`) — Good
