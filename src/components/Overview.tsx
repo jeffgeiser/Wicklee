@@ -1060,7 +1060,9 @@ const DiagnosticRail: React.FC<{
   const cpu = utilCls(cpuPct);
 
   return (
-    <div>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+      {/* ── Column 1: Core hardware ── */}
+      <div>
       <RailRow label="CPU Usage" value={`${cpuPct.toFixed(1)}%`} pct={cpuPct} textCls={cpu.text} barCls={cpu.bar} />
       {gpuPct != null && (() => {
         const g = utilCls(gpuPct);
@@ -1104,6 +1106,9 @@ const DiagnosticRail: React.FC<{
         const cls = pct > 50 ? { text: 'text-red-400', bar: 'bg-red-400' } : pct > 20 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-gray-400', bar: 'bg-gray-500' };
         return <RailRow label="Clk Throttle" value={`${pct.toFixed(0)}%`} pct={pct} textCls={cls.text} barCls={cls.bar} />;
       })()}
+      </div>
+      {/* ── Column 2: Inference + Latency ── */}
+      <div>
       {/* TOK/S — three-state: LIVE (green ~), IDLE-SPD (muted baseline), BUSY (amber last-probe) */}
       {hasTps && (
         isInferring ? (
@@ -1179,6 +1184,44 @@ const DiagnosticRail: React.FC<{
           badgeCls="text-gray-600"
         />
       )}
+      {/* Load Duration — Ollama only */}
+      {s.ollama_load_duration_ms != null && (
+        <RailRow
+          label="Load Duration"
+          value={s.ollama_load_duration_ms < 1000 ? `${Math.round(s.ollama_load_duration_ms)}ms` : `${(s.ollama_load_duration_ms / 1000).toFixed(1)}s`}
+          textCls={s.ollama_load_duration_ms < 500 ? 'text-emerald-400' : s.ollama_load_duration_ms < 2000 ? 'text-yellow-400' : 'text-red-400'}
+          barCls="bg-transparent"
+        />
+      )}
+      {/* Prefill Speed — Ollama only */}
+      {s.ollama_prompt_eval_tps != null && (
+        <RailRow
+          label="Prefill Speed"
+          value={`${s.ollama_prompt_eval_tps.toFixed(1)} tok/s`}
+          textCls="text-blue-400"
+          barCls="bg-transparent"
+        />
+      )}
+      {/* KV Cache — vLLM only */}
+      {s.vllm_running && s.vllm_cache_usage_perc != null && (
+        <RailRow
+          label="KV Cache"
+          value={`${s.vllm_cache_usage_perc.toFixed(1)}%`}
+          pct={s.vllm_cache_usage_perc}
+          textCls={s.vllm_cache_usage_perc > 90 ? 'text-red-400' : s.vllm_cache_usage_perc > 70 ? 'text-amber-400' : 'text-green-400'}
+          barCls={s.vllm_cache_usage_perc > 90 ? 'bg-red-400' : s.vllm_cache_usage_perc > 70 ? 'bg-amber-400' : 'bg-green-400'}
+        />
+      )}
+      {/* Requests Running — vLLM only, when active */}
+      {s.vllm_running && s.vllm_requests_running != null && s.vllm_requests_running > 0 && (
+        <RailRow
+          label="Running"
+          value={`${s.vllm_requests_running} req`}
+          textCls="text-green-400"
+          barCls="bg-transparent"
+        />
+      )}
+      </div>
     </div>
   );
 };
