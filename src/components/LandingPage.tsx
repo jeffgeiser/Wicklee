@@ -22,37 +22,38 @@ const FeatureCard: React.FC<{ icon: React.ElementType, title: string, descriptio
 
 // ── Why Wicklee — Part 1 ──────────────────────────────────────────────────────
 
-// ── All 15 observation patterns ──────────────────────────────────────────────
+// ── All 18 observation patterns ──────────────────────────────────────────────
 
 interface ObsTile {
   id: string;
   title: string;
   trigger: string;
-  scope: 'Localhost + Cloud' | 'Cloud' | 'Localhost';
-  scopeColor: string;
+  scope: 'Cloud' | null;      // only "Cloud" gets a badge; null = available everywhere
+  tier: 'community' | 'pro';  // Pro gets a small badge
   icon: React.ReactElement;
-  hookColor: string;
 }
 
 const allPatterns: ObsTile[] = [
-  // Localhost + Cloud (4)
-  { id: 'A', title: 'Thermal Performance Drain',  trigger: 'Your GPU is thermally throttling, silently reducing throughput below its rated speed.',                                    scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <Thermometer className="w-4 h-4 text-amber-400" />,  hookColor: 'text-amber-400'  },
-  { id: 'B', title: 'Phantom Load',               trigger: 'A model is loaded in memory and drawing power, but nobody is using it.',                                                    scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <Zap         className="w-4 h-4 text-violet-400" />, hookColor: 'text-violet-400' },
-  { id: 'J', title: 'Swap I/O Pressure',          trigger: 'Model layers are spilling to disk during inference, causing latency spikes.',                                               scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <HardDrive   className="w-4 h-4 text-rose-400" />,   hookColor: 'text-rose-400'   },
-  { id: 'L', title: 'PCIe Lane Degradation',      trigger: 'GPU is running in a reduced PCIe lane width, limiting data transfer bandwidth.',                                            scope: 'Localhost + Cloud', scopeColor: 'text-emerald-400', icon: <Server      className="w-4 h-4 text-orange-400" />, hookColor: 'text-orange-400' },
-  // Cloud (6)
-  { id: 'C', title: 'WES Velocity Drop',          trigger: 'Efficiency score is declining steadily before thermal state has changed — an early warning.',                                scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <TrendingDown className="w-4 h-4 text-indigo-400" />, hookColor: 'text-indigo-400' },
-  { id: 'D', title: 'Power-GPU Decoupling',       trigger: 'High power draw but the GPU is barely active — inference is running on CPU instead of GPU.',                                 scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <Cpu         className="w-4 h-4 text-cyan-400" />,    hookColor: 'text-cyan-400'   },
-  { id: 'E', title: 'Fleet Load Imbalance',       trigger: 'This node is stressed while a healthier fleet peer has spare capacity.',                                                     scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <BarChart2   className="w-4 h-4 text-blue-400" />,    hookColor: 'text-blue-400'   },
-  { id: 'G', title: 'Bandwidth Saturation',       trigger: 'VRAM is nearly full but the GPU compute is barely used — a memory bandwidth bottleneck, not a compute one.',                 scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <Gauge       className="w-4 h-4 text-emerald-400" />, hookColor: 'text-emerald-400'},
-  { id: 'H', title: 'Power Jitter',               trigger: 'Power draw is swinging wildly during inference — unstable delivery or erratic batch scheduling.',                            scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <Waves       className="w-4 h-4 text-orange-400" />,  hookColor: 'text-orange-400' },
-  { id: 'I', title: 'Efficiency Penalty Drag',    trigger: 'Significant efficiency loss with normal thermals and no memory pressure — a hidden context-length or batch inefficiency.',   scope: 'Cloud',             scopeColor: 'text-blue-400',    icon: <TrendingDown className="w-4 h-4 text-yellow-400" />, hookColor: 'text-yellow-400' },
-  // Localhost (5)
-  { id: 'F', title: 'Memory Pressure Trajectory',  trigger: 'Memory pressure is climbing steadily — projected to reach critical levels and trigger swap.',                               scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <MemoryStick className="w-4 h-4 text-cyan-400" />,    hookColor: 'text-cyan-400'   },
-  { id: 'K', title: 'Clock Drift',                 trigger: 'GPU clocks are throttled during inference but thermals are normal — a power cap or driver limit is the bottleneck.',        scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <Gauge       className="w-4 h-4 text-lime-400" />,    hookColor: 'text-lime-400'   },
-  { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'The vLLM KV cache is nearly full — new sequences will queue or get rejected.',                                             scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <Database    className="w-4 h-4 text-pink-400" />,    hookColor: 'text-pink-400'   },
-  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temperature is dangerously high — the driver will aggressively throttle clocks.',                                      scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <Flame       className="w-4 h-4 text-red-400" />,     hookColor: 'text-red-400'    },
-  { id: 'O', title: 'VRAM Overcommit',             trigger: 'The loaded model consumes nearly all available memory — no headroom for KV cache or concurrency.',                         scope: 'Localhost',         scopeColor: 'text-amber-400',   icon: <MemoryStick className="w-4 h-4 text-emerald-400" />, hookColor: 'text-emerald-400'},
+  // Community patterns (9)
+  { id: 'A', title: 'Thermal Performance Drain',   trigger: 'Your GPU is thermally throttling, silently reducing throughput below its rated speed.',                                    scope: null,    tier: 'community', icon: <Thermometer className="w-4 h-4 text-amber-400" />  },
+  { id: 'B', title: 'Phantom Load',                trigger: 'A model is loaded in memory and drawing power, but nobody is using it.',                                                    scope: null,    tier: 'community', icon: <Zap         className="w-4 h-4 text-violet-400" /> },
+  { id: 'C', title: 'WES Velocity Drop',           trigger: 'Efficiency score is declining steadily before thermal state has changed — an early warning.',                                scope: 'Cloud', tier: 'community', icon: <TrendingDown className="w-4 h-4 text-indigo-400" /> },
+  { id: 'F', title: 'Memory Pressure Trajectory',  trigger: 'Memory pressure is climbing steadily — projected to reach critical levels and trigger swap.',                               scope: 'Cloud', tier: 'community', icon: <MemoryStick className="w-4 h-4 text-cyan-400" />  },
+  { id: 'H', title: 'Power Jitter',                trigger: 'Power draw is swinging wildly during inference — unstable delivery or erratic batch scheduling.',                            scope: null,    tier: 'community', icon: <Waves       className="w-4 h-4 text-orange-400" /> },
+  { id: 'J', title: 'Swap I/O Pressure',           trigger: 'Model layers are spilling to disk during inference, causing latency spikes.',                                               scope: null,    tier: 'community', icon: <HardDrive   className="w-4 h-4 text-rose-400" />   },
+  { id: 'K', title: 'Clock Drift',                 trigger: 'GPU clocks are throttled during inference but thermals are normal — a power cap or driver limit.',                           scope: null,    tier: 'community', icon: <Gauge       className="w-4 h-4 text-lime-400" />   },
+  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temperature is dangerously high — the driver will aggressively throttle clocks.',                                       scope: null,    tier: 'community', icon: <Flame       className="w-4 h-4 text-red-400" />    },
+  { id: 'O', title: 'VRAM Overcommit',             trigger: 'The loaded model consumes nearly all available memory — no headroom for KV cache or concurrency.',                          scope: null,    tier: 'community', icon: <MemoryStick className="w-4 h-4 text-emerald-400" /> },
+  // Pro patterns (9)
+  { id: 'D', title: 'Power-GPU Decoupling',        trigger: 'High power draw but the GPU is barely active — inference is running on CPU instead of GPU.',                                 scope: null,    tier: 'pro', icon: <Cpu         className="w-4 h-4 text-cyan-400" />    },
+  { id: 'E', title: 'Fleet Load Imbalance',        trigger: 'This node is stressed while a healthier fleet peer has spare capacity.',                                                     scope: 'Cloud', tier: 'pro', icon: <BarChart2   className="w-4 h-4 text-blue-400" />    },
+  { id: 'G', title: 'Bandwidth Saturation',        trigger: 'VRAM is nearly full but the GPU compute is barely used — a memory bandwidth bottleneck, not compute.',                       scope: null,    tier: 'pro', icon: <Gauge       className="w-4 h-4 text-emerald-400" /> },
+  { id: 'I', title: 'Efficiency Penalty Drag',     trigger: 'Significant efficiency loss with normal thermals and no memory pressure — a hidden context or batch inefficiency.',           scope: 'Cloud', tier: 'pro', icon: <TrendingDown className="w-4 h-4 text-yellow-400" /> },
+  { id: 'L', title: 'PCIe Lane Degradation',       trigger: 'GPU is running in a reduced PCIe lane width, limiting data transfer bandwidth.',                                            scope: null,    tier: 'pro', icon: <Server      className="w-4 h-4 text-orange-400" /> },
+  { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'The vLLM KV cache is nearly full — new sequences will queue or get rejected.',                                              scope: null,    tier: 'pro', icon: <Database    className="w-4 h-4 text-pink-400" />   },
+  { id: 'P', title: 'TTFT Regression',             trigger: 'Time to first token has spiked above 2x the recent baseline — queue contention or model swap.',                             scope: null,    tier: 'pro', icon: <Activity    className="w-4 h-4 text-pink-400" />   },
+  { id: 'Q', title: 'Latency Spike',               trigger: 'End-to-end request latency exceeds 2 seconds sustained — inference pipeline bottleneck.',                                    scope: null,    tier: 'pro', icon: <Thermometer className="w-4 h-4 text-red-300" />    },
+  { id: 'R', title: 'vLLM Queue Saturation',       trigger: 'Requests are queuing faster than the engine can process — scale horizontally or reroute.',                                   scope: null,    tier: 'pro', icon: <Gauge       className="w-4 h-4 text-violet-300" /> },
 ];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
@@ -215,44 +216,59 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             Standard monitors stop at the hardware. We see the inference layer.
           </h2>
           <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
-            While standard tools report raw utilization, Wicklee surfaces the invisible metrics—WES scores, wattage-per-token, and runtime health—that define your real-world performance.
+            vLLM and Ollama report throughput and queue depth. Wicklee adds power, thermal, and fleet intelligence — the metrics that define your real-world efficiency.
           </p>
 
-          {/* Collapsed observation rows — matches AccordionObservationCard collapsed state */}
-          <div className="space-y-2">
-            {([
-              { icon: <TrendingDown className="w-4 h-4 text-indigo-400" />, title: 'WES Velocity Drop',           node: 'WK-502B',  hook: '-0.7 WES/min · 47% drop',                          hookCls: 'text-indigo-400' },
-              { icon: <BarChart2    className="w-4 h-4 text-blue-400" />,   title: 'Fleet Load Imbalance',        node: '2 nodes',   hook: '81% WES gap vs WK-502B',                            hookCls: 'text-blue-400', isGrouped: true },
-              { icon: <Gauge        className="w-4 h-4 text-lime-400" />,   title: 'Clock Drift During Inference', node: 'spark-c559', hook: '21% throttled · running at 79% of rated clock · 31.8 tok/s', hookCls: 'text-violet-400' },
-              { icon: <Server       className="w-4 h-4 text-orange-400" />, title: 'PCIe Lane Degradation',       node: 'spark-c559', hook: 'x1 of x16 lanes · 94% PCIe bandwidth loss',        hookCls: 'text-violet-400' },
-            ] as const).map((obs) => (
-              <div key={obs.title} className="bg-gray-900/60 border border-gray-800 rounded-2xl">
-                <div className="flex items-center gap-2.5 px-4 py-3">
-                  <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />
-                  <span className="shrink-0">{obs.icon}</span>
-                  <span className="flex-1 text-sm font-semibold text-white truncate min-w-0">{obs.title}</span>
-                  {'isGrouped' in obs && obs.isGrouped ? (
-                    <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded-md">
-                      {obs.node}
-                    </span>
-                  ) : (
-                    <span className="shrink-0 text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
-                      {obs.node}
-                    </span>
-                  )}
-                  <span className={`shrink-0 text-xs font-bold font-mono ${obs.hookCls}`}>{obs.hook}</span>
-                  <ChevronRight className="shrink-0 w-3.5 h-3.5 text-gray-600" />
-                </div>
+          {/* 2-column comparison: Runtime vs Wicklee */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+            {/* Left: What your runtime shows */}
+            <div className="bg-gray-900/40 border border-gray-800 rounded-2xl p-6">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">Your runtime</p>
+              <div className="space-y-3">
+                {([
+                  { icon: <Activity  className="w-4 h-4 text-gray-500" />, title: 'Tokens Per Second',  desc: 'Raw throughput from your runtime response' },
+                  { icon: <Database  className="w-4 h-4 text-gray-500" />, title: 'VRAM & Model Size',  desc: 'Which model is loaded and how much memory it uses' },
+                  { icon: <BarChart2 className="w-4 h-4 text-gray-500" />, title: 'Queue Depth',        desc: 'How many requests are waiting (vLLM only)' },
+                ] as const).map(item => (
+                  <div key={item.title} className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-4 flex items-start gap-3">
+                    <span className="shrink-0 mt-0.5">{item.icon}</span>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-400">{item.title}</p>
+                      <p className="text-xs text-gray-600 mt-0.5">{item.desc}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+
+            {/* Right: What Wicklee adds */}
+            <div className="bg-gray-900/40 border border-gray-800 rounded-2xl p-6">
+              <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4">Wicklee adds</p>
+              <div className="space-y-3">
+                {([
+                  { icon: <Zap          className="w-4 h-4 text-emerald-400" />, title: 'WES — tok/watt',            desc: 'Thermally-honest efficiency. The metric neither runtime exposes.',            border: 'border-emerald-500/30' },
+                  { icon: <Thermometer  className="w-4 h-4 text-amber-400" />,   title: 'Power & Thermal',           desc: 'Real-time watts and thermal state from NVML, IOKit, and RAPL.',               border: 'border-amber-500/30' },
+                  { icon: <Route        className="w-4 h-4 text-blue-400" />,    title: 'Fleet Routing',             desc: 'Cross-node routing decisions based on live WES and availability.',             border: 'border-blue-500/30' },
+                  { icon: <ShieldCheck  className="w-4 h-4 text-violet-400" />,  title: '18 Observation Patterns',   desc: 'Correlate signals no single runtime exposes — from TTFT regression to queue saturation.', border: 'border-violet-500/30' },
+                ] as const).map(item => (
+                  <div key={item.title} className={`bg-gray-800/50 border ${item.border} rounded-xl p-4 flex items-start gap-3`}>
+                    <span className="shrink-0 mt-0.5">{item.icon}</span>
+                    <div>
+                      <p className="text-sm font-semibold text-white">{item.title}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{item.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Part 2 — 15 Hardware Observation Patterns */}
+        {/* Part 2 — 18 Hardware Observation Patterns */}
         <div>
           <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">What Wicklee surfaces</p>
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center mx-auto">
-            15 hardware observation patterns. Zero AI hallucination.
+            18 hardware observation patterns. Zero AI hallucination.
           </h2>
           <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
             Pure arithmetic over time-windowed telemetry. Every pattern requires sustained evidence before firing — single-frame spikes never produce an alert.
@@ -263,9 +279,16 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <div key={p.id} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all">
                 <div className="flex items-center gap-2 mb-3">
                   {p.icon}
-                  <div className="min-w-0">
+                  <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-white truncate">{p.title}</p>
-                    <p className={`text-[10px] font-semibold uppercase tracking-wider ${p.scopeColor}`}>{p.scope}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      {p.scope === 'Cloud' && (
+                        <span className="text-[9px] font-semibold uppercase tracking-wider text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded">Cloud</span>
+                      )}
+                      {p.tier === 'pro' && (
+                        <span className="text-[9px] font-semibold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded">Pro</span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <p className="text-xs text-gray-400 leading-relaxed">{p.trigger}</p>
