@@ -1981,8 +1981,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           );
         })()}
 
-        {/* 5. RUNTIME (local) / FLEET NODES (cloud) */}
-        {isLocalMode ? (
+        {/* 5. RUNTIME (local only — cloud uses TTFT tile instead) */}
+        {isLocalMode && (
           <InsightTile
             label="Runtime"
             value={
@@ -2001,16 +2001,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               sentinel ? 'Ollama + vLLM not detected' : undefined
             }
             icon={Cpu}
-            iconCls="text-green-400"
-          />
-        ) : (
-          <InsightTile
-            label="Fleet Nodes"
-            value={fleetTotalCount > 0 ? `${fleetLiveCount} / ${fleetTotalCount}` : '—'}
-            sub={fleetLiveCount > 0
-              ? `${fleetLiveCount} online`
-              : fleetTotalCount > 0 ? 'no nodes live' : undefined}
-            icon={Server}
             iconCls="text-green-400"
           />
         )}
