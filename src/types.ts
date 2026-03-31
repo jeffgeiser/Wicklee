@@ -127,6 +127,12 @@ export interface SentinelMetrics {
    * When true, tok/s comes from done-packet eval_count/eval_duration (exact),
    * not the 30-second synthetic probe. Frontend shows "live" not "live estimate". */
   ollama_proxy_active?: boolean | null;
+  /** Live TTFT from proxy done packets (rolling average, ms). Null when proxy inactive. */
+  ollama_proxy_avg_ttft_ms?: number | null;
+  /** Live E2E latency from proxy done packets (rolling average, ms). Null when proxy inactive. */
+  ollama_proxy_avg_latency_ms?: number | null;
+  /** Total requests proxied since agent start. Null when proxy inactive. */
+  ollama_proxy_request_count?: number | null;
   /** Port the proxy listens on (e.g. 11434). Null/undefined when proxy is disabled. */
   proxy_listen_port?: number | null;
   /** Port the proxy forwards to (the real Ollama port, e.g. 11435). Null when disabled. */

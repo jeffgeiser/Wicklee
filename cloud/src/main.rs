@@ -89,6 +89,12 @@ struct MetricsPayload {
     #[serde(default)]
     ollama_proxy_active: Option<bool>,
     #[serde(default)]
+    ollama_proxy_avg_ttft_ms: Option<f32>,
+    #[serde(default)]
+    ollama_proxy_avg_latency_ms: Option<f32>,
+    #[serde(default)]
+    ollama_proxy_request_count: Option<u64>,
+    #[serde(default)]
     proxy_listen_port: Option<u16>,
     #[serde(default)]
     proxy_target_port: Option<u16>,

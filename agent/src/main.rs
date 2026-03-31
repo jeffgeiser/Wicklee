@@ -82,6 +82,12 @@ pub(crate) struct OllamaMetrics {
     /// When true, tok/s comes from done-packet eval_count/eval_duration rather than the 30s probe.
     #[serde(default)]
     pub(crate) ollama_proxy_active: bool,
+    /// Live TTFT from proxy done packets (rolling average, ms). Null when proxy inactive.
+    pub(crate) ollama_proxy_avg_ttft_ms: Option<f32>,
+    /// Live E2E latency from proxy done packets (rolling average, ms). Null when proxy inactive.
+    pub(crate) ollama_proxy_avg_latency_ms: Option<f32>,
+    /// Total requests proxied since agent start.
+    pub(crate) ollama_proxy_request_count: Option<u64>,
     /// Set to `Some(Instant::now())` when probe_ollama_tps() begins.
     #[serde(skip)]
     pub(crate) last_probe_start: Option<std::time::Instant>,
@@ -321,6 +327,12 @@ struct MetricsPayload {
     /// Frontend uses this to label tok/s as "live" (not "live estimate").
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_proxy_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_proxy_avg_ttft_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_proxy_avg_latency_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_proxy_request_count: Option<u64>,
     /// Port the proxy listens on (e.g. 11434). None when proxy is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     proxy_listen_port: Option<u16>,
@@ -2429,7 +2441,10 @@ fn start_metrics_broadcaster(
                 ollama_active_model:      ollama.ollama_active_model,
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_inference_active:  ollama.ollama_inference_active,
-                ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
+                ollama_proxy_active:         if ollama.ollama_proxy_active { Some(true) } else { None },
+                ollama_proxy_avg_ttft_ms:    ollama.ollama_proxy_avg_ttft_ms,
+                ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
+                ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -3408,7 +3423,10 @@ async fn handle_metrics(
                 ollama_active_model:      ollama.ollama_active_model,
                 ollama_model_size_gb:     ollama.ollama_model_size_gb,
                 ollama_inference_active:  ollama.ollama_inference_active,
-                ollama_proxy_active:      if ollama.ollama_proxy_active { Some(true) } else { None },
+                ollama_proxy_active:         if ollama.ollama_proxy_active { Some(true) } else { None },
+                ollama_proxy_avg_ttft_ms:    ollama.ollama_proxy_avg_ttft_ms,
+                ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
+                ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -3884,6 +3902,9 @@ async fn main() {
                     node_id:          config.node_id.clone(),
                     #[cfg(not(target_env = "musl"))]
                     trace_tx:         Some(trace_tx.clone()),
+                    ttft_sum_ns:      std::sync::atomic::AtomicU64::new(0),
+                    latency_sum_ns:   std::sync::atomic::AtomicU64::new(0),
+                    request_count:    std::sync::atomic::AtomicU64::new(0),
                 });
                 let ps_clone = Arc::clone(&ps);
                 let proxy_app = axum::Router::new()

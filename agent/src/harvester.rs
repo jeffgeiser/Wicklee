@@ -345,6 +345,16 @@ pub(crate) fn start_ollama_harvester(
                     m.ollama_inference_active = Some(proxy_active || since_done);
                     m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
                     m.ollama_proxy_active = true;
+
+                    // Phase 4: compute proxy rolling averages
+                    let req_count = ps.request_count.load(std::sync::atomic::Ordering::Relaxed);
+                    if req_count > 0 {
+                        let ttft_sum = ps.ttft_sum_ns.load(std::sync::atomic::Ordering::Relaxed);
+                        let lat_sum  = ps.latency_sum_ns.load(std::sync::atomic::Ordering::Relaxed);
+                        m.ollama_proxy_avg_ttft_ms    = Some((ttft_sum as f64 / req_count as f64 / 1_000_000.0) as f32);
+                        m.ollama_proxy_avg_latency_ms = Some((lat_sum as f64 / req_count as f64 / 1_000_000.0) as f32);
+                        m.ollama_proxy_request_count  = Some(req_count);
+                    }
                 } else {
                     // 15 s matches the Tier 2 attribution window in compute_inference_state.
                     // inference_state is now the SSOT for live detection; this window is
