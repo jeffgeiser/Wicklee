@@ -700,7 +700,7 @@ pub(crate) fn start_vllm_harvester(
                         if let (Some(sum), Some(count)) = (h.ttft_sum, h.ttft_count) {
                             if let (Some(ps), Some(pc)) = (g.prev_ttft_sum, g.prev_ttft_count) {
                                 let dc = count.saturating_sub(pc);
-                                if dc >= 3 { // guard against noisy spikes
+                                if dc >= 1 { // at least 1 new request in the window
                                     let ds = sum - ps;
                                     g.vllm_avg_ttft_ms = Some((ds / dc as f64 * 1000.0) as f32);
                                 }
