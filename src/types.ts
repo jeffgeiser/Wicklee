@@ -148,6 +148,20 @@ export interface SentinelMetrics {
   /** KV cache utilisation 0–100%. Agent multiplies vLLM's 0–1 value by 100. */
   vllm_cache_usage_perc?: number | null;
   vllm_requests_running?: number | null;
+  /** Queue depth — nonzero = vLLM scheduler saturated. */
+  vllm_requests_waiting?: number | null;
+  /** Requests swapped to CPU memory — severe KV cache pressure. */
+  vllm_requests_swapped?: number | null;
+  /** Windowed average time-to-first-token (ms) from Prometheus histogram deltas. */
+  vllm_avg_ttft_ms?: number | null;
+  /** Windowed average end-to-end request latency (ms). */
+  vllm_avg_e2e_latency_ms?: number | null;
+  /** Windowed average queue wait time (ms). */
+  vllm_avg_queue_time_ms?: number | null;
+  /** Cumulative prompt tokens processed (counter). */
+  vllm_prompt_tokens_total?: number | null;
+  /** Cumulative generation tokens produced (counter). */
+  vllm_generation_tokens_total?: number | null;
   // llama.cpp / llama-box runtime (absent/false when not running)
   llamacpp_running?:          boolean;
   llamacpp_model_name?:       string | null;

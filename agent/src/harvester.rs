@@ -448,32 +448,51 @@ pub(crate) fn start_ollama_harvester(
 // process scanner. Called on a 2 s tick with a 500 ms timeout per call.
 // No full Prometheus parser: lines are matched by metric-name prefix.
 
-/// Probe vLLM once on `port`; returns (running, model_name, tok/s, cache_pct, req_count).
-/// Never panics on malformed input; returns (false, …) on any connection failure.
-async fn harvest_vllm(port: u16) -> (bool, Option<String>, Option<f32>, Option<f32>, Option<u32>) {
+/// Result of a single vLLM Prometheus /metrics poll.
+/// Named struct instead of positional tuple for clarity and extensibility.
+#[derive(Default)]
+struct VllmHarvestResult {
+    running:              bool,
+    model_name:           Option<String>,
+    tokens_per_sec:       Option<f32>,
+    cache_usage_perc:     Option<f32>,
+    requests_running:     Option<u32>,
+    // Phase 1: queue/saturation gauges
+    requests_waiting:     Option<u32>,
+    requests_swapped:     Option<u32>,
+    // Phase 3 (histogram deltas): raw _sum/_count accumulators for windowed averages
+    ttft_sum:             Option<f64>,
+    ttft_count:           Option<u64>,
+    e2e_sum:              Option<f64>,
+    e2e_count:            Option<u64>,
+    queue_time_sum:       Option<f64>,
+    queue_time_count:     Option<u64>,
+    prompt_tokens_total:  Option<u64>,
+    gen_tokens_total:     Option<u64>,
+}
+
+/// Probe vLLM once on `port`. Never panics on malformed input.
+async fn harvest_vllm(port: u16) -> VllmHarvestResult {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_millis(500))
         .build()
     {
         Ok(c)  => c,
-        Err(_) => return (false, None, None, None, None),
+        Err(_) => return VllmHarvestResult::default(),
     };
 
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
     let resp = match client.get(format!("http://127.0.0.1:{port}/metrics")).send().await {
         Ok(r) if r.status().is_success() => r,
-        _ => return (false, None, None, None, None),
+        _ => return VllmHarvestResult::default(),
     };
 
     let text = match resp.text().await {
         Ok(t)  => t,
-        Err(_) => return (true, None, None, None, None),
+        Err(_) => return VllmHarvestResult { running: true, ..Default::default() },
     };
 
-    let mut model_name:       Option<String> = None;
-    let mut tokens_per_sec:   Option<f32>    = None;
-    let mut cache_usage_perc: Option<f32>    = None;
-    let mut requests_running: Option<u32>    = None;
+    let mut r = VllmHarvestResult { running: true, ..Default::default() };
 
     for line in text.lines() {
         // Skip Prometheus comment / metadata lines.
@@ -489,41 +508,75 @@ async fn harvest_vllm(port: u16) -> (bool, Option<String>, Option<f32>, Option<f
         };
 
         // Numeric value = last whitespace-separated token on the line.
-        let value: Option<f32> = line.split_whitespace().last()
+        let raw_value: Option<f64> = line.split_whitespace().last()
             .and_then(|s| s.parse().ok());
+        let value_f32: Option<f32> = raw_value.map(|v| v as f32);
 
         // Extract model_name="..." from the label string (first occurrence wins).
-        if model_name.is_none() {
+        if r.model_name.is_none() {
             if let Some(start) = line.find("model_name=\"") {
                 let rest = &line[start + 12..];
                 if let Some(end) = rest.find('"') {
-                    model_name = Some(rest[..end].to_string());
+                    r.model_name = Some(rest[..end].to_string());
                 }
             }
         }
 
+        let parse_u32 = |v: Option<f32>| -> Option<u32> {
+            v.and_then(|v| if v >= 0.0 && v < u32::MAX as f32 { Some(v as u32) } else { None })
+        };
+        let parse_u64 = |v: Option<f64>| -> Option<u64> {
+            v.and_then(|v| if v >= 0.0 { Some(v as u64) } else { None })
+        };
+
         match metric_name.trim() {
-            // vllm:avg_generation_throughput_toks_per_s is a direct tok/s gauge emitted
-            // by vLLM during active generation. Zero when idle — we filter that out so
-            // the probe-measured IDLE-SPD baseline isn't overwritten by a 0.0 from an
-            // idle Prometheus scrape.
+            // ── Existing gauges ──────────────────────────────────────────────────
             "vllm:avg_generation_throughput_toks_per_s" => {
-                tokens_per_sec = value.filter(|&v| v > 0.1);
+                r.tokens_per_sec = value_f32.filter(|&v| v > 0.1);
             }
-            "vllm:gpu_cache_usage_perc" => {
-                // vLLM reports 0.0–1.0; multiply by 100 for percentage.
-                cache_usage_perc = value.map(|v| v * 100.0);
+            "vllm:gpu_cache_usage_perc" | "vllm:kv_cache_usage_perc" => {
+                r.cache_usage_perc = value_f32.map(|v| v * 100.0);
             }
             "vllm:num_requests_running" => {
-                requests_running = value.and_then(|v| {
-                    if v >= 0.0 && v < u32::MAX as f32 { Some(v as u32) } else { None }
-                });
+                r.requests_running = parse_u32(value_f32);
+            }
+            // ── Phase 1: queue/saturation gauges ────────────────────────────────
+            "vllm:num_requests_waiting" => {
+                r.requests_waiting = parse_u32(value_f32);
+            }
+            "vllm:num_requests_swapped" => {
+                r.requests_swapped = parse_u32(value_f32);
+            }
+            // ── Phase 3: histogram _sum/_count for windowed averages ────────────
+            "vllm:time_to_first_token_seconds_sum" => {
+                r.ttft_sum = raw_value;
+            }
+            "vllm:time_to_first_token_seconds_count" => {
+                r.ttft_count = parse_u64(raw_value);
+            }
+            "vllm:e2e_request_latency_seconds_sum" | "vllm:request_inference_time_seconds_sum" => {
+                r.e2e_sum = raw_value;
+            }
+            "vllm:e2e_request_latency_seconds_count" | "vllm:request_inference_time_seconds_count" => {
+                r.e2e_count = parse_u64(raw_value);
+            }
+            "vllm:request_queue_time_seconds_sum" => {
+                r.queue_time_sum = raw_value;
+            }
+            "vllm:request_queue_time_seconds_count" => {
+                r.queue_time_count = parse_u64(raw_value);
+            }
+            "vllm:request_prompt_tokens_sum" => {
+                r.prompt_tokens_total = parse_u64(raw_value);
+            }
+            "vllm:request_generation_tokens_sum" => {
+                r.gen_tokens_total = parse_u64(raw_value);
             }
             _ => {}
         }
     }
 
-    (true, model_name, tokens_per_sec, cache_usage_perc, requests_running)
+    r
 }
 
 /// Spawns a 2 s polling loop that watches for vLLM via the discovery channel,
@@ -570,19 +623,62 @@ pub(crate) fn start_vllm_harvester(
                     }
                 }
 
-                let (running, model, tps, cache, reqs) = harvest_vllm(port).await;
+                let h = harvest_vllm(port).await;
                 if let Ok(mut g) = shared_main.lock() {
-                    if !running {
+                    if !h.running {
                         *g = VllmMetrics::default();
                     } else {
                         g.vllm_running          = true;
-                        if let Some(m) = model  { g.vllm_model_name = Some(m); }
+                        if let Some(m) = h.model_name  { g.vllm_model_name = Some(m); }
                         // Only overwrite tok/s with live Prometheus value when the
                         // scheduler is actively generating (filter_out_zero applied
                         // upstream). When idle (None), preserve the probe baseline.
-                        if tps.is_some()        { g.vllm_tokens_per_sec = tps; }
-                        g.vllm_cache_usage_perc = cache;
-                        g.vllm_requests_running = reqs;
+                        if h.tokens_per_sec.is_some()  { g.vllm_tokens_per_sec = h.tokens_per_sec; }
+                        g.vllm_cache_usage_perc  = h.cache_usage_perc;
+                        g.vllm_requests_running  = h.requests_running;
+                        g.vllm_requests_waiting  = h.requests_waiting;
+                        g.vllm_requests_swapped  = h.requests_swapped;
+
+                        // Phase 3: compute windowed averages from histogram deltas
+                        // TTFT
+                        if let (Some(sum), Some(count)) = (h.ttft_sum, h.ttft_count) {
+                            if let (Some(ps), Some(pc)) = (g.prev_ttft_sum, g.prev_ttft_count) {
+                                let dc = count.saturating_sub(pc);
+                                if dc >= 3 { // guard against noisy spikes
+                                    let ds = sum - ps;
+                                    g.vllm_avg_ttft_ms = Some((ds / dc as f64 * 1000.0) as f32);
+                                }
+                            }
+                            g.prev_ttft_sum   = Some(sum);
+                            g.prev_ttft_count = Some(count);
+                        }
+                        // E2E latency
+                        if let (Some(sum), Some(count)) = (h.e2e_sum, h.e2e_count) {
+                            if let (Some(ps), Some(pc)) = (g.prev_e2e_sum, g.prev_e2e_count) {
+                                let dc = count.saturating_sub(pc);
+                                if dc >= 3 {
+                                    let ds = sum - ps;
+                                    g.vllm_avg_e2e_latency_ms = Some((ds / dc as f64 * 1000.0) as f32);
+                                }
+                            }
+                            g.prev_e2e_sum   = Some(sum);
+                            g.prev_e2e_count = Some(count);
+                        }
+                        // Queue time
+                        if let (Some(sum), Some(count)) = (h.queue_time_sum, h.queue_time_count) {
+                            if let (Some(ps), Some(pc)) = (g.prev_queue_time_sum, g.prev_queue_time_count) {
+                                let dc = count.saturating_sub(pc);
+                                if dc >= 3 {
+                                    let ds = sum - ps;
+                                    g.vllm_avg_queue_time_ms = Some((ds / dc as f64 * 1000.0) as f32);
+                                }
+                            }
+                            g.prev_queue_time_sum   = Some(sum);
+                            g.prev_queue_time_count = Some(count);
+                        }
+                        // Token counters
+                        g.vllm_prompt_tokens_total = h.prompt_tokens_total;
+                        g.vllm_generation_tokens_total = h.gen_tokens_total;
                     }
                 }
             }

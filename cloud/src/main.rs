@@ -107,6 +107,20 @@ struct MetricsPayload {
     vllm_cache_usage_perc: Option<f32>,
     #[serde(default)]
     vllm_requests_running: Option<u32>,
+    #[serde(default)]
+    vllm_requests_waiting: Option<u32>,
+    #[serde(default)]
+    vllm_requests_swapped: Option<u32>,
+    #[serde(default)]
+    vllm_avg_ttft_ms: Option<f32>,
+    #[serde(default)]
+    vllm_avg_e2e_latency_ms: Option<f32>,
+    #[serde(default)]
+    vllm_avg_queue_time_ms: Option<f32>,
+    #[serde(default)]
+    vllm_prompt_tokens_total: Option<u64>,
+    #[serde(default)]
+    vllm_generation_tokens_total: Option<u64>,
     // llama.cpp / llama-box runtime
     #[serde(default)]
     llamacpp_running:          bool,
