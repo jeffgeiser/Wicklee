@@ -6,6 +6,30 @@
 
 ---
 
+## March 31, 2026 — v0.7.10: Inference Metrics Expansion, Patterns P/Q/R, Pro Features
+
+### Inference Metrics Expansion (Phases 1–7) ✅
+- **Phase 1: vLLM Gauges** — `vllm_requests_waiting`, `vllm_requests_swapped` harvested from `/metrics` endpoint
+- **Phase 2: Ollama Probe** — `ollama_prompt_eval_tps`, `ollama_ttft_ms`, `ollama_load_duration_ms` parsed from 20-token probe response
+- **Phase 3: vLLM Histograms** — `vllm_avg_ttft_ms`, `vllm_avg_e2e_latency_ms`, `vllm_avg_queue_time_ms`, token counters via delta tracking
+- **Phase 4: Proxy Aggregates** — `ollama_proxy_avg_ttft_ms`, `ollama_proxy_avg_latency_ms`, `ollama_proxy_request_count` from done-packet accumulators
+- **Phase 5: Storage** — DuckDB columns + Postgres `metrics_raw` and rollup additions for all 13 new fields
+- **Phase 6: Frontend** — TTFT column in Fleet Status table, TTFT summary tile on Intelligence page (replaces Fleet Nodes), TTFT in Diagnostics rail and Performance tab charts
+- **Phase 7: Patterns P/Q/R** — TTFT Regression (P), Latency Spike (Q), vLLM Queue Saturation (R). Pattern M enhanced with queue depth context.
+- **Total: 18 observation patterns** (A–R). 9 Community, 9 Pro.
+
+### Pro Features ✅
+- **Node Display Names** — Settings → Node Configuration "Display Name" column. Syncs to Postgres via `PATCH /api/nodes/:node_id` for Pro+ users. SSE stream includes `display_name` so all devices see the custom name within 60s.
+- **7-Day History Enforcement** — `isRangeLocked()` now uses actual `subscriptionTier` instead of `historyDays` proxy. Community: 1h/24h. Pro: +7d. Team: +30d/90d.
+- **Paddle Integration** — Replaced Stripe references with Paddle throughout (ROADMAP.md, TIERS.md, PricingPage.tsx). Paddle overlay script + `openCheckout()` wired into pricing buttons.
+
+### Pricing Updates ✅
+- **Team tier** — $19/seat/mo (3-seat min), 25 nodes, $50/50-node expansion. Marked "Coming Soon".
+- **Enterprise tier** — "From $200/month". Proxy exclusive to Enterprise.
+- **Pro features added** — Custom Alert Thresholds, Node Naming & Tags.
+
+---
+
 ## March 30, 2026 — v0.7.9: Subscription Gating, WES Cleanup, Event Unification, Clerk Production
 
 ### WES Formula Cleanup ✅
