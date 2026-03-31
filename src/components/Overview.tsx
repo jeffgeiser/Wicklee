@@ -1922,17 +1922,43 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             icon={Cpu}
             iconCls="text-green-400"
           />
-        ) : (
-          <InsightTile
-            label="Fleet Nodes"
-            value={fleetTotalCount > 0 ? `${fleetLiveCount} / ${fleetTotalCount}` : '—'}
-            sub={fleetLiveCount > 0
-              ? `${fleetLiveCount} online`
-              : fleetTotalCount > 0 ? 'no nodes live' : undefined}
-            icon={Server}
-            iconCls="text-green-400"
-          />
-        )}
+        ) : (() => {
+          const ttftValues = effectiveMetrics
+            .map(m => m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms ?? null)
+            .filter((v): v is number => v != null && v > 0);
+          const avgTtft = ttftValues.length > 0
+            ? ttftValues.reduce((a, b) => a + b, 0) / ttftValues.length
+            : null;
+          const ttftCls = avgTtft == null ? 'text-gray-400 dark:text-gray-600'
+            : avgTtft < 100 ? 'text-emerald-400'
+            : avgTtft < 500 ? 'text-yellow-400'
+            : 'text-red-400';
+          return (
+            <InsightTile
+              label={
+                <MetricTooltip
+                  metricId="fleet-ttft"
+                  name="TTFT — Time To First Token"
+                  oneLiner="Average time from request to first generated token. Best available: vLLM histogram, proxy rolling average, or Ollama probe."
+                  ranges={[
+                    { threshold: '< 100ms', color: 'green', label: 'Fast · interactive quality' },
+                    { threshold: '100–500ms', color: 'amber', label: 'Moderate · noticeable delay' },
+                    { threshold: '> 500ms', color: 'red', label: 'Slow · check model size or queue depth' },
+                  ]}
+                >
+                  Fleet TTFT
+                </MetricTooltip>
+              }
+              value={avgTtft != null ? (avgTtft < 1000 ? `${Math.round(avgTtft)}ms` : `${(avgTtft / 1000).toFixed(1)}s`) : '—'}
+              valueCls={ttftCls}
+              sub={avgTtft != null
+                ? `${ttftValues.length} node${ttftValues.length !== 1 ? 's' : ''} · avg latency`
+                : 'no latency data'}
+              icon={Clock}
+              iconCls="text-cyan-400"
+            />
+          );
+        })()}
 
         {/* ── Row 2: Efficiency & ROI ──────────────────────────────────────── */}
 
@@ -2050,45 +2076,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             : displayFleetAvgTokW != null && displayFleetAvgTokW >= 1 ? 'text-yellow-400'
             : 'text-gray-500'}
         />
-
-        {/* 9. FLEET TTFT — average time to first token across active nodes */}
-        {(() => {
-          const ttftValues = effectiveMetrics
-            .map(m => m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms ?? null)
-            .filter((v): v is number => v != null && v > 0);
-          const avgTtft = ttftValues.length > 0
-            ? ttftValues.reduce((a, b) => a + b, 0) / ttftValues.length
-            : null;
-          const ttftCls = avgTtft == null ? 'text-gray-400 dark:text-gray-600'
-            : avgTtft < 100 ? 'text-emerald-400'
-            : avgTtft < 500 ? 'text-yellow-400'
-            : 'text-red-400';
-          return (
-            <InsightTile
-              label={
-                <MetricTooltip
-                  metricId="fleet-ttft"
-                  name="TTFT — Time To First Token"
-                  oneLiner="Average time from request to first generated token. Best available: vLLM histogram, proxy rolling average, or Ollama probe."
-                  ranges={[
-                    { threshold: '< 100ms', color: 'green', label: 'Fast · interactive quality' },
-                    { threshold: '100–500ms', color: 'amber', label: 'Moderate · noticeable delay' },
-                    { threshold: '> 500ms', color: 'red', label: 'Slow · check model size or queue depth' },
-                  ]}
-                >
-                  {isLocalMode ? 'Node TTFT' : 'Fleet TTFT'}
-                </MetricTooltip>
-              }
-              value={avgTtft != null ? (avgTtft < 1000 ? `${Math.round(avgTtft)}ms` : `${(avgTtft / 1000).toFixed(1)}s`) : '—'}
-              valueCls={ttftCls}
-              sub={avgTtft != null
-                ? `${ttftValues.length} node${ttftValues.length !== 1 ? 's' : ''} · avg latency`
-                : 'no latency data'}
-              icon={Clock}
-              iconCls="text-cyan-400"
-            />
-          );
-        })()}
 
       </div>
 
