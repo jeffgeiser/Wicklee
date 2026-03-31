@@ -22,6 +22,13 @@ pub(crate) struct ProxyState {
     /// Channel sender for inference traces — writes to DuckDB via a consumer task.
     #[cfg(not(target_env = "musl"))]
     pub(crate) trace_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::store::TraceRow>>,
+    // ── Proxy aggregate accumulators (Phase 4) ──────────────────────────────
+    /// Sum of prompt_eval_duration (nanoseconds) across all done packets.
+    pub(crate) ttft_sum_ns:      std::sync::atomic::AtomicU64,
+    /// Sum of total_duration (nanoseconds) across all done packets.
+    pub(crate) latency_sum_ns:   std::sync::atomic::AtomicU64,
+    /// Total done packets received since agent start.
+    pub(crate) request_count:    std::sync::atomic::AtomicU64,
 }
 
 /// Timeout for individual upstream chunks — if no data arrives for this long,
@@ -161,6 +168,11 @@ pub(crate) async fn proxy_ollama_streaming(
                                                     eval_duration_ns: Some(eval_dur as i64),
                                                 });
                                             }
+
+                                            // Phase 4: accumulate for rolling averages
+                                            proxy_state.ttft_sum_ns.fetch_add(prompt_dur, std::sync::atomic::Ordering::Relaxed);
+                                            proxy_state.latency_sum_ns.fetch_add(total_dur, std::sync::atomic::Ordering::Relaxed);
+                                            proxy_state.request_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                         }
                                     }
                                 }
