@@ -1717,10 +1717,20 @@ function evaluatePatternM(
     hostname,
     title:       'vLLM KV Cache Saturation',
     hook:        `${avgCache.toFixed(0)}% KV cache full`,
-    body:        `${hostname}'s vLLM KV cache has been above ${PATTERN_M_CACHE_THRESH}% for the last ` +
-                 `${Math.round(observedMs / 60000)} min (avg ${avgCache.toFixed(1)}%). ` +
-                 `When the cache fills, the scheduler cannot admit new sequences — incoming requests ` +
-                 `queue, get preempted, or return 503. Throughput degrades before errors appear.`,
+    body:        (() => {
+                   const queueSamples = recent.filter(s => s.vllm_requests_waiting != null && s.vllm_requests_waiting > 0);
+                   const avgQueue = queueSamples.length > 0
+                     ? queueSamples.reduce((a, s) => a + (s.vllm_requests_waiting ?? 0), 0) / queueSamples.length
+                     : 0;
+                   let msg = `${hostname}'s vLLM KV cache has been above ${PATTERN_M_CACHE_THRESH}% for the last ` +
+                     `${Math.round(observedMs / 60000)} min (avg ${avgCache.toFixed(1)}%). ` +
+                     `When the cache fills, the scheduler cannot admit new sequences — incoming requests ` +
+                     `queue, get preempted, or return 503.`;
+                   if (avgQueue > 0) {
+                     msg += ` Currently ${Math.round(avgQueue)} requests queued on average — confirming back-pressure.`;
+                   }
+                   return msg;
+                 })(),
     recommendation: `Reduce concurrent load: lower \`--max-num-seqs\` or \`--max-num-batched-tokens\` ` +
                     `to free KV cache headroom. If demand is sustained, scale horizontally or switch ` +
                     `to a smaller model/quantization that uses less cache per sequence.`,
@@ -1950,6 +1960,195 @@ function evaluatePatternO(
   };
 }
 
+// ── Pattern P: TTFT Regression ───────────────────────────────────────────────
+// Detects when Time To First Token degrades significantly compared to recent
+// baseline. Compares last 2 minutes of TTFT to the 5-minute baseline.
+// Fires when recent TTFT is > 2× the baseline.
+// Tier: Pro. Scope: Both (localhost + cloud).
+
+function evaluatePatternP(
+  nodeId: string, hostname: string, history: MetricSample[], now: number,
+): DetectedInsight | null {
+  const WINDOW_MS    = 5 * 60_000;
+  const RECENT_MS    = 2 * 60_000;
+  const MIN_SAMPLES  = 5;
+  const REGRESSION_FACTOR = 2.0;
+
+  const windowStart = now - WINDOW_MS;
+  const recentStart = now - RECENT_MS;
+  const samples = history.filter(s => s.ts_ms >= windowStart && s.ttft_ms != null && s.ttft_ms > 0);
+  if (samples.length < MIN_SAMPLES) return null;
+
+  const baseline = samples.filter(s => s.ts_ms < recentStart);
+  const recent   = samples.filter(s => s.ts_ms >= recentStart);
+  if (baseline.length < 3 || recent.length < 2) return null;
+
+  const baselineAvg = baseline.reduce((a, s) => a + (s.ttft_ms ?? 0), 0) / baseline.length;
+  const recentAvg   = recent.reduce((a, s) => a + (s.ttft_ms ?? 0), 0) / recent.length;
+
+  if (baselineAvg <= 0 || recentAvg < baselineAvg * REGRESSION_FACTOR) return null;
+
+  const regressionPct = Math.round(((recentAvg - baselineAvg) / baselineAvg) * 100);
+
+  const observedMs = recent.length * SAMPLE_INTERVAL_MS;
+
+  return {
+    patternId:   'ttft_regression',
+    title:       'TTFT Regression',
+    tier:        'pro',
+    nodeId,
+    hostname,
+    confidence:       recentAvg > baselineAvg * 3 ? 'high' : 'moderate',
+    confidenceRatio:  Math.min(recentAvg / baselineAvg / REGRESSION_FACTOR, 1.0),
+    hook:        `TTFT spiked ${regressionPct}% — ${Math.round(recentAvg)}ms vs ${Math.round(baselineAvg)}ms baseline`,
+    body:        `Time to first token has regressed from ${Math.round(baselineAvg)}ms to ${Math.round(recentAvg)}ms over the last 2 minutes. `
+               + `This may indicate queue contention, model swapping, or increased prompt complexity. `
+               + `Check queue depth and active model count.`,
+    recommendation: `Investigate queue backlog and model loading. If TTFT remains above ${Math.round(baselineAvg * 2)}ms, reduce concurrent request load or route to a healthier node.`,
+    resolution_steps: [
+      `Check current queue depth: \`curl -s http://localhost:7700/api/metrics | head -1 | jq .vllm_requests_waiting\``,
+      `View loaded models: \`ollama ps\``,
+      `If queue is backing up, reduce \`--max-num-seqs\` or route overflow to another node`,
+    ],
+    action_id:       'check_thermal_zone' as ActionId,
+    requiredMs:      RECENT_MS,
+    observedMs,
+    actions: [
+      { label: 'Check queue status', copyText: 'curl -s http://localhost:7700/api/metrics | head -1 | jq .vllm_requests_waiting' },
+      { label: 'View loaded models', copyText: 'ollama ps' },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,
+    best_node_hostname: null,
+  };
+}
+
+// ── Pattern Q: Latency Spike ────────────────────────────────────────────────
+// Detects sustained high E2E latency (> 2s) which indicates the node is
+// struggling to serve requests. Fires when mean E2E latency exceeds 2000ms
+// for 3+ consecutive samples.
+// Tier: Pro. Scope: Both (localhost + cloud).
+
+function evaluatePatternQ(
+  nodeId: string, hostname: string, history: MetricSample[], now: number,
+): DetectedInsight | null {
+  const WINDOW_MS      = 3 * 60_000;
+  const THRESHOLD_MS   = 2000;
+  const MIN_CONSECUTIVE = 3;
+
+  const windowStart = now - WINDOW_MS;
+  const samples = history
+    .filter(s => s.ts_ms >= windowStart && s.e2e_latency_ms != null)
+    .sort((a, b) => b.ts_ms - a.ts_ms);
+
+  if (samples.length < MIN_CONSECUTIVE) return null;
+
+  let consecutive = 0;
+  for (const s of samples) {
+    if ((s.e2e_latency_ms ?? 0) > THRESHOLD_MS) consecutive++;
+    else break;
+  }
+
+  if (consecutive < MIN_CONSECUTIVE) return null;
+
+  const avgLatency = samples.slice(0, consecutive).reduce((a, s) => a + (s.e2e_latency_ms ?? 0), 0) / consecutive;
+
+  const observedMs = consecutive * SAMPLE_INTERVAL_MS;
+
+  return {
+    patternId:   'latency_spike',
+    title:       'Latency Spike',
+    tier:        'pro',
+    nodeId,
+    hostname,
+    confidence:       avgLatency > 5000 ? 'high' : 'moderate',
+    confidenceRatio:  Math.min(avgLatency / THRESHOLD_MS / 2, 1.0),
+    hook:        `E2E latency at ${(avgLatency / 1000).toFixed(1)}s — ${consecutive} consecutive samples above 2s threshold`,
+    body:        `End-to-end request latency has been above 2 seconds for ${consecutive} consecutive samples. `
+               + `Average: ${Math.round(avgLatency)}ms. This indicates the inference pipeline is bottlenecked — `
+               + `check model size, batch concurrency, and system memory pressure.`,
+    recommendation: `Check for memory pressure or queue backlog. If latency persists, reduce model concurrency or route requests to a healthier node.`,
+    resolution_steps: [
+      `Check memory pressure: \`cat /proc/meminfo | grep -E "MemAvailable|SwapFree"\``,
+      `Reduce vLLM batch size: \`vllm serve --max-num-seqs 4\``,
+      `If Ollama: check if model is too large with \`ollama ps\` and switch to a smaller quantization`,
+    ],
+    action_id:       'reduce_batch_size' as ActionId,
+    requiredMs:      WINDOW_MS,
+    observedMs,
+    actions: [
+      { label: 'Check memory pressure', copyText: 'cat /proc/meminfo | grep -E "MemAvailable|SwapFree"' },
+      { label: 'Reduce batch size', copyText: 'vllm serve --max-num-seqs 4' },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,
+    best_node_hostname: null,
+  };
+}
+
+// ── Pattern R: vLLM Queue Saturation ────────────────────────────────────────
+// Detects when the vLLM request queue consistently has waiting requests,
+// indicating the engine can't keep up with incoming traffic.
+// Fires when requests_waiting > 5 for 3+ consecutive samples.
+// Tier: Pro. Scope: Both (localhost + cloud).
+
+function evaluatePatternR(
+  nodeId: string, hostname: string, history: MetricSample[], now: number,
+): DetectedInsight | null {
+  const WINDOW_MS      = 3 * 60_000;
+  const QUEUE_THRESHOLD = 5;
+  const MIN_CONSECUTIVE = 3;
+
+  const windowStart = now - WINDOW_MS;
+  const samples = history
+    .filter(s => s.ts_ms >= windowStart && s.vllm_requests_waiting != null)
+    .sort((a, b) => b.ts_ms - a.ts_ms);
+
+  if (samples.length < MIN_CONSECUTIVE) return null;
+
+  let consecutive = 0;
+  for (const s of samples) {
+    if ((s.vllm_requests_waiting ?? 0) > QUEUE_THRESHOLD) consecutive++;
+    else break;
+  }
+
+  if (consecutive < MIN_CONSECUTIVE) return null;
+
+  const avgQueue = samples.slice(0, consecutive).reduce((a, s) => a + (s.vllm_requests_waiting ?? 0), 0) / consecutive;
+
+  const observedMs = consecutive * SAMPLE_INTERVAL_MS;
+
+  return {
+    patternId:   'vllm_queue_saturation',
+    title:       'vLLM Queue Saturation',
+    tier:        'pro',
+    nodeId,
+    hostname,
+    confidence:       avgQueue > 20 ? 'high' : 'moderate',
+    confidenceRatio:  Math.min(avgQueue / QUEUE_THRESHOLD / 4, 1.0),
+    hook:        `${Math.round(avgQueue)} requests queued — sustained backlog for ${consecutive} samples`,
+    body:        `The vLLM engine has ${Math.round(avgQueue)} requests waiting on average over ${consecutive} consecutive samples. `
+               + `This means incoming requests are arriving faster than the engine can process them. `
+               + `Consider scaling horizontally, reducing max_num_seqs, or routing overflow to another node.`,
+    recommendation: `Reduce incoming request rate or scale horizontally. Route overflow to the best available node via the routing API.`,
+    resolution_steps: [
+      `Check current queue: \`curl -s http://localhost:8000/metrics | grep vllm_num_requests\``,
+      `Reduce max sequences: restart with \`--max-num-seqs 4\``,
+      `Route overflow: \`curl -s http://localhost:7700/api/v1/route/best\``,
+    ],
+    action_id:       'reduce_batch_size' as ActionId,
+    requiredMs:      WINDOW_MS,
+    observedMs,
+    actions: [
+      { label: 'Check vLLM metrics', copyText: 'curl -s http://localhost:8000/metrics | grep vllm_num_requests' },
+      { label: 'Route to best node', copyText: 'curl -s http://localhost:7700/api/v1/route/best', isEndpoint: true },
+    ],
+    firstFiredMs:       now,
+    best_node_id:       null,
+    best_node_hostname: null,
+  };
+}
+
 // ── Public evaluator ──────────────────────────────────────────────────────────
 
 export interface PatternEvaluatorInput {
@@ -2041,6 +2240,15 @@ export function evaluatePatterns(
   const o = evaluatePatternO(nodeId, hostname, history, now, os);
   if (o) results.push(o);
 
+  const p = evaluatePatternP(nodeId, hostname, history, now);
+  if (p) results.push(p);
+
+  const q = evaluatePatternQ(nodeId, hostname, history, now);
+  if (q) results.push(q);
+
+  const r = evaluatePatternR(nodeId, hostname, history, now);
+  if (r) results.push(r);
+
   // Filter out patterns that require a higher tier than the user has.
-  return results.filter(r => (TIER_RANK[r.tier] ?? 0) <= userTierRank);
+  return results.filter(r2 => (TIER_RANK[r2.tier] ?? 0) <= userTierRank);
 }

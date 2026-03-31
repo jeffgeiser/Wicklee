@@ -57,6 +57,12 @@ export interface MetricSample {
   ollama_model_size_gb:   number | null;
   /** Apple Silicon GPU VRAM budget (MB). Pattern O: VRAM capacity on Apple Silicon nodes. */
   gpu_wired_limit_mb:     number | null;
+  /** Time to first token (ms). Best available: vLLM > proxy > probe. Pattern P: TTFT regression. */
+  ttft_ms:                number | null;
+  /** End-to-end request latency (ms). vLLM or proxy only. Pattern Q: latency spike. */
+  e2e_latency_ms:         number | null;
+  /** vLLM requests waiting in queue. Pattern R: queue saturation. */
+  vllm_requests_waiting:  number | null;
 }
 
 // Map<node_id, MetricSample[]> — stored as JSON in localStorage
@@ -119,6 +125,12 @@ export function metricsToSample(
     nvidia_gpu_temp_c?:             number | null;
     ollama_model_size_gb?:          number | null;
     gpu_wired_limit_mb?:            number | null;
+    vllm_avg_ttft_ms?:              number | null;
+    ollama_proxy_avg_ttft_ms?:      number | null;
+    ollama_ttft_ms?:                number | null;
+    vllm_avg_e2e_latency_ms?:      number | null;
+    ollama_proxy_avg_latency_ms?:   number | null;
+    vllm_requests_waiting?:         number | null;
     // WES score is not in SentinelMetrics directly — computed downstream
     _wes_score?:                    number | null;
   },
@@ -157,6 +169,9 @@ export function metricsToSample(
     ollama_model_size_gb:   m.ollama_model_size_gb   ?? null,
     gpu_wired_limit_mb:     (m.gpu_wired_limit_mb != null && m.gpu_wired_limit_mb > 0)
                               ? m.gpu_wired_limit_mb : null,
+    ttft_ms:                m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms ?? null,
+    e2e_latency_ms:         m.vllm_avg_e2e_latency_ms ?? m.ollama_proxy_avg_latency_ms ?? null,
+    vllm_requests_waiting:  m.vllm_requests_waiting ?? null,
   };
 }
 
