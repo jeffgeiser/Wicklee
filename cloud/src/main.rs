@@ -2444,7 +2444,7 @@ async fn handle_metrics_history(
                         AVG(cpu_pct)          AS cpu_pct,
                         AVG(swap_write)       AS swap_write,
                         AVG(ttft_ms)          AS ttft_ms,
-                        AVG(e2e_latency_ms)   AS e2e_latency_ms
+                        AVG(avg_latency_ms)   AS e2e_latency_ms
                  FROM metrics_raw
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
