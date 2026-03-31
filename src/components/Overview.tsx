@@ -2005,6 +2005,41 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           />
         )}
 
+        {/* 5b. INFERENCE STATE (local only) */}
+        {isLocalMode && (
+          <InsightTile
+            label="Inference State"
+            value={
+              localIsInferring ? 'Live' :
+              localIsBusy      ? 'Busy' :
+              localIsIdleSpeed ? 'Idle-SPD' :
+              localIsIdle      ? 'Idle' :
+              '—'
+            }
+            valueCls={
+              localIsInferring ? 'text-green-400' :
+              localIsBusy      ? 'text-amber-400' :
+              localIsIdleSpeed ? 'text-blue-400' :
+              localIsIdle      ? 'text-gray-400 dark:text-gray-600' :
+              'text-gray-400 dark:text-gray-600'
+            }
+            sub={
+              localIsInferring ? 'actively generating tokens' :
+              localIsBusy      ? 'GPU active · no token output' :
+              localIsIdleSpeed ? 'model loaded · baseline ready' :
+              localIsIdle      ? 'no model loaded' :
+              undefined
+            }
+            icon={Activity}
+            iconCls={
+              localIsInferring ? 'text-green-400' :
+              localIsBusy      ? 'text-amber-400' :
+              localIsIdleSpeed ? 'text-blue-400' :
+              'text-gray-500'
+            }
+          />
+        )}
+
         {/* ── Row 2: Efficiency & ROI ──────────────────────────────────────── */}
 
         {/* 5. AVG WES / NODE WES */}
