@@ -29,7 +29,11 @@
 - **Pro features added** — Custom Alert Thresholds, Node Naming & Tags.
 
 ### Dashboard ✅
-- **10-tile Intelligence layout** — both localhost and cloud now have 10 summary tiles (5 per row). Cloud: Fleet Nodes tile replaced with Fleet TTFT. Localhost: added Inference State tile (Live/Busy/Idle-SPD/Idle with color-coded states).
+- **10-tile Intelligence layout** — both localhost and cloud now have 10 summary tiles (5 per row).
+  - Cloud: Capacity · Fleet Health · Fleet VRAM · Fleet TTFT · Avg WES · Fleet GPU% · Fleet Cost/Day · W/1K · Fleet Memory · Fleet tok/W
+  - Localhost: Capacity · Node Cost/Day · Node VRAM · Node TTFT · Runtime · Inference State · Node WES · W/1K · Node Memory · Node tok/W
+- **Expandable Fleet Status rows** — click any node row to reveal a detail panel with all inference metrics. Smart-filtered by runtime: Ollama nodes show Load Duration + Prefill Speed, vLLM nodes show E2E Latency + Queue Depth + KV Cache. No dashes for inapplicable fields.
+- **Two-column Diagnostics rail (localhost)** — Live Hardware section now uses a 2-column grid: Column 1 (core hardware: CPU, GPU%, Memory, Power, Thermal, Swap, Clock Throttle) + Column 2 (inference + latency: Tok/s, TTFT, E2E Latency, Queue Depth, Load Duration, Prefill Speed, KV Cache, Requests Running).
 - **TTFT column in Fleet Status** — resolves best-available source (vLLM histogram → proxy rolling → Ollama probe). Color-coded: <100ms green, 100-500ms yellow, >500ms red.
 - **tok/W column + tile** — replaces Duty on both dashboards. Raw tok/s ÷ watts, same color scale as WES.
 - **WES color scale** — emerald (>10), green (3-10), yellow (1-3), red (<1). Applied consistently across all components.
@@ -37,11 +41,15 @@
 
 ### Bug Fixes ✅
 - **Ollama probe carry-forward** — TTFT, prefill speed, load duration wiped every 5s harvester tick. Now carried forward like tok/s.
+- **vLLM histogram delta guard** — relaxed from dc≥3 to dc≥1. Low-traffic nodes never accumulated 3 requests in a 2s poll window, causing TTFT/latency to stay permanently null.
 - **nginx IPv6 DNS** — Railway internal DNS `[fd12::10]` bracketed correctly, resolves persistent 502 on `/api/v1/*`.
 - **gpu_wired_limit_mb** — M4 fallback to 75% of total RAM when sysctl returns 0.
 - **False thermal on idle CPU** — clock_ratio source with <15% CPU usage forced to Normal.
 - **Live Activity flood** — DB seed events with unrecognized types no longer default to `node_online`.
 - **10 documentation accuracy fixes** — WebSocket Hz, agent privilege, probe token count, config filename, CLI reference, API endpoints, pattern scopes, thermal mapping.
+
+### Documentation ✅
+- **Latency & TTFT section** added to DocsPage — three-source TTFT explanation (synthetic probe vs production), resolution priority, full latency metrics table.
 
 ---
 
