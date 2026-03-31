@@ -275,6 +275,9 @@ struct MetricsRow {
     inference_state:  Option<String>,    // "live" | "idle-spd" | "busy" | "idle"
     wes_version:      u8,               // incremented when WES formula changes
     swap_write:       Option<f32>,      // swap write MB/s — SSD degradation indicator
+    ttft_ms:          Option<f32>,      // best-available TTFT (vLLM > proxy > Ollama probe)
+    avg_latency_ms:   Option<f32>,      // best-available E2E latency (vLLM > proxy)
+    queue_depth:      Option<i32>,      // vLLM requests_waiting
 }
 
 /// A Live Activity event destined for the `node_events` table.
@@ -511,6 +514,12 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 
     // Additive column migration (idempotent — silently ignored if column exists)
     sqlx::query("ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write REAL")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ttft_ms REAL")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS avg_latency_ms REAL")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth INTEGER")
         .execute(pool).await.ok();
 
     // Convert to hypertable (idempotent check via exception handling)
@@ -2848,6 +2857,11 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
         inference_state:  m.inference_state.clone(),
         wes_version:      m.wes_version.unwrap_or(1),
         swap_write:       m.swap_write_mb_s,
+        // Best-available TTFT: vLLM > proxy > Ollama probe
+        ttft_ms:          m.vllm_avg_ttft_ms.or(m.ollama_proxy_avg_ttft_ms).or(m.ollama_ttft_ms),
+        // Best-available latency: vLLM > proxy
+        avg_latency_ms:   m.vllm_avg_e2e_latency_ms.or(m.ollama_proxy_avg_latency_ms),
+        queue_depth:      m.vllm_requests_waiting.map(|v| v as i32),
     }
 }
 
@@ -2875,18 +2889,23 @@ async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
         let inf_state:   Vec<Option<&str>>   = chunk.iter().map(|r| r.inference_state.as_deref()).collect();
         let wes_ver:     Vec<i16>            = chunk.iter().map(|r| r.wes_version as i16).collect();
         let swap_write:  Vec<Option<f32>>    = chunk.iter().map(|r| r.swap_write).collect();
+        let ttft:        Vec<Option<f32>>    = chunk.iter().map(|r| r.ttft_ms).collect();
+        let avg_lat:     Vec<Option<f32>>    = chunk.iter().map(|r| r.avg_latency_ms).collect();
+        let q_depth:     Vec<Option<i32>>    = chunk.iter().map(|r| r.queue_depth).collect();
 
         let _ = sqlx::query(
             "INSERT INTO metrics_raw (ts, node_id, tenant_id, tok_s, watts, wes_raw, wes_penalized,
                 thermal_cost_pct, thermal_penalty, thermal_state, vram_used_mb, vram_total_mb,
-                mem_pressure_pct, gpu_pct, cpu_pct, inference_state, wes_version, swap_write)
+                mem_pressure_pct, gpu_pct, cpu_pct, inference_state, wes_version, swap_write,
+                ttft_ms, avg_latency_ms, queue_depth)
              SELECT to_timestamp(unnest($1::float8[]) / 1000.0),
                     unnest($2::text[]), unnest($3::text[]),
                     unnest($4::real[]), unnest($5::real[]), unnest($6::real[]), unnest($7::real[]),
                     unnest($8::real[]), unnest($9::real[]), unnest($10::text[]),
                     unnest($11::int[]), unnest($12::int[]),
                     unnest($13::real[]), unnest($14::real[]), unnest($15::real[]),
-                    unnest($16::text[]), unnest($17::smallint[]), unnest($18::real[])
+                    unnest($16::text[]), unnest($17::smallint[]), unnest($18::real[]),
+                    unnest($19::real[]), unnest($20::real[]), unnest($21::int[])
              ON CONFLICT DO NOTHING"
         )
         .bind(&ts_values).bind(&node_ids).bind(&tenant_ids)
@@ -2895,6 +2914,7 @@ async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
         .bind(&vram_used).bind(&vram_total)
         .bind(&mem_pct).bind(&gpu_pct).bind(&cpu_pct)
         .bind(&inf_state).bind(&wes_ver).bind(&swap_write)
+        .bind(&ttft).bind(&avg_lat).bind(&q_depth)
         .execute(pool).await;
     }
 }
