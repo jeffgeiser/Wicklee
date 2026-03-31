@@ -1985,6 +1985,121 @@ async fn handle_acknowledge_observation(
     }
 }
 
+/// POST /api/fleet/observations — submit client-side pattern detections (Pro+)
+async fn handle_submit_observation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    // Pro+ only — persistent insight cards
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if tier == "community" {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Persistent insights require Pro tier or above", "upgrade": true }))).into_response();
+    }
+
+    let node_id    = body["node_id"].as_str().unwrap_or_default().to_string();
+    let alert_type = body["alert_type"].as_str().unwrap_or_default().to_string();
+    let severity   = body["severity"].as_str().unwrap_or("warning").to_string();
+    let title      = body["title"].as_str().unwrap_or_default().to_string();
+    let detail     = body["detail"].as_str().unwrap_or_default().to_string();
+    let context    = body.get("context").cloned().unwrap_or(serde_json::json!({}));
+
+    if node_id.is_empty() || alert_type.is_empty() || title.is_empty() {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "node_id, alert_type, and title are required" }))).into_response();
+    }
+
+    // Verify node belongs to user
+    let owns: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM nodes WHERE wk_id = $1 AND user_id = $2"
+    ).bind(&node_id).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0) > 0;
+    if !owns {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Node not found or not owned by you" }))).into_response();
+    }
+
+    // Dedup: skip if same (node, alert_type) already open
+    let already_open: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM fleet_observations WHERE tenant_id = $1 AND node_id = $2 AND alert_type = $3 AND state = 'open'"
+    ).bind(&user_id).bind(&node_id).bind(&alert_type).fetch_one(&state.pool).await.unwrap_or(0) > 0;
+    if already_open {
+        return Json(serde_json::json!({ "ok": true, "dedup": true, "message": "Already open" })).into_response();
+    }
+
+    let now = now_ms() as i64;
+    let obs_id = Uuid::new_v4().to_string();
+    let context_str = serde_json::to_string(&context).unwrap_or_default();
+
+    let _ = sqlx::query(
+        "INSERT INTO fleet_observations (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
+         VALUES ($1, $2, $3, $4, $5, 'open', $6, $7, $8::jsonb, $9)
+         ON CONFLICT DO NOTHING"
+    ).bind(&obs_id).bind(&user_id).bind(&node_id).bind(&alert_type)
+    .bind(&severity).bind(&title).bind(&detail)
+    .bind(&context_str).bind(now)
+    .execute(&state.pool).await;
+
+    // Also write to node_events for timeline visibility
+    let _ = state.events_tx.try_send(EventRow {
+        ts_ms: now, node_id: node_id.clone(), tenant_id: user_id.clone(),
+        level: if severity == "critical" { "error" } else { "warning" }.into(),
+        event_type: Some(alert_type.clone()), message: title.clone(),
+    });
+
+    Json(serde_json::json!({ "ok": true, "id": obs_id })).into_response()
+}
+
+/// POST /api/fleet/observations/:id/resolve — mark an observation as resolved from frontend
+async fn handle_resolve_observation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(obs_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let now = now_ms() as i64;
+    let result = sqlx::query(
+        "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1
+         WHERE id = $2 AND tenant_id = $3 AND state = 'open'"
+    ).bind(now).bind(&obs_id).bind(&user_id)
+    .execute(&state.pool).await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Observation not found or already resolved" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("resolve failed: {e}") }))).into_response(),
+    }
+}
+
 /// GET /api/fleet/export
 async fn handle_fleet_export(
     State(state): State<AppState>,
@@ -4274,8 +4389,9 @@ async fn main() {
         .route("/api/fleet/duty",                 get(handle_fleet_duty))
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
         .route("/api/fleet/export",               get(handle_fleet_export))
-        .route("/api/fleet/observations",            get(handle_fleet_observations))
+        .route("/api/fleet/observations",            get(handle_fleet_observations).post(handle_submit_observation))
         .route("/api/fleet/observations/:id/acknowledge", post(handle_acknowledge_observation))
+        .route("/api/fleet/observations/:id/resolve",     post(handle_resolve_observation))
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))
         .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))

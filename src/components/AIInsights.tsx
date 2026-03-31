@@ -40,6 +40,44 @@ import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW } from '../utils/power';
 import { buildReportFromLive } from '../utils/benchmarkReport';
 import type { BenchmarkReport } from '../utils/benchmarkReport';
+
+const CLOUD_URL = (() => {
+  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
+  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  if (v === '/') return '';
+  return v.startsWith('http') ? v : `https://${v}`;
+})();
+
+/** Save a client-side pattern detection to cloud Postgres (Pro+ only, best-effort). */
+async function submitObservationToCloud(
+  getToken: () => Promise<string | null>,
+  obs: { node_id: string; alert_type: string; severity: string; title: string; detail: string; context?: object },
+) {
+  try {
+    const token = await getToken();
+    if (!token) return null;
+    const res = await fetch(`${CLOUD_URL}/api/fleet/observations`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(obs),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.id as string | null;
+  } catch { return null; }
+}
+
+/** Resolve a cloud-persisted observation (Pro+ only, best-effort). */
+async function resolveObservationOnCloud(getToken: () => Promise<string | null>, obsId: string) {
+  try {
+    const token = await getToken();
+    if (!token) return;
+    await fetch(`${CLOUD_URL}/api/fleet/observations/${obsId}/resolve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch { /* best-effort */ }
+}
 import BenchmarkReportModal from './BenchmarkReportModal';
 import { computeModelFitScore } from '../utils/modelFit';
 import { useSettings } from '../hooks/useSettings';
@@ -690,6 +728,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
+  // Maps "patternId:nodeId" → cloud observation ID for resolve calls (Pro+ only)
+  const cloudObsIdRef = useRef(new Map<string, string>());
+  const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
 
   /**
    * Onset suppression map — tracks the last timestamp a pattern_onset event was
@@ -985,6 +1026,20 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             localStorage.setItem('wicklee:patternOnsetMap',
               JSON.stringify([...patternOnsetMapRef.current.entries()]));
           } catch {}
+
+          // Save to cloud Postgres for cross-device persistence (Pro+ only)
+          if (isProOrAbove && !isLocalHost && getToken) {
+            submitObservationToCloud(getToken, {
+              node_id:    result.nodeId,
+              alert_type: result.patternId,
+              severity:   result.confidence === 'high' ? 'critical' : 'warning',
+              title:      result.title,
+              detail:     `${result.hook} · ${result.recommendation}`,
+              context:    { confidence: result.confidence, action_id: result.action_id },
+            }).then(obsId => {
+              if (obsId) cloudObsIdRef.current.set(key, obsId);
+            });
+          }
         }
       }
     }
@@ -1039,6 +1094,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             recommendation: entry.insight.recommendation,
             durationMs,
           });
+
+          // Resolve on cloud (Pro+ only)
+          const cloudId = cloudObsIdRef.current.get(key);
+          if (cloudId && isProOrAbove && !isLocalHost && getToken) {
+            resolveObservationOnCloud(getToken, cloudId);
+            cloudObsIdRef.current.delete(key);
+          }
 
           cache.delete(key);
         }
