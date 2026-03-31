@@ -741,7 +741,7 @@ WES Version:     2
               The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. Each observation includes actionable commands tailored to your platform (macOS, Linux, or NVIDIA).
             </p>
             <p>
-              Wicklee evaluates 15 patterns across three scopes: patterns that run on both localhost and the fleet cloud, patterns that require fleet context (cloud-only), and patterns that rely on local-only sensors.
+              Wicklee evaluates 18 patterns across three scopes: patterns that run on both localhost and the fleet cloud, patterns that require fleet context (cloud-only), and patterns that rely on local-only sensors. 9 patterns are available on the Community tier; 9 additional patterns require Pro.
             </p>
 
             {/* ── Localhost + Cloud patterns ── */}
@@ -839,7 +839,7 @@ WES Version:     2
             </div>
 
             {/* ── Localhost-only patterns ── */}
-            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-6">Both — Localhost + Cloud (7 patterns)</p>
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-6">Both — Localhost + Cloud (10 patterns)</p>
             <p className="text-xs text-gray-500 mb-2">Evaluated on both the local agent and the cloud pattern engine. Available in standalone and fleet mode.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -902,6 +902,27 @@ WES Version:     2
                     <Td mono>instant</Td>
                     <Td>Community</Td>
                   </tr>
+                  <tr>
+                    <Td><span className="font-medium text-pink-400">P — TTFT Regression</span></Td>
+                    <Td>Time to first token spikes &gt; 2× the 5-minute baseline — queue contention, model swap, or prompt complexity increase</Td>
+                    <Td><code className="text-[10px] text-gray-500">curl localhost:7700/api/metrics | jq .vllm_requests_waiting</code></Td>
+                    <Td mono>2 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-red-300">Q — Latency Spike</span></Td>
+                    <Td>End-to-end request latency exceeds 2 seconds for 3+ consecutive samples — inference pipeline bottleneck</Td>
+                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
+                    <Td mono>3 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-violet-300">R — vLLM Queue Saturation</span></Td>
+                    <Td>vLLM requests_waiting &gt; 5 sustained — incoming requests exceed engine capacity, needs horizontal scaling or routing</Td>
+                    <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep vllm_num_requests</code></Td>
+                    <Td mono>3 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
                 </tbody>
               </table>
             </div>
@@ -922,7 +943,7 @@ WES Version:     2
             <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2">
               <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Action commands</p>
               <p className="text-xs text-gray-400 leading-relaxed">
-                Each observation includes one or two actionable commands you can copy and run. Commands are platform-aware — Pattern O shows <code className="text-gray-300">sysctl iogpu.wired_limit_mb</code> on Apple Silicon and <code className="text-gray-300">nvidia-smi --query-gpu=memory.total,memory.used,memory.free</code> on NVIDIA. All commands target the local agent or runtime and never send data externally.
+                Each observation includes one or two actionable commands you can copy and run. Commands are platform-aware — Pattern O shows <code className="text-gray-300">sysctl iogpu.wired_limit_mb</code> on Apple Silicon and <code className="text-gray-300">nvidia-smi --query-gpu=memory.total,memory.used,memory.free</code> on NVIDIA. Latency patterns (P, Q, R) leverage TTFT and queue depth metrics from vLLM Prometheus, the Ollama proxy, and probe responses. All commands target the local agent or runtime and never send data externally.
               </p>
             </div>
 
