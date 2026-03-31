@@ -1961,15 +1961,33 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           iconCls="text-indigo-400"
         />
 
-        {/* 2. FLEET / NODE HEALTH */}
-        <InsightTile
-          label={isLocalMode ? 'Node Health' : 'Fleet Health'}
-          value={fleetHealthPct != null ? `${fleetHealthPct}%` : '—'}
-          valueCls={fleetHealthCls}
-          sub={fleetHealthPct != null ? 'Normal / Fair thermal' : 'no thermal data'}
-          icon={Thermometer}
-          iconCls="text-amber-400"
-        />
+        {/* 2. FLEET HEALTH (cloud) / NODE COST/DAY (localhost) */}
+        {isLocalMode ? (() => {
+          // Node Cost/Day: watts × 24h × kWhRate / 1000
+          const nodeWatts = sentinel?.apple_soc_power_w ?? sentinel?.nvidia_power_draw_w ?? sentinel?.cpu_power_w ?? null;
+          const ns = getNodeSettings?.(sentinel?.node_id ?? '');
+          const kwhRate = ns?.kwhRate ?? 0.12;
+          const dailyCost = nodeWatts != null ? (nodeWatts * 24 / 1000) * kwhRate : null;
+          return (
+            <InsightTile
+              label="Node Cost/Day"
+              value={dailyCost != null ? (dailyCost < 0.01 ? '< $0.01' : `$${dailyCost.toFixed(2)}`) : '—'}
+              valueCls={dailyCost == null ? 'text-gray-400 dark:text-gray-600' : dailyCost < 0.50 ? 'text-emerald-400' : dailyCost < 2.00 ? 'text-yellow-400' : 'text-red-400'}
+              sub={nodeWatts != null ? `${nodeWatts.toFixed(1)}W · $${kwhRate}/kWh` : 'no power data'}
+              icon={DollarSign}
+              iconCls="text-emerald-400"
+            />
+          );
+        })() : (
+          <InsightTile
+            label="Fleet Health"
+            value={fleetHealthPct != null ? `${fleetHealthPct}%` : '—'}
+            valueCls={fleetHealthCls}
+            sub={fleetHealthPct != null ? 'Normal / Fair thermal' : 'no thermal data'}
+            icon={Thermometer}
+            iconCls="text-amber-400"
+          />
+        )}
 
         {/* 3. TOTAL FLEET / NODE VRAM */}
         <InsightTile
@@ -2108,27 +2126,52 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           />
         )}
 
-        {/* ── Cloud-only tiles to fill row 2 (replace Runtime + Inference State) ── */}
+        {/* ── Cloud-only tiles: Fleet GPU% + Fleet Cost/Day ── */}
         {!isLocalMode && (() => {
-          const liveNodes = effectiveMetrics.filter(m => m.inference_state === 'live' || m.inference_state === 'idle-spd').length;
-          const modelNodes = effectiveMetrics.filter(m => m.ollama_active_model || m.vllm_model_name).length;
+          // Fleet GPU% — average across nodes that report GPU utilization
+          const gpuValues = effectiveMetrics
+            .map(m => m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null)
+            .filter((v): v is number => v != null);
+          const avgGpu = gpuValues.length > 0
+            ? Math.round(gpuValues.reduce((a, b) => a + b, 0) / gpuValues.length)
+            : null;
+          const gpuCls = avgGpu == null ? 'text-gray-400 dark:text-gray-600'
+            : avgGpu >= 80 ? 'text-red-400'
+            : avgGpu >= 50 ? 'text-yellow-400'
+            : 'text-emerald-400';
+
+          // Fleet Cost/Day — sum of (watts × 24h × kWhRate / 1000) across all nodes
+          let fleetDailyCost: number | null = null;
+          let totalFleetWatts = 0;
+          let costNodeCount = 0;
+          for (const m of effectiveMetrics) {
+            const w = m.nvidia_power_draw_w ?? m.apple_soc_power_w ?? m.cpu_power_w ?? null;
+            if (w != null && w > 0) {
+              const ns = getNodeSettings?.(m.node_id);
+              const rate = ns?.kwhRate ?? 0.12;
+              totalFleetWatts += w;
+              fleetDailyCost = (fleetDailyCost ?? 0) + (w * 24 / 1000) * rate;
+              costNodeCount++;
+            }
+          }
+
           return (
             <>
               <InsightTile
-                label="Active Models"
-                value={modelNodes > 0 ? `${modelNodes}` : '—'}
-                valueCls={modelNodes > 0 ? 'text-green-400' : 'text-gray-400 dark:text-gray-600'}
-                sub={modelNodes > 0 ? `${modelNodes} node${modelNodes !== 1 ? 's' : ''} with models loaded` : 'no models loaded'}
+                label="Fleet GPU%"
+                value={avgGpu != null ? `${avgGpu}%` : '—'}
+                valueCls={gpuCls}
+                sub={avgGpu != null ? `${gpuValues.length} node${gpuValues.length !== 1 ? 's' : ''} · compute utilization` : 'no GPU data'}
                 icon={Cpu}
-                iconCls="text-green-400"
+                iconCls={avgGpu != null && avgGpu >= 50 ? 'text-yellow-400' : 'text-emerald-400'}
               />
               <InsightTile
-                label="Inference Active"
-                value={liveNodes > 0 ? `${liveNodes}` : '0'}
-                valueCls={liveNodes > 0 ? 'text-green-400' : 'text-gray-400 dark:text-gray-600'}
-                sub={liveNodes > 0 ? `${liveNodes} node${liveNodes !== 1 ? 's' : ''} live or ready` : 'no active inference'}
-                icon={Activity}
-                iconCls={liveNodes > 0 ? 'text-green-400' : 'text-gray-500'}
+                label="Fleet Cost/Day"
+                value={fleetDailyCost != null ? (fleetDailyCost < 0.01 ? '< $0.01' : `$${fleetDailyCost.toFixed(2)}`) : '—'}
+                valueCls={fleetDailyCost == null ? 'text-gray-400 dark:text-gray-600' : fleetDailyCost < 1.00 ? 'text-emerald-400' : fleetDailyCost < 5.00 ? 'text-yellow-400' : 'text-red-400'}
+                sub={fleetDailyCost != null ? `${costNodeCount} node${costNodeCount !== 1 ? 's' : ''} · ${totalFleetWatts.toFixed(0)}W total` : 'no power data'}
+                icon={DollarSign}
+                iconCls="text-emerald-400"
               />
             </>
           );
