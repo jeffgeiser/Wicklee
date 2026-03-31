@@ -329,6 +329,7 @@ interface NodeRowProps {
 }
 
 const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, restricted = false, onUpgrade }) => {
+  const [expanded, setExpanded] = useState(false);
   const isOnline = m !== null;
 
   // Rolling-average smoothing for fleet rows. Fleet SSE arrives at 2s cadence
@@ -526,8 +527,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   ].filter(Boolean).join('  ·  ');
 
   return (
+    <>
     <div
-      className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors${dotState === 'offline' ? ' opacity-50' : ''}`}
+      onClick={() => setExpanded(e => !e)}
+      className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors cursor-pointer${dotState === 'offline' ? ' opacity-50' : ''}`}
     >
       {/* 1. NODE — status dot + ID + hostname (sticky) */}
       <div className="flex items-center gap-2 overflow-hidden sticky left-4 bg-white dark:bg-gray-900 group-hover:bg-gray-50/50 dark:group-hover:bg-gray-800/30" title={nodeTooltip || undefined}>
@@ -773,11 +776,62 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* SPACER */}
-      <div />
+      {/* SPACER — chevron indicator */}
+      <div className="flex justify-end">
+        <ChevronDown className={`w-3 h-3 text-gray-600 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </div>
     </div>
+
+    {/* ── Expanded detail panel ─────────────────────────────────────────── */}
+    {expanded && isOnline && m && (
+      <div className="px-6 py-3 bg-gray-950/40 border-b border-gray-800/60">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-2 text-xs">
+          {/* Latency metrics */}
+          <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={m.vllm_avg_ttft_ms != null ? 'vllm' : m.ollama_proxy_avg_ttft_ms != null ? 'proxy' : 'probe'} />
+          <DetailCell label="E2E Latency" value={m.vllm_avg_e2e_latency_ms ?? m.ollama_proxy_avg_latency_ms} unit="ms" />
+          <DetailCell label="Queue Time" value={m.vllm_avg_queue_time_ms} unit="ms" />
+          <DetailCell label="Load Duration" value={m.ollama_load_duration_ms} unit="ms" />
+          <DetailCell label="Prefill Speed" value={m.ollama_prompt_eval_tps} unit="tok/s" />
+          {/* Queue & cache */}
+          <DetailCell label="Queue Depth" value={m.vllm_requests_waiting} unit="req" />
+          <DetailCell label="Requests Running" value={m.vllm_requests_running} unit="" />
+          <DetailCell label="KV Cache" value={m.vllm_cache_usage_perc} unit="%" />
+          {/* Infrastructure */}
+          <DetailCell label="Swap Write" value={m.swap_write_mb_s} unit="MB/s" />
+          <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%" />
+          <DetailCell label="Proxy Requests" value={m.ollama_proxy_request_count} unit="total" />
+          <DetailCell label="Thermal Source" value={m.thermal_source} />
+        </div>
+      </div>
+    )}
+    </>
   );
 };
+
+/** Compact metric cell for the expanded detail panel. */
+const DetailCell: React.FC<{
+  label: string;
+  value: number | string | null | undefined;
+  unit?: string;
+  source?: string;
+}> = ({ label, value, unit, source }) => (
+  <div className="flex flex-col">
+    <span className="text-[9px] text-gray-600 uppercase tracking-wider">{label}</span>
+    <div className="flex items-baseline gap-1">
+      {value != null ? (
+        <>
+          <span className="text-xs font-telin text-gray-300">
+            {typeof value === 'number' ? (value < 1 && value > 0 ? value.toFixed(2) : value >= 1000 ? `${(value / 1000).toFixed(1)}k` : Number.isInteger(value) ? value : value.toFixed(1)) : value}
+          </span>
+          {unit && <span className="text-[9px] text-gray-600">{unit}</span>}
+          {source && <span className="text-[8px] text-gray-700 font-mono">{source}</span>}
+        </>
+      ) : (
+        <span className="text-[10px] text-gray-700">—</span>
+      )}
+    </div>
+  </div>
+);
 
 // ── WES breakdown tooltip (browser title attr) ───────────────────────────────
 function wesBreakdownTitle(
