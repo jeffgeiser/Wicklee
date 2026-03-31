@@ -409,10 +409,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* Live cost preview */}
+          {/* Reference cost benchmark */}
           <div className="rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-800 px-4 py-3">
             <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-              Cost Preview · 100 W node · 24/7
+              Reference Benchmark · 100W node running 24/7
             </p>
             <div className="flex items-baseline gap-1.5">
               <span className="text-2xl font-bold font-telin text-gray-900 dark:text-white">
@@ -421,7 +421,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
               <span className="text-xs text-gray-500">/month</span>
             </div>
             <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
-              {currSymbol}{effKwh.toFixed(4)}/kWh · PUE {effPue.toFixed(1)}
+              {currSymbol}{effKwh.toFixed(4)}/kWh · PUE {effPue.toFixed(1)} · hypothetical reference cost
+            </p>
+            <p className="text-[10px] text-gray-600 mt-1">
+              Your actual fleet cost is shown on the Intelligence tab based on live power draw.
             </p>
           </div>
 
