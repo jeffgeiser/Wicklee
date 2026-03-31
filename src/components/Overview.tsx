@@ -1069,6 +1069,48 @@ const DiagnosticRail: React.FC<{
           <RailRow label="Tok/s" value="—" textCls="text-gray-600" barCls="bg-gray-800" />
         )
       )}
+      {/* TTFT — best available: vLLM > proxy > Ollama probe */}
+      {(() => {
+        const ttft = s.vllm_avg_ttft_ms ?? s.ollama_proxy_avg_ttft_ms ?? s.ollama_ttft_ms ?? null;
+        if (ttft == null) return null;
+        const cls = ttft < 100 ? 'text-emerald-400' : ttft < 500 ? 'text-yellow-400' : 'text-red-400';
+        const src = s.vllm_avg_ttft_ms != null ? 'vllm' : s.ollama_proxy_avg_ttft_ms != null ? 'proxy' : 'probe';
+        return (
+          <RailRow
+            label="TTFT"
+            value={ttft < 1000 ? `${Math.round(ttft)}ms` : `${(ttft / 1000).toFixed(1)}s`}
+            textCls={cls}
+            barCls="bg-transparent"
+            badge={src}
+            badgeCls="text-gray-600"
+          />
+        );
+      })()}
+      {/* E2E Latency — vLLM or proxy only */}
+      {(() => {
+        const lat = s.vllm_avg_e2e_latency_ms ?? s.ollama_proxy_avg_latency_ms ?? null;
+        if (lat == null) return null;
+        const cls = lat < 500 ? 'text-emerald-400' : lat < 2000 ? 'text-yellow-400' : 'text-red-400';
+        return (
+          <RailRow
+            label="E2E Latency"
+            value={lat < 1000 ? `${Math.round(lat)}ms` : `${(lat / 1000).toFixed(1)}s`}
+            textCls={cls}
+            barCls="bg-transparent"
+          />
+        );
+      })()}
+      {/* vLLM Queue Depth — only when vLLM is active */}
+      {s.vllm_running && s.vllm_requests_waiting != null && s.vllm_requests_waiting > 0 && (
+        <RailRow
+          label="Queue Depth"
+          value={`${s.vllm_requests_waiting}`}
+          textCls={s.vllm_requests_waiting > 10 ? 'text-red-400' : s.vllm_requests_waiting > 3 ? 'text-amber-400' : 'text-green-400'}
+          barCls="bg-transparent"
+          badge="waiting"
+          badgeCls="text-gray-600"
+        />
+      )}
     </div>
   );
 };
