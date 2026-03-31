@@ -2675,6 +2675,15 @@ async fn handle_fleet_stream(
     let mut nodes          = initial_nodes;
     let mut ordered_nodes  = initial_ordered;
     let mut tier           = initial_tier;
+    // display_name cache: node_id → custom name (Pro+ feature)
+    let mut display_names: HashMap<String, String> = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT wk_id, display_name FROM nodes WHERE user_id = $1 AND display_name IS NOT NULL"
+            ).bind(&uid2).fetch_all(&pool).await.unwrap_or_default()
+                .into_iter().collect()
+        })
+    });
     let mut tick: u32 = 0;
 
     let stream = interval_stream.map(move |_| {
@@ -2696,6 +2705,14 @@ async fn handle_fleet_stream(
                     ).bind(&uid_ref).fetch_one(&pool).await.unwrap_or_else(|_| "community".to_string())
                 })
             });
+            display_names = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    sqlx::query_as::<_, (String, String)>(
+                        "SELECT wk_id, display_name FROM nodes WHERE user_id = $1 AND display_name IS NOT NULL"
+                    ).bind(&uid_ref).fetch_all(&pool).await.unwrap_or_default()
+                        .into_iter().collect()
+                })
+            });
         }
 
         let restricted_ids: HashSet<&str> = if is_team_or_above(&tier) {
@@ -2709,12 +2726,16 @@ async fn handle_fleet_stream(
             .iter()
             .filter(|(node_id, _)| nodes.contains(node_id.as_str()))
             .map(|(node_id, entry)| {
-                serde_json::json!({
+                let mut obj = serde_json::json!({
                     "node_id":      node_id,
                     "last_seen_ms": entry.last_seen_ms,
                     "metrics":      entry.metrics,
                     "restricted":   restricted_ids.contains(node_id.as_str()),
-                })
+                });
+                if let Some(name) = display_names.get(node_id.as_str()) {
+                    obj["display_name"] = serde_json::Value::String(name.clone());
+                }
+                obj
             })
             .collect();
 

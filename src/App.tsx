@@ -260,8 +260,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       const match = snapshot.find(n => n.node_id === node.id);
       if (!match) return node;
       const updates: Partial<typeof node> = {};
-      if (match.metrics?.hostname && node.hostname === node.id) {
-        updates.hostname = match.metrics.hostname;
+      // Prefer display_name (Pro+ custom name) > metrics.hostname > node_id
+      const resolvedHostname = match.display_name ?? match.metrics?.hostname ?? node.id;
+      if (resolvedHostname !== node.hostname) {
+        updates.hostname = resolvedHostname;
       }
       if (match.restricted !== undefined && match.restricted !== node.restricted) {
         updates.restricted = match.restricted;

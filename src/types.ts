@@ -440,6 +440,8 @@ export interface FleetNode {
   last_seen_ms: number;
   metrics: SentinelMetrics | null;
   restricted?: boolean;
+  /** Custom display name set by Pro+ users. Takes priority over hostname. */
+  display_name?: string | null;
 }
 
 /** Values exposed by FleetStreamContext to consumers via useFleetStream(). */
