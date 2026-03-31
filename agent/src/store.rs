@@ -73,6 +73,10 @@ pub struct Sample {
     pub mem_pressure_pct: Option<f64>,
     pub swap_write_mb_s:  Option<f64>,
     pub clock_throttle_pct: Option<f64>,
+    // Phase 4: inference latency metrics
+    pub ttft_ms:          Option<f64>,
+    pub avg_latency_ms:   Option<f64>,
+    pub queue_depth:      Option<i64>,
 }
 
 /// Minimal subset of MetricsPayload for JSON deserialization.
@@ -99,6 +103,13 @@ struct BroadcastFrame {
     #[serde(default)] memory_pressure_percent:         Option<f32>,
     #[serde(default)] swap_write_mb_s:                 Option<f32>,
     #[serde(default)] clock_throttle_pct:              Option<f32>,
+    // Phase 4: latency metrics (best available from vLLM, Ollama probe, or proxy)
+    #[serde(default)] vllm_avg_ttft_ms:               Option<f32>,
+    #[serde(default)] ollama_ttft_ms:                  Option<f32>,
+    #[serde(default)] ollama_proxy_avg_ttft_ms:        Option<f32>,
+    #[serde(default)] vllm_avg_e2e_latency_ms:         Option<f32>,
+    #[serde(default)] ollama_proxy_avg_latency_ms:     Option<f32>,
+    #[serde(default)] vllm_requests_waiting:           Option<u32>,
 }
 
 impl BroadcastFrame {
@@ -134,6 +145,17 @@ impl BroadcastFrame {
             mem_pressure_pct: self.memory_pressure_percent.map(|v| v as f64),
             swap_write_mb_s:  self.swap_write_mb_s.map(|v| v as f64),
             clock_throttle_pct: self.clock_throttle_pct.map(|v| v as f64),
+            // Best-available TTFT: vLLM histogram avg > proxy rolling avg > Ollama probe
+            ttft_ms:          self.vllm_avg_ttft_ms
+                                  .or(self.ollama_proxy_avg_ttft_ms)
+                                  .or(self.ollama_ttft_ms)
+                                  .map(|v| v as f64),
+            // Best-available E2E latency: vLLM histogram > proxy rolling avg
+            avg_latency_ms:   self.vllm_avg_e2e_latency_ms
+                                  .or(self.ollama_proxy_avg_latency_ms)
+                                  .map(|v| v as f64),
+            // Queue depth: vLLM waiting requests
+            queue_depth:      self.vllm_requests_waiting.map(|v| v as i64),
         }
     }
 }
@@ -229,6 +251,12 @@ pub struct HistorySample {
     pub swap_write_mb_s: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clock_throttle_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_latency_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_depth: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -417,6 +445,9 @@ impl Store {
             -- DuckDB supports ADD COLUMN IF NOT EXISTS — safe to run on every startup.
             ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s    DOUBLE;
             ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS clock_throttle_pct DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ttft_ms           DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS avg_latency_ms    DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth       BIGINT;
         ")
     }
 
@@ -432,8 +463,9 @@ impl Store {
               cpu_usage_pct, mem_used_mb, mem_total_mb,
               cpu_power_w, gpu_power_w, gpu_util_pct,
               vram_used_mb, vram_total_mb, thermal_state, mem_pressure_pct,
-              swap_write_mb_s, clock_throttle_pct)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              swap_write_mb_s, clock_throttle_pct,
+              ttft_ms, avg_latency_ms, queue_depth)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (ts_ms, node_id) DO NOTHING",
             params![
                 s.ts_ms,
@@ -452,6 +484,9 @@ impl Store {
                 s.mem_pressure_pct,
                 s.swap_write_mb_s,
                 s.clock_throttle_pct,
+                s.ttft_ms,
+                s.avg_latency_ms,
+                s.queue_depth,
             ],
         )?;
         Ok(())
@@ -589,7 +624,8 @@ impl Store {
                     "SELECT ts_ms, model, tps, cpu_usage_pct,
                             gpu_util_pct, gpu_power_w, vram_used_mb, thermal_state,
                             cpu_power_w, mem_pressure_pct,
-                            swap_write_mb_s, clock_throttle_pct
+                            swap_write_mb_s, clock_throttle_pct,
+                            ttft_ms, avg_latency_ms, queue_depth
                      FROM metrics_raw
                      WHERE node_id = ? AND ts_ms >= ? AND ts_ms <= ?
                      ORDER BY ts_ms ASC",
@@ -611,6 +647,9 @@ impl Store {
                         mem_pressure_pct: row.get(9)?,
                         swap_write_mb_s: row.get(10)?,
                         clock_throttle_pct: row.get(11)?,
+                        ttft_ms:        row.get(12)?,
+                        avg_latency_ms: row.get(13)?,
+                        queue_depth:    row.get(14)?,
                     })
                 })?.collect::<Result<_, _>>()?
             }
@@ -640,6 +679,9 @@ impl Store {
                         mem_pressure_pct: None,
                         swap_write_mb_s: None,
                         clock_throttle_pct: None,
+                        ttft_ms:        None,
+                        avg_latency_ms: None,
+                        queue_depth:    None,
                     })
                 })?.collect::<Result<_, _>>()?
             }
@@ -669,6 +711,9 @@ impl Store {
                         mem_pressure_pct: None,
                         swap_write_mb_s: None,
                         clock_throttle_pct: None,
+                        ttft_ms:        None,
+                        avg_latency_ms: None,
+                        queue_depth:    None,
                     })
                 })?.collect::<Result<_, _>>()?
             }
