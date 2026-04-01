@@ -1,7 +1,7 @@
 use crate::PairingState;
 use std::sync::{Arc, Mutex};
 
-pub(crate) const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.up.railway.app";
+pub(crate) const CLOUD_URL: &str = "https://wicklee.dev";
 
 /// Spawn a background task that forwards live telemetry to the cloud every 2 s.
 /// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
