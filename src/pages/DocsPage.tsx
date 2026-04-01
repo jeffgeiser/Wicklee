@@ -312,7 +312,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --pair</td>
-                    <td className="py-3 text-gray-400 align-top">Generate a 6-digit pairing code and print it to the terminal — useful when you can't open <code className="font-mono text-xs text-gray-300">localhost:7700</code> (headless server, SSH session). Enter the code at <span className="text-gray-300">wicklee.dev → Pair a node</span>.</td>
+                    <td className="py-3 text-gray-400 align-top">Start the agent and generate a 6-digit pairing code — the agent runs normally while displaying the code. Useful for headless servers (SSH session). Enter the code at <span className="text-gray-300">wicklee.dev → Pair a node</span>.</td>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --version</td>
@@ -432,8 +432,8 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                       <tr>
                         <Td>Intel Linux (coretemp)</Td>
                         <Td mono>coretemp</Td>
-                        <Td>Per-core temperature from coretemp hwmon + clock ratio as tie-breaker</Td>
-                        <Td>Same clock ratio thresholds as AMD, with max core temp as override. Without cpufreq: &lt;70°C Normal · 70–79 Fair · 80–89 Serious · ≥90 Critical.</Td>
+                        <Td>Clock ratio (primary) with per-core coretemp temperature as override</Td>
+                        <Td>Same clock ratio thresholds as AMD. Coretemp max temp overrides if &gt; 85°C. Without cpufreq: &lt;70°C Normal · 70–79 Fair · 80–89 Serious · ≥90 Critical.</Td>
                       </tr>
                       <tr>
                         <Td>Generic Linux (no hwmon)</Td>
@@ -721,7 +721,7 @@ WES Version:     2
                   <span className="shrink-0 w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-[10px] font-bold text-emerald-400">1</span>
                   <div>
                     <p className="text-sm text-white font-medium">Exact — runtime API</p>
-                    <p className="text-xs text-gray-400 mt-0.5">vLLM reports active request count via its Prometheus endpoint. If <code className="text-gray-300 font-mono text-xs">requests_running &gt; 0</code>, the node is LIVE — no ambiguity.</p>
+                    <p className="text-xs text-gray-400 mt-0.5">vLLM and llama.cpp/llama-box report active request/slot counts. If <code className="text-gray-300 font-mono text-xs">requests_running &gt; 0</code> (vLLM) or <code className="text-gray-300 font-mono text-xs">slots_processing &gt; 0</code> (llama.cpp), the node is LIVE — no ambiguity.</p>
                   </div>
                 </div>
                 <div className="flex gap-3">
@@ -1168,7 +1168,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td mono>GET /ws</Td>
-                    <Td>WebSocket — 1 Hz live telemetry (same broadcast channel as SSE)</Td>
+                    <Td>WebSocket — 10 Hz live telemetry for high-frequency charts (localhost only)</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/observations</Td>
@@ -1351,7 +1351,7 @@ curl https://wicklee.dev/api/v1/fleet \\
               <p>Open the <strong className="text-white">Settings</strong> tab from your fleet dashboard to configure:</p>
               <ul className="mt-2 space-y-1 list-none">
                 {[
-                  ['kWh rate', 'Local electricity rate (default $0.13/kWh). Used to calculate Cost/1K TKN.'],
+                  ['kWh rate', 'Local electricity rate (default $0.12/kWh). Used to calculate Cost/Day and Cost/1K TKN.'],
                   ['PUE multiplier', 'Power Usage Effectiveness for data center / rack overhead.'],
                   ['Per-node overrides', 'Different kWh rates and labels per node — useful for mixed-location fleets.'],
                   ['Temperature units', '°C or °F display preference.'],
@@ -1411,8 +1411,8 @@ curl https://wicklee.dev/api/v1/fleet \\
                       <Td>Slack (1 channel)</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-amber-400 font-medium">Team ($29/mo)</span></Td>
-                      <Td>Unlimited</Td>
+                      <Td><span className="text-amber-400 font-medium">Team ($19/seat/mo)</span></Td>
+                      <Td>25 nodes (expandable +50 at $50/mo)</Td>
                       <Td>90-day history (Postgres rollups)</Td>
                       <Td>Slack + PagerDuty + CSV/JSON export</Td>
                     </tr>

@@ -73,7 +73,7 @@ const TIERS: TierDef[] = [
     features: [
       '10 Nodes',
       '7-Day Metric History',
-      'All 15 Patterns (+Pro: D, E, G, I, L, M)',
+      'All 18 Patterns (+Pro: D, E, G, I, L, M, P, Q, R)',
       'Custom Alert Thresholds',
       'Node Naming & Tags',
       'Slack Alerts (Single Channel)',
