@@ -600,6 +600,11 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                       <Td>Only reachable nodes (last-seen within 30 s) contribute to <code className="text-gray-400">fleet_watts</code>. Offline nodes are excluded to prevent wattage inflation.</Td>
                     </tr>
                     <tr>
+                      <Td><span className="font-medium text-white">Cost / Day</span></Td>
+                      <Td mono>Σ (node_watts × 24 ÷ 1000) × kWh_rate</Td>
+                      <Td>Estimated daily electricity cost based on <strong className="text-gray-300">current instantaneous power draw</strong> projected over 24 hours. Uses each node's configured kWh rate (default $0.12/kWh). This is a <em>projection</em>, not metered consumption — if a node spikes to 200W for 1 hour then idles at 10W for 23 hours, the tile shows cost at whatever wattage is being read <em>right now</em>. Node Cost/Day (localhost) sums a single node; Fleet Cost/Day (cloud) sums all online nodes. PUE multiplier applied when configured in Settings.</Td>
+                    </tr>
+                    <tr>
                       <Td><span className="font-medium text-white">Throughput label</span></Td>
                       <Td mono>LIVE · IDLE-SPD · BUSY · IDLE</Td>
                       <Td>Four states from the agent's inference state machine. See <a href="#states" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Node States</a> for full definitions. Tok/s values with a <code className="text-gray-300 font-mono text-xs">~</code> prefix are probe baselines, not live measurements.</Td>
