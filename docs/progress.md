@@ -48,8 +48,34 @@
 - **Live Activity flood** — DB seed events with unrecognized types no longer default to `node_online`.
 - **10 documentation accuracy fixes** — WebSocket Hz, agent privilege, probe token count, config filename, CLI reference, API endpoints, pattern scopes, thermal mapping.
 
+### Pro Features — Custom Alert Thresholds + Persistent Insight Cards ✅
+- **Custom Alert Thresholds** — 2 new event types: `ttft_regression` (default 500ms) and `throughput_low` (default 5 tok/s). Backend evaluation fires when TTFT > threshold during active inference, or tok/s < threshold during live inference.
+- **Persistent Insight Cards (Pro+)** — `obsCacheRef` seeded from server observations (`useFleetObservations`) on page load. Cards survive browser close and device switch. Dismiss calls `POST /api/fleet/observations/:id/acknowledge` for cross-device sync.
+- **Resolved History (24h)** — Triage tab shows server-backed resolved observations from last 24h for Pro+ users. Green check styling with duration and age.
+
+### Security Hardening ✅
+- **R1: Agent CORS restricted** — `allow_origin(Any)` → explicit allowlist (localhost:7700, 127.0.0.1:7700, localhost:3000). Malicious webpages on external domains cannot read telemetry via JS.
+- **R2: Localhost-only bind** — Default bind changed from `0.0.0.0` to `127.0.0.1`. LAN access opt-in via `bind_address = "0.0.0.0"` in config.toml.
+- **R3: Fleet removal detection** — Agent detects 410 Gone from telemetry push, clears pairing state and stops push loop. Cloud returns 410 when `node_id` not in `nodes` table.
+
+### UI Polish ✅
+- **Action buttons indigo→blue** — all CTA buttons (Header, AddNodeModal, EmptyFleetState, NodesList) now use `bg-blue-600` matching the active sidebar nav color.
+- **Dark mode enforced** — Theme toggle removed from Settings and Preferences. `<html class="dark">` in index.html. "Hardware-Centric Dark" is the only mode.
+- **Sidebar icons centered** — Nav icons centered in collapsed rail (was left-aligned by px-6).
+- **Empty state cleanup** — Lightning icon removed, step badges blue, onboarding copy updated.
+- **Bell icon removed** — Notification bell placeholder removed from header.
+
+### Pre-Launch Cleanup ✅
+- **FSL-1.1-Apache-2.0 License** — protects commercial tiers from hosted competitors. Converts to Apache 2.0 after 4 years.
+- **Cloud URL fixed** — `cloud_push.rs` changed from internal Railway hostname to `https://wicklee.dev`.
+- **`.env.agent` untracked** — removed from git, added to `.gitignore`.
+- **GitHub repo polished** — description updated, 8 topics added (gpu-monitoring, local-ai, ollama, vllm, inference, observability, rust, wes).
+- **Blog post accuracy** — WES color scale, typical ranges, and route/best description fixed.
+
 ### Documentation ✅
 - **Latency & TTFT section** added to DocsPage — three-source TTFT explanation (synthetic probe vs production), resolution priority, full latency metrics table.
+- **Security audit updated** — R1, R2, R3, R5, R6 marked fixed. Only R8 (Paddle webhook signature) remains open.
+- **AI/agent discovery files** — llms.txt, llms-full.txt, openapi.json, robots.txt, ai-plugin.json updated.
 
 ---
 
