@@ -65,20 +65,20 @@ We added the thermal penalty layer because raw IPW assumes a steady state. Real 
 
 ## What Good Looks Like
 
-| WES Range | Interpretation |
-|---|---|
-| > 10 | Excellent — efficient hardware, low thermal draw |
-| 1–10 | Good — typical GPU workload |
-| 0.1–1 | Fair — throttling or heavy CPU inference |
-| < 0.1 | Poor — thermal runaway or severely underpowered |
+| WES Range | Rating | Color |
+|---|---|---|
+| > 10 | Excellent | Emerald |
+| 3–10 | Good | Green |
+| 1–3 | Acceptable | Yellow |
+| < 1 | Low | Red |
 
-Apple Silicon M-series chips tend to land in the 1–5 range. A well-cooled RTX 4090 at inference sits in 0.3–0.8. CPU-only inference typically scores below 0.2.
+Apple Silicon M-series chips routinely score 10–20+ thanks to their ultra-low power draw (1–3W SoC power at idle inference). A well-cooled RTX 4090 at inference sits in the 1–3 range. CPU-only inference on high-wattage chips (EPYC, Xeon) typically scores below 3.
 
 ## Routing With WES
 
-`GET /api/v1/route/best` returns the node with the highest penalized WES score that can accept the requested model. Not the fastest. Not the most available. The most efficient that can actually serve the request.
+`GET /api/v1/route/best` returns two candidates: the **latency** pick (highest tok/s) and the **efficiency** pick (highest penalized WES). The default recommendation is efficiency — the node that gives you the most output per watt.
 
-For latency-critical paths you might prefer the fastest node. For background batch jobs, the highest WES node gives you the most output per dollar of electricity. Both are valid choices — but only when you can see the tradeoff.
+For latency-critical paths, use the latency pick. For background batch jobs, the efficiency pick gives you the most output per dollar of electricity. Both are returned in every response — the tradeoff is always visible.
 
 That's what WES is for.
 
