@@ -48,6 +48,9 @@ const INSIGHT_TIER_GATE: Record<number, InsightsTier> = {
  */
 function getDevTierOverride(): SubscriptionTier | null {
   try {
+    // Only allow devTier override on localhost — never on production (wicklee.dev)
+    const host = window.location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1') return null;
     const p = new URLSearchParams(window.location.search).get('devTier');
     if (p === 'community' || p === 'pro' || p === 'team' || p === 'enterprise') {
       return p as SubscriptionTier;
