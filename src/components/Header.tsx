@@ -19,7 +19,7 @@ interface HeaderProps {
   connectionState?: ConnectionState;
 }
 
-const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, theme, connectionState = 'disconnected' }) => {
+const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, theme, connectionState = 'disconnected', isLocalHost = false }) => {
   const titles: Record<string, string> = {
     [DashboardTab.SCAFFOLDING]:  'Fleet Scaffolding',
     [DashboardTab.TEAM]:         'Team & Memberships',
@@ -75,8 +75,14 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
               onClick={onOpenPairing}
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-lg shadow-indigo-500/20"
             >
-              <Cloud className="w-4 h-4" />
-              <span className="hidden sm:inline">Pair a Node</span>
+              {isLocalHost ? (
+                <>
+                  <CloudLightning className="w-4 h-4" />
+                  <span className="hidden sm:inline">Connect to Cloud</span>
+                </>
+              ) : (
+                <span className="hidden sm:inline">+ Add Node</span>
+              )}
             </button>
           )}
 
