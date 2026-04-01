@@ -1018,7 +1018,7 @@ const NodesList: React.FC<NodesListProps> = ({
             href="https://wicklee.dev"
             target="_blank"
             rel="noopener noreferrer"
-            className="shrink-0 flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-500/20"
+            className="shrink-0 flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
           >
             Add more nodes
             <ExternalLink className="w-3.5 h-3.5" />

@@ -73,13 +73,10 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
           ) : (
             <button
               onClick={onOpenPairing}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-lg shadow-indigo-500/20"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all shadow-lg shadow-blue-500/20"
             >
               {isLocalHost ? (
-                <>
-                  <CloudLightning className="w-4 h-4" />
-                  <span className="hidden sm:inline">Connect to Cloud</span>
-                </>
+                <span className="hidden sm:inline">Connect to Cloud</span>
               ) : (
                 <span className="hidden sm:inline">+ Add Node</span>
               )}
