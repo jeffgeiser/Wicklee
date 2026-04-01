@@ -815,7 +815,7 @@ const TraceTable: React.FC<{
         <div className="flex gap-2">
           <button
             onClick={fetchTraces}
-            className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+            className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 transition-colors flex items-center gap-2"
           >
             <Database className="w-3.5 h-3.5" />
             Query Local Logs
