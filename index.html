@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -13,39 +13,13 @@
     <style>
       body {
         font-family: 'Inter', sans-serif;
-        background-color: #030712; /* Default dark */
+        background-color: #030712;
         color: #f9fafb;
       }
-      .dark body {
-        background-color: #030712;
-      }
-      html:not(.dark) body {
-        background-color: #f9fafb;
-        color: #111827;
-      }
-::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent;
-      }
-      .dark ::-webkit-scrollbar-track {
-        background: #111827;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #d1d5db;
-        border-radius: 4px;
-      }
-      .dark ::-webkit-scrollbar-thumb {
-        background: #374151;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #9ca3af;
-      }
-      .dark ::-webkit-scrollbar-thumb:hover {
-        background: #4b5563;
-      }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: #111827; }
+      ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
 
       /* Blog post prose */
       .blog-content { color: #d1d5db; line-height: 1.8; }

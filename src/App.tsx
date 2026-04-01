@@ -170,9 +170,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
-  });
+  // Dark mode only — "Hardware-Centric Dark" design language.
+  const theme: 'dark' = 'dark';
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
 
   const navigate = useCallback((path: string) => {
@@ -312,14 +311,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   }, [pairingInfo?.status, fetchPairingStatus]);
 
 
+  // Always force dark mode class on the document
   useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    localStorage.setItem('theme', theme);
-  }, [theme]);
+    document.documentElement.classList.add('dark');
+  }, []);
 
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
@@ -378,9 +373,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
     setActiveTab(tab);
   };
 
-  const toggleTheme = () => {
-    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
-  };
+  const toggleTheme = () => {}; // Dark mode only — no-op
 
   // Clerk sign-in / sign-up routes
   if (currentPath === '/sign-in' || currentPath.startsWith('/sign-in/')) {
@@ -489,12 +482,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
           clearAllOverridesForField={clearAllOverridesForField}
           clearAllNodeOverrides={clearAllNodeOverrides}
           theme={theme}
-          onThemeChange={(t) => {
-            const effective = t === 'system'
-              ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-              : t;
-            setTheme(effective);
-          }}
+          onThemeChange={() => {}} // Dark mode only
           onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
           onNavigateToApiKeys={() => setActiveTab(DashboardTab.API_KEYS)}
           onNavigateToPricing={() => navigate('/pricing')}
@@ -510,7 +498,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       case DashboardTab.API_KEYS:
         return <APIKeysView />;
       case DashboardTab.PREFERENCES:
-        return <PreferencesView currentTenant={currentTenant} theme={theme} setTheme={setTheme} />;
+        return <PreferencesView currentTenant={currentTenant} theme={theme} />;
       case DashboardTab.PRICING:
         return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} embedded />;
       case DashboardTab.AI_PROVIDERS:
