@@ -842,9 +842,20 @@ const DetailCell: React.FC<{
   unit?: string;
   source?: string;
   tooltip?: string;
-}> = ({ label, value, unit, source, tooltip }) => (
-  <div className="flex flex-col" title={tooltip}>
+}> = ({ label, value, unit, source, tooltip }) => {
+  const [showTip, setShowTip] = React.useState(false);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleEnter = () => { if (tooltip && window.matchMedia('(hover: hover)').matches) timerRef.current = setTimeout(() => setShowTip(true), 400); };
+  const handleLeave = () => { if (timerRef.current) clearTimeout(timerRef.current); setShowTip(false); };
+  return (
+  <div className="flex flex-col relative" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
     <span className="text-[9px] text-gray-600 uppercase tracking-wider">{label}</span>
+    {showTip && tooltip && (
+      <div className="absolute bottom-full left-0 mb-1.5 z-50 w-56 bg-gray-900 border border-gray-700/50 rounded-xl shadow-2xl shadow-black/50 p-3 pointer-events-none">
+        <p className="text-xs font-semibold text-gray-100 leading-snug mb-1">{label}</p>
+        <p className="text-[11px] text-gray-400 leading-snug">{tooltip}</p>
+      </div>
+    )}
     <div className="flex items-baseline gap-1">
       {value != null ? (
         <>
@@ -859,7 +870,8 @@ const DetailCell: React.FC<{
       )}
     </div>
   </div>
-);
+  );
+};
 
 // ── WES breakdown tooltip (browser title attr) ───────────────────────────────
 function wesBreakdownTitle(
@@ -971,8 +983,19 @@ interface RailRowProps {
   badgeCls?: string;
   tooltip?:  string;
 }
-const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, badge, badgeCls, tooltip }) => (
-  <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0" title={tooltip}>
+const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, badge, badgeCls, tooltip }) => {
+  const [showTip, setShowTip] = React.useState(false);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleEnter = () => { if (tooltip && window.matchMedia('(hover: hover)').matches) timerRef.current = setTimeout(() => setShowTip(true), 400); };
+  const handleLeave = () => { if (timerRef.current) clearTimeout(timerRef.current); setShowTip(false); };
+  return (
+  <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0 relative" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
+    {showTip && tooltip && (
+      <div className="absolute bottom-full left-5 mb-1.5 z-50 w-60 bg-gray-900 border border-gray-700/50 rounded-xl shadow-2xl shadow-black/50 p-3 pointer-events-none">
+        <p className="text-xs font-semibold text-gray-100 leading-snug mb-1">{label}</p>
+        <p className="text-[11px] text-gray-400 leading-snug">{tooltip}</p>
+      </div>
+    )}
     <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 w-28 shrink-0">{label}</p>
     <div className="flex items-center gap-1.5 w-20 shrink-0">
       <p className={`text-sm font-telin font-bold whitespace-nowrap ${textCls}`}>{value}</p>
@@ -991,7 +1014,8 @@ const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, b
       </div>
     )}
   </div>
-);
+  );
+};
 
 const DiagnosticRail: React.FC<{
   sentinel: SentinelMetrics | null;
