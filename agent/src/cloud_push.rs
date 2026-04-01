@@ -76,16 +76,26 @@ pub(crate) fn start_cloud_push(
             // Without this guard a single failed POST silently drops a state transition
             // (e.g. idle-spd → live) and the fleet view can stay stale until the *next*
             // state change forces another bypass — which may never come.
-            let post_ok = client
+            let resp = client
                 .post(format!("{cloud}/api/telemetry"))
                 .header("content-type", "application/json")
                 .body(patched)
                 .send()
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-            if post_ok {
-                last_pushed_state = curr_state;
+                .await;
+            match resp {
+                Ok(r) if r.status().as_u16() == 410 => {
+                    // 410 Gone — node was removed from fleet. Clear pairing state.
+                    eprintln!("[cloud_push] 410 Gone — node removed from fleet. Clearing pairing state.");
+                    if let Ok(mut ps) = pairing_state.lock() {
+                        ps.cloud_session_token = None;
+                        ps.status = crate::PairingStatus::Unpaired;
+                    }
+                    break; // Stop the push loop entirely
+                }
+                Ok(r) if r.status().is_success() => {
+                    last_pushed_state = curr_state;
+                }
+                _ => {} // Network error or non-2xx — retry next cycle
             }
         }
     });

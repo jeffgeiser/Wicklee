@@ -1729,6 +1729,15 @@ async fn handle_telemetry(
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
 
+    // Check if the node exists in the database — if it was removed from the fleet,
+    // return 410 Gone so the agent can clear its pairing state.
+    let node_exists: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM nodes WHERE wk_id = $1"
+    ).bind(&node_id).fetch_one(&state.pool).await.unwrap_or(0) > 0;
+    if !node_exists {
+        return StatusCode::GONE; // 410 — agent should clear pairing
+    }
+
     let duck_row = metrics_row_from_payload(&payload, ts);
     let live_activities = payload.live_activities.clone();
     let metrics_snap: Option<MetricsPayload> = Some(payload.clone());
