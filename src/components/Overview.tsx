@@ -793,27 +793,40 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         <div className="px-6 py-3 bg-gray-950/40 border-b border-gray-800/60">
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-2 text-xs">
             {/* Always show TTFT + thermal source */}
-            <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={ttftSource} />
-            <DetailCell label="Thermal Source" value={m.thermal_source} />
-            <DetailCell label="Swap Write" value={m.swap_write_mb_s} unit="MB/s" />
+            <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={ttftSource}
+              tooltip="Time To First Token — latency from request arrival to first generated token. Source: vLLM histogram (production), proxy rolling avg (production), or Ollama probe (synthetic 20-token baseline every ~30s). Lower is more responsive." />
+            <DetailCell label="Thermal Source" value={m.thermal_source}
+              tooltip="How Wicklee detects thermal state on this node. nvml = NVIDIA hardware bitmask, iokit = macOS pmset, coretemp = Intel hwmon, clock_ratio = CPU frequency scaling, sysfs = Linux thermal zone, wmi = Windows WMI." />
+            <DetailCell label="Swap Write" value={m.swap_write_mb_s} unit="MB/s"
+              tooltip="Swap write rate — data being written to disk swap. > 2 MB/s sustained means model layers are spilling from RAM to disk, degrading inference throughput. 0 is ideal." />
 
             {/* Ollama-specific */}
-            {isOllama && <DetailCell label="Load Duration" value={m.ollama_load_duration_ms} unit="ms" />}
-            {isOllama && <DetailCell label="Prefill Speed" value={m.ollama_prompt_eval_tps} unit="tok/s" />}
+            {isOllama && <DetailCell label="Load Duration" value={m.ollama_load_duration_ms} unit="ms"
+              tooltip="Time Ollama spent loading the model into memory on the last probe request. High values (> 1000ms) indicate cold starts or model swaps. Once loaded, subsequent requests show near-zero." />}
+            {isOllama && <DetailCell label="Prefill Speed" value={m.ollama_prompt_eval_tps} unit="tok/s"
+              tooltip="Prompt processing speed — how fast Ollama evaluates the input prompt before generating output. Measured from the 20-token probe's prompt_eval_duration. Higher is better; depends on prompt length and model size." />}
 
             {/* vLLM-specific */}
-            {isVllm && <DetailCell label="E2E Latency" value={m.vllm_avg_e2e_latency_ms} unit="ms" />}
-            {isVllm && <DetailCell label="Queue Time" value={m.vllm_avg_queue_time_ms} unit="ms" />}
-            {isVllm && <DetailCell label="Queue Depth" value={m.vllm_requests_waiting} unit="req" />}
-            {isVllm && <DetailCell label="Running" value={m.vllm_requests_running} unit="req" />}
-            {isVllm && <DetailCell label="KV Cache" value={m.vllm_cache_usage_perc} unit="%" />}
+            {isVllm && <DetailCell label="E2E Latency" value={m.vllm_avg_e2e_latency_ms} unit="ms"
+              tooltip="Average end-to-end request latency from vLLM's Prometheus histogram. Includes queue wait + prefill + generation. Real production data from actual requests, not synthetic." />}
+            {isVllm && <DetailCell label="Queue Time" value={m.vllm_avg_queue_time_ms} unit="ms"
+              tooltip="Average time requests spend waiting in vLLM's scheduler queue before processing begins. High values indicate the engine is saturated — consider reducing max_num_seqs or scaling horizontally." />}
+            {isVllm && <DetailCell label="Queue Depth" value={m.vllm_requests_waiting} unit="req"
+              tooltip="Number of requests currently waiting in vLLM's scheduler queue. 0 = no backlog. > 5 sustained = engine can't keep up with incoming traffic. Pattern R fires at this threshold." />}
+            {isVllm && <DetailCell label="Running" value={m.vllm_requests_running} unit="req"
+              tooltip="Number of requests currently being processed by vLLM. This is active inference — each running request consumes KV cache and GPU compute." />}
+            {isVllm && <DetailCell label="KV Cache" value={m.vllm_cache_usage_perc} unit="%"
+              tooltip="vLLM KV cache utilization — the percentage of GPU memory reserved for attention key-value pairs that is currently in use. > 90% means the scheduler can't admit new sequences. Pattern M fires at this threshold." />}
 
             {/* Proxy-specific */}
-            {hasProxy && <DetailCell label="E2E Latency" value={m.ollama_proxy_avg_latency_ms} unit="ms" />}
-            {hasProxy && <DetailCell label="Proxy Requests" value={m.ollama_proxy_request_count} unit="total" />}
+            {hasProxy && <DetailCell label="E2E Latency" value={m.ollama_proxy_avg_latency_ms} unit="ms"
+              tooltip="Average end-to-end latency from Wicklee proxy done packets. Measures total_duration from actual user requests flowing through the proxy. Real production data." />}
+            {hasProxy && <DetailCell label="Proxy Requests" value={m.ollama_proxy_request_count} unit="total"
+              tooltip="Total number of inference requests that have flowed through the Wicklee transparent proxy since agent startup. Resets on agent restart." />}
 
             {/* Clock throttle — only on platforms that report it */}
-            {m.clock_throttle_pct != null && <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%" />}
+            {m.clock_throttle_pct != null && <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%"
+              tooltip="Percentage of clock speed reduction from maximum. 0% = running at full speed. > 15% during active inference with Normal thermal state suggests a power cap or driver limit, not heat (Pattern K)." />}
           </div>
         </div>
       );
@@ -828,8 +841,9 @@ const DetailCell: React.FC<{
   value: number | string | null | undefined;
   unit?: string;
   source?: string;
-}> = ({ label, value, unit, source }) => (
-  <div className="flex flex-col">
+  tooltip?: string;
+}> = ({ label, value, unit, source, tooltip }) => (
+  <div className="flex flex-col" title={tooltip}>
     <span className="text-[9px] text-gray-600 uppercase tracking-wider">{label}</span>
     <div className="flex items-baseline gap-1">
       {value != null ? (
@@ -955,9 +969,10 @@ interface RailRowProps {
   barCls:    string;
   badge?:    string;
   badgeCls?: string;
+  tooltip?:  string;
 }
-const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, badge, badgeCls }) => (
-  <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0">
+const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, badge, badgeCls, tooltip }) => (
+  <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0" title={tooltip}>
     <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 w-28 shrink-0">{label}</p>
     <div className="flex items-center gap-1.5 w-20 shrink-0">
       <p className={`text-sm font-telin font-bold whitespace-nowrap ${textCls}`}>{value}</p>
@@ -1156,6 +1171,7 @@ const DiagnosticRail: React.FC<{
             barCls="bg-transparent"
             badge={src}
             badgeCls="text-gray-600"
+            tooltip="Time To First Token — latency from request to first generated token. vLLM: real production histogram. Proxy: rolling average from done packets. Probe: synthetic 20-token baseline every ~30s."
           />
         );
       })()}
@@ -1170,6 +1186,7 @@ const DiagnosticRail: React.FC<{
             value={lat < 1000 ? `${Math.round(lat)}ms` : `${(lat / 1000).toFixed(1)}s`}
             textCls={cls}
             barCls="bg-transparent"
+            tooltip="Average end-to-end request latency — total time from request arrival to last token. Includes queue wait, prefill, and generation. Real production data from vLLM histogram or proxy done packets."
           />
         );
       })()}
@@ -1182,6 +1199,7 @@ const DiagnosticRail: React.FC<{
           barCls="bg-transparent"
           badge="waiting"
           badgeCls="text-gray-600"
+          tooltip="Requests waiting in vLLM's scheduler queue. 0 = no backlog. > 5 sustained triggers Pattern R (Queue Saturation). Consider reducing max_num_seqs or routing overflow to another node."
         />
       )}
       {/* Load Duration — Ollama only */}
@@ -1191,6 +1209,7 @@ const DiagnosticRail: React.FC<{
           value={s.ollama_load_duration_ms < 1000 ? `${Math.round(s.ollama_load_duration_ms)}ms` : `${(s.ollama_load_duration_ms / 1000).toFixed(1)}s`}
           textCls={s.ollama_load_duration_ms < 500 ? 'text-emerald-400' : s.ollama_load_duration_ms < 2000 ? 'text-yellow-400' : 'text-red-400'}
           barCls="bg-transparent"
+          tooltip="Time Ollama spent loading the model into memory on the last probe request. High values (> 1s) indicate cold starts or model swaps. Near-zero once the model is warm in memory."
         />
       )}
       {/* Prefill Speed — Ollama only */}
@@ -1200,6 +1219,7 @@ const DiagnosticRail: React.FC<{
           value={`${s.ollama_prompt_eval_tps.toFixed(1)} tok/s`}
           textCls="text-blue-400"
           barCls="bg-transparent"
+          tooltip="Prompt processing speed — how fast Ollama evaluates the input prompt before generating output. Measured from the 20-token probe's prompt_eval_duration. Higher is better; depends on prompt length and model size."
         />
       )}
       {/* KV Cache — vLLM only */}
@@ -1210,6 +1230,7 @@ const DiagnosticRail: React.FC<{
           pct={s.vllm_cache_usage_perc}
           textCls={s.vllm_cache_usage_perc > 90 ? 'text-red-400' : s.vllm_cache_usage_perc > 70 ? 'text-amber-400' : 'text-green-400'}
           barCls={s.vllm_cache_usage_perc > 90 ? 'bg-red-400' : s.vllm_cache_usage_perc > 70 ? 'bg-amber-400' : 'bg-green-400'}
+          tooltip="vLLM KV cache utilization — GPU memory reserved for attention key-value pairs. > 70% = moderate pressure. > 90% = Pattern M fires (scheduler can't admit new sequences)."
         />
       )}
       {/* Requests Running — vLLM only, when active */}
@@ -1219,6 +1240,7 @@ const DiagnosticRail: React.FC<{
           value={`${s.vllm_requests_running} req`}
           textCls="text-green-400"
           barCls="bg-transparent"
+          tooltip="Active requests being processed by vLLM right now. Each running request consumes KV cache and GPU compute."
         />
       )}
       </div>
