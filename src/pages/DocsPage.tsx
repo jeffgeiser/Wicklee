@@ -1472,6 +1472,83 @@ ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
             </div>
 
             <div className="mt-4">
+              <p className="font-semibold text-white mb-3">Agent sampling cadence</p>
+              <p className="text-xs text-gray-500 mb-2">Everything the agent does on your machine, how often, and why.</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                    <th className="pb-2 pr-4">Subsystem</th>
+                    <th className="pb-2 pr-4">Cadence</th>
+                    <th className="pb-2 pr-4">What it reads</th>
+                    <th className="pb-2">Impact</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Broadcast loop</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">1 Hz</td>
+                    <td className="py-2 pr-4 text-gray-400">Assembles latest snapshot from all harvesters, pushes to SSE/WebSocket</td>
+                    <td className="py-2 text-gray-500">Negligible — single JSON serialize per tick</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">System metrics (CPU, memory, swap)</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">1 Hz</td>
+                    <td className="py-2 pr-4 text-gray-400">sysinfo crate — /proc/stat, /proc/meminfo (Linux), IOKit (macOS), WMI (Windows)</td>
+                    <td className="py-2 text-gray-500">Sub-millisecond reads</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Apple Silicon power</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">5s window</td>
+                    <td className="py-2 pr-4 text-gray-400"><code className="text-gray-400 font-mono">powermetrics --samplers cpu_power,gpu_power</code> — requires root</td>
+                    <td className="py-2 text-gray-500">Low — runs as a background subprocess</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">NVIDIA GPU</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">1 Hz</td>
+                    <td className="py-2 pr-4 text-gray-400">NVML API — utilization, temperature, power, VRAM, clocks, PCIe, throttle reason</td>
+                    <td className="py-2 text-gray-500">Zero-privilege NVML calls, &lt; 1ms</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Ollama harvester</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 pr-4 text-gray-400"><code className="text-gray-400 font-mono">GET /api/ps</code> — loaded models, VRAM usage, expires_at for inference attribution</td>
+                    <td className="py-2 text-gray-500">Lightweight HTTP GET to localhost</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Ollama probe</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">~30s</td>
+                    <td className="py-2 pr-4 text-gray-400">20-token <code className="text-gray-400 font-mono">POST /api/generate</code> — measures tok/s, TTFT, prefill speed, load duration. <strong className="text-gray-300">Disabled when proxy is active.</strong></td>
+                    <td className="py-2 text-gray-500">Brief GPU spike (~0.5s). The <code className="text-gray-400 font-mono">probe_caused_next_reset</code> flag prevents the probe from being counted as user inference.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">vLLM harvester</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 pr-4 text-gray-400"><code className="text-gray-400 font-mono">GET /metrics</code> — Prometheus gauges (requests running/waiting, KV cache) and histograms (TTFT, E2E latency, queue time)</td>
+                    <td className="py-2 text-gray-500">Lightweight HTTP GET to localhost</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">WES thermal sampler</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 pr-4 text-gray-400">Reads thermal state from NVML/IOKit/hwmon/sysfs/WMI. 30-sample rolling window for penalty averaging.</td>
+                    <td className="py-2 text-gray-500">Reuses data from GPU/system harvesters</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">DuckDB local store</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 pr-4 text-gray-400">Writes tok/s, GPU%, power, memory, swap, TTFT to local metrics_raw table (1-hour buffer)</td>
+                    <td className="py-2 text-gray-500">Low — batch INSERT, WAL mode</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Cloud telemetry push</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 pr-4 text-gray-400">POST to fleet URL with full MetricsPayload. State-change bypass: immediate push on inference state transitions.</td>
+                    <td className="py-2 text-gray-500">~2 KB per push. Only when paired.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4">
               <p className="font-semibold text-white mb-3">Outbound connections</p>
               <table className="w-full">
                 <thead>
