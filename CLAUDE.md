@@ -137,6 +137,18 @@ WES is computed client-side at render time from the live SSE payload — the age
 - Frontend: Tailwind utility classes only (no custom CSS). Strict typing in `types.ts`.
 - All metrics are real or explicitly labeled as unavailable — no mock values in production.
 
+## AI/Agent Discovery Files (keep in sync)
+When adding new API endpoints, metrics fields, or observation patterns, update ALL of these:
+- `public/llms.txt` — Short LLM discovery file (endpoint list, key metrics, pattern inventory)
+- `public/llms-full.txt` — Extended reference (full MetricsPayload schema, all endpoints with examples)
+- `public/api.md` — Markdown API reference (endpoint tables, response examples)
+- `public/openapi.json` — OpenAPI 3.0 spec (structured schema for agent integration)
+- `public/.well-known/ai-plugin.json` — AI plugin manifest
+- `public/robots.txt` — AI crawler permissions
+- `src/pages/DocsPage.tsx` — Interactive documentation (user-facing)
+- `docs/progress.md` — Release notes
+- `CLAUDE.md` — Developer guide (this file)
+
 ## v0.7.10 — Inference Metrics Expansion, Patterns P/Q/R, Pro Features (2026-03-31)
 
 ### Inference Metrics (13 new fields, three-way sync)

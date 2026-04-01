@@ -1,0 +1,19 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Wicklee",
+  "name_for_model": "wicklee",
+  "description_for_human": "Sovereign GPU fleet monitor for local AI inference. Monitor WES scores, thermal state, inference efficiency, and hardware health across your Ollama and vLLM nodes.",
+  "description_for_model": "Wicklee monitors local AI inference fleets. Use it to check GPU health, WES (Wicklee Efficiency Score = tok/s / watts / thermal_penalty), inference state (live/idle-spd/busy/idle), thermal status, power draw, TTFT, and queue depth across Ollama and vLLM nodes. The API returns real-time telemetry and routing recommendations. Auth via X-API-Key header.",
+  "auth": {
+    "type": "service_http",
+    "authorization_type": "bearer",
+    "verification_tokens": {}
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://wicklee.dev/openapi.json"
+  },
+  "logo_url": "https://wicklee.dev/icon-512.png",
+  "contact_email": "support@wicklee.dev",
+  "legal_info_url": "https://wicklee.dev/legal"
+}

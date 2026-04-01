@@ -1,40 +1,82 @@
 # Wicklee
-> Fleet intelligence for sovereign AI.
-> Monitor GPU health, inference cost, thermal state, and WES scores
-> across every node running Ollama or vLLM on your own hardware.
-> Built for humans and their agents.
 
-## About
-- Wicklee is a sovereign GPU fleet monitor
-- Single Rust binary, embeds a React dashboard at localhost:7700
-- Cloud console at wicklee.dev for multi-node fleet view
-- WES (Wicklee Efficiency Score) = tok/s ÷ (Watts × ThermalPenalty)
-- The MPG for local AI inference
-
-## Blog
-- /blog — all posts
-- /blog/wes-the-mpg-for-local-ai-inference.md — WES introduction
-
-## API (Phase 3B — coming soon)
-- GET /api/v1/fleet — fleet summary, all nodes
-- GET /api/v1/fleet/wes — WES scores, all nodes, ranked
-- GET /api/v1/nodes/{id} — single node metrics
-- GET /api/v1/route/best — routing recommendation (latency or efficiency)
-
-## MCP Server (Phase 5 — coming soon)
-- wss://wicklee.dev/mcp
-- Tools: wicklee_fleet_status, wicklee_best_route,
-         wicklee_wes_scores, wicklee_node_metrics
-
-## Metrics Reference
-- /metrics — interactive metrics reference page
-- /metrics.md — raw Markdown version of the metrics reference (machine-readable)
+> Sovereign GPU fleet monitor for local AI inference.
+> One Rust binary per node, React dashboard at localhost:7700, fleet aggregation at wicklee.dev.
+> WES (Wicklee Efficiency Score) = tok/s / (Watts x ThermalPenalty) — the MPG for local AI.
 
 ## Docs
-- /docs/install — installation guide
-- /docs/wes — WES formula and methodology
-- /docs/api — API reference (coming soon)
+
+- [Full Documentation](https://wicklee.dev/llms-full.txt)
+- [API Reference (Markdown)](https://wicklee.dev/api.md)
+- [OpenAPI Spec](https://wicklee.dev/openapi.json)
+- [Metrics Reference](https://wicklee.dev/metrics.md)
+- [Interactive Docs](https://wicklee.dev/docs)
 
 ## Install
+
+```bash
 curl -fsSL https://wicklee.dev/install.sh | bash
-irm https://wicklee.dev/install.ps1 | iex
+```
+
+Windows: `irm https://wicklee.dev/install.ps1 | iex`
+
+## Localhost API (no auth, any tier)
+
+- `GET /api/metrics` — SSE stream, 1 Hz telemetry
+- `GET /ws` — WebSocket, 10 Hz telemetry
+- `GET /api/observations` — Local hardware pattern evaluation (4 patterns)
+- `GET /api/history?node_id=WK-XXXX` — DuckDB metric history (1h buffer)
+- `GET /api/traces` — Proxy inference traces
+- `GET /api/events/history` — Node event log
+- `GET /api/events/recent` — Recent in-memory events
+- `GET /api/export?format=json|csv` — Data export
+- `GET /api/tags` — Ollama model tags
+- `GET /api/pair/status` — Pairing status
+
+## Fleet API v1 (X-API-Key auth)
+
+Base URL: `https://wicklee.dev/api/v1`
+
+- `GET /api/v1/fleet` — All nodes with full MetricsPayload
+- `GET /api/v1/fleet/wes` — WES scores ranked
+- `GET /api/v1/nodes/{id}` — Single node deep dive
+- `GET /api/v1/route/best` — Routing recommendation (latency or efficiency)
+- `GET /api/v1/insights/latest` — Fleet intelligence snapshot (Team+)
+- `POST /api/v1/keys` — Create API key
+- `GET /api/v1/keys` — List API keys
+- `DELETE /api/v1/keys/{id}` — Revoke API key
+
+## Key Metrics
+
+- `inference_state`: "live" | "idle-spd" | "busy" | "idle"
+- `ollama_tokens_per_second`: tok/s from 20-token probe (~30s cadence)
+- `apple_soc_power_w`: Combined CPU+GPU+ANE power (Apple Silicon)
+- `nvidia_power_draw_w`: Board power (NVIDIA)
+- `thermal_state`: "Normal" | "Fair" | "Serious" | "Critical"
+- `penalty_avg`: Thermal penalty multiplier (1.0 = no penalty)
+- `vllm_requests_waiting`: Queue depth (vLLM)
+- `ollama_ttft_ms`: Time to first token (Ollama probe baseline)
+- `vllm_avg_ttft_ms`: Time to first token (vLLM production histogram)
+
+## 18 Observation Patterns (A-R)
+
+Community (9): A (Thermal Drain), B (Phantom Load), C (WES Velocity Drop),
+F (Memory Trajectory), H (Power Jitter), J (Swap Pressure), K (Clock Drift),
+N (NVIDIA Thermal Ceiling), O (VRAM Overcommit)
+
+Pro (9): D (Power-GPU Decoupling), E (Fleet Load Imbalance), G (Bandwidth Saturation),
+I (Efficiency Penalty Drag), L (PCIe Degradation), M (vLLM KV Cache Saturation),
+P (TTFT Regression), Q (Latency Spike), R (vLLM Queue Saturation)
+
+## Runtimes Supported
+
+- Ollama (macOS, Linux, Windows)
+- vLLM (Linux)
+- llama.cpp / llama-box (macOS, Linux)
+
+## Pricing
+
+- Community: Free forever, 3 nodes, 24h history, 9 patterns
+- Pro: $9/mo, 10 nodes, 7-day history, 18 patterns, Slack alerts
+- Team: $19/seat/mo (3-seat min), 25 nodes, 90-day history, shared dashboards
+- Enterprise: From $200/mo, proxy, airgapped/sovereign deployment
