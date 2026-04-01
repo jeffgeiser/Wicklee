@@ -512,11 +512,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       case DashboardTab.PREFERENCES:
         return <PreferencesView currentTenant={currentTenant} theme={theme} setTheme={setTheme} />;
       case DashboardTab.PRICING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} embedded />;
       case DashboardTab.AI_PROVIDERS:
         return <AIProvidersView />;
       case DashboardTab.BILLING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} embedded />;
       default:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }

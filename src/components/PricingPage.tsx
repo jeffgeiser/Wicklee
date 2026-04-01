@@ -19,6 +19,8 @@ interface PricingPageProps {
   /** Auth callbacks — rendered in the nav when logged out. */
   onSignIn?: () => void;
   onSignUp?: () => void;
+  /** When true, hides the standalone nav (rendered inside dashboard layout). */
+  embedded?: boolean;
 }
 
 // ── Tier data derived from TIERS.md ──────────────────────────────────────────
@@ -113,6 +115,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
   onCheckout,
   onSignIn,
   onSignUp,
+  embedded = false,
 }) => {
 
   const tierRank = (t: SubscriptionTier | null): number =>
@@ -144,8 +147,8 @@ const PricingPage: React.FC<PricingPageProps> = ({
 
   return (
     <div className="min-h-screen bg-gray-950">
-      {/* ── Navigation — matches LandingPage nav ────────────────────── */}
-      <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
+      {/* ── Navigation — only shown on standalone /pricing route, hidden when embedded in dashboard ── */}
+      {!embedded && <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <button onClick={() => onNavigate?.('/')} className="cursor-pointer">
           <Logo className="text-3xl" connectionState="connected" />
         </button>
@@ -184,7 +187,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
             </button>
           )}
         </div>
-      </nav>
+      </nav>}
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16 space-y-12">
 

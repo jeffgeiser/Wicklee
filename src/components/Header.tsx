@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, Cloud, CloudLightning } from 'lucide-react';
+import { Cloud, CloudLightning } from 'lucide-react';
 import { ConnectionState, DashboardTab, PairingInfo, Tenant, User as UserType } from '../types';
 import Logo from './Logo';
 
@@ -80,11 +80,7 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
             </button>
           )}
 
-          {/* Bell */}
-          <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition-colors relative">
-            <Bell className="w-5 h-5" />
-            <span className="absolute top-2 right-2.5 w-1.5 h-1.5 bg-red-500 rounded-full border border-white dark:border-gray-950" />
-          </button>
+          {/* Bell — hidden until notification system is built */}
         </div>
       </div>
     </header>
