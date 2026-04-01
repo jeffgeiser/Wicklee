@@ -1,0 +1,236 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Wicklee Fleet API",
+    "description": "Sovereign GPU fleet monitor for local AI inference. Monitor WES scores, thermal state, inference efficiency, and hardware health across Ollama and vLLM nodes.",
+    "version": "1.0.0",
+    "contact": { "name": "Wicklee", "url": "https://wicklee.dev" }
+  },
+  "servers": [
+    { "url": "https://wicklee.dev", "description": "Production fleet API" },
+    { "url": "http://localhost:7700", "description": "Local agent API (no auth)" }
+  ],
+  "security": [{ "ApiKeyAuth": [] }],
+  "paths": {
+    "/api/v1/fleet": {
+      "get": {
+        "operationId": "getFleet",
+        "summary": "Get all fleet nodes with full telemetry",
+        "description": "Returns all nodes belonging to the authenticated user with their latest MetricsPayload.",
+        "responses": {
+          "200": {
+            "description": "Fleet node list",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetResponse" } } }
+          },
+          "401": { "description": "Missing or invalid API key" }
+        }
+      }
+    },
+    "/api/v1/fleet/wes": {
+      "get": {
+        "operationId": "getFleetWes",
+        "summary": "Get WES scores for all nodes",
+        "description": "Returns WES (Wicklee Efficiency Score) for each node, ranked by score.",
+        "responses": {
+          "200": {
+            "description": "WES scores",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WesResponse" } } }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{nodeId}": {
+      "get": {
+        "operationId": "getNode",
+        "summary": "Get single node deep dive",
+        "parameters": [{ "name": "nodeId", "in": "path", "required": true, "schema": { "type": "string" }, "example": "WK-502B" }],
+        "responses": {
+          "200": {
+            "description": "Node with full metrics",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NodeResponse" } } }
+          },
+          "404": { "description": "Node not found" }
+        }
+      }
+    },
+    "/api/v1/route/best": {
+      "get": {
+        "operationId": "getBestRoute",
+        "summary": "Get routing recommendation",
+        "description": "Returns two candidates: latency (highest tok/s) and efficiency (highest WES). Default strategy is efficiency.",
+        "responses": {
+          "200": {
+            "description": "Routing recommendation",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RouteResponse" } } }
+          }
+        }
+      }
+    },
+    "/api/v1/insights/latest": {
+      "get": {
+        "operationId": "getInsights",
+        "summary": "Get fleet intelligence snapshot (Team+)",
+        "description": "Fleet summary with avg WES, total tok/s, and findings array (thermal stress, WES below baseline, etc.).",
+        "responses": {
+          "200": {
+            "description": "Intelligence snapshot",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InsightsResponse" } } }
+          },
+          "402": { "description": "Requires Team tier or above" }
+        }
+      }
+    },
+    "/api/v1/keys": {
+      "post": {
+        "operationId": "createApiKey",
+        "summary": "Create a new API key",
+        "description": "Returns the raw key once (prefix wk_live_). Stored as SHA-256 hash.",
+        "responses": {
+          "200": { "description": "API key created" }
+        }
+      },
+      "get": {
+        "operationId": "listApiKeys",
+        "summary": "List all API keys",
+        "responses": {
+          "200": { "description": "API key list (hashes never exposed)" }
+        }
+      }
+    },
+    "/api/v1/keys/{keyId}": {
+      "delete": {
+        "operationId": "revokeApiKey",
+        "summary": "Revoke an API key",
+        "parameters": [{ "name": "keyId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Key revoked" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    },
+    "schemas": {
+      "FleetResponse": {
+        "type": "object",
+        "properties": {
+          "nodes": { "type": "array", "items": { "$ref": "#/components/schemas/FleetNode" } }
+        }
+      },
+      "FleetNode": {
+        "type": "object",
+        "properties": {
+          "node_id": { "type": "string", "example": "WK-502B" },
+          "hostname": { "type": "string", "example": "macmini.local" },
+          "online": { "type": "boolean" },
+          "last_seen_ms": { "type": "integer", "format": "int64" },
+          "metrics": { "$ref": "#/components/schemas/MetricsPayload" }
+        }
+      },
+      "WesResponse": {
+        "type": "object",
+        "properties": {
+          "nodes": { "type": "array", "items": {
+            "type": "object",
+            "properties": {
+              "node_id": { "type": "string" },
+              "online": { "type": "boolean" },
+              "wes": { "type": "number", "format": "float" }
+            }
+          }}
+        }
+      },
+      "NodeResponse": {
+        "type": "object",
+        "properties": {
+          "node_id": { "type": "string" },
+          "hostname": { "type": "string" },
+          "online": { "type": "boolean" },
+          "last_seen_ms": { "type": "integer", "format": "int64" },
+          "metrics": { "$ref": "#/components/schemas/MetricsPayload" }
+        }
+      },
+      "RouteResponse": {
+        "type": "object",
+        "properties": {
+          "latency": { "$ref": "#/components/schemas/RouteCandidate" },
+          "efficiency": { "$ref": "#/components/schemas/RouteCandidate" },
+          "default": { "type": "string", "enum": ["latency", "efficiency"] }
+        }
+      },
+      "RouteCandidate": {
+        "type": "object",
+        "properties": {
+          "node": { "type": "string" },
+          "tok_s": { "type": "number", "format": "float" },
+          "wes": { "type": "number", "format": "float" },
+          "reason": { "type": "string" }
+        }
+      },
+      "InsightsResponse": {
+        "type": "object",
+        "properties": {
+          "generated_at_ms": { "type": "integer", "format": "int64" },
+          "fleet": {
+            "type": "object",
+            "properties": {
+              "online_count": { "type": "integer" },
+              "total_count": { "type": "integer" },
+              "avg_wes": { "type": "number", "format": "float" },
+              "fleet_tok_s": { "type": "number", "format": "float" }
+            }
+          },
+          "findings": { "type": "array", "items": { "$ref": "#/components/schemas/Finding" } }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "properties": {
+          "node_id": { "type": "string" },
+          "hostname": { "type": "string" },
+          "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+          "pattern": { "type": "string" },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "value": { "type": "number", "format": "float" },
+          "unit": { "type": "string" }
+        }
+      },
+      "MetricsPayload": {
+        "type": "object",
+        "description": "Full telemetry payload. All fields optional (null when unavailable).",
+        "properties": {
+          "node_id": { "type": "string" },
+          "hostname": { "type": "string" },
+          "inference_state": { "type": "string", "enum": ["live", "idle-spd", "busy", "idle"] },
+          "thermal_state": { "type": "string", "enum": ["Normal", "Fair", "Serious", "Critical"] },
+          "thermal_source": { "type": "string", "enum": ["nvml", "iokit", "coretemp", "clock_ratio", "sysfs", "wmi"] },
+          "penalty_avg": { "type": "number", "format": "float" },
+          "cpu_usage_percent": { "type": "number", "format": "float" },
+          "memory_pressure_percent": { "type": "number", "format": "float" },
+          "gpu_utilization_percent": { "type": "number", "format": "float" },
+          "apple_soc_power_w": { "type": "number", "format": "float" },
+          "nvidia_power_draw_w": { "type": "number", "format": "float" },
+          "nvidia_gpu_temp_c": { "type": "number", "format": "float" },
+          "ollama_running": { "type": "boolean" },
+          "ollama_active_model": { "type": "string" },
+          "ollama_tokens_per_second": { "type": "number", "format": "float" },
+          "ollama_ttft_ms": { "type": "number", "format": "float" },
+          "vllm_running": { "type": "boolean" },
+          "vllm_model_name": { "type": "string" },
+          "vllm_tokens_per_sec": { "type": "number", "format": "float" },
+          "vllm_avg_ttft_ms": { "type": "number", "format": "float" },
+          "vllm_requests_waiting": { "type": "integer" },
+          "agent_version": { "type": "string" },
+          "timestamp_ms": { "type": "integer", "format": "int64" }
+        }
+      }
+    }
+  }
+}

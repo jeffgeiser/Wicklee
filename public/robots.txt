@@ -1,0 +1,25 @@
+User-agent: *
+Allow: /
+Sitemap: https://wicklee.dev/sitemap.xml
+
+# AI crawlers — welcome
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+# LLM discovery files
+# /llms.txt — short overview
+# /llms-full.txt — complete API reference
+# /openapi.json — OpenAPI 3.0 spec
+# /api.md — markdown API docs

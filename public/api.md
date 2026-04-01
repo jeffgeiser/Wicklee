@@ -1,0 +1,100 @@
+# Wicklee API Reference
+
+## Localhost Agent API
+
+Base URL: `http://localhost:7700`
+Auth: None required.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/metrics | SSE stream — 1 Hz telemetry with full MetricsPayload |
+| GET | /ws | WebSocket — 10 Hz live telemetry |
+| GET | /api/observations | Local hardware patterns (A, B, J, L) against 1h DuckDB buffer |
+| GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
+| GET | /api/traces | Proxy inference traces |
+| GET | /api/events/history | Node event log |
+| GET | /api/events/recent | Recent in-memory events |
+| GET | /api/export?format=json\|csv | Data export |
+| GET | /api/tags | Ollama model tags |
+| GET | /api/pair/status | Pairing status |
+| POST | /api/insights/dismiss | Permanently dismiss a pattern |
+| GET | /api/insights/dismissed | List dismissed patterns |
+
+## Fleet API v1
+
+Base URL: `https://wicklee.dev/api/v1`
+Auth: `X-API-Key: wk_live_...` header.
+
+| Method | Endpoint | Description | Tier |
+|--------|----------|-------------|------|
+| GET | /api/v1/fleet | All nodes with full MetricsPayload | All |
+| GET | /api/v1/fleet/wes | WES scores ranked | All |
+| GET | /api/v1/nodes/{id} | Single node deep dive | All |
+| GET | /api/v1/route/best | Routing recommendation (latency or efficiency) | All |
+| GET | /api/v1/insights/latest | Fleet intelligence snapshot | Team+ |
+| POST | /api/v1/keys | Create API key | All |
+| GET | /api/v1/keys | List API keys | All |
+| DELETE | /api/v1/keys/{id} | Revoke API key | All |
+
+## Response Examples
+
+### GET /api/v1/fleet/wes
+```json
+{
+  "nodes": [
+    { "node_id": "WK-502B", "online": true, "wes": 15.0 },
+    { "node_id": "WK-99E9", "online": true, "wes": 3.2 }
+  ]
+}
+```
+
+### GET /api/v1/route/best
+```json
+{
+  "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3, "reason": "Highest throughput" },
+  "efficiency": { "node": "WK-502B", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
+  "default":    "efficiency"
+}
+```
+
+### GET /api/v1/insights/latest
+```json
+{
+  "generated_at_ms": 1774624251478,
+  "fleet": { "online_count": 3, "total_count": 3, "avg_wes": 9.9, "fleet_tok_s": 79.0 },
+  "findings": [{
+    "node_id": "WK-99E9",
+    "hostname": "spark-c559",
+    "severity": "low",
+    "pattern": "wes_below_baseline",
+    "title": "WES below fleet average",
+    "detail": "WES 3.3 vs fleet average 9.9",
+    "value": 3.3,
+    "unit": "WES"
+  }]
+}
+```
+
+## Key Metrics
+
+| Field | Type | Description |
+|-------|------|-------------|
+| inference_state | string | "live" \| "idle-spd" \| "busy" \| "idle" |
+| ollama_tokens_per_second | f32 | tok/s from 20-token probe (~30s) |
+| apple_soc_power_w | f32 | Combined CPU+GPU+ANE (Apple Silicon) |
+| nvidia_power_draw_w | f32 | Board power (NVIDIA) |
+| thermal_state | string | "Normal" \| "Fair" \| "Serious" \| "Critical" |
+| penalty_avg | f32 | Thermal penalty (1.0 = no penalty) |
+| ollama_ttft_ms | f32 | TTFT from probe baseline |
+| vllm_avg_ttft_ms | f32 | TTFT from production histogram |
+| vllm_requests_waiting | u32 | Queue depth |
+
+## WES Formula
+
+```
+WES = tok/s / (Watts x ThermalPenalty)
+```
+
+Normal thermal (penalty=1.0): WES = tok/s / Watts = tok/W.
+
+Color scale: >10 Excellent (emerald) · 3-10 Good (green) · 1-3 Acceptable (yellow) · <1 Low (red)

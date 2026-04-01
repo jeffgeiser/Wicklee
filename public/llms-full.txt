@@ -1,0 +1,357 @@
+# Wicklee — Full LLM Reference
+
+> Sovereign GPU fleet monitor for local AI inference.
+> This document contains everything an AI agent needs to integrate with Wicklee.
+
+---
+
+## Architecture
+
+Wicklee consists of three components:
+1. **Agent** — Single Rust binary per node. Runs as a system service (launchd/systemd).
+   Embeds a React dashboard at localhost:7700. Harvests hardware telemetry at 1 Hz.
+2. **Cloud Backend** — Rust/Axum on Railway. Receives telemetry from agents (2s push),
+   stores in Postgres, serves fleet dashboard via SSE at wicklee.dev.
+3. **Frontend** — React 19 + Vite + Tailwind. Dark mode. Two builds: agent-embedded
+   (localhost) and cloud-deployed (wicklee.dev).
+
+## Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://wicklee.dev/install.sh | bash
+
+# Windows (PowerShell as Administrator)
+irm https://wicklee.dev/install.ps1 | iex
+
+# Register as system service (auto-starts on boot, runs as root)
+sudo wicklee --install-service
+```
+
+---
+
+## Localhost API
+
+Base URL: `http://localhost:7700`
+Auth: None required. All endpoints available on every tier.
+
+### GET /api/metrics
+SSE stream. 1 Hz cadence. Returns `data: {MetricsPayload}\n\n` per tick.
+
+### GET /ws
+WebSocket. 10 Hz cadence. Same MetricsPayload as SSE, higher frequency for charts.
+
+### GET /api/observations
+Returns local hardware pattern evaluation (Patterns A, B, J, L) against 1-hour DuckDB buffer.
+```json
+{ "observations": [{ "pattern_id": "thermal_drain", "severity": "warning", ... }] }
+```
+
+### GET /api/history?node_id=WK-XXXX
+DuckDB metric history. 1-hour of raw samples.
+```json
+{ "samples": [{ "ts_ms": 1774621630223, "tok_s": 19.5, "gpu_util_pct": 45.0, "gpu_power_w": 2.1, "mem_pressure_pct": 52.0, "swap_write_mb_s": 0.0 }] }
+```
+
+### GET /api/traces
+Proxy inference traces (when proxy is enabled).
+```json
+[{ "id": "uuid", "ts_ms": 1774621630223, "model": "llama3.1:8b", "latency_ms": 650, "ttft_ms": 45, "tpot_ms": 32.5, "eval_count": 20 }]
+```
+
+### GET /api/events/history
+Node event log from DuckDB.
+```json
+{ "events": [{ "ts_ms": 1774621630223, "event_type": "startup", "level": "info", "message": "Agent started v0.7.10", "node_id": "WK-502B" }] }
+```
+
+### GET /api/events/recent
+Recent in-memory events (last 20, 5-minute TTL).
+
+### GET /api/export?format=json|csv
+Full data export. Supports `format=json` or `format=csv`.
+
+### GET /api/tags
+Ollama model tags (proxied from local Ollama instance).
+```json
+{ "models": [{ "name": "llama3.1:8b", "size": 5368709120 }] }
+```
+
+### GET /api/pair/status
+Pairing status with fleet.
+```json
+{ "status": "connected", "node_id": "WK-502B", "fleet_url": "https://wicklee.dev" }
+```
+
+### POST /api/insights/dismiss
+Permanently dismiss a local observation pattern.
+
+### GET /api/insights/dismissed
+List all permanently dismissed pattern IDs.
+
+---
+
+## Fleet API v1
+
+Base URL: `https://wicklee.dev/api/v1`
+Auth: `X-API-Key: wk_live_...` header. Create keys in Settings > API Keys.
+
+### GET /api/v1/fleet
+All nodes with full MetricsPayload.
+```json
+{
+  "nodes": [{
+    "node_id": "WK-502B",
+    "hostname": "macmini.local",
+    "online": true,
+    "last_seen_ms": 1774622475195,
+    "metrics": { ...full MetricsPayload... }
+  }]
+}
+```
+
+### GET /api/v1/fleet/wes
+WES scores for all nodes, ranked.
+```json
+{
+  "nodes": [
+    { "node_id": "WK-502B", "online": true, "wes": 15.0 },
+    { "node_id": "WK-99E9", "online": true, "wes": 3.2 }
+  ]
+}
+```
+
+### GET /api/v1/nodes/{node_id}
+Single node deep dive with full MetricsPayload.
+```json
+{
+  "node_id": "WK-502B",
+  "hostname": "macmini.local",
+  "online": true,
+  "last_seen_ms": 1774622475195,
+  "metrics": { ...full MetricsPayload... }
+}
+```
+
+### GET /api/v1/route/best
+Routing recommendation. Returns two candidates: latency (highest tok/s) and efficiency (highest WES).
+```json
+{
+  "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
+  "efficiency": { "node": "WK-502B", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
+  "default":    "efficiency"
+}
+```
+
+### GET /api/v1/insights/latest
+Fleet intelligence snapshot. Team tier and above only.
+```json
+{
+  "generated_at_ms": 1774624251478,
+  "fleet": { "online_count": 3, "total_count": 3, "avg_wes": 9.9, "fleet_tok_s": 79.0 },
+  "findings": [{ "node_id": "WK-99E9", "hostname": "spark-c559", "severity": "low", "pattern": "wes_below_baseline", "title": "WES below fleet average", "detail": "WES 3.3 vs fleet average 9.9", "value": 3.3, "unit": "WES" }]
+}
+```
+
+### POST /api/v1/keys
+Create a new API key. Returns the raw key once (prefix `wk_live_`). Stored as SHA-256 hash.
+```json
+{ "key": "wk_live_abc123...", "key_id": "uuid", "created_at_ms": 1774622475195 }
+```
+
+### GET /api/v1/keys
+List all API keys. Hash is never exposed.
+
+### DELETE /api/v1/keys/{key_id}
+Revoke an API key. Takes effect immediately.
+
+---
+
+## MetricsPayload Schema
+
+The full telemetry payload sent every 1-2 seconds. All fields are optional (null when unavailable).
+
+### Hardware
+- `node_id`: string — Stable WK-XXXX identifier
+- `hostname`: string — System hostname
+- `gpu_name`: string — "Apple M4", "NVIDIA RTX 4090", etc.
+- `cpu_usage_percent`: f32
+- `total_memory_mb`: u32
+- `used_memory_mb`: u32
+- `available_memory_mb`: u32
+- `cpu_core_count`: u32
+- `memory_pressure_percent`: f32 — macOS memory pressure (0-100)
+- `swap_write_mb_s`: f32 — Swap write rate in MB/s
+
+### Power
+- `cpu_power_w`: f32 — CPU package power (RAPL on Linux, IOKit on macOS)
+- `apple_soc_power_w`: f32 — Combined CPU+GPU+ANE (Apple Silicon only)
+- `apple_gpu_power_w`: f32 — GPU-only power (Apple Silicon)
+- `nvidia_power_draw_w`: f32 — Board power (NVIDIA)
+
+### GPU
+- `gpu_utilization_percent`: f32 — Apple Silicon GPU residency
+- `nvidia_gpu_utilization_percent`: f32 — NVIDIA GPU utilization
+- `nvidia_vram_used_mb`: u32
+- `nvidia_vram_total_mb`: u32
+- `nvidia_gpu_temp_c`: f32
+- `gpu_wired_limit_mb`: u32 — Apple Silicon VRAM budget
+
+### Thermal
+- `thermal_state`: string — "Normal" | "Fair" | "Serious" | "Critical"
+- `thermal_source`: string — "nvml" | "iokit" | "coretemp" | "clock_ratio" | "sysfs" | "wmi"
+- `penalty_avg`: f32 — Rolling average thermal penalty (1.0 = no penalty)
+- `penalty_peak`: f32 — Peak penalty in sample window
+- `clock_throttle_pct`: f32 — Clock speed reduction percentage
+
+### Inference State
+- `inference_state`: string — "live" | "idle-spd" | "busy" | "idle"
+- `ollama_running`: bool
+- `ollama_active_model`: string — "llama3.1:8b"
+- `ollama_model_size_gb`: f32
+- `ollama_quantization`: string — "Q4_K_M"
+- `ollama_tokens_per_second`: f32 — From 20-token probe or proxy
+- `ollama_inference_active`: bool
+- `vllm_running`: bool
+- `vllm_model_name`: string
+- `vllm_tokens_per_sec`: f32
+
+### Latency & Queue (v0.7.10+)
+- `ollama_ttft_ms`: f32 — Time to first token (probe baseline, ~30s)
+- `ollama_prompt_eval_tps`: f32 — Prompt processing speed (tok/s)
+- `ollama_load_duration_ms`: f32 — Model load time
+- `vllm_avg_ttft_ms`: f32 — TTFT from Prometheus histogram (production)
+- `vllm_avg_e2e_latency_ms`: f32 — End-to-end latency (production)
+- `vllm_avg_queue_time_ms`: f32 — Queue wait time (production)
+- `vllm_requests_waiting`: u32 — Queue depth
+- `vllm_requests_swapped`: u32 — Swapped requests
+- `vllm_total_prompt_tokens`: u64 — Cumulative prompt tokens
+- `vllm_total_generation_tokens`: u64 — Cumulative generation tokens
+- `ollama_proxy_avg_ttft_ms`: f32 — TTFT from proxy done packets
+- `ollama_proxy_avg_latency_ms`: f32 — E2E latency from proxy
+- `ollama_proxy_request_count`: u64 — Total proxied requests
+
+### WES
+- `wes_version`: u32 — Currently 2
+- `sample_count`: u32 — Samples in current WES window
+
+### Agent
+- `agent_version`: string — "0.7.10"
+- `timestamp_ms`: u64 — Unix milliseconds
+
+---
+
+## WES — Wicklee Efficiency Score
+
+```
+WES = tok/s / (Watts x ThermalPenalty)
+```
+
+When thermal is Normal (penalty = 1.0): WES = tok/s / Watts = tok/W.
+
+### Thermal Penalties
+| State    | Penalty | Score Multiplier |
+|----------|---------|-----------------|
+| Normal   | 1.00    | 1.00x           |
+| Fair     | 1.25    | 0.80x           |
+| Serious  | 1.75    | 0.57x           |
+| Critical | 2.00    | 0.50x           |
+
+### Color Scale (WES and tok/W)
+| Range | Label      | Color        |
+|-------|------------|-------------|
+| > 10  | Excellent  | Emerald     |
+| 3-10  | Good       | Light Green |
+| 1-3   | Acceptable | Yellow      |
+| < 1   | Low        | Red         |
+
+---
+
+## Inference State Machine
+
+Four states, evaluated once per second as a pure function:
+
+1. **Tier 1 (Exact):** vLLM requests_running > 0 OR llama.cpp slots_processing > 0 → LIVE
+2. **Tier 2 (Attribution):** Ollama /api/ps expires_at change attributed to user (not probe) within 15s → LIVE
+3. **Tier 3 (Physics):** GPU residency > 20%, SoC power > 8W, ANE power > 0.5W, or NVIDIA power > 40W → LIVE
+4. **Default:** No signal → IDLE (no model) or IDLE-SPD (model loaded, baseline tok/s from probe)
+
+---
+
+## 18 Observation Patterns
+
+### Localhost-Only (4)
+Evaluated by agent against local 1-hour DuckDB buffer.
+
+- **A — Thermal Drain:** Sustained throttle reducing tok/s > 8% vs Normal baseline
+- **B — Phantom Load:** Model loaded + power > 5W + tok/s < 0.5 (idle model burning power)
+- **J — Swap Pressure:** Swap write > 2 MB/s sustained (model spilling to disk)
+- **L — PCIe Degradation:** PCIe link width below rated max (NVIDIA only, Pro)
+
+### Cloud-Only (4)
+Require fleet context or multi-node comparison.
+
+- **C — WES Velocity Drop:** WES declining > 10% before thermal state changes
+- **E — Fleet Load Imbalance:** Node WES < 50% of best peer with spare capacity (Pro)
+- **F — Memory Pressure Trajectory:** Memory pressure rising > 1 pct/min sustained
+- **I — Efficiency Penalty Drag:** WES penalty > 30% with Normal thermal (Pro)
+
+### Both — Localhost + Cloud (10)
+- **D — Power-GPU Decoupling:** High power + low GPU% during inference (Pro)
+- **G — Bandwidth Saturation:** Low GPU% + high VRAM + dropping WES (Pro)
+- **H — Power Jitter:** Power CV > 20% during inference
+- **K — Clock Drift:** Clock throttle > 15% with Normal thermal
+- **M — vLLM KV Cache Saturation:** Cache > 90% sustained (Pro)
+- **N — NVIDIA Thermal Ceiling:** GPU temp > 85C sustained
+- **O — VRAM Overcommit:** Model size > 90% of VRAM capacity
+- **P — TTFT Regression:** Recent TTFT > 2x baseline (Pro)
+- **Q — Latency Spike:** E2E latency > 2s for 3+ samples (Pro)
+- **R — vLLM Queue Saturation:** requests_waiting > 5 sustained (Pro)
+
+---
+
+## Sampling Cadence
+
+| Subsystem | Cadence | What |
+|-----------|---------|------|
+| Broadcast loop | 1 Hz | Assembles snapshot, pushes to SSE/WS |
+| System metrics | 1 Hz | CPU, memory, swap via sysinfo |
+| Apple Silicon power | 5s window | powermetrics (requires root) |
+| NVIDIA GPU | 1 Hz | NVML API (zero-privilege) |
+| Ollama harvester | 2s | GET /api/ps (models, VRAM, expires_at) |
+| Ollama probe | ~30s | 20-token POST /api/generate (disabled when proxy active) |
+| vLLM harvester | 2s | GET /metrics (Prometheus gauges + histograms) |
+| WES thermal sampler | 2s | 30-sample rolling window |
+| DuckDB local store | 2s | Batch INSERT, WAL mode |
+| Cloud telemetry push | 2s | POST to fleet URL (~2 KB per push) |
+
+---
+
+## Sovereignty
+
+- Inference content (prompts, responses, conversations) NEVER leaves the machine
+- Only hardware telemetry (CPU%, GPU%, power, thermal, model name) is transmitted when paired
+- Agent runs as a system service with no external dependencies
+- All data visible in the Observability tab's Sovereignty section
+- Cloud relay is optional — localhost dashboard works fully offline
+
+---
+
+## Pricing
+
+| Tier | Price | Nodes | History | Patterns |
+|------|-------|-------|---------|----------|
+| Community | Free | 3 | 24h | 9 |
+| Pro | $9/mo | 10 | 7 days | 18 |
+| Team | $19/seat/mo | 25 | 90 days | 18 + shared dashboards |
+| Enterprise | From $200/mo | Custom | Custom | + proxy + sovereign deploy |
+
+---
+
+## Runtimes
+
+| Runtime | Platforms | Detection |
+|---------|-----------|-----------|
+| Ollama | macOS, Linux, Windows | Process scan + /api/ps |
+| vLLM | Linux | Process scan + /metrics Prometheus |
+| llama.cpp / llama-box | macOS, Linux | Process scan + /health |
