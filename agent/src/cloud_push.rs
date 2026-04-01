@@ -48,10 +48,12 @@ pub(crate) fn start_cloud_push(
             if !state_changed && last_push.elapsed() < push_interval { continue; }
 
             // Only push when paired (session_token present).
-            let wk_id = {
+            let (wk_id, session_token) = {
                 let state = pairing_state.lock().unwrap();
-                if state.cloud_session_token.is_none() { continue; }
-                state.node_id.clone()
+                match &state.cloud_session_token {
+                    Some(tok) => (state.node_id.clone(), tok.clone()),
+                    None => continue,
+                }
             };
 
             // Patch the JSON frame: replace node_id with the WK-XXXX identifier
@@ -79,6 +81,7 @@ pub(crate) fn start_cloud_push(
             let resp = client
                 .post(format!("{cloud}/api/telemetry"))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {session_token}"))
                 .body(patched)
                 .send()
                 .await;

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import Logo from './Logo';
 import { parseFrontmatter, slugToTitle, formatDate } from '../utils/parseFrontmatter';
 
@@ -70,7 +71,7 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate, onSignIn, onSignU
           canonical.setAttribute('href', `https://wicklee.dev/blog/${slug}`);
 
           const rendered = await marked(content);
-          setHtml(rendered);
+          setHtml(DOMPurify.sanitize(rendered));
           setLoading(false);
         }
       } catch {

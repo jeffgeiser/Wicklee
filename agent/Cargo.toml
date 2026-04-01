@@ -20,6 +20,8 @@ mime_guess    = "2"
 tokio-stream  = "0.1"
 # UUID v4 for trace IDs (inference request tracing).
 uuid          = { version = "1", features = ["v4"] }
+# Cryptographically secure random pairing codes.
+rand          = "0.8"
 # Outbound HTTPS for cloud pairing registration.
 reqwest       = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 # Binary self-replacement for the auto-update flow.

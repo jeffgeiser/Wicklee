@@ -20,7 +20,7 @@ else
   if [ -n "$IPV6_NS" ]; then
     RESOLVER="[$IPV6_NS]"
   else
-    RESOLVER="8.8.8.8"
+    RESOLVER="127.0.0.11"  # Docker embedded DNS; avoids leaking queries to external resolvers
   fi
 fi
 export RESOLVER

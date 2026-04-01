@@ -1,12 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { Suspense, useState, useRef, useEffect } from 'react';
 import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog, CreditCard } from 'lucide-react';
-import { useClerk } from '@clerk/clerk-react';
 import { ConnectionState, DashboardTab, User, UserRole } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
 // In agent builds, ClerkProvider is absent — this gates all useClerk() calls.
 const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+
+// Clerk account actions are lazy-loaded so @clerk/clerk-react is never imported
+// in agent builds. The dynamic import is tree-shaken when IS_AGENT is true.
+const LazyClerkAccountActions = React.lazy(() => import('./ClerkAccountActions'));
 
 interface SidebarProps {
   activeTab: DashboardTab;
@@ -19,35 +22,6 @@ interface SidebarProps {
   isLocalHost?: boolean;
   onNavigate?: (path: string) => void;
 }
-
-// ── Clerk-dependent account actions — rendered ONLY in non-agent (cloud) builds ─
-// Isolated here so useClerk() is called inside a component that is conditionally
-// mounted, satisfying React's hooks-in-same-order rule while keeping ClerkProvider
-// absent from the agent binary's render tree.
-const ClerkAccountActions: React.FC<{
-  onClose: () => void;
-  onNavigateSettings: () => void;
-}> = ({ onClose, onNavigateSettings: _nav }) => {
-  const { signOut, openUserProfile } = useClerk();
-  return (
-    <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50 space-y-0.5">
-      <button
-        onClick={() => { onClose(); openUserProfile(); }}
-        className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
-      >
-        <UserCog className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-        Manage Account
-      </button>
-      <button
-        onClick={() => { onClose(); signOut({ redirectUrl: '/' }); }}
-        className="w-full text-left px-3 py-2 rounded-lg text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex items-center gap-2"
-      >
-        <LogOut className="w-4 h-4" />
-        Sign out
-      </button>
-    </div>
-  );
-};
 
 const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalMode = true, isLocalHost = false, onNavigate }) => {
   const permissions = usePermissions(currentUser);
@@ -201,10 +175,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
 
               {/* Manage Account + Sign out — cloud build only (ClerkProvider present) */}
               {!IS_AGENT && !isLocalHost && (
-                <ClerkAccountActions
-                  onClose={() => setIsAvatarMenuOpen(false)}
-                  onNavigateSettings={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
-                />
+                <Suspense fallback={null}>
+                  <LazyClerkAccountActions
+                    onClose={() => setIsAvatarMenuOpen(false)}
+                    onNavigateSettings={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
+                  />
+                </Suspense>
               )}
             </div>
           )}

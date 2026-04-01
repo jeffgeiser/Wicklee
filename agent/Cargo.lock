@@ -3166,6 +3166,7 @@ dependencies = [
  "mime_guess",
  "nvml-wrapper",
  "nvml-wrapper-sys",
+ "rand 0.8.5",
  "reqwest",
  "rust-embed",
  "scopeguard",
