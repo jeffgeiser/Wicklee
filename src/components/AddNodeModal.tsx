@@ -40,7 +40,7 @@ const StepDots: React.FC<{ current: number }> = ({ current }) => (
       <React.Fragment key={n}>
         <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
           n === current
-            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30'
+            ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
             : n < current
             ? 'bg-indigo-900/50 text-indigo-500 ring-1 ring-indigo-800'
             : 'bg-gray-800 text-gray-600'
@@ -168,7 +168,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-gray-950 border border-gray-800 w-full max-w-md rounded-[28px] overflow-hidden shadow-2xl shadow-indigo-500/10 animate-in zoom-in-95 duration-200">
+      <div className="bg-gray-950 border border-gray-800 w-full max-w-md rounded-[28px] overflow-hidden shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 duration-200">
         <div className="p-8">
 
           {/* Header */}
@@ -224,7 +224,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
               <button
                 type="button"
                 onClick={() => setStep(2)}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 mt-2"
+                className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20 mt-2"
               >
                 Next
                 <ArrowRight className="w-4 h-4" />
@@ -283,7 +283,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                 <button
                   type="button"
                   onClick={() => setStep(3)}
-                  className="flex-[2] py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20"
+                  className="flex-[2] py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
                 >
                   Next
                   <ArrowRight className="w-4 h-4" />
@@ -351,7 +351,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                   <button
                     type="submit"
                     disabled={loading || code.length !== 6}
-                    className="flex-[2] py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20"
+                    className="flex-[2] py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
                   >
                     <CloudLightning className="w-4 h-4" />
                     {loading ? 'Pairing…' : 'Pair Node'}
