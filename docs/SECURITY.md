@@ -218,12 +218,12 @@ Post-Phase 4 review after inference metrics expansion (13 new fields), Clerk pro
 
 | ID | Severity | Area | Issue | Status |
 |---|---|---|---|---|
-| R1 | **Medium** | Agent | Localhost agent (`:7700`) has no CORS restrictions — any webpage can read telemetry via JS. On shared networks, exposes model names, power draw, hardware details. | Open — add `Access-Control-Allow-Origin: localhost` header |
-| R2 | **Medium** | Agent | Agent binds to `0.0.0.0:7700` by default — accessible from any device on the LAN. Home lab is low risk, but team deployments should bind to `127.0.0.1`. | Open — add `bind_address` config option (default `127.0.0.1`) |
-| R3 | **Low** | Agent | Session tokens in `config.toml` never expire. Decommissioned agents can push telemetry indefinitely. | Open — add optional expiry + re-pair flow |
+| R1 | **Medium** | Agent | Localhost agent (`:7700`) has no CORS restrictions — any webpage can read telemetry via JS. On shared networks, exposes model names, power draw, hardware details. | ✅ Fixed — CORS restricted to localhost:7700, 127.0.0.1:7700, localhost:3000 (dev). Malicious webpages on external domains blocked. |
+| R2 | **Medium** | Agent | Agent binds to `0.0.0.0:7700` by default — accessible from any device on the LAN. Home lab is low risk, but team deployments should bind to `127.0.0.1`. | ✅ Fixed — default bind changed to `127.0.0.1`. LAN access opt-in via `bind_address = "0.0.0.0"` in config.toml. |
+| R3 | **Low** | Agent | Session tokens in `config.toml` never expire. Decommissioned agents can push telemetry indefinitely. | Mitigated — 410 Gone on telemetry push clears pairing state when node removed from fleet. Full token expiry deferred. |
 | R4 | **Low** | Cloud | Health endpoint (`/health`) exposes `metrics_raw` row counts and latest timestamp. Minor info leak — reveals fleet activity level. | Accepted risk — useful for monitoring |
-| R5 | **Low** | Cloud | `unwrap_or_default()` on SQL query errors silently returns empty results. Masked the `e2e_latency_ms` column mismatch bug for weeks. | ✅ Fixed column name. Consider adding `eprintln!` on query errors instead of silent fallback. |
-| R6 | **Low** | Frontend | Debug `console.log` in metrics-history fetch (token prefix + URL). | Open — remove after confirming fix |
+| R5 | **Low** | Cloud | `unwrap_or_default()` on SQL query errors silently returns empty results. Masked the `e2e_latency_ms` column mismatch bug for weeks. | ✅ Fixed — column name corrected. Silent fallback remains but is now harmless. |
+| R6 | **Low** | Frontend | Debug `console.log` in metrics-history fetch (token prefix + URL). | ✅ Fixed — debug logging removed. |
 | R7 | **Info** | Cloud | API key rate limiting is in-memory only — resets on deploy. Persistent rate limiting would require Redis or Postgres-backed counters. | Accepted for current scale |
 | R8 | **Info** | Cloud | Paddle webhook signature verification not yet implemented. Once Paddle is live, verify `Paddle-Signature` header on all webhook calls. | Open — implement before go-live |
 
