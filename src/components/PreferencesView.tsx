@@ -20,22 +20,15 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl divide-y divide-gray-100 dark:divide-gray-800 shadow-sm dark:shadow-none transition-colors">
           <div className="p-6 flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-blue-600 dark:text-blue-400 transition-colors">
-                {theme === 'dark' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+              <div className="p-2 bg-gray-800 rounded-lg text-blue-400">
+                <Moon className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold font-telin text-gray-900 dark:text-gray-200">Interface Theme</h4>
-                <p className="text-xs text-gray-500">Control how Wicklee looks on your screen.</p>
+                <h4 className="text-sm font-bold font-telin text-gray-200">Interface Theme</h4>
+                <p className="text-xs text-gray-500">Hardware-Centric Dark — optimized for monitoring.</p>
               </div>
             </div>
-            <select 
-              value={theme}
-              onChange={(e) => setTheme?.(e.target.value as 'light' | 'dark')}
-              className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs text-gray-900 dark:text-gray-300 rounded-lg px-3 py-1.5 outline-none transition-colors cursor-pointer"
-            >
-              <option value="dark">Dark Mode</option>
-              <option value="light">Light Mode</option>
-            </select>
+            <span className="text-xs text-gray-500 bg-gray-800 px-3 py-1.5 rounded-lg">Dark Mode</span>
           </div>
 
           <div className="p-6 flex items-center justify-between">
