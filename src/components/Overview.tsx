@@ -942,12 +942,12 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
           ),
         },
         {
-          step: '2', icon: Terminal, title: 'Open the dashboard',
-          body: <p className="mt-2 text-xs text-gray-500">Click "Pair a Node" in the header to get your 6-digit pairing code.</p>,
+          step: '2', icon: Terminal, title: 'Open your local dashboard',
+          body: <p className="mt-2 text-xs text-gray-500">Visit <span className="text-gray-300 font-mono">localhost:7700</span> on the machine where you installed the agent. Click <span className="text-gray-300">"Connect to Cloud"</span> to generate a 6-digit code.</p>,
         },
         {
           step: '3', icon: Plus, title: 'Enter the code here',
-          body: <p className="mt-2 text-xs text-gray-500">Click "Add Node" below and enter the 6-digit code from your local dashboard.</p>,
+          body: <p className="mt-2 text-xs text-gray-500">Click <span className="text-gray-300">"+ Add Node"</span> below and enter the 6-digit code.</p>,
         },
       ].map(({ step, icon: Icon, title, body }) => (
         <div key={step} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-1">
@@ -2973,7 +2973,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               onClick={onOpenPairing}
               className="px-3 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-400 hover:text-indigo-300 font-medium rounded-lg transition-all"
             >
-              Pair this Node →
+              Connect to Cloud →
             </button>
           )}
 

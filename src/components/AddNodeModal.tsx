@@ -174,7 +174,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
           {/* Header */}
           <div className="flex items-start justify-between mb-6">
             <div>
-              <h2 className="text-xl font-bold text-white">Pair a Node</h2>
+              <h2 className="text-xl font-bold text-white">Add a Node</h2>
               <p className="text-xs text-gray-600 mt-0.5">macOS &amp; Linux</p>
             </div>
             <button onClick={onClose} className="p-2 text-gray-500 hover:text-white transition-colors">
