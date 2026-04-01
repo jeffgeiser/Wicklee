@@ -3739,17 +3739,20 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                     });
                 } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
             }
-            // 4. WES Cliff
+            // 4. WES Cliff — only fires during active inference, with a minimum floor
+            // to avoid noise from idle-state WES fluctuations.
             {
                 let alert_type = "wes_cliff";
                 if let (Some(current_wes), Some(&baseline)) = (wes, wes_baselines.get(node_id)) {
-                    let is_firing = baseline > 0.0 && current_wes < baseline * 0.5;
+                    let is_active = matches!(m.inference_state.as_deref(), Some("live") | Some("idle-spd"));
+                    let wes_floor = 3.0_f32; // Don't fire if WES is still in "Good" range
+                    let is_firing = is_active && baseline > 0.0 && current_wes < baseline * 0.35 && current_wes < wes_floor;
                     let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
                     if is_firing && !is_open {
                         to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
                             severity: ObsSeverity::Warning, title: "WES Cliff \u{2014} Efficiency Collapse".into(),
-                            detail: format!("WES dropped to {:.1} (24h baseline: {:.1}).", current_wes, baseline),
-                            context: serde_json::json!({"current_wes": current_wes, "baseline_wes_24h": baseline, "thermal_state": m.thermal_state}),
+                            detail: format!("WES dropped to {:.1} (24h baseline: {:.1}). Active inference detected — this is not an idle fluctuation.", current_wes, baseline),
+                            context: serde_json::json!({"current_wes": current_wes, "baseline_wes_24h": baseline, "thermal_state": m.thermal_state, "inference_state": m.inference_state}),
                         });
                     } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
                 }
@@ -3798,16 +3801,18 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 }
             }
 
-            // 1-hour cooldown: skip firing if the same (node, alert_type) was
-            // resolved or acknowledged less than 1 hour ago. Prevents flickering
-            // alerts for nodes that hover near a threshold boundary.
-            let cooldown_ms: i64 = 3_600_000; // 1 hour
-            let cooldown_cutoff = (now as i64) - cooldown_ms;
+            // Cooldown: skip firing if the same (node, alert_type) was recently
+            // resolved or acknowledged. WES cliff gets a longer cooldown (4h) to
+            // prevent hourly fire/resolve churn from natural WES fluctuations.
+            let default_cooldown_ms: i64 = 3_600_000; // 1 hour
+            let wes_cliff_cooldown_ms: i64 = 14_400_000; // 4 hours
 
             for obs in &to_fire {
                 let tenant_id = match tenant_map.get(&obs.node_id) { Some(t) => t.clone(), None => continue };
 
                 // Check cooldown: was this (node, alert_type) recently resolved/acknowledged?
+                let cooldown = if obs.alert_type == "wes_cliff" { wes_cliff_cooldown_ms } else { default_cooldown_ms };
+                let cooldown_cutoff = (now as i64) - cooldown;
                 let recently_settled: bool = sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM fleet_observations
                      WHERE tenant_id = $1 AND node_id = $2 AND alert_type = $3
@@ -3817,7 +3822,8 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 .fetch_one(&state.pool).await.unwrap_or(0) > 0;
 
                 if recently_settled {
-                    eprintln!("[evaluator] cooldown: skipping {} for {} (settled <1h ago)", obs.alert_type, obs.node_id);
+                    let hours = cooldown / 3_600_000;
+                    eprintln!("[evaluator] cooldown: skipping {} for {} (settled <{}h ago)", obs.alert_type, obs.node_id, hours);
                     continue;
                 }
 
