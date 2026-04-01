@@ -520,6 +520,23 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
             </div>
 
 
+            {/* WES Alerting Behavior */}
+            <div className="bg-gray-950 border border-gray-800 rounded-xl p-5">
+              <p className="text-xs font-bold text-white uppercase tracking-wider mb-3">WES Cliff — Efficiency Collapse Alert</p>
+              <p className="text-xs text-gray-400 leading-relaxed mb-3">
+                The cloud evaluator monitors WES across your fleet and fires a <strong className="text-gray-300">WES Cliff</strong> observation when a node's efficiency collapses. To avoid noise from natural fluctuations, the alert has strict gating:
+              </p>
+              <div className="space-y-2 text-xs text-gray-400">
+                <p><strong className="text-gray-300">1. Active inference required</strong> — WES is only meaningful during inference. The alert only evaluates nodes in <code className="text-gray-300 font-mono text-[10px]">live</code> or <code className="text-gray-300 font-mono text-[10px]">idle-spd</code> state. Idle nodes are ignored.</p>
+                <p><strong className="text-gray-300">2. Absolute floor</strong> — Current WES must be below <span className="text-yellow-400 font-mono">3.0</span> (the bottom of the "Good" range). A node at WES 5.0 that dropped 70% from baseline is still performing acceptably — no alert.</p>
+                <p><strong className="text-gray-300">3. Relative drop</strong> — Current WES must also be below <span className="font-mono text-gray-300">35%</span> of the node's 24-hour baseline. This catches genuine collapses while ignoring normal variation.</p>
+                <p><strong className="text-gray-300">4. Cooldown</strong> — After resolving, the same node cannot re-fire WES Cliff for <span className="font-mono text-gray-300">4 hours</span>. This prevents hourly fire/resolve churn when a node hovers near the threshold.</p>
+              </div>
+              <p className="mt-3 text-[10px] text-gray-600 leading-relaxed">
+                Example: a node with a 24h WES baseline of 12.0 would need to drop below both 3.0 (absolute) and 4.2 (35% of 12.0) during active inference to trigger. The effective threshold is whichever is lower — in this case, WES &lt; 3.0.
+              </p>
+            </div>
+
             {/* tok/W */}
             <div className="bg-gray-950 border border-blue-500/20 rounded-xl p-5">
               <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-3">tok/W — Tokens Per Watt</p>
