@@ -332,6 +332,8 @@ struct AppState {
     clerk_keys:       Arc<RwLock<Vec<JwkKey>>>,
     /// Sliding-window rate-limit timestamps keyed by api_key key_id.
     api_rate_limits:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
+    /// IP-based rate-limit for auth endpoints (login/signup). 10 requests per 60s.
+    auth_rate_limits: Arc<Mutex<HashMap<String, Vec<u64>>>>,
     /// Channel to the metrics writer task.  try_send drops rows if the writer
     /// falls behind; that's acceptable for telemetry.
     metrics_tx:       mpsc::Sender<MetricsRow>,
@@ -667,6 +669,17 @@ fn is_pro_or_above(tier: &str) -> bool {
     matches!(tier, "pro" | "team" | "enterprise")
 }
 
+/// Pattern-to-tier allowlist. Community users see 7 patterns; Pro+ see all 18.
+fn allowed_patterns_for_tier(tier: &str) -> Vec<String> {
+    let community: Vec<&str> = vec!["A", "B", "D", "H", "J", "K", "L"];
+    if is_pro_or_above(tier) {
+        // All 18 patterns A–R
+        (b'A'..=b'R').map(|c| String::from(c as char)).collect()
+    } else {
+        community.into_iter().map(String::from).collect()
+    }
+}
+
 /// Number of nodes available for free on the Community tier.
 const FREE_NODE_LIMIT: usize = 3;
 
@@ -755,7 +768,7 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
             Err(e) => { eprintln!("[auth] DecodingKey build failed for kid={}: {e}", jwk.kid); }
             Ok(key) => match decode::<ClerkClaims>(token, &key, &val) {
                 Ok(data) => {
-                    eprintln!("[auth] JWT valid — sub={}", data.claims.sub);
+                    eprintln!("[auth] JWT valid");
                     return Some(data.claims.sub);
                 }
                 Err(e) => { eprintln!("[auth] JWT decode failed for kid={}: {e}", jwk.kid); }
@@ -913,6 +926,35 @@ async fn validate_api_key(
         .execute(pool).await;
 
     Some((key_id, user_id, is_pro_int != 0))
+}
+
+const AUTH_RATE_LIMIT: usize = 10; // max attempts per 60s per IP
+
+/// IP-based sliding-window rate limiter for auth endpoints.
+/// Returns true if the request is allowed, false if rate-limited.
+fn check_auth_rate_limit(
+    ip: &str,
+    rate_limits: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
+) -> bool {
+    let now = now_ms();
+    let window_start = now.saturating_sub(60_000);
+    let mut rl = rate_limits.lock().unwrap();
+    let calls = rl.entry(ip.to_string()).or_default();
+    calls.retain(|&t| t >= window_start);
+    if calls.len() >= AUTH_RATE_LIMIT {
+        return false;
+    }
+    calls.push(now);
+    true
+}
+
+/// Extract client IP from X-Forwarded-For (Railway/nginx) or fall back to peer addr.
+fn client_ip(headers: &HeaderMap) -> String {
+    headers.get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn extract_api_key(headers: &HeaderMap) -> Option<String> {
@@ -1545,11 +1587,39 @@ async fn handle_stream_token(
     (StatusCode::OK, Json(serde_json::json!({ "stream_token": stream_token }))).into_response()
 }
 
+/// DELETE /api/auth/stream-token — revoke all stream tokens for the current user (called on logout).
+async fn handle_revoke_stream_tokens(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED,
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(uid) => uid,
+        None => return StatusCode::UNAUTHORIZED,
+    };
+
+    let _ = sqlx::query("DELETE FROM stream_tokens WHERE user_id = $1")
+        .bind(&user_id).execute(&state.pool).await;
+
+    StatusCode::NO_CONTENT
+}
+
 /// POST /api/auth/signup
 async fn handle_signup(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<SignupRequest>,
 ) -> impl IntoResponse {
+    let ip = client_ip(&headers);
+    if !check_auth_rate_limit(&ip, &state.auth_rate_limits) {
+        return (StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Too many requests. Try again in a minute." }))).into_response();
+    }
     let email = body.email.trim().to_lowercase();
 
     if email.is_empty() || !email.contains('@') {
@@ -1614,8 +1684,14 @@ async fn handle_signup(
 /// POST /api/auth/login
 async fn handle_login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    let ip = client_ip(&headers);
+    if !check_auth_rate_limit(&ip, &state.auth_rate_limits) {
+        return (StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Too many requests. Try again in a minute." }))).into_response();
+    }
     let email = body.email.trim().to_lowercase();
 
     let row = sqlx::query_as::<_, (String, String, String, String, String, i32)>(
@@ -1723,19 +1799,31 @@ async fn handle_claim(
 /// POST /api/telemetry
 async fn handle_telemetry(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<MetricsPayload>,
 ) -> StatusCode {
     let node_id       = payload.node_id.clone();
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
 
-    // Check if the node exists in the database — if it was removed from the fleet,
-    // return 410 Gone so the agent can clear its pairing state.
-    let node_exists: bool = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM nodes WHERE wk_id = $1"
-    ).bind(&node_id).fetch_one(&state.pool).await.unwrap_or(0) > 0;
-    if !node_exists {
-        return StatusCode::GONE; // 410 — agent should clear pairing
+    // Authenticate: require session_token issued during pairing.
+    let bearer = headers.get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+    let bearer = match bearer {
+        Some(t) => t.to_string(),
+        None => return StatusCode::UNAUTHORIZED,
+    };
+
+    // Combined existence + auth check (single indexed query).
+    let stored_token: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT session_token FROM nodes WHERE wk_id = $1"
+    ).bind(&node_id).fetch_optional(&state.pool).await.unwrap_or(None);
+
+    match stored_token {
+        None => return StatusCode::GONE, // 410 — node deleted from fleet
+        Some(ref t) if t != &bearer => return StatusCode::UNAUTHORIZED,
+        _ => {} // token matches — proceed
     }
 
     let duck_row = metrics_row_from_payload(&payload, ts);
@@ -1953,31 +2041,37 @@ async fn handle_fleet_observations(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
+    // Tier-based pattern filtering: community users only see community-tier observations.
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    let allowed = allowed_patterns_for_tier(&tier);
+
     let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50).min(200);
     let state_filter = params.get("state").cloned().unwrap_or_else(|| "open".into());
     let node_id_filter = params.get("node_id").cloned();
 
-    let base = "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms, ack_at_ms, acknowledged_by FROM fleet_observations WHERE tenant_id = $1";
+    let base = "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms, ack_at_ms, acknowledged_by FROM fleet_observations WHERE tenant_id = $1 AND alert_type = ANY($2)";
 
     let rows: Vec<(String, String, String, String, String, String, String, Option<String>, i64, Option<i64>, Option<i64>, Option<String>)> = match (state_filter.as_str(), &node_id_filter) {
         ("all", Some(nid)) => {
-            let sql = format!("{base} AND node_id = $2 ORDER BY fired_at_ms DESC LIMIT $3");
-            sqlx::query_as(&sql).bind(&user_id).bind(nid).bind(limit)
+            let sql = format!("{base} AND node_id = $3 ORDER BY fired_at_ms DESC LIMIT $4");
+            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(nid).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
         ("all", None) => {
-            let sql = format!("{base} ORDER BY fired_at_ms DESC LIMIT $2");
-            sqlx::query_as(&sql).bind(&user_id).bind(limit)
+            let sql = format!("{base} ORDER BY fired_at_ms DESC LIMIT $3");
+            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
         (st, Some(nid)) => {
-            let sql = format!("{base} AND state = $2 AND node_id = $3 ORDER BY fired_at_ms DESC LIMIT $4");
-            sqlx::query_as(&sql).bind(&user_id).bind(st).bind(nid).bind(limit)
+            let sql = format!("{base} AND state = $3 AND node_id = $4 ORDER BY fired_at_ms DESC LIMIT $5");
+            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(st).bind(nid).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
         (st, None) => {
-            let sql = format!("{base} AND state = $2 ORDER BY fired_at_ms DESC LIMIT $3");
-            sqlx::query_as(&sql).bind(&user_id).bind(st).bind(limit)
+            let sql = format!("{base} AND state = $3 ORDER BY fired_at_ms DESC LIMIT $4");
+            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(st).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
     };
@@ -2024,8 +2118,9 @@ async fn handle_acknowledge_observation(
         Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
         Ok(_) => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Observation not found or already resolved" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("update failed: {e}") }))).into_response(),
+        Err(e) => { eprintln!("[observations] update failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
     }
 }
 
@@ -2139,8 +2234,9 @@ async fn handle_resolve_observation(
         Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
         Ok(_) => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Observation not found or already resolved" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("resolve failed: {e}") }))).into_response(),
+        Err(e) => { eprintln!("[observations] resolve failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
     }
 }
 
@@ -2834,7 +2930,38 @@ async fn handle_agent_version(
 
 // ── CORS middleware ───────────────────────────────────────────────────────────
 
-async fn cors(req: Request<Body>, next: Next) -> Response {
+/// Restrictive CORS for dashboard routes — only wicklee.dev and localhost dev server.
+async fn cors_dashboard(req: Request<Body>, next: Next) -> Response {
+    let origin = req.headers().get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let allowed = matches!(origin.as_str(),
+        "https://wicklee.dev" | "http://localhost:3000" | "http://localhost:5173"
+    );
+    let allow_origin = if allowed { origin.as_str() } else { "https://wicklee.dev" };
+    let origin_owned = allow_origin.to_string();
+
+    if req.method() == Method::OPTIONS {
+        return (
+            StatusCode::OK,
+            [
+                (header::ACCESS_CONTROL_ALLOW_ORIGIN,  origin_owned.as_str()),
+                (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, PATCH, DELETE, OPTIONS"),
+                (header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type, authorization"),
+            ],
+        ).into_response();
+    }
+
+    let mut res = next.run(req).await;
+    if let Ok(v) = header::HeaderValue::from_str(&origin_owned) {
+        res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
+    }
+    res
+}
+
+/// Permissive CORS for v1 API routes (external consumers) and agent endpoints.
+async fn cors_open(req: Request<Body>, next: Next) -> Response {
     if req.method() == Method::OPTIONS {
         return (
             StatusCode::OK,
@@ -2847,8 +2974,7 @@ async fn cors(req: Request<Body>, next: Next) -> Response {
     }
 
     let mut res = next.run(req).await;
-    let h = res.headers_mut();
-    h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN,
+    res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN,
         header::HeaderValue::from_static("*"));
     res
 }
@@ -4033,8 +4159,9 @@ async fn handle_create_channel(
             id, channel_type: body.channel_type, name: body.name,
             config_json: body.config_json, verified: false, created_at: ts,
         })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("insert failed: {e}") }))).into_response(),
+        Err(e) => { eprintln!("[alerts] channel insert failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
     }
 }
 
@@ -4091,7 +4218,8 @@ async fn handle_delete_channel(
     match result {
         Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
         Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Channel not found" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
+        Err(e) => { eprintln!("[alerts] channel delete failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
     }
 }
 
@@ -4155,8 +4283,9 @@ async fn handle_create_rule(
             threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
             enabled: true, created_at: ts,
         })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
+        Err(e) => { eprintln!("[alerts] rule insert failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
     }
 }
 
@@ -4214,7 +4343,8 @@ async fn handle_delete_rule(
     match result {
         Ok(r) if r.rows_affected() > 0 => Json(serde_json::json!({ "ok": true })).into_response(),
         Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Rule not found" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
+        Err(e) => { eprintln!("[alerts] rule delete failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
     }
 }
 
@@ -4320,13 +4450,16 @@ async fn handle_paddle_webhook(
                 Json(serde_json::json!({ "error": "Invalid signature" }))).into_response();
         }
     } else {
-        eprintln!("[billing] PADDLE_WEBHOOK_SECRET not set \u{2014} skipping signature verification");
+        eprintln!("[billing] PADDLE_WEBHOOK_SECRET not set \u{2014} rejecting webhook");
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Webhook verification not configured" }))).into_response();
     }
 
     let event: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("Invalid JSON: {e}") }))).into_response(),
+        Err(e) => { eprintln!("[billing] webhook JSON parse failed: {e}");
+            return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid request body" }))).into_response() },
     };
 
     let event_type = event["event_type"].as_str().unwrap_or("");
@@ -4430,7 +4563,8 @@ async fn main() {
         pool:            pool.clone(),
         metrics:         Arc::new(RwLock::new(seed_metrics)),
         clerk_keys:      clerk_keys.clone(),
-        api_rate_limits: Arc::new(Mutex::new(HashMap::new())),
+        api_rate_limits:  Arc::new(Mutex::new(HashMap::new())),
+        auth_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         metrics_tx,
         events_tx,
     };
@@ -4470,17 +4604,15 @@ async fn main() {
         }
     });
 
-    let app = Router::new()
-        .route("/health",                  get(handle_health))
-        .route("/api/agent/version",       get(handle_agent_version))
+    // Dashboard routes — restrictive CORS (wicklee.dev + localhost dev only).
+    let dashboard_routes = Router::new()
         .route("/api/auth/signup",       post(handle_signup))
         .route("/api/auth/login",        post(handle_login))
         .route("/api/auth/me",           get(handle_me))
-        .route("/api/auth/stream-token", get(handle_stream_token))
+        .route("/api/auth/stream-token", get(handle_stream_token).delete(handle_revoke_stream_tokens))
         .route("/api/pair/claim",    post(handle_claim))
         .route("/api/pair/activate", post(handle_activate))
         .route("/api/nodes/:node_id",     delete(handle_delete_node))
-        .route("/api/telemetry",    post(handle_telemetry))
         .route("/api/fleet",              get(handle_fleet))
         .route("/api/fleet/stream",       get(handle_fleet_stream))
         .route("/api/fleet/wes-history",          get(handle_wes_history))
@@ -4491,14 +4623,6 @@ async fn main() {
         .route("/api/fleet/observations",            get(handle_fleet_observations).post(handle_submit_observation))
         .route("/api/fleet/observations/:id/acknowledge", post(handle_acknowledge_observation))
         .route("/api/fleet/observations/:id/resolve",     post(handle_resolve_observation))
-        .route("/api/v1/keys",           post(handle_v1_create_key))
-        .route("/api/v1/keys",           get(handle_v1_list_keys))
-        .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))
-        .route("/api/v1/fleet",          get(handle_v1_fleet))
-        .route("/api/v1/fleet/wes",      get(handle_v1_fleet_wes))
-        .route("/api/v1/nodes/:id",      get(handle_v1_node))
-        .route("/api/v1/route/best",     get(handle_v1_route_best))
-        .route("/api/v1/insights/latest", get(handle_v1_insights_latest))
         .route("/api/alerts/channels",          post(handle_create_channel))
         .route("/api/alerts/channels",          get(handle_list_channels))
         .route("/api/alerts/channels/:id",      delete(handle_delete_channel))
@@ -4509,8 +4633,27 @@ async fn main() {
         .route("/api/nodes/:node_id",    patch(handle_update_node))
         .route("/api/billing/config",    get(handle_billing_config))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
+        .with_state(state.clone())
+        .layer(middleware::from_fn(cors_dashboard));
+
+    // Open routes — permissive CORS. V1 API (external consumers), agent telemetry, health.
+    let open_routes = Router::new()
+        .route("/health",                  get(handle_health))
+        .route("/api/agent/version",       get(handle_agent_version))
+        .route("/api/telemetry",    post(handle_telemetry))
+        .route("/api/v1/keys",           post(handle_v1_create_key))
+        .route("/api/v1/keys",           get(handle_v1_list_keys))
+        .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))
+        .route("/api/v1/fleet",          get(handle_v1_fleet))
+        .route("/api/v1/fleet/wes",      get(handle_v1_fleet_wes))
+        .route("/api/v1/nodes/:id",      get(handle_v1_node))
+        .route("/api/v1/route/best",     get(handle_v1_route_best))
+        .route("/api/v1/insights/latest", get(handle_v1_insights_latest))
         .with_state(state)
-        .layer(middleware::from_fn(cors));
+        .layer(middleware::from_fn(cors_open));
+
+    let app = dashboard_routes.merge(open_routes)
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)); // 2 MB global limit
 
     let port: u16 = std::env::var("PORT")
         .ok().and_then(|p| p.parse().ok()).unwrap_or(8080);

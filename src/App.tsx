@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { version } from '../package.json';
 import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff, RefreshCw } from 'lucide-react';
-import { useAuth, useUser } from '@clerk/clerk-react';
+// NOTE: @clerk/clerk-react is NOT imported here. It's lazy-loaded via
+// CloudApp.tsx to prevent Clerk's module init from running in agent builds.
 import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
@@ -15,11 +16,13 @@ import ScaffoldingView from './components/ScaffoldingView';
 import AIInsights from './components/AIInsights';
 import TeamManagement from './components/TeamManagement';
 import LandingPage from './components/LandingPage';
-import SignInPage from './components/SignInPage';
-import SignUpPage from './components/SignUpPage';
+// SignInPage/SignUpPage import @clerk/clerk-react — lazy-load to keep Clerk
+// out of the agent bundle.
+const SignInPage = React.lazy(() => import('./components/SignInPage'));
+const SignUpPage = React.lazy(() => import('./components/SignUpPage'));
 import ProfileView from './components/ProfileView';
 import SecurityView from './components/SecurityView';
-import APIKeysView from './components/APIKeysView';
+const APIKeysView = React.lazy(() => import('./components/APIKeysView'));
 import PreferencesView from './components/PreferencesView';
 import SettingsView from './components/SettingsView';
 import { useSettings } from './hooks/useSettings';
@@ -28,7 +31,7 @@ import MetricsPage from './pages/MetricsPage';
 import DocsPage from './pages/DocsPage';
 import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
-import AddNodeModal from './components/AddNodeModal';
+const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
 import { usePermissions } from './hooks/usePermissions';
 import BlogListing from './components/BlogListing';
 import BlogPost from './components/BlogPost';
@@ -377,10 +380,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
 
   // Clerk sign-in / sign-up routes
   if (currentPath === '/sign-in' || currentPath.startsWith('/sign-in/')) {
-    return <SignInPage onNavigate={navigate} />;
+    return <React.Suspense fallback={null}><SignInPage onNavigate={navigate} /></React.Suspense>;
   }
   if (currentPath === '/sign-up' || currentPath.startsWith('/sign-up/')) {
-    return <SignUpPage onNavigate={navigate} />;
+    return <React.Suspense fallback={null}><SignUpPage onNavigate={navigate} /></React.Suspense>;
   }
 
   // Metrics reference route — public, no auth required
@@ -496,7 +499,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       case DashboardTab.SECURITY:
         return <SecurityView byokMode={byokMode} setByokMode={setByokMode} userApiKey={userApiKey} setUserApiKey={setUserApiKey} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onGenerateCode={generatePairingCode} onDisconnect={disconnectFleet} />;
       case DashboardTab.API_KEYS:
-        return <APIKeysView />;
+        return <React.Suspense fallback={null}><APIKeysView /></React.Suspense>;
       case DashboardTab.PREFERENCES:
         return <PreferencesView currentTenant={currentTenant} theme={theme} />;
       case DashboardTab.PRICING:
@@ -557,14 +560,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   );
 };
 
-// Thin cloud-build bridge — calls Clerk hooks inside ClerkProvider context.
-// Isolated into its own component so useAuth/useUser are never invoked in
-// the agent binary where ClerkProvider is absent from the render tree.
-const CloudApp: React.FC = () => {
-  const { isSignedIn, isLoaded, getToken } = useAuth();
-  const { user } = useUser();
-  return <AppCore isSignedIn={isSignedIn} isLoaded={isLoaded} getToken={getToken} user={user} />;
-};
+// Lazy-loaded Clerk bridge — keeps @clerk/clerk-react out of the agent bundle.
+const LazyCloudApp = React.lazy(() => import('./components/CloudApp'));
 
 // Exported root component.
 // Agent builds: skip Clerk hooks entirely and render with local-mode defaults.
@@ -572,7 +569,7 @@ const CloudApp: React.FC = () => {
 const App: React.FC = () =>
   IS_AGENT
     ? <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />
-    : <CloudApp />;
+    : <React.Suspense fallback={null}><LazyCloudApp AppCore={AppCore} /></React.Suspense>;
 
 // ── DashboardShell ────────────────────────────────────────────────────────────
 // Inner component that lives inside FleetStreamProvider so it can call useFleetStream().
@@ -666,12 +663,14 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
         onGenerate={generatePairingCode}
         onDisconnect={disconnectFleet}
       />
-      <AddNodeModal
-        isOpen={isAddNodeModalOpen}
-        onClose={() => setIsAddNodeModalOpen(false)}
-        onNodeAdded={handleNodeAdded}
-        cloudUrl={CLOUD_URL}
-      />
+      <React.Suspense fallback={null}>
+        <AddNodeModal
+          isOpen={isAddNodeModalOpen}
+          onClose={() => setIsAddNodeModalOpen(false)}
+          onNodeAdded={handleNodeAdded}
+          cloudUrl={CLOUD_URL}
+        />
+      </React.Suspense>
       <Sidebar
         activeTab={activeTab}
         setActiveTab={handleTabChange}

@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.3",
+    "@types/dompurify": "^3.0.5",
+    "dompurify": "^3.3.3",
     "lucide-react": "^0.562.0",
     "marked": "^17.0.4",
     "react": "^19.2.3",

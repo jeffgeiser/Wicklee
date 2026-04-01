@@ -227,7 +227,7 @@ pub(crate) async fn proxy_passthrough(
 
     let method  = req.method().clone();
     let headers = req.headers().clone();
-    let body_bytes = axum::body::to_bytes(req.into_body(), 64 * 1024 * 1024)
+    let body_bytes = axum::body::to_bytes(req.into_body(), 16 * 1024 * 1024) // 16 MB
         .await
         .unwrap_or_default();
 

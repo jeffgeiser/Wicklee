@@ -1763,12 +1763,20 @@ fn save_config(cfg: &WickleeConfig) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(content) = toml::to_string(cfg) {
-        let _ = std::fs::write(&path, content);
+        let _ = std::fs::write(&path, &content);
+        // Restrict config file to owner-only (0600) — it contains session_token.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
     }
 }
 
 fn generate_code() -> String {
-    format!("{:06}", now_ms() % 1_000_000)
+    use rand::Rng;
+    let n: u32 = rand::thread_rng().gen_range(0..1_000_000);
+    format!("{:06}", n)
 }
 
 /// POST { code, node_id, fleet_url } to the cloud backend.
@@ -3919,7 +3927,14 @@ async fn main() {
                     .route("/api/chat",     axum::routing::post(proxy::proxy_ollama_streaming))
                     .fallback(proxy::proxy_passthrough)
                     .with_state(ps_clone)
-                    .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any));
+                    .layer(CorsLayer::new()
+                        .allow_origin([
+                            "http://localhost:7700".parse::<axum::http::HeaderValue>().unwrap(),
+                            "http://127.0.0.1:7700".parse::<axum::http::HeaderValue>().unwrap(),
+                            "http://localhost:3000".parse::<axum::http::HeaderValue>().unwrap(),
+                        ])
+                        .allow_methods(Any)
+                        .allow_headers(Any));
                 tokio::spawn(async move {
                     if let Err(e) = axum::serve(proxy_listener, proxy_app).await {
                         eprintln!("[proxy] Server exited: {e}");
