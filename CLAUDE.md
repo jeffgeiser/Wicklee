@@ -181,6 +181,25 @@ When adding new API endpoints, metrics fields, or observation patterns, update A
 - **Two-column Diagnostics rail (localhost)** — Column 1: core hardware. Column 2: inference + latency metrics. Metrics conditionally shown by runtime.
 - **TTFT resolution priority:** vLLM histogram (production) → proxy rolling avg (production) → Ollama probe (synthetic baseline)
 
+### Pro Features (complete)
+- **Custom Alert Thresholds** — 2 new event types: `ttft_regression` (500ms default), `throughput_low` (5 tok/s default). Backend evaluation + frontend Settings UI.
+- **Persistent Insight Cards (Pro+)** — `obsCacheRef` seeded from `useFleetObservations` on page load. Dismiss → `POST /api/fleet/observations/:id/acknowledge`. Resolved History (24h) on Triage tab.
+- **Node Naming & Tags** — Settings UI + `PATCH /api/nodes/:node_id` + SSE sync
+- **Pattern Tier Filtering** — `evaluatePatterns()` filters by user tier. Community: 9 patterns, Pro: 18
+
+### Security Hardening (v0.7.10)
+- **Agent CORS restricted** — `allow_origin(Any)` → explicit localhost allowlist. Prevents JS telemetry theft from external domains.
+- **Localhost-only bind** — Default `127.0.0.1:7700`. LAN access opt-in via `bind_address = "0.0.0.0"` in config.toml.
+- **Fleet removal detection** — Cloud returns 410 Gone when node deleted; agent clears pairing and stops push loop.
+- **FSL-1.1-Apache-2.0 License** — protects commercial tiers. Converts to Apache 2.0 after 4 years.
+
+### UI / Design
+- **Dark mode enforced** — Theme toggle removed. `<html class="dark">` in index.html. "Hardware-Centric Dark" is the only mode.
+- **Action buttons** — all CTA buttons use `bg-blue-600` matching active sidebar nav.
+- **Sidebar icons centered** in collapsed rail.
+- **Bell icon removed** from header.
+- **Empty state** — lightning icon removed, onboarding copy clarified, step badges blue.
+
 ### WES Color Scale (updated — replaces blue with emerald)
 - `> 10` → Emerald (`text-emerald-400`) — Excellent
 - `3–10` → Light Green (`text-green-300`) — Good
