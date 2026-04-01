@@ -509,6 +509,10 @@ pub(crate) struct WickleeConfig {
     /// Explicit port overrides — bypasses process-based auto-detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) runtime_ports: Option<RuntimePortsConfig>,
+    /// Network bind address. Default "127.0.0.1" (localhost only).
+    /// Set to "0.0.0.0" to accept LAN connections (proxy mode, remote dashboard).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bind_address: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1748,7 +1752,7 @@ fn load_or_create_config() -> WickleeConfig {
     }
 
     // ── First-run: generate a new identity ───────────────────────────────────
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None };
     save_config(&cfg);
     cfg
 }
@@ -2572,6 +2576,7 @@ async fn handle_pair_generate(
                 session_token: Some(token),
                 ollama_proxy: None,
                 runtime_ports: None,
+                bind_address: None,
             });
         }
     });
@@ -2600,6 +2605,7 @@ async fn handle_pair_claim(
             session_token: state.cloud_session_token.clone(),
             ollama_proxy: None,
             runtime_ports: None,
+            bind_address: None,
         });
         state.status = PairingStatus::Connected { fleet_url };
     }
@@ -2612,7 +2618,7 @@ async fn handle_pair_disconnect(
     let mut state = pairing_state.lock().unwrap();
     state.status              = PairingStatus::Unpaired;
     state.cloud_session_token = None;
-    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None });
+    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None });
     Json(pairing_response(&state))
 }
 
@@ -3839,6 +3845,7 @@ async fn main() {
                     session_token: Some(token),
                     ollama_proxy: config.ollama_proxy.clone(),
                     runtime_ports: config.runtime_ports.clone(),
+                    bind_address: config.bind_address.clone(),
                 });
             }
             None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
@@ -4218,8 +4225,16 @@ async fn main() {
         },
     );
 
+    // Restrict CORS to localhost origins only. Prevents malicious webpages on
+    // external domains from reading telemetry data via JavaScript.
+    // When bind_address is 0.0.0.0, LAN users can still access via browser
+    // navigation — CORS only blocks cross-origin JS fetch/XHR.
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin([
+            "http://localhost:7700".parse::<axum::http::HeaderValue>().unwrap(),
+            "http://127.0.0.1:7700".parse::<axum::http::HeaderValue>().unwrap(),
+            "http://localhost:3000".parse::<axum::http::HeaderValue>().unwrap(),  // dev server
+        ])
         .allow_methods(Any)
         .allow_headers(Any);
 
@@ -4280,7 +4295,11 @@ async fn main() {
     // `curl | sh` upgrades seamless — no manual "stop the old agent" step.
     let mut eviction_attempted = false;
     let listener = loop {
-        match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
+        // Default to 127.0.0.1 (localhost only) for security. Agents running as
+        // a fleet node should set bind_address = "0.0.0.0" in config.toml to accept
+        // LAN connections (e.g., for proxy mode or remote dashboard access).
+        let bind_addr = config.bind_address.as_deref().unwrap_or("127.0.0.1");
+        match tokio::net::TcpListener::bind(format!("{bind_addr}:{port}")).await {
             Ok(l) => break l,
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 #[cfg(not(target_os = "windows"))]
