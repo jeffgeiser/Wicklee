@@ -13,6 +13,7 @@ build/
 
 # Environment Variables
 .env
+.env.agent
 .env.local
 .env.development.local
 .env.test.local

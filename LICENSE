@@ -1,0 +1,74 @@
+Functional Source License, Version 1.1, Apache 2.0 Future License
+
+Abbreviation
+
+    FSL-1.1-Apache-2.0
+
+Notice
+
+    Copyright 2024-2026 Jeff Geiser (Wicklee)
+
+Terms and Conditions
+
+Licensor:             Jeff Geiser
+
+Licensed Work:        Wicklee
+                      The Licensed Work is copyright 2024-2026 Jeff Geiser.
+
+Additional Use Grant: You may make use of the Licensed Work, provided that
+                      you do not use the Licensed Work for a GPU Fleet
+                      Monitoring Service.
+
+                      A "GPU Fleet Monitoring Service" is a commercial
+                      offering that allows third parties to access the
+                      functionality of the Licensed Work by providing
+                      fleet telemetry aggregation, hardware observation
+                      patterns, or inference efficiency scoring as a
+                      hosted or managed service.
+
+Change Date:          Four years from the date the Licensed Work is
+                      published.
+
+Change License:       Apache License, Version 2.0
+
+For information about alternative licensing arrangements for the Licensed Work,
+please contact: jeff@wicklee.dev
+
+Notice
+
+THE LICENSED WORK IS PROVIDED "AS IS". LICENSOR HEREBY DISCLAIMS ALL
+WARRANTIES, WHETHER EXPRESS, IMPLIED, STATUTORY OR OTHERWISE, WITH RESPECT TO
+THE LICENSED WORK, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+LICENSOR BE LIABLE FOR ANY DAMAGES OF ANY KIND, INCLUDING BUT NOT LIMITED TO
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING BUT NOT LIMITED TO PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THE LICENSED
+WORK, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+Functional Source License Terms
+
+1. Grant of Rights
+
+    (a) Subject to the terms and conditions of this License, Licensor hereby
+    grants You a non-exclusive, worldwide, non-transferable, non-sublicensable,
+    revocable license to use, copy, modify, create derivative works of, and
+    redistribute the Licensed Work, subject to the Additional Use Grant above.
+
+    (b) You may not move, change, disable, or circumvent the license key
+    functionality in the Licensed Work, and you may not remove or obscure any
+    functionality in the Licensed Work that is protected by the license key.
+
+2. Change Date and Change License
+
+    On the Change Date, or the fourth anniversary of the first publicly
+    available distribution of a specific version of the Licensed Work under
+    this License, whichever comes first, the Licensed Work will be made
+    available under the Change License.
+
+3. Termination
+
+    If You violate the terms of this License, Your rights under this License
+    will terminate automatically.
