@@ -90,7 +90,7 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
           <button className="px-6 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-bold rounded-xl transition-all border border-gray-200 dark:border-transparent">
             Reset Defaults
           </button>
-          <button className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20">
+          <button className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20">
             Save Preferences
           </button>
         </div>

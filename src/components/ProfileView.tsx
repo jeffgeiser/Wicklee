@@ -27,7 +27,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({ currentUser }) => {
               Principal Systems Engineer at Wicklee. Focused on distributed inference scaling and thermal-aware orchestration for low-latency AI applications.
             </p>
           </div>
-          <button className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20">
+          <button className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20">
             Edit Profile
           </button>
         </div>

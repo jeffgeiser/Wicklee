@@ -147,7 +147,7 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
           </button>
           <button
             onClick={onSignUp}
-            className="px-4 sm:px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
+            className="px-4 sm:px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
           >
             Get Started
           </button>

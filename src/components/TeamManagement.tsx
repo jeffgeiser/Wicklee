@@ -22,7 +22,7 @@ const TeamManagement: React.FC<TeamManagementProps> = ({ tenantId, currentUser }
           <h3 className="text-xl font-bold text-gray-900 dark:text-white">Team Members</h3>
           <p className="text-sm text-gray-500 mt-1">Manage permissions and identities for {tenantId}</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-blue-500/20">
+        <button className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-blue-500/20">
           <UserPlus className="w-4 h-4" />
           Invite Member
         </button>
