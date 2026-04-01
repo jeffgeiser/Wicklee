@@ -37,30 +37,6 @@ const INSIGHT_TIER_GATE: Record<number, InsightsTier> = {
   14: 'predictive',     // Sovereignty Audit        — Enterprise
 };
 
-// ── Dev tier override ──────────────────────────────────────────────────────────
-
-/**
- * URL param override for local development — never affects production users.
- * Usage: append ?devTier=pro (or team / enterprise) to the URL.
- * Clerk publicMetadata is the authoritative source in production.
- *
- * Example: http://localhost:5173/?devTier=team
- */
-function getDevTierOverride(): SubscriptionTier | null {
-  try {
-    // Only allow devTier override on localhost — never on production (wicklee.dev)
-    const host = window.location.hostname;
-    if (host !== 'localhost' && host !== '127.0.0.1') return null;
-    const p = new URLSearchParams(window.location.search).get('devTier');
-    if (p === 'community' || p === 'pro' || p === 'team' || p === 'enterprise') {
-      return p as SubscriptionTier;
-    }
-  } catch {
-    /* SSR or window unavailable */
-  }
-  return null;
-}
-
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export const usePermissions = (user: User | null) => {
@@ -69,12 +45,9 @@ export const usePermissions = (user: User | null) => {
     return roles.includes(user.role);
   };
 
-  // Resolve subscription tier:
-  //   1. ?devTier= URL param (dev/testing only)
-  //   2. user.tier from Clerk publicMetadata
-  //   3. Default: community
-  const subscriptionTier: SubscriptionTier =
-    getDevTierOverride() ?? user?.tier ?? 'community';
+  // Resolve subscription tier from Clerk publicMetadata (set by Paddle webhook).
+  // Default: community (free tier).
+  const subscriptionTier: SubscriptionTier = user?.tier ?? 'community';
 
   const insightsTier: InsightsTier = SUBSCRIPTION_TO_INSIGHTS[subscriptionTier];
 
