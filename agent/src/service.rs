@@ -268,7 +268,7 @@ pub(crate) async fn install_service() {
                 .status().await
                 .map(|s| s.success())
                 .unwrap_or(false);
-            println!("✓ Wicklee Sentinel installed as a launchd service.");
+            println!("✓ Wicklee installed as a launchd service.");
             println!("  Starts automatically on boot (runs as root).");
             println!("  Plist: {plist_path}");
             println!("  Logs:  /var/log/wicklee.log");
@@ -300,7 +300,7 @@ pub(crate) async fn install_service() {
 
         let unit = format!(
 "[Unit]\n\
-Description=Wicklee Sentinel Agent\n\
+Description=Wicklee Agent\n\
 After=network.target\n\
 \n\
 [Service]\n\
@@ -345,7 +345,7 @@ WantedBy=multi-user.target\n"
             .status().await;
         match status {
             Ok(s) if s.success() => {
-                println!("✓ Wicklee Sentinel installed as a systemd service.");
+                println!("✓ Wicklee installed as a systemd service.");
                 println!("  Starts now and automatically on every boot.");
                 println!("  Unit: {unit_path}");
                 println!("  To remove: sudo wicklee --uninstall-service");
@@ -361,7 +361,7 @@ WantedBy=multi-user.target\n"
             .args(["create", "WickleeSentinel",
                    "binPath=", &exe_str,
                    "start=", "auto",
-                   "DisplayName=", "Wicklee Sentinel"])
+                   "DisplayName=", "Wicklee Agent"])
             .status().await;
         match status {
             Ok(s) if s.success() => {}
@@ -373,14 +373,14 @@ WantedBy=multi-user.target\n"
             Err(e) => { eprintln!("error: sc: {e}"); return; }
         }
         let _ = tokio::process::Command::new("sc")
-            .args(["description", "WickleeSentinel", "Wicklee Sentinel Agent"])
+            .args(["description", "WickleeSentinel", "Wicklee Agent"])
             .status().await;
         let start = tokio::process::Command::new("sc")
             .args(["start", "WickleeSentinel"])
             .status().await;
         match start {
             Ok(s) if s.success() => {
-                println!("+ Wicklee Sentinel installed and started as a Windows service.");
+                println!("+ Wicklee installed and started as a Windows service.");
                 println!("  To remove: wicklee --uninstall-service  (run as Administrator)");
             }
             Ok(s) => eprintln!("warning: sc start exited with status {s} — service registered but not started"),

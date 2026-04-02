@@ -20,7 +20,7 @@ fi
 
 set -euo pipefail
 
-# ── Wicklee Sentinel — one-line installer ─────────────────────────────────────
+# ── Wicklee — one-line installer ───────────────────────────────────────────────
 #
 #   curl -fsSL https://wicklee.dev/install.sh | bash
 #

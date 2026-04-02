@@ -41,7 +41,7 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
     // ── Banner ────────────────────────────────────────────────────────────────
     println!("{top}");
     println!("{blank_row}");
-    println!("{}", row("", &format!("Wicklee Sentinel  ·  v{}", env!("CARGO_PKG_VERSION"))));
+    println!("{}", row("", &format!("Wicklee Agent  ·  v{}", env!("CARGO_PKG_VERSION"))));
     println!("{}", row("", &format!("http://localhost:{port}")));
     println!("{blank_row}");
     println!("{sep}");
