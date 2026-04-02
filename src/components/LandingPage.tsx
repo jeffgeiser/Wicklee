@@ -299,8 +299,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
         {/* Part 3 — Sovereign by design */}
         <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
-          <p className="text-xs font-bold text-green-400 uppercase tracking-widest mb-4">Architecture</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-10 tracking-tight">Sovereign by design.</h2>
+          <p className="text-xs font-bold text-green-400 uppercase tracking-widest mb-4 text-center">Architecture</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-10 tracking-tight text-center">Sovereign by design.</h2>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-start">
             {/* Left — paragraph */}
             <div className="space-y-4 text-gray-400 text-sm sm:text-base leading-relaxed">
@@ -360,9 +360,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       {/* Observe Without Interfering Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
-          <p className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4">Zero Interference</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight">Observe without interfering.</h2>
-          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mb-10">
+          <p className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4 text-center">Zero Interference</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Observe without interfering.</h2>
+          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
             Wicklee is designed not to sit in your inference path by default.
             We use a lightweight synthetic probe (20 tokens every ~30 seconds) to status your models while keeping your real traffic private and untouched.
             For users who need deeper real-traffic visibility — true RPS, queue depth, exact KV cache hit rate, production latency histograms — enable the optional inline proxy: a transparent layer with near-zero overhead.
@@ -428,9 +428,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       {/* Grows With You Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
-          <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-4">Scale</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight">Grows with you — from local to enterprise.</h2>
-          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mb-10">
+          <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-4 text-center">Scale</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Grows with you — from local to enterprise.</h2>
+          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
             Start 100% locally with full sovereignty.
             When your fleet scales or your organization requires enterprise observability, Wicklee becomes the bridge — enriching your existing tools with the hardware context they're missing.
           </p>
