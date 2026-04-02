@@ -396,6 +396,14 @@ export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
  */
 export type SubscriptionTier = 'community' | 'pro' | 'team' | 'enterprise';
 
+/** OpenTelemetry export configuration (Team+ tier). */
+export interface OtelConfig {
+  enabled: boolean;
+  endpoint_url: string;
+  auth_headers: string;  // JSON string: {"Authorization": "Bearer xxx"}
+  export_interval_s: number;
+}
+
 /**
  * Insights capability level derived from SubscriptionTier.
  * Controls which insight cards render vs. show locked shells.

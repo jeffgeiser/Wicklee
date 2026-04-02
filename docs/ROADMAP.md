@@ -26,9 +26,11 @@ Postgres time-series storage, 5-minute rollups, 90-day history, fleet alerting w
 ### Platform Support
 macOS (Apple Silicon + Intel), Linux (x86_64 + aarch64), Windows, NVIDIA GPU builds with NVML.
 
----
+### Local MCP Server
+JSON-RPC 2.0 endpoint (`POST /mcp`) on the agent for AI agents (Cursor, Claude Desktop) to query node status, inference state, active models, observations, and thermal data. Zero new dependencies. All tiers.
 
-## In Progress
+### OpenTelemetry Export
+OTLP HTTP exporter on the cloud backend. 8 gauges per node (GPU utilization, power, tok/s, WES, thermal penalty, memory pressure, TTFT, inference state) pushed to configured endpoints. Prometheus scrape endpoint. Team tier.
 
 ### Agent API & Integrations
 REST API for fleet telemetry. AI agent discovery via `llms.txt`, OpenAPI spec, and structured endpoint metadata.
@@ -38,13 +40,14 @@ User-configurable thresholds for TTFT regression, throughput, and thermal events
 
 ---
 
+## In Progress
+
+### Cloud MCP Server
+Fleet-aggregated MCP endpoint for remote AI agents. Fleet status, multi-node routing, cross-node pattern correlation. Team tier.
+
+---
+
 ## Planned
-
-### OpenTelemetry Export
-OTLP exporter for forwarding Wicklee telemetry to Datadog, Grafana, New Relic, and other observability platforms.
-
-### MCP Server
-Model Context Protocol integration for AI agents to query fleet state, route inference, and receive hardware-aware recommendations.
 
 ### Kubernetes Operator
 Helm chart and operator for automated Wicklee agent deployment across GPU node pools.
