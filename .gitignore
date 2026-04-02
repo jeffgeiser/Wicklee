@@ -44,6 +44,17 @@ Cargo.lock
 .claude/
 !agent/Cargo.lock
 
-# Local progress / notes (never commit)
+# Internal docs — kept locally, not tracked in public repo.
+# These contain architecture internals, pricing details, security audit
+# specifics, and development history that shouldn't be public.
+CLAUDE.md
+HANDOVER.md
+docs/SPEC.md
+docs/TIERS.md
+docs/INSIGHTS.md
+docs/metrics.md
+docs/progress.md
+docs/progress-archive.md
+docs/SECURITY.md
 docs/PROGRESS.md
 docs/Progress*.rtf

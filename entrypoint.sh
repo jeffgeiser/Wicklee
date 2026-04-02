@@ -25,6 +25,9 @@ else
 fi
 export RESOLVER
 
-envsubst '$PORT $RESOLVER' < /etc/nginx/conf.d/nginx.conf.template \
+# Backend hostname — set via Railway env var, falls back to Railway private networking.
+export BACKEND_HOST="${BACKEND_HOST:-vibrant-fulfillment.railway.internal:8080}"
+
+envsubst '$PORT $RESOLVER $BACKEND_HOST' < /etc/nginx/conf.d/nginx.conf.template \
   > /etc/nginx/conf.d/default.conf
 exec nginx -g 'daemon off;'
