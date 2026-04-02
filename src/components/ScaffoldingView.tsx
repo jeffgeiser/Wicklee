@@ -29,7 +29,7 @@ wicklee-agent register --backend-url $VITE_WICKLEE_AGENT_URL --runtime metal`
       setup: `# JetPack 6.0+ Required
 # Low-power autonomous mode
 sudo apt install wicklee-agent-jetson
-wicklee-agent register --sentinel-mode autonomous`
+wicklee-agent register --mode autonomous`
     }
   };
 
@@ -190,7 +190,7 @@ async fn main() {
               <ShieldCheck className="w-5 h-5 text-cyan-400" />
               <div className="flex items-center gap-2">
                 <h3 className="font-semibold text-gray-200">Global Routing Policy</h3>
-                {/* Sentinel Dot */}
+                {/* Status Dot */}
                 <div className="w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_#22d3ee] animate-pulse"></div>
               </div>
             </div>

@@ -1,4 +1,4 @@
-# Wicklee Sentinel — one-line Windows installer
+# Wicklee — one-line Windows installer
 #
 #   irm https://wicklee.dev/install.ps1 | iex
 #

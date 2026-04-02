@@ -7,6 +7,7 @@
 ## Docs
 
 - [Full Documentation](https://wicklee.dev/llms-full.txt)
+- [Documentation (Markdown)](https://wicklee.dev/docs.md)
 - [API Reference (Markdown)](https://wicklee.dev/api.md)
 - [OpenAPI Spec](https://wicklee.dev/openapi.json)
 - [Metrics Reference](https://wicklee.dev/metrics.md)

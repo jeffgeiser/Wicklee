@@ -390,6 +390,39 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
       </section>
 
+      {/* Built for Agents & LLMs Section */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
+        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">MCP</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Built for agents &amp; LLMs.</h2>
+          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
+            Wicklee includes a Local MCP Server (available to everyone) so AI agents and tools like Claude Desktop and Cursor
+            can directly query your fleet status, WES scores, thermal state, and observations — all while staying fully on-device.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl mx-auto mb-8">
+            {[
+              { tool: 'get_node_status', desc: 'Full hardware + inference snapshot' },
+              { tool: 'get_inference_state', desc: 'Live/idle/busy with sensor context' },
+              { tool: 'get_active_models', desc: 'Models across Ollama, vLLM, llama.cpp' },
+              { tool: 'get_observations', desc: 'Thermal, power, memory patterns' },
+              { tool: 'get_metrics_history', desc: '1-hour rolling telemetry buffer' },
+              { tool: 'wicklee://node/*', desc: 'MCP resources for live metrics' },
+            ].map((t) => (
+              <div key={t.tool} className="p-3 bg-gray-800/40 border border-gray-700/50 rounded-xl">
+                <p className="text-xs font-mono text-blue-400 mb-1">{t.tool}</p>
+                <p className="text-[10px] text-gray-500">{t.desc}</p>
+              </div>
+            ))}
+          </div>
+          <div className="text-center">
+            <div className="inline-block bg-gray-950 border border-gray-800 rounded-xl px-5 py-3 font-mono text-xs text-gray-400">
+              <span className="text-cyan-400">POST</span> localhost:7700/mcp
+              <span className="text-gray-600 ml-2">// JSON-RPC 2.0 · no auth · all tiers</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* The Programmable Fleet Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="text-center mb-4">

@@ -290,7 +290,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
                 </span>
               </h4>
               <p className="text-sm text-gray-500 mt-0.5">
-                On-premise deployment. No outbound telemetry. Sentinel Proxy for inference tracing,
+                On-premise deployment. No outbound telemetry. Inline proxy for inference tracing,
                 Kubernetes Operator, Prometheus export, SSO/SAML, signed PDF audits, and SIEM integration.
               </p>
             </div>
