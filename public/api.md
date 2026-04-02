@@ -47,7 +47,34 @@ The agent exposes a local MCP server for AI agents (Cursor, Claude Desktop, cust
 | `wicklee://node/metrics` | Live MetricsPayload JSON |
 | `wicklee://node/thermal` | Thermal state + WES penalty values |
 
-### Example
+### Connect to Claude Desktop
+
+Config file: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
+
+```json
+{
+  "mcpServers": {
+    "wicklee": {
+      "command": "/opt/homebrew/bin/npx",
+      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"],
+      "env": {
+        "HOME": "/Users/YOUR_USERNAME",
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    }
+  }
+}
+```
+
+Requires Node.js. Use `which npx` to find the correct npx path. Fully quit Claude Desktop (Cmd+Q) and relaunch after editing.
+
+### Connect to Claude Code
+
+```bash
+claude mcp add wicklee -- npx -y mcp-remote http://localhost:7700/mcp
+```
+
+### Test with curl
 
 ```bash
 curl -X POST http://localhost:7700/mcp \

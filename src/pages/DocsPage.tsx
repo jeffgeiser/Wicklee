@@ -1385,7 +1385,34 @@ curl https://wicklee.dev/api/v1/fleet \\
             </div>
 
             <div>
-              <p className="font-semibold text-white mb-1">Example</p>
+              <p className="font-semibold text-white mb-2">Connect to Claude Desktop</p>
+              <p className="mb-2">Add Wicklee to your Claude Desktop config. Edit <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) or <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows):</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+{`{
+  "mcpServers": {
+    "wicklee": {
+      "command": "/opt/homebrew/bin/npx",
+      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"],
+      "env": {
+        "HOME": "/Users/YOUR_USERNAME",
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    }
+  }
+}`}
+              </pre>
+              <p className="text-gray-500 text-xs">Requires Node.js. Use <code>which npx</code> to find the correct path for your system. Fully quit Claude Desktop (Cmd+Q) and relaunch after editing.</p>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Connect to Claude Code</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{`claude mcp add wicklee -- npx -y mcp-remote http://localhost:7700/mcp`}
+              </pre>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-1">Test with curl</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
 {`curl -X POST http://localhost:7700/mcp \\
   -H "Content-Type: application/json" \\
