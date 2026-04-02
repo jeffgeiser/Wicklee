@@ -87,6 +87,9 @@ For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates 
 | Patterns | 9 | 18 | 18 |
 | Alerts | — | Slack, Email | Slack, Email, PagerDuty |
 | API | — | ✅ | ✅ |
+| Local MCP | ✅ | ✅ | ✅ |
+| Cloud MCP | — | — | ✅ |
+| OTel + Prometheus | — | — | ✅ |
 
 To pair a node: open `localhost:7700` and click **Connect to Fleet**, or run `wicklee --pair`.
 
@@ -94,20 +97,39 @@ To pair a node: open `localhost:7700` and click **Connect to Fleet**, or run `wi
 
 ## For Agents & LLMs
 
-Wicklee exposes structured telemetry for AI agents:
+Wicklee exposes structured telemetry for AI agents via MCP, REST, and standard discovery files:
 
+- **`POST /mcp`** — MCP (Model Context Protocol) JSON-RPC 2.0 endpoint
+- **`GET /.well-known/mcp.json`** — MCP server manifest
 - **`/llms.txt`** — Lightweight discovery file
-- **`/api.md`** — Markdown API reference
 - **`/openapi.json`** — OpenAPI 3.0 spec
 - **REST API** — Fleet state, WES scores, best-route inference, observations
 
-```bash
-# Get fleet-wide WES scores
-curl -H "X-API-Key: wk_..." https://wicklee.dev/api/v1/fleet/wes
+### MCP Tools (localhost:7700, all tiers)
 
-# Find the most efficient node for inference
-curl -H "X-API-Key: wk_..." https://wicklee.dev/api/v1/route/best
+| Tool | Description |
+|------|-------------|
+| `get_node_status` | Full hardware + inference metrics snapshot |
+| `get_inference_state` | Live/idle/busy state with sensor context |
+| `get_active_models` | Running models across Ollama, vLLM, llama.cpp |
+| `get_observations` | Local hardware pattern evaluation |
+| `get_metrics_history` | 1-hour rolling telemetry buffer |
+
+```bash
+# Query node status via MCP
+curl -X POST http://localhost:7700/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}'
+
+# Get fleet-wide WES scores via REST
+curl -H "X-API-Key: wk_..." https://wicklee.dev/api/v1/fleet/wes
 ```
+
+### Enterprise Bridge (Team tier)
+
+- **OpenTelemetry Export** — OTLP metrics to Datadog, Grafana Cloud, New Relic
+- **Prometheus Endpoint** — `GET /metrics` with API key authentication
+- **Cloud MCP** — Fleet-aggregated MCP for remote AI agents (coming soon)
 
 ---
 
@@ -120,7 +142,8 @@ wicklee (single binary)
 ├── Axum HTTP server (port 7700)
 │   ├── Embedded React dashboard
 │   ├── SSE telemetry stream (1 Hz)
-│   └── WebSocket live charts (10 Hz)
+│   ├── WebSocket live charts (10 Hz)
+│   └── MCP server (JSON-RPC 2.0)
 ├── Hardware harvester (Tokio background tasks)
 │   ├── Apple Silicon: ioreg, powermetrics, pmset, vm_stat
 │   ├── NVIDIA: nvml-wrapper (sudoless)

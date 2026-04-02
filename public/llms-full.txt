@@ -91,6 +91,34 @@ List all permanently dismissed pattern IDs.
 
 ---
 
+## MCP Server (Model Context Protocol)
+
+The agent exposes a JSON-RPC 2.0 MCP endpoint for AI agents. Available on all tiers, localhost only, no auth required.
+
+### POST /mcp
+JSON-RPC 2.0 endpoint. Content-Type: application/json.
+
+Tools:
+- `get_node_status` — Full MetricsPayload snapshot (~60 fields: CPU, GPU, memory, power, thermal, inference state, model, WES penalty, tok/s)
+- `get_inference_state` — Current inference state (live/idle-spd/busy/idle) with which detection tier matched and sensor values
+- `get_active_models` — List of loaded models across Ollama (model, size, quantization, tok/s), vLLM (model, requests, cache), llama.cpp (model, tok/s, slots)
+- `get_observations` — Evaluates local patterns (A: Thermal Drain, B: Phantom Load, J: Swap Pressure, L: PCIe Degradation) against 1h DuckDB buffer
+- `get_metrics_history` — 1-hour rolling telemetry (redirects to REST /api/history)
+
+Resources:
+- `wicklee://node/metrics` — Live MetricsPayload JSON
+- `wicklee://node/thermal` — Thermal state, penalty_avg, penalty_peak, thermal_source, sample_count
+
+Example request:
+```json
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}
+```
+
+### GET /.well-known/mcp.json
+MCP server discovery manifest. Returns server name, version, transport, and capabilities.
+
+---
+
 ## Fleet API v1
 
 Base URL: `https://wicklee.dev/api/v1`
