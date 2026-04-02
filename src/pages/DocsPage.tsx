@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2 } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {
@@ -109,6 +109,8 @@ const NAV = [
   { id: 'event-feeds', label: 'Event Feeds' },
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
+  { id: 'mcp',         label: 'MCP Server' },
+  { id: 'otel',        label: 'OTel & Prometheus' },
   { id: 'config',      label: 'Configuration' },
   { id: 'sovereignty', label: 'Sovereignty' },
   { id: 'platforms',   label: 'Platform Support' },
@@ -1334,6 +1336,85 @@ curl https://wicklee.dev/api/v1/fleet \\
             <div>
               <p className="font-semibold text-white mb-1">Rate limits</p>
               <p>Community: 60 req/min &nbsp;·&nbsp; Pro: 300 req/min &nbsp;·&nbsp; Team: 600 req/min &nbsp;·&nbsp; Enterprise: unlimited. Rate limits are operational throttles, not feature gates — API access is available on all tiers.</p>
+            </div>
+          </Section>
+
+          {/* ── MCP Server ── */}
+          <Section
+            id="mcp"
+            icon={<Cpu className="w-5 h-5" />}
+            accent="border-cyan-500/20"
+            title="MCP Server"
+          >
+            <p>Wicklee exposes a local <strong className="text-white">Model Context Protocol</strong> server for AI agents (Cursor, Claude Desktop, custom agents). Available on all tiers.</p>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Endpoints</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-800"><Th>Method</Th><Th>Path</Th><Th>Description</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-800"><Td>POST</Td><Td>/mcp</Td><Td>JSON-RPC 2.0 MCP endpoint</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>GET</Td><Td>/.well-known/mcp.json</Td><Td>MCP server discovery manifest</Td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Tools</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-800"><Th>Tool</Th><Th>Description</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-800"><Td>get_node_status</Td><Td>Full hardware + inference metrics snapshot</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_inference_state</Td><Td>Live/idle/busy state with sensor context and tier match</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_active_models</Td><Td>Running models across Ollama, vLLM, llama.cpp</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_observations</Td><Td>Local hardware pattern evaluation (A, B, J, L)</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_metrics_history</Td><Td>1-hour rolling telemetry buffer from DuckDB</Td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Resources</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-800"><Th>URI</Th><Th>Description</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-800"><Td>wicklee://node/metrics</Td><Td>Live MetricsPayload JSON</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>wicklee://node/thermal</Td><Td>Thermal state + WES penalty values</Td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-1">Example</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{`curl -X POST http://localhost:7700/mcp \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}'`}
+              </pre>
+            </div>
+          </Section>
+
+          {/* ── OTel & Prometheus ── */}
+          <Section
+            id="otel"
+            icon={<BarChart2 className="w-5 h-5" />}
+            accent="border-amber-500/20"
+            title="OpenTelemetry & Prometheus"
+          >
+            <p>Export fleet telemetry to enterprise observability platforms. <strong className="text-white">Team tier required.</strong></p>
+
+            <div>
+              <p className="font-semibold text-white mb-2">OpenTelemetry Export</p>
+              <p>The cloud backend pushes OTLP JSON metrics to any OpenTelemetry-compatible collector (Datadog, Grafana Cloud, New Relic). Configure in <strong className="text-white">Settings → OpenTelemetry Export</strong>.</p>
+              <p className="mt-2">8 gauges per node: <code>wicklee.gpu.utilization</code>, <code>wicklee.power.watts</code>, <code>wicklee.inference.tokens_per_second</code>, <code>wicklee.wes.score</code>, <code>wicklee.thermal.penalty</code>, <code>wicklee.memory.pressure</code>, <code>wicklee.inference.ttft_ms</code>, <code>wicklee.inference.state</code></p>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Prometheus Endpoint</p>
+              <p>Pull-based scrape endpoint at <code>GET /metrics</code> with X-API-Key authentication. Returns standard Prometheus text format with the same 7 gauges, labeled by node_id and hostname.</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+{`curl -H "X-API-Key: wk_live_..." https://wicklee.dev/metrics`}
+              </pre>
             </div>
           </Section>
 

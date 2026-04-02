@@ -19,6 +19,41 @@ Auth: None required.
 | GET | /api/pair/status | Pairing status |
 | POST | /api/insights/dismiss | Permanently dismiss a pattern |
 | GET | /api/insights/dismissed | List dismissed patterns |
+| POST | /mcp | MCP (Model Context Protocol) JSON-RPC 2.0 endpoint |
+| GET | /.well-known/mcp.json | MCP server manifest |
+
+## MCP (Model Context Protocol)
+
+The agent exposes a local MCP server for AI agents (Cursor, Claude Desktop, custom agents).
+
+**Endpoint:** `POST http://localhost:7700/mcp`
+**Protocol:** JSON-RPC 2.0
+**Auth:** None (localhost only)
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_node_status` | Full hardware + inference metrics snapshot |
+| `get_inference_state` | Live/idle/busy state with sensor context |
+| `get_active_models` | Running models across Ollama, vLLM, llama.cpp |
+| `get_observations` | Local hardware pattern evaluation (A, B, J, L) |
+| `get_metrics_history` | 1-hour rolling telemetry buffer |
+
+### Resources
+
+| URI | Description |
+|-----|-------------|
+| `wicklee://node/metrics` | Live MetricsPayload JSON |
+| `wicklee://node/thermal` | Thermal state + WES penalty values |
+
+### Example
+
+```bash
+curl -X POST http://localhost:7700/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_inference_state"},"id":1}'
+```
 
 ## Fleet API v1
 
@@ -35,6 +70,9 @@ Auth: `X-API-Key: wk_live_...` header.
 | POST | /api/v1/keys | Create API key | All |
 | GET | /api/v1/keys | List API keys | All |
 | DELETE | /api/v1/keys/{id} | Revoke API key | All |
+| GET | /metrics | Prometheus scrape endpoint (text format) | Team+ |
+| GET | /api/otel/config | OpenTelemetry export configuration | Team+ |
+| PUT | /api/otel/config | Update OTel export settings | Team+ |
 
 ## Response Examples
 
