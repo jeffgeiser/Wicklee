@@ -115,7 +115,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           </span>
         </h1>
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
-          Routing intelligence. True inference cost. Thermal state. Live, across every node. Built for Ollama and vLLM. Install in 60 seconds — nothing to configure.
+          Thermal intelligence. WES (thermally-honest MPG for AI) and 18 observation patterns. No proxy unless you want production-grade metrics. Install in 60 seconds — nothing to configure.
         </p>
         <div className="flex items-center justify-center">
           <button
@@ -127,10 +127,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           </button>
         </div>
         <p className="mt-3 text-xs text-gray-500">
-          Free forever · Up to 3 nodes · No account needed for local-only
+          No account needed for local-only
         </p>
         <p className="mt-1 text-xs text-gray-600">
-          1h real-time local store · 24h cloud relay history
+          100% local by default · Nothing leaves your machine · Optional cloud pairing &amp; enterprise exports
         </p>
       </section>
 
@@ -357,6 +357,39 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
       </section>
 
+      {/* Observe Without Interfering Section */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
+        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+          <p className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4">Zero Interference</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight">Observe without interfering.</h2>
+          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mb-10">
+            Wicklee is designed not to sit in your inference path by default.
+            We use a lightweight synthetic probe (20 tokens every ~30 seconds) to status your models while keeping your real traffic private and untouched.
+            For users who need deeper real-traffic visibility — true RPS, queue depth, exact KV cache hit rate, production latency histograms — enable the optional inline proxy: a transparent layer with near-zero overhead.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl">
+            <div className="p-5 bg-green-500/5 border border-green-500/20 rounded-2xl">
+              <div className="flex items-center gap-2 mb-3">
+                <ShieldCheck className="w-5 h-5 text-green-400" />
+                <h4 className="text-sm font-bold text-green-300 uppercase tracking-wider">Default</h4>
+              </div>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Maximum privacy + zero added latency. Recommended for most users. Your real inference traffic is never touched.
+              </p>
+            </div>
+            <div className="p-5 bg-indigo-500/5 border border-indigo-500/20 rounded-2xl">
+              <div className="flex items-center gap-2 mb-3">
+                <Activity className="w-5 h-5 text-indigo-400" />
+                <h4 className="text-sm font-bold text-indigo-300 uppercase tracking-wider">With Proxy</h4>
+              </div>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Full production metrics from real requests. Per-request TTFT, end-to-end latency, throughput aggregates, and queue depth. Opt-in only.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* The Programmable Fleet Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="text-center mb-4">
@@ -389,6 +422,44 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             title="Performance CI/CD"
             description="Plug node-level tok/s into your deployment pipeline. Automatically flag model quantizations that regress performance on your specific hardware mix before they reach production."
           />
+        </div>
+      </section>
+
+      {/* Grows With You Section */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
+        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+          <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-4">Scale</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight">Grows with you — from local to enterprise.</h2>
+          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mb-10">
+            Start 100% locally with full sovereignty.
+            When your fleet scales or your organization requires enterprise observability, Wicklee becomes the bridge — enriching your existing tools with the hardware context they're missing.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+            <div className="p-5 bg-gray-800/40 border border-gray-700/50 rounded-2xl">
+              <BarChart2 className="w-6 h-6 text-amber-400 mb-3" />
+              <h4 className="text-sm font-bold text-white mb-2">OpenTelemetry Export</h4>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Enrich Datadog, Grafana, and New Relic LLM traces with GPU utilization, thermal state, and WES context from every node.
+              </p>
+            </div>
+            <div className="p-5 bg-gray-800/40 border border-gray-700/50 rounded-2xl">
+              <Gauge className="w-6 h-6 text-amber-400 mb-3" />
+              <h4 className="text-sm font-bold text-white mb-2">Prometheus Endpoint</h4>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Expose WES scores, thermal patterns, and node intelligence as Prometheus metrics for your existing alerting stack.
+              </p>
+            </div>
+            <div className="p-5 bg-gray-800/40 border border-gray-700/50 rounded-2xl">
+              <Server className="w-6 h-6 text-amber-400 mb-3" />
+              <h4 className="text-sm font-bold text-white mb-2">MCP Server</h4>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Give AI agents direct access to fleet state, routing recommendations, and hardware-aware inference decisions via Model Context Protocol.
+              </p>
+            </div>
+          </div>
+          <p className="mt-6 text-xs text-gray-600">
+            Team tier unlocks enterprise bridge features, shared dashboards, and the MCP server.
+          </p>
         </div>
       </section>
 
