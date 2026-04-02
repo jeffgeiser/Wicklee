@@ -310,20 +310,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <p>
                 The agent runs entirely on your machine. Nothing leaves until you explicitly pair a node to the Fleet View. For teams handling sensitive workloads, this isn't a nice-to-have — it's a requirement.
               </p>
-              <div className="flex items-start gap-3 mt-6 p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
-                <ShieldCheck className="w-5 h-5 text-green-400 shrink-0 mt-0.5" />
-                <p className="text-sm text-green-300/80">
-                  Structural guarantee, not a privacy policy. The agent has no outbound connections by default — there's nothing to configure or accidentally misconfigure.
-                </p>
-              </div>
-              <div className="flex items-start gap-3 mt-4 p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl">
-                <Terminal className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
-                <p className="text-sm text-indigo-300/80">
-                  Prefer to run locally? The agent exposes a full local dashboard at{' '}
-                  <a href="http://localhost:7700" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-indigo-200 transition-colors">localhost:7700</a>
-                  {' '}— no cloud account required, zero configuration, works the moment the agent starts.
-                </p>
-              </div>
             </div>
 
             {/* Right — comparison table */}
@@ -354,6 +340,23 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               </table>
             </div>
           </div>
+          {/* Callout tiles — side by side below the grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-8">
+            <div className="flex items-start gap-3 p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
+              <ShieldCheck className="w-5 h-5 text-green-400 shrink-0 mt-0.5" />
+              <p className="text-sm text-green-300/80">
+                Structural guarantee, not a privacy policy. The agent has no outbound connections by default — there's nothing to configure or accidentally misconfigure.
+              </p>
+            </div>
+            <div className="flex items-start gap-3 p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl">
+              <Terminal className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+              <p className="text-sm text-indigo-300/80">
+                Prefer to run locally? The agent exposes a full local dashboard at{' '}
+                <a href="http://localhost:7700" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-indigo-200 transition-colors">localhost:7700</a>
+                {' '}— no cloud account required, zero configuration, works the moment the agent starts.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -367,7 +370,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             We use a lightweight synthetic probe (20 tokens every ~30 seconds) to status your models while keeping your real traffic private and untouched.
             For users who need deeper real-traffic visibility — true RPS, queue depth, exact KV cache hit rate, production latency histograms — enable the optional inline proxy: a transparent layer with near-zero overhead.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl mx-auto">
             <div className="p-5 bg-green-500/5 border border-green-500/20 rounded-2xl">
               <div className="flex items-center gap-2 mb-3">
                 <ShieldCheck className="w-5 h-5 text-green-400" />
