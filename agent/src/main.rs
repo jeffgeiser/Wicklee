@@ -69,6 +69,8 @@ struct JsonRpcRequest {
     jsonrpc: String,
     method: String,
     params: Option<serde_json::Value>,
+    /// JSON-RPC notifications omit `id`. Default to Null so they deserialize.
+    #[serde(default)]
     id: serde_json::Value,
 }
 
