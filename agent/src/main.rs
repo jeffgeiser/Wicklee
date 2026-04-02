@@ -3762,6 +3762,87 @@ async fn handle_mcp(
     }
 }
 
+// ── MCP stdio transport ──────────────────────────────────────────────────────
+// Thin proxy: reads JSON-RPC lines from stdin, POSTs to the running agent's
+// HTTP MCP endpoint, writes JSON-RPC responses to stdout.  This lets Claude
+// Desktop, Claude Code, and other MCP clients use the native stdio transport
+// without requiring HTTPS.  The agent must already be running (service or
+// foreground).
+async fn run_mcp_stdio() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let port: u16 = std::env::var("WICKLEE_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(7700);
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    let client = reqwest::Client::new();
+
+    // Verify agent is reachable before entering the read loop.
+    match client.get(format!("http://127.0.0.1:{port}/api/pair/status")).send().await {
+        Ok(r) if r.status().is_success() => {}
+        _ => {
+            let err = serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": { "code": -32000, "message": format!("Wicklee agent not reachable on port {port}. Is the service running?") },
+                "id": null
+            });
+            println!("{}", err);
+            return;
+        }
+    }
+
+    let stdin = tokio::io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut lines = reader.lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let line = line.trim().to_string();
+        if line.is_empty() { continue; }
+
+        // Forward to agent HTTP MCP endpoint.
+        let resp = match client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(line.clone())
+            .send()
+            .await
+        {
+            Ok(r) => {
+                match r.text().await {
+                    Ok(body) => body,
+                    Err(e) => {
+                        // Extract id from request for error response.
+                        let id = serde_json::from_str::<serde_json::Value>(&line)
+                            .ok()
+                            .and_then(|v| v.get("id").cloned())
+                            .unwrap_or(serde_json::Value::Null);
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": { "code": -32000, "message": format!("Failed to read response: {e}") },
+                            "id": id
+                        }).to_string()
+                    }
+                }
+            }
+            Err(e) => {
+                let id = serde_json::from_str::<serde_json::Value>(&line)
+                    .ok()
+                    .and_then(|v| v.get("id").cloned())
+                    .unwrap_or(serde_json::Value::Null);
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": { "code": -32000, "message": format!("Agent unreachable: {e}") },
+                    "id": id
+                }).to_string()
+            }
+        };
+
+        // Write response to stdout (one JSON object per line).
+        println!("{resp}");
+    }
+}
+
 async fn handle_tags() -> Json<TagsResponse> {
     Json(TagsResponse {
         models: vec![
@@ -4185,6 +4266,14 @@ async fn main() {
 
     if std::env::args().any(|a| a == "--version" || a == "-V") {
         return; // version already printed above
+    }
+
+    // ── --mcp-stdio: stdio transport for Claude Desktop / Claude Code ──────────
+    // Reads JSON-RPC from stdin, forwards to the running agent's HTTP MCP endpoint,
+    // writes responses to stdout. The agent must already be running as a service.
+    if std::env::args().any(|a| a == "--mcp-stdio") {
+        run_mcp_stdio().await;
+        return;
     }
 
     if std::env::args().any(|a| a == "--install-service") {
