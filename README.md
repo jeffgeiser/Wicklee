@@ -1,48 +1,158 @@
-# Wicklee 
+# Wicklee
 
-**Open-source GPU fleet monitor for teams running local AI inference.**
+[![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/License-FSL--1.1--Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+[![Build](https://img.shields.io/github/actions/workflow/status/jeffgeiser/Wicklee/release.yml?label=nightly)](https://github.com/jeffgeiser/Wicklee/actions)
 
-Wicklee is a single Rust binary that installs on any inference node — Ollama, vLLM, or custom stacks — and gives you a live hardware dashboard at `localhost:7700`. No cloud required. No data leaves your network until you choose.
+**Sovereign-first GPU fleet monitor for local AI inference.**
 
-![Wicklee Dashboard](docs/screenshot.png)
+One Rust binary per node. Live hardware dashboard at `localhost:7700`. Optional fleet aggregation at [wicklee.dev](https://wicklee.dev). No proxy in the inference path by default — your models run untouched.
 
 ---
 
 ## Install
 
-**macOS &amp; Linux:**
+**macOS & Linux:**
 
 ```bash
 curl -fsSL https://wicklee.dev/install.sh | bash
 ```
 
-**Windows (PowerShell):**
+**Windows (PowerShell as Administrator):**
 
 ```powershell
 irm https://wicklee.dev/install.ps1 | iex
 ```
 
-Then start monitoring — **recommended** (auto-starts on every boot):
+Dashboard opens at **http://localhost:7700**. Auto-starts on boot as a system service.
+
+---
+
+## What It Monitors
+
+| Metric | Apple Silicon | NVIDIA (Linux/Windows) |
+|--------|:---:|:---:|
+| GPU utilization % | ✅ | ✅ via NVML |
+| Board power draw (W) | ✅ | ✅ |
+| Thermal state + penalties | ✅ | ✅ |
+| VRAM used / total | Unified | ✅ |
+| Memory pressure % | ✅ | — |
+| Inference state (live/idle/busy) | ✅ | ✅ |
+| Tok/s, TTFT, queue depth | ✅ | ✅ |
+| WES (tokens per watt) | ✅ | ✅ |
+
+**Runtimes detected:** Ollama, vLLM — auto-discovered, no configuration needed.
+
+---
+
+## WES — Wicklee Efficiency Score
+
+WES = tok/s per watt, adjusted for thermal state. A direct measure of how efficiently your hardware converts power into inference throughput.
+
+When thermals degrade, WES penalizes the score — surfacing efficiency loss before it becomes a throughput problem.
+
+---
+
+## Observation Patterns
+
+18 hardware-aware patterns continuously evaluated against live telemetry:
+
+- **Thermal:** Thermal Drain, NVIDIA Thermal Ceiling
+- **Power:** Phantom Load, Power-GPU Decoupling, Power Jitter
+- **Memory:** Swap Pressure, Memory Pressure Trajectory, VRAM Overcommit
+- **Inference:** TTFT Regression, Latency Spike, vLLM Queue Saturation, KV Cache Saturation
+- **Hardware:** Bandwidth Saturation, Clock Drift, PCIe Degradation
+- **Fleet:** WES Velocity Drop, Fleet Load Imbalance, Efficiency Penalty Drag
+
+Each pattern produces actionable observations with severity, evidence, and recommended actions.
+
+---
+
+## Non-Proxy by Default
+
+Wicklee observes inference — it doesn't intercept it. The agent reads hardware telemetry and runtime APIs without sitting in the request path.
+
+An **optional transparent proxy** (port 11434) is available for teams that want production request metrics: per-request TTFT, end-to-end latency, and throughput aggregates. Opt-in only.
+
+---
+
+## Fleet View
+
+For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates all paired agents into a single dashboard with SSE real-time streaming.
+
+| | Community | Pro | Team |
+|---|---|---|---|
+| Nodes | 3 | 10 | 25+ |
+| History | 2 days | 7 days | 90 days |
+| Patterns | 9 | 18 | 18 |
+| Alerts | — | Slack, Email | Slack, Email, PagerDuty |
+| API | — | ✅ | ✅ |
+
+To pair a node: open `localhost:7700` and click **Connect to Fleet**, or run `wicklee --pair`.
+
+---
+
+## For Agents & LLMs
+
+Wicklee exposes structured telemetry for AI agents:
+
+- **`/llms.txt`** — Lightweight discovery file
+- **`/api.md`** — Markdown API reference
+- **`/openapi.json`** — OpenAPI 3.0 spec
+- **REST API** — Fleet state, WES scores, best-route inference, observations
 
 ```bash
-# macOS / Linux
-sudo wicklee --install-service
+# Get fleet-wide WES scores
+curl -H "X-API-Key: wk_..." https://wicklee.dev/api/v1/fleet/wes
 
-# Windows (PowerShell, as Administrator)
-wicklee --install-service
+# Find the most efficient node for inference
+curl -H "X-API-Key: wk_..." https://wicklee.dev/api/v1/route/best
 ```
 
-Or run manually (exits when you close the terminal):
+---
+
+## Architecture
+
+Single binary. The React dashboard is compiled and embedded via `rust-embed` — no runtime dependencies.
+
+```
+wicklee (single binary)
+├── Axum HTTP server (port 7700)
+│   ├── Embedded React dashboard
+│   ├── SSE telemetry stream (1 Hz)
+│   └── WebSocket live charts (10 Hz)
+├── Hardware harvester (Tokio background tasks)
+│   ├── Apple Silicon: ioreg, powermetrics, pmset, vm_stat
+│   ├── NVIDIA: nvml-wrapper (sudoless)
+│   ├── Linux: coretemp, cpufreq, sysinfo
+│   └── Windows: WMI thermal, sysinfo
+├── Runtime harvester (Ollama + vLLM auto-discovery)
+├── Inference state machine (4-state, pure function)
+├── DuckDB local history (1-hour observation buffer)
+└── Optional: transparent proxy (port 11434)
+```
+
+**Sovereign by default.** Nothing leaves the machine until you explicitly pair with a fleet.
+
+---
+
+## Build from Source
+
+**Prerequisites:** Rust 1.75+, Node.js 18+
 
 ```bash
-# macOS / Linux
-sudo wicklee
+git clone https://github.com/jeffgeiser/Wicklee.git
+cd wicklee
 
-# Windows
-wicklee
+# Build frontend (agent mode — no Clerk)
+npm ci && npm run build:agent
+
+# Copy to agent embed directory
+cp -r dist/ agent/frontend/dist/
+
+# Build agent
+cd agent && cargo build --release
 ```
-
-Dashboard opens at **http://localhost:7700**.
 
 ---
 
@@ -52,128 +162,22 @@ Dashboard opens at **http://localhost:7700**.
 |---|---|---|
 | Install service | `sudo wicklee --install-service` | `wicklee --install-service` |
 | Remove service | `sudo wicklee --uninstall-service` | `wicklee --uninstall-service` |
-| Check status (macOS) | `sudo launchctl list \| grep wicklee` | — |
-| Check status (Linux) | `systemctl status wicklee` | — |
-| Check status (Windows) | — | `sc query WickleeSentinel` |
-
----
-
-## What it monitors
-
-| Metric | Apple Silicon | NVIDIA (Linux) |
-|---|---|---|
-| CPU usage % | ✅ | ✅ |
-| Memory used / available | ✅ | ✅ |
-| Memory pressure % | ✅ | — |
-| GPU utilization % | ✅ sudoless | ✅ via NVML |
-| Board power draw (W) | ⚠️ requires root | ✅ sudoless |
-| Thermal state | ✅ sudoless | 🔜 |
-| VRAM used / total | — | ✅ via NVML |
-
----
-
-## Build from source
-
-**Prerequisites:** Rust 1.75+, Node.js 18+
-
-```bash
-# Clone
-git clone https://github.com/Wicklee/wicklee
-cd wicklee
-
-# Build frontend + agent (single command)
-make install
-
-# Run
-wicklee
-# → Dashboard at http://localhost:7700
-```
-
----
-
-## Architecture
-
-Wicklee is a **single binary**. The React dashboard is compiled and embedded directly into the Rust agent at build time using `rust-embed` — no web server, no npm at runtime, no file paths to manage.
-
-```
-wicklee (single binary, ~700KB)
-│
-├── Axum HTTP server (port 7700)
-│   ├── GET /          → embedded React dashboard
-│   ├── GET /api/metrics → SSE stream, 1Hz telemetry
-│   └── GET /ws        → WebSocket, 10Hz live charts
-│
-└── Hardware harvester (tokio background task)
-    ├── sysinfo        → CPU, memory
-    ├── ioreg          → GPU utilization (macOS, no sudo)
-    ├── pmset          → thermal state (macOS, no sudo)
-    ├── vm_stat        → memory pressure (macOS, no sudo)
-    └── nvml-wrapper   → GPU metrics (Linux, no sudo)
-```
-
-**Sovereign by default.** Nothing leaves the machine until you explicitly pair it with a Fleet View account at [wicklee.dev](https://wicklee.dev).
-
----
-
-## Fleet View
-
-For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates all paired agents into a single hosted dashboard.
-
-- **Free:** up to 3 nodes
-- **Team Edition:** unlimited nodes, 90-day history, Sentinel alerts — coming soon
-
-To pair a node: run `wicklee --pair` or open `localhost:7700` and click **Connect to Fleet**.
-
-```
-┌─────────────────────────────────┐
-│  Wicklee Fleet Pairing          │
-│  Node Identity: WK-8821         │
-│  Pairing Code:  847291          │
-│  Enter at: wicklee.dev          │
-│  Expires in: 5:00               │
-└─────────────────────────────────┘
-```
-
----
-
-## Roadmap
-
-### ✅ Phase 1 — The Standalone Sentinel
-Single binary, embedded dashboard, Apple Silicon deep metal, sudoless, global CLI.
-
-### 🔜 Phase 2 — The Multi-Node Fleet *(in progress)*
-NVIDIA/NVML support, Fleet Connect pairing, hosted fleet aggregation on Railway.
-
-### 📋 Phase 3 — The Intelligence Layer
-Wattage-per-Token, Thermal Rerouting (Sentinel), Apple Neural Engine (ANE).
-
-### 📋 Phase 4 — The Commercial Layer
-Team Edition, Paddle, alert integrations (Slack/PagerDuty), curl install script.
-
----
-
-## Why Wicklee?
-
-Standard monitoring tools see CPU and RAM. They don't see GPU utilization, unified memory pressure, thermal state, or wattage-per-token. When an inference node overheats or degrades, you find out from a user — not a dashboard.
-
-Wicklee fixes that. One binary. Zero dependencies. Your data stays on your hardware.
-
-> *"Your fleet data never leaves your network until you choose."*
-
----
-
-## Tools
-
-- **[Wattage-per-Token Calculator](https://huggingface.co/spaces/Wicklee/Wattage-per-token)** — compare your GPU's real inference cost against cloud API pricing.
+| Health check | `wicklee --status` | `wicklee --status` |
 
 ---
 
 ## License
 
-[Business Source License 1.1](LICENSE) — free for individuals and teams under 5 nodes. Commercial use above 5 nodes requires a Team Edition license.
+[FSL-1.1-Apache-2.0](LICENSE) (Functional Source License). Free for personal use and small teams. Converts to Apache 2.0 after four years.
+
+---
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome. See [docs/SPEC.md](docs/SPEC.md) for architecture details and [docs/ROADMAP.md](docs/ROADMAP.md) for what's coming next.
+Issues and PRs welcome. See the [roadmap](docs/ROADMAP.md) for what's planned. Full documentation at [wicklee.dev/docs](https://wicklee.dev/docs).
