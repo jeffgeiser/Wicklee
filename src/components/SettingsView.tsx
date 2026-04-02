@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { version as pkgVersion } from '../../package.json';
-import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock, Key, ChevronRight } from 'lucide-react';
+import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock, Key, ChevronRight, Globe } from 'lucide-react';
 import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import {
@@ -679,6 +679,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
         </Section>
+      )}
+
+      {/* ── ④¾ OPENTELEMETRY EXPORT ───────────────────────────────────── */}
+      {isCloudMode && (subscriptionTier === 'team' || subscriptionTier === 'enterprise') && (
+        <OtelExportSection getToken={getToken} />
       )}
 
       {/* ── ⑤ ACCOUNT & DATA ─────────────────────────────────────────────── */}
@@ -1476,6 +1481,128 @@ const NodeOverrideRow: React.FC<{
         )}
       </td>
     </tr>
+  );
+};
+
+// ── OpenTelemetry Export Section (Team+ only) ────────────────────────────────
+
+const OtelExportSection: React.FC<{
+  getToken: () => Promise<string | null>;
+}> = ({ getToken }) => {
+  const [enabled, setEnabled] = useState(false);
+  const [endpoint, setEndpoint] = useState('');
+  const [authHeaders, setAuthHeaders] = useState('{}');
+  const [interval, setInterval_] = useState(30);
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const token = await getToken();
+      if (!token) return;
+      try {
+        const resp = await fetch(`${CLOUD_URL}/api/otel/config`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setEnabled(data.enabled ?? false);
+          setEndpoint(data.endpoint_url ?? '');
+          setAuthHeaders(data.auth_headers ?? '{}');
+          setInterval_(data.export_interval_s ?? 30);
+          setLoaded(true);
+        }
+      } catch { /* ignore */ }
+    })();
+  }, [getToken]);
+
+  const save = async () => {
+    setSaving(true);
+    const token = await getToken();
+    if (!token) { setSaving(false); return; }
+    try {
+      await fetch(`${CLOUD_URL}/api/otel/config`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled, endpoint_url: endpoint, auth_headers: authHeaders, export_interval_s: interval }),
+      });
+    } catch { /* ignore */ }
+    setSaving(false);
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <Section id="otel" title="OpenTelemetry Export" icon={Globe} iconBg="bg-amber-500/10" iconCls="text-amber-400">
+      <div className="px-6 py-5 space-y-4">
+        <p className="text-xs text-gray-500 leading-relaxed">
+          Export fleet telemetry as OTLP metrics to Datadog, Grafana Cloud, New Relic, or any OpenTelemetry-compatible collector. Metrics include GPU utilization, power, WES, thermal penalty, TTFT, and inference state per node.
+        </p>
+
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-semibold text-gray-300">Enable OTLP Export</label>
+          <button
+            onClick={() => setEnabled(!enabled)}
+            className={`relative w-10 h-5 rounded-full transition-colors ${enabled ? 'bg-amber-500' : 'bg-gray-700'}`}
+          >
+            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'left-5' : 'left-0.5'}`} />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">OTLP Endpoint URL</label>
+            <input
+              type="text"
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              placeholder="https://otel.datadoghq.com"
+              className="mt-1 w-full px-3 py-2 bg-gray-800/60 border border-gray-700 rounded-lg text-xs text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+            />
+            <p className="mt-1 text-[10px] text-gray-600">The /v1/metrics path is appended automatically.</p>
+          </div>
+
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Auth Headers (JSON)</label>
+            <input
+              type="text"
+              value={authHeaders}
+              onChange={(e) => setAuthHeaders(e.target.value)}
+              placeholder='{"DD-API-KEY": "your-key"}'
+              className="mt-1 w-full px-3 py-2 bg-gray-800/60 border border-gray-700 rounded-lg text-xs text-gray-200 font-mono placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Export Interval</label>
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                type="number"
+                min={15}
+                max={300}
+                value={interval}
+                onChange={(e) => setInterval_(Number(e.target.value))}
+                className="w-20 px-3 py-2 bg-gray-800/60 border border-gray-700 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-amber-500/50"
+              />
+              <span className="text-xs text-gray-500">seconds (15–300)</span>
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={save}
+          disabled={saving}
+          className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save OTel Configuration'}
+        </button>
+
+        <div className="text-[10px] text-gray-600 font-mono">
+          <p>8 gauges per node: gpu_utilization · power_watts · tokens_per_second · wes_score</p>
+          <p>thermal_penalty · memory_pressure · ttft_ms · inference_state</p>
+        </div>
+      </div>
+    </Section>
   );
 };
 

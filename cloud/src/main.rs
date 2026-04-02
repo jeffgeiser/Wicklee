@@ -617,6 +617,19 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("schema_breakpoints migration failed");
 
+    // ── OpenTelemetry export configuration (Team+ tier) ─────────────────────
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS otel_config (
+            user_id          TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            enabled          BOOLEAN NOT NULL DEFAULT false,
+            endpoint_url     TEXT NOT NULL DEFAULT '',
+            auth_headers     TEXT NOT NULL DEFAULT '{}',
+            export_interval_s INTEGER NOT NULL DEFAULT 30,
+            created_at       BIGINT NOT NULL DEFAULT 0,
+            updated_at       BIGINT NOT NULL DEFAULT 0
+        )
+    ").execute(pool).await.expect("otel_config migration failed");
+
     // ── TimescaleDB policies ────────────────────────────────────────────────
     // Retention: metrics_raw 2 days, node_events 30 days
     // These are idempotent — TimescaleDB ignores if already set.
@@ -4505,6 +4518,288 @@ async fn handle_paddle_webhook(
     StatusCode::OK.into_response()
 }
 
+// ── OpenTelemetry Export (Team+ tier) ─────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OtelConfig {
+    enabled: bool,
+    endpoint_url: String,
+    auth_headers: String,   // JSON string: {"Authorization": "Bearer xxx"}
+    export_interval_s: i32,
+}
+
+async fn handle_get_otel_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing auth token"}))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
+    };
+    let tier: String = sqlx::query_scalar("SELECT subscription_tier FROM users WHERE id = $1")
+        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if tier != "team" && tier != "enterprise" {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Team tier required"}))).into_response();
+    }
+    let row: Option<(bool, String, String, i32)> = sqlx::query_as(
+        "SELECT enabled, endpoint_url, auth_headers, export_interval_s FROM otel_config WHERE user_id = $1"
+    ).bind(&user_id).fetch_optional(&state.pool).await.unwrap_or(None);
+    match row {
+        Some((enabled, endpoint_url, auth_headers, interval)) => {
+            Json(serde_json::json!({ "enabled": enabled, "endpoint_url": endpoint_url, "auth_headers": auth_headers, "export_interval_s": interval })).into_response()
+        }
+        None => Json(serde_json::json!({ "enabled": false, "endpoint_url": "", "auth_headers": "{}", "export_interval_s": 30 })).into_response(),
+    }
+}
+
+async fn handle_put_otel_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<OtelConfig>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing auth token"}))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
+    };
+    let tier: String = sqlx::query_scalar("SELECT subscription_tier FROM users WHERE id = $1")
+        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if tier != "team" && tier != "enterprise" {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Team tier required"}))).into_response();
+    }
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+    let interval = body.export_interval_s.clamp(15, 300);
+    sqlx::query("
+        INSERT INTO otel_config (user_id, enabled, endpoint_url, auth_headers, export_interval_s, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $6)
+        ON CONFLICT (user_id) DO UPDATE SET enabled = $2, endpoint_url = $3, auth_headers = $4, export_interval_s = $5, updated_at = $6
+    ").bind(&user_id).bind(body.enabled).bind(&body.endpoint_url).bind(&body.auth_headers).bind(interval).bind(now_ms)
+    .execute(&state.pool).await.ok();
+    (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
+}
+
+/// Background task: reads enabled OTel configs and POSTs OTLP JSON to configured endpoints.
+async fn otel_exporter_task(state: AppState) {
+    // Wait for metrics to populate before starting exports.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    loop {
+        interval.tick().await;
+
+        // Load all enabled configs.
+        let configs: Vec<(String, String, String, i32)> = sqlx::query_as(
+            "SELECT user_id, endpoint_url, auth_headers, export_interval_s FROM otel_config WHERE enabled = true AND endpoint_url != ''"
+        ).fetch_all(&state.pool).await.unwrap_or_default();
+
+        if configs.is_empty() { continue; }
+
+        for (user_id, endpoint_url, auth_headers_json, _interval) in &configs {
+            // Find this user's nodes.
+            let node_ids: Vec<String> = sqlx::query_scalar(
+                "SELECT wk_id FROM nodes WHERE user_id = $1"
+            ).bind(user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+            if node_ids.is_empty() { continue; }
+
+            // Read metrics from in-memory cache.
+            let cache = state.metrics.read().unwrap();
+            let mut resource_metrics = Vec::new();
+
+            for nid in &node_ids {
+                let entry = match cache.get(nid) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let m = match &entry.metrics {
+                    Some(m) => m,
+                    None => continue,
+                };
+
+                // Resolve power: NVIDIA > SoC > CPU
+                let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
+                let tok_s = m.ollama_tokens_per_second.or(m.vllm_tokens_per_sec);
+                let wes = match (tok_s, watts, m.penalty_avg) {
+                    (Some(t), Some(w), Some(p)) if w > 0.0 && p > 0.0 => Some(t / (w * p)),
+                    _ => None,
+                };
+                let ttft = m.vllm_avg_ttft_ms.or(m.ollama_proxy_avg_ttft_ms).or(m.ollama_ttft_ms);
+
+                let time_ns = format!("{}", m.timestamp_ms * 1_000_000);
+
+                let mut data_points = Vec::new();
+                let mut add_gauge = |name: &str, unit: &str, value: Option<f64>| {
+                    if let Some(v) = value {
+                        data_points.push(serde_json::json!({
+                            "name": name,
+                            "unit": unit,
+                            "gauge": { "dataPoints": [{ "asDouble": v, "timeUnixNano": &time_ns }] }
+                        }));
+                    }
+                };
+
+                add_gauge("wicklee.gpu.utilization", "%",
+                    m.gpu_utilization_percent.map(|v| v as f64)
+                        .or(m.nvidia_gpu_utilization_percent.map(|v| v as f64)));
+                add_gauge("wicklee.power.watts", "W", watts.map(|v| v as f64));
+                add_gauge("wicklee.inference.tokens_per_second", "tok/s", tok_s.map(|v| v as f64));
+                add_gauge("wicklee.wes.score", "score", wes.map(|v| v as f64));
+                add_gauge("wicklee.thermal.penalty", "ratio", m.penalty_avg.map(|v| v as f64));
+                add_gauge("wicklee.memory.pressure", "%", m.memory_pressure_percent.map(|v| v as f64));
+                add_gauge("wicklee.inference.ttft_ms", "ms", ttft.map(|v| v as f64));
+
+                // Add inference_state as a special data point with string attribute
+                data_points.push(serde_json::json!({
+                    "name": "wicklee.inference.state",
+                    "unit": "1",
+                    "gauge": { "dataPoints": [{
+                        "asDouble": match m.inference_state.as_deref() { Some("live") => 3.0, Some("busy") => 2.0, Some("idle-spd") => 1.0, _ => 0.0 },
+                        "timeUnixNano": &time_ns,
+                        "attributes": [{ "key": "state", "value": { "stringValue": m.inference_state.as_deref().unwrap_or("unknown") } }]
+                    }]}
+                }));
+
+                resource_metrics.push(serde_json::json!({
+                    "resource": {
+                        "attributes": [
+                            { "key": "node.id", "value": { "stringValue": nid } },
+                            { "key": "node.hostname", "value": { "stringValue": &m.hostname } },
+                            { "key": "node.gpu.name", "value": { "stringValue": m.gpu_name.as_deref().unwrap_or("") } },
+                            { "key": "node.os", "value": { "stringValue": &m.os } },
+                            { "key": "node.arch", "value": { "stringValue": &m.arch } },
+                            { "key": "service.name", "value": { "stringValue": "wicklee" } },
+                            { "key": "service.version", "value": { "stringValue": &m.agent_version } },
+                        ]
+                    },
+                    "scopeMetrics": [{
+                        "scope": { "name": "wicklee", "version": &m.agent_version },
+                        "metrics": data_points
+                    }]
+                }));
+            }
+            drop(cache);
+
+            if resource_metrics.is_empty() { continue; }
+
+            let payload = serde_json::json!({ "resourceMetrics": resource_metrics });
+            let endpoint = endpoint_url.clone();
+            let headers_str = auth_headers_json.clone();
+
+            // Fire-and-forget: POST to OTLP endpoint using ureq in a blocking task.
+            tokio::task::spawn_blocking(move || {
+                let mut req = ureq::post(&format!("{endpoint}/v1/metrics"))
+                    .set("Content-Type", "application/json");
+
+                // Parse auth headers JSON and apply them.
+                if let Ok(hdrs) = serde_json::from_str::<HashMap<String, String>>(&headers_str) {
+                    for (k, v) in &hdrs {
+                        req = req.set(k, v);
+                    }
+                }
+
+                match req.send_json(&payload) {
+                    Ok(resp) => {
+                        if resp.status() >= 400 {
+                            eprintln!("[otel] export failed: HTTP {}", resp.status());
+                        }
+                    }
+                    Err(e) => eprintln!("[otel] export error: {e}"),
+                }
+            });
+        }
+    }
+}
+
+// ── Prometheus Scrape Endpoint (Team+ tier, API key auth) ────────────────────
+
+async fn handle_prometheus_metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Validate API key (same as V1 endpoints).
+    let api_key = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if api_key.is_empty() {
+        return (StatusCode::UNAUTHORIZED, "X-API-Key required").into_response();
+    }
+    let key_hash = format!("{:x}", sha2::Sha256::digest(api_key.as_bytes()));
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT user_id FROM api_keys WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > $2)"
+    ).bind(&key_hash).bind(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
+    .fetch_optional(&state.pool).await.unwrap_or(None);
+
+    let user_id = match row {
+        Some((uid,)) => uid,
+        None => return (StatusCode::UNAUTHORIZED, "Invalid API key").into_response(),
+    };
+
+    // Tier gate
+    let tier: String = sqlx::query_scalar("SELECT subscription_tier FROM users WHERE id = $1")
+        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if tier != "team" && tier != "enterprise" {
+        return (StatusCode::FORBIDDEN, "Team tier required for Prometheus metrics").into_response();
+    }
+
+    // Build Prometheus text format from in-memory cache for this user's nodes.
+    let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
+        .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let cache = state.metrics.read().unwrap();
+    let mut output = String::with_capacity(4096);
+
+    let gauges = [
+        ("wicklee_gpu_utilization", "GPU utilization percentage", "%"),
+        ("wicklee_power_watts", "Power draw in watts", "W"),
+        ("wicklee_inference_tokens_per_second", "Inference throughput", "tok/s"),
+        ("wicklee_wes_score", "Wicklee Efficiency Score", "score"),
+        ("wicklee_thermal_penalty", "Thermal penalty multiplier", "ratio"),
+        ("wicklee_memory_pressure", "Memory pressure percentage", "%"),
+        ("wicklee_inference_ttft_ms", "Time to first token", "ms"),
+    ];
+
+    for (name, help, _unit) in &gauges {
+        output.push_str(&format!("# HELP {name} {help}\n# TYPE {name} gauge\n"));
+        for nid in &node_ids {
+            if let Some(entry) = cache.get(nid) {
+                if let Some(m) = &entry.metrics {
+                    let hostname = m.hostname.as_deref().unwrap_or("");
+                    let val = match *name {
+                        "wicklee_gpu_utilization" => m.gpu_utilization_percent.map(|v| v as f64)
+                            .or(m.nvidia_gpu_utilization_percent.map(|v| v as f64)),
+                        "wicklee_power_watts" => m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w).map(|v| v as f64),
+                        "wicklee_inference_tokens_per_second" => m.ollama_tokens_per_second.or(m.vllm_tokens_per_sec).map(|v| v as f64),
+                        "wicklee_wes_score" => {
+                            let tok = m.ollama_tokens_per_second.or(m.vllm_tokens_per_sec);
+                            let w = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
+                            match (tok, w, m.penalty_avg) {
+                                (Some(t), Some(w), Some(p)) if w > 0.0 && p > 0.0 => Some((t / (w * p)) as f64),
+                                _ => None,
+                            }
+                        }
+                        "wicklee_thermal_penalty" => m.penalty_avg.map(|v| v as f64),
+                        "wicklee_memory_pressure" => m.memory_pressure_percent.map(|v| v as f64),
+                        "wicklee_inference_ttft_ms" => m.vllm_avg_ttft_ms.or(m.ollama_proxy_avg_ttft_ms).or(m.ollama_ttft_ms).map(|v| v as f64),
+                        _ => None,
+                    };
+                    if let Some(v) = val {
+                        output.push_str(&format!("{name}{{node_id=\"{nid}\",hostname=\"{hostname}\"}} {v}\n"));
+                    }
+                }
+            }
+        }
+    }
+
+    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")], output).into_response()
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -4576,6 +4871,7 @@ async fn main() {
     tokio::spawn(nightly_task(pool.clone()));
     tokio::spawn(node_offline_alert_task(state.clone()));
     tokio::spawn(fleet_alert_evaluator_task(state.clone()));
+    tokio::spawn(otel_exporter_task(state.clone()));
 
     // Refresh JWKS every 6 hours.
     if let Some(url) = jwks_url {
@@ -4633,6 +4929,7 @@ async fn main() {
         .route("/api/nodes/:node_id",    patch(handle_update_node))
         .route("/api/billing/config",    get(handle_billing_config))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
+        .route("/api/otel/config",       get(handle_get_otel_config).put(handle_put_otel_config))
         .with_state(state.clone())
         .layer(middleware::from_fn(cors_dashboard));
 
@@ -4649,6 +4946,7 @@ async fn main() {
         .route("/api/v1/nodes/:id",      get(handle_v1_node))
         .route("/api/v1/route/best",     get(handle_v1_route_best))
         .route("/api/v1/insights/latest", get(handle_v1_insights_latest))
+        .route("/metrics",                  get(handle_prometheus_metrics))
         .with_state(state)
         .layer(middleware::from_fn(cors_open));
 

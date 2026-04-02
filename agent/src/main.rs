@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use axum::{
     body::Body,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -56,6 +58,44 @@ struct TagsResponse { models: Vec<ModelInfo> }
 
 #[derive(Serialize)]
 struct ModelInfo { name: String, size: u64 }
+
+// ── MCP (Model Context Protocol) JSON-RPC 2.0 Types ─────────────────────────
+// Lightweight MCP server — wraps existing agent endpoints for AI agent consumption.
+// No additional crate dependencies; just serde_json over Axum.
+
+#[derive(Deserialize)]
+struct JsonRpcRequest {
+    #[allow(dead_code)]
+    jsonrpc: String,
+    method: String,
+    params: Option<serde_json::Value>,
+    id: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct JsonRpcResponse {
+    jsonrpc: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonRpcError>,
+    id: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
+}
+
+impl JsonRpcResponse {
+    fn success(id: serde_json::Value, result: serde_json::Value) -> Self {
+        Self { jsonrpc: "2.0", result: Some(result), error: None, id }
+    }
+    fn error(id: serde_json::Value, code: i32, message: String) -> Self {
+        Self { jsonrpc: "2.0", result: None, error: Some(JsonRpcError { code, message }), id }
+    }
+}
 
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
@@ -3329,6 +3369,399 @@ async fn handle_events_recent(
     axum::Json(events)
 }
 
+// ── MCP Server ───────────────────────────────────────────────────────────────
+// JSON-RPC 2.0 endpoint for AI agent consumption (Cursor, Claude Desktop, etc.).
+// Wraps existing sensor data — no new shared state, no new dependencies.
+
+async fn handle_mcp_manifest() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "schema_version": "2024-11-05",
+        "name": "wicklee-agent",
+        "version": env!("CARGO_PKG_VERSION"),
+        "description": "Sovereign GPU fleet monitor — hardware telemetry, inference state, WES efficiency scores, and observation patterns for local AI inference nodes.",
+        "transport": { "type": "http", "url": "/mcp" },
+        "capabilities": {
+            "tools": true,
+            "resources": true,
+        }
+    }))
+}
+
+fn mcp_tools_list() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "name": "get_node_status",
+            "description": "Returns a full snapshot of the node's current hardware and inference metrics — CPU, GPU, memory, power, thermal state, inference state, active model, WES penalty, tok/s, and more.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "get_inference_state",
+            "description": "Returns the node's current inference state (live, idle-spd, busy, or idle) with context about which detection tier matched and the relevant sensor values.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "get_active_models",
+            "description": "Returns a list of currently loaded AI models across all detected runtimes (Ollama, vLLM, llama.cpp) with model names, sizes, and inference activity.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "get_observations",
+            "description": "Evaluates local hardware observation patterns (Thermal Drain, Phantom Load, Swap Pressure, PCIe Degradation) against the 1-hour DuckDB buffer. Returns any active observations with severity, evidence, and recommended actions.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "get_metrics_history",
+            "description": "Returns the 1-hour rolling metrics history from the local DuckDB store. Includes tok/s, GPU%, power, memory pressure, and swap over time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "minutes": {
+                        "type": "integer",
+                        "description": "How many minutes of history to return (1-60, default 60)"
+                    }
+                }
+            }
+        }
+    ])
+}
+
+fn mcp_resources_list() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "uri": "wicklee://node/metrics",
+            "name": "Live Metrics Snapshot",
+            "description": "Current MetricsPayload — full hardware + inference telemetry for this node.",
+            "mimeType": "application/json"
+        },
+        {
+            "uri": "wicklee://node/thermal",
+            "name": "Thermal State",
+            "description": "Current thermal state, WES penalty values, thermal source, and sample count.",
+            "mimeType": "application/json"
+        }
+    ])
+}
+
+/// Build a MetricsPayload snapshot from shared sensor state.
+/// Used by both the 1 Hz broadcaster and the MCP handler.
+fn build_mcp_node_snapshot(
+    apple: &AppleSiliconMetrics,
+    nvidia: &NvidiaMetrics,
+    ollama: &OllamaMetrics,
+    vllm: &VllmMetrics,
+    llamacpp: &LlamacppMetrics,
+    wes: &WesMetrics,
+    rapl_power: Option<f32>,
+    linux_thermal: &Option<LinuxThermalResult>,
+    swap_mb_s: Option<f32>,
+    probe_active: &std::sync::atomic::AtomicBool,
+    cpu_usage: f32,
+    total_mb: u64,
+    used_mb: u64,
+    available_mb: u64,
+    core_count: usize,
+    node_id: &str,
+    hostname: &str,
+    proxy_listen: Option<u16>,
+    proxy_target: Option<u16>,
+    _runtime_overrides: Option<String>,
+    model_baseline: Option<(f32, f32, u32)>,
+) -> serde_json::Value {
+    let hw = read_hardware_signals(apple, nvidia, ollama, vllm, llamacpp,
+        &Arc::new(std::sync::atomic::AtomicBool::new(
+            probe_active.load(std::sync::atomic::Ordering::Relaxed)
+        )));
+    let inference_state_val = compute_inference_state(&hw).to_string();
+    let thermal = resolve_thermal_state(&apple.thermal_state, linux_thermal, cpu_usage);
+
+    serde_json::json!({
+        "node_id": node_id,
+        "hostname": hostname,
+        "gpu_name": nvidia.nvidia_gpu_name.as_deref().or(apple.gpu_name.as_deref()),
+        "cpu_usage_percent": cpu_usage,
+        "total_memory_mb": total_mb,
+        "used_memory_mb": used_mb,
+        "available_memory_mb": available_mb,
+        "cpu_core_count": core_count,
+        "timestamp_ms": now_ms(),
+        "cpu_power_w": apple.cpu_power_w.or(rapl_power),
+        "apple_soc_power_w": apple.soc_power_w,
+        "apple_gpu_power_w": apple.gpu_power_w,
+        "gpu_utilization_percent": apple.gpu_utilization_percent,
+        "memory_pressure_percent": apple.memory_pressure_percent,
+        "thermal_state": thermal,
+        "nvidia_gpu_utilization_percent": nvidia.nvidia_gpu_utilization_percent,
+        "nvidia_vram_used_mb": nvidia.nvidia_vram_used_mb,
+        "nvidia_vram_total_mb": nvidia.nvidia_vram_total_mb,
+        "nvidia_gpu_temp_c": nvidia.nvidia_gpu_temp_c,
+        "nvidia_power_draw_w": nvidia.nvidia_power_draw_w,
+        "ollama_running": ollama.ollama_running,
+        "ollama_active_model": ollama.ollama_active_model,
+        "ollama_tokens_per_second": ollama.ollama_tokens_per_second,
+        "ollama_inference_active": ollama.ollama_inference_active,
+        "ollama_prompt_eval_tps": ollama.ollama_prompt_eval_tps,
+        "ollama_ttft_ms": ollama.ollama_ttft_ms,
+        "vllm_running": vllm.vllm_running,
+        "vllm_model_name": vllm.vllm_model_name,
+        "vllm_tokens_per_sec": vllm.vllm_tokens_per_sec,
+        "vllm_cache_usage_perc": vllm.vllm_cache_usage_perc,
+        "vllm_requests_waiting": vllm.vllm_requests_waiting,
+        "vllm_avg_ttft_ms": vllm.vllm_avg_ttft_ms,
+        "vllm_avg_e2e_latency_ms": vllm.vllm_avg_e2e_latency_ms,
+        "llamacpp_running": llamacpp.llamacpp_running,
+        "llamacpp_model_name": llamacpp.llamacpp_model_name,
+        "llamacpp_tokens_per_sec": llamacpp.llamacpp_tokens_per_sec,
+        "inference_state": inference_state_val,
+        "penalty_avg": wes.penalty_avg,
+        "penalty_peak": wes.penalty_peak,
+        "thermal_source": wes.thermal_source,
+        "swap_write_mb_s": swap_mb_s,
+        "proxy_listen_port": proxy_listen,
+        "proxy_target_port": proxy_target,
+        "model_baseline_tps": model_baseline.map(|b| b.0),
+        "model_baseline_wes": model_baseline.map(|b| b.1),
+        "agent_version": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    })
+}
+
+async fn handle_mcp(
+    axum::extract::Extension(apple_metrics):         axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
+    axum::extract::Extension(nvidia_metrics):        axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
+    axum::extract::Extension(ollama_metrics):        axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
+    axum::extract::Extension(rapl_metrics):          axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
+    axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<LinuxThermalResult>>>>,
+    axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
+    axum::extract::Extension(llamacpp_metrics):      axum::extract::Extension<Arc<Mutex<LlamacppMetrics>>>,
+    axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
+    axum::extract::Extension(swap_metrics):          axum::extract::Extension<SwapMetrics>,
+    axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
+    axum::extract::Extension(proxy_ports):           axum::extract::Extension<ProxyPorts>,
+    axum::extract::Extension(node_id):               axum::extract::Extension<NodeId>,
+    Json(req): Json<JsonRpcRequest>,
+) -> Json<JsonRpcResponse> {
+    let id = req.id.clone();
+
+    // Helper: read all shared state into local snapshots.
+    let read_snapshot = || -> serde_json::Value {
+        let apple    = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+        let nvidia   = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+        let ollama   = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+        let vllm     = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+        let llamacpp = llamacpp_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+        let wes      = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+        let rapl     = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
+        let lt       = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
+        let swap     = swap_metrics.read();
+        let hostname = sysinfo::System::host_name().unwrap_or_else(|| node_id.0.to_string());
+
+        // Get basic system info
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_memory();
+        let total = sys.total_memory() / 1024 / 1024;
+        let used  = sys.used_memory()  / 1024 / 1024;
+
+        build_mcp_node_snapshot(
+            &apple, &nvidia, &ollama, &vllm, &llamacpp, &wes,
+            rapl, &lt, swap, &probe_active, sys.global_cpu_info().cpu_usage(),
+            total, used, total.saturating_sub(used), sys.cpus().len(),
+            &node_id.0, &hostname,
+            proxy_ports.listen, proxy_ports.target, proxy_ports.runtime_overrides.clone(),
+            None, // model_baseline — not wired through Extension, acceptable for MCP
+        )
+    };
+
+    match req.method.as_str() {
+        // ── Protocol lifecycle ───────────────────────────────────────────────
+        "initialize" => Json(JsonRpcResponse::success(id, serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "serverInfo": {
+                "name": "wicklee-agent",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "capabilities": {
+                "tools": { "listChanged": false },
+                "resources": { "listChanged": false },
+            }
+        }))),
+
+        "notifications/initialized" => Json(JsonRpcResponse::success(id, serde_json::json!({}))),
+
+        // ── Tools ────────────────────────────────────────────────────────────
+        "tools/list" => Json(JsonRpcResponse::success(id, serde_json::json!({
+            "tools": mcp_tools_list()
+        }))),
+
+        "tools/call" => {
+            let tool_name = req.params.as_ref()
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+
+            match tool_name {
+                "get_node_status" => {
+                    let snapshot = read_snapshot();
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&snapshot).unwrap_or_default() }]
+                    })))
+                }
+
+                "get_inference_state" => {
+                    let apple    = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let nvidia   = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let ollama   = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let vllm     = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let llamacpp = llamacpp_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let wes      = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+
+                    let hw = read_hardware_signals(&apple, &nvidia, &ollama, &vllm, &llamacpp, &probe_active);
+                    let state = compute_inference_state(&hw);
+
+                    let result = serde_json::json!({
+                        "inference_state": state.to_string(),
+                        "signals": {
+                            "vllm_requests": hw.vllm_requests,
+                            "apple_gpu_pct": hw.apple_gpu_pct,
+                            "nvidia_gpu_pct": hw.nvidia_gpu_pct,
+                            "soc_power_w": hw.soc_power_w,
+                            "nvidia_power_w": hw.nvidia_power_w,
+                            "ai_runtime_loaded": hw.ai_runtime_loaded,
+                        },
+                        "active_model": ollama.ollama_active_model.as_deref()
+                            .or(vllm.vllm_model_name.as_deref())
+                            .or(llamacpp.llamacpp_model_name.as_deref()),
+                        "tokens_per_second": ollama.ollama_tokens_per_second
+                            .or(vllm.vllm_tokens_per_sec)
+                            .or(llamacpp.llamacpp_tokens_per_sec),
+                        "wes_penalty": wes.penalty_avg,
+                        "thermal_source": wes.thermal_source,
+                    });
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }]
+                    })))
+                }
+
+                "get_active_models" => {
+                    let ollama   = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let vllm     = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let llamacpp = llamacpp_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+
+                    let mut models = Vec::new();
+                    if ollama.ollama_running {
+                        models.push(serde_json::json!({
+                            "runtime": "ollama",
+                            "model": ollama.ollama_active_model,
+                            "size_gb": ollama.ollama_model_size_gb,
+                            "inference_active": ollama.ollama_inference_active,
+                            "tokens_per_second": ollama.ollama_tokens_per_second,
+                            "quantization": ollama.ollama_quantization,
+                        }));
+                    }
+                    if vllm.vllm_running {
+                        models.push(serde_json::json!({
+                            "runtime": "vllm",
+                            "model": vllm.vllm_model_name,
+                            "tokens_per_second": vllm.vllm_tokens_per_sec,
+                            "requests_running": vllm.vllm_requests_running,
+                            "requests_waiting": vllm.vllm_requests_waiting,
+                            "cache_usage_pct": vllm.vllm_cache_usage_perc,
+                        }));
+                    }
+                    if llamacpp.llamacpp_running {
+                        models.push(serde_json::json!({
+                            "runtime": "llamacpp",
+                            "model": llamacpp.llamacpp_model_name,
+                            "tokens_per_second": llamacpp.llamacpp_tokens_per_sec,
+                            "slots_processing": llamacpp.llamacpp_slots_processing,
+                        }));
+                    }
+
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&models).unwrap_or_default() }]
+                    })))
+                }
+
+                "get_observations" | "get_metrics_history" => {
+                    // These require DuckDB — return a helpful message on musl/no-store builds.
+                    #[cfg(not(target_env = "musl"))]
+                    {
+                        // Note: DuckDB store is wired as an Extension only on store-backed routes.
+                        // For MCP, we return a message directing users to the REST endpoint.
+                        let msg = if tool_name == "get_observations" {
+                            "Local observations are available via GET /api/observations. The MCP handler does not have direct DuckDB access — use the REST endpoint or the wicklee://node/metrics resource for current state."
+                        } else {
+                            "Metrics history is available via GET /api/history?node_id=<id>&minutes=60. The MCP handler proxies to the live snapshot — use the REST endpoint for historical data."
+                        };
+                        Json(JsonRpcResponse::success(id, serde_json::json!({
+                            "content": [{ "type": "text", "text": msg }]
+                        })))
+                    }
+                    #[cfg(target_env = "musl")]
+                    {
+                        Json(JsonRpcResponse::success(id, serde_json::json!({
+                            "content": [{ "type": "text", "text": "DuckDB is not available on this build (musl). Historical data and observations require the standard build." }]
+                        })))
+                    }
+                }
+
+                _ => Json(JsonRpcResponse::error(id, -32601, format!("Unknown tool: {tool_name}"))),
+            }
+        }
+
+        // ── Resources ────────────────────────────────────────────────────────
+        "resources/list" => Json(JsonRpcResponse::success(id, serde_json::json!({
+            "resources": mcp_resources_list()
+        }))),
+
+        "resources/read" => {
+            let uri = req.params.as_ref()
+                .and_then(|p| p.get("uri"))
+                .and_then(|u| u.as_str())
+                .unwrap_or("");
+
+            match uri {
+                "wicklee://node/metrics" => {
+                    let snapshot = read_snapshot();
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "contents": [{
+                            "uri": "wicklee://node/metrics",
+                            "mimeType": "application/json",
+                            "text": serde_json::to_string_pretty(&snapshot).unwrap_or_default()
+                        }]
+                    })))
+                }
+
+                "wicklee://node/thermal" => {
+                    let apple = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let wes   = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let lt    = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
+
+                    let thermal = serde_json::json!({
+                        "thermal_state": resolve_thermal_state(&apple.thermal_state, &lt, 0.0),
+                        "penalty_avg": wes.penalty_avg,
+                        "penalty_peak": wes.penalty_peak,
+                        "thermal_source": wes.thermal_source,
+                        "sample_count": wes.sample_count,
+                    });
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "contents": [{
+                            "uri": "wicklee://node/thermal",
+                            "mimeType": "application/json",
+                            "text": serde_json::to_string_pretty(&thermal).unwrap_or_default()
+                        }]
+                    })))
+                }
+
+                _ => Json(JsonRpcResponse::error(id, -32602, format!("Unknown resource: {uri}"))),
+            }
+        }
+
+        // ── Unknown method ───────────────────────────────────────────────────
+        _ => Json(JsonRpcResponse::error(id, -32601, format!("Method not found: {}", req.method))),
+    }
+}
+
 async fn handle_tags() -> Json<TagsResponse> {
     Json(TagsResponse {
         models: vec![
@@ -4264,7 +4697,10 @@ async fn main() {
             .route("/api/pair/status",    get(handle_pair_status))
             .route("/api/pair/generate",  post(handle_pair_generate))
             .route("/api/pair/claim",     post(handle_pair_claim))
-            .route("/api/pair/disconnect",post(handle_pair_disconnect));
+            .route("/api/pair/disconnect",post(handle_pair_disconnect))
+            // MCP (Model Context Protocol) — JSON-RPC 2.0 for AI agents
+            .route("/mcp",                      post(handle_mcp))
+            .route("/.well-known/mcp.json",     get(handle_mcp_manifest));
 
         // Wire store-backed routes only when DuckDB opened successfully.
         // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET),

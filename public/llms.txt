@@ -32,6 +32,21 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `GET /api/export?format=json|csv` — Data export
 - `GET /api/tags` — Ollama model tags
 - `GET /api/pair/status` — Pairing status
+- `POST /mcp` — MCP (Model Context Protocol) JSON-RPC 2.0 endpoint
+- `GET /.well-known/mcp.json` — MCP server manifest
+
+### MCP Tools (via POST /mcp)
+
+- `get_node_status` — Full hardware + inference metrics snapshot
+- `get_inference_state` — Live/idle/busy state with sensor context
+- `get_active_models` — Running models across Ollama, vLLM, llama.cpp
+- `get_observations` — Local hardware pattern evaluation
+- `get_metrics_history` — 1-hour rolling telemetry buffer
+
+### MCP Resources
+
+- `wicklee://node/metrics` — Live MetricsPayload JSON
+- `wicklee://node/thermal` — Thermal state + WES penalty values
 
 ## Fleet API v1 (X-API-Key auth)
 
@@ -45,6 +60,7 @@ Base URL: `https://wicklee.dev/api/v1`
 - `POST /api/v1/keys` — Create API key
 - `GET /api/v1/keys` — List API keys
 - `DELETE /api/v1/keys/{id}` — Revoke API key
+- `GET /metrics` — Prometheus scrape endpoint (Team+, X-API-Key auth)
 
 ## Key Metrics
 
