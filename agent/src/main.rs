@@ -4504,7 +4504,16 @@ async fn main() {
     let ollama_port   = ollama_cfg.or_else(|| initial.get("ollama").copied());
     let vllm_port     = vllm_cfg  .or_else(|| initial.get("vllm").copied());
     let llamacpp_port = initial.get("llamacpp").copied().or_else(|| initial.get("llama-box").copied());
-    if let Some(p) = ollama_port   { let _ = ollama_port_tx.send(Some(p)); }
+    // When the proxy is enabled, the harvester + probe must talk to Ollama
+    // directly on its moved port (e.g. 11435), NOT through the proxy on 11434.
+    // The proxy occupies the default port, so auto-discovery would incorrectly
+    // connect the harvester to the proxy instead of the real Ollama process.
+    let effective_ollama_port = if proxy_arc.is_some() {
+        Some(proxy_cfg.ollama_port) // e.g. 11435 — where Ollama actually listens
+    } else {
+        ollama_port
+    };
+    if let Some(p) = effective_ollama_port { let _ = ollama_port_tx.send(Some(p)); }
     if let Some(p) = vllm_port     { let _ = vllm_port_tx.send(Some(p)); }
     if let Some(p) = llamacpp_port { let _ = llamacpp_port_tx.send(Some(p)); }
 
@@ -4529,7 +4538,9 @@ async fn main() {
     // the override is authoritative and must never be overwritten by
     // auto-discovery (Priority of Truth: TOML > cmdline > socket scan).
     let mut discovery_txs: std::collections::HashMap<&str, _> = Default::default();
-    if ollama_cfg.is_none() { discovery_txs.insert("ollama", ollama_port_tx); }
+    // When proxy is enabled, ollama port is fixed to proxy_cfg.ollama_port —
+    // do not let auto-discovery overwrite it (same logic as TOML override).
+    if ollama_cfg.is_none() && proxy_arc.is_none() { discovery_txs.insert("ollama", ollama_port_tx); }
     if vllm_cfg.is_none()   { discovery_txs.insert("vllm",   vllm_port_tx);   }
     discovery_txs.insert("llamacpp",  llamacpp_disc_tx);
     discovery_txs.insert("llama-box", llamabox_disc_tx);
