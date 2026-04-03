@@ -1511,17 +1511,24 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
                   <span className="shrink-0 w-5 h-5 rounded-full bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-[10px] font-bold text-purple-400">1</span>
                   <div>
                     <p className="text-sm text-white font-medium">Move Ollama to a different port</p>
-                    <p className="mt-0.5">Set the <code className="text-gray-300 font-mono text-xs">OLLAMA_HOST</code> environment variable before starting Ollama:</p>
+                    <p className="mt-0.5">Set <code className="text-gray-300 font-mono text-xs">OLLAMA_HOST</code> so Ollama listens on a different port:</p>
                     <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
-{`# macOS (launchd)
-sudo launchctl setenv OLLAMA_HOST "127.0.0.1:11435"
-# Then restart Ollama (quit from menu bar and reopen, or:)
-# brew services restart ollama
+{`# macOS — add EnvironmentVariables to the Ollama plist:
+nano ~/Library/LaunchAgents/com.ollama.startup.plist
+# Add inside the <dict> block, before </dict>:
+#   <key>EnvironmentVariables</key>
+#   <dict>
+#     <key>OLLAMA_HOST</key>
+#     <string>127.0.0.1:11435</string>
+#   </dict>
+# Then reload:
+launchctl unload ~/Library/LaunchAgents/com.ollama.startup.plist
+launchctl load ~/Library/LaunchAgents/com.ollama.startup.plist
 
 # Linux (systemd)
 sudo systemctl edit ollama
 # Add under [Service]:
-# Environment="OLLAMA_HOST=127.0.0.1:11435"
+#   Environment="OLLAMA_HOST=127.0.0.1:11435"
 sudo systemctl restart ollama`}
                     </pre>
                   </div>
