@@ -62,7 +62,7 @@ Proxy inference traces (when proxy is enabled).
 ### GET /api/events/history
 Node event log from DuckDB.
 ```json
-{ "events": [{ "ts_ms": 1774621630223, "event_type": "startup", "level": "info", "message": "Agent started v0.7.10", "node_id": "WK-502B" }] }
+{ "events": [{ "ts_ms": 1774621630223, "event_type": "startup", "level": "info", "message": "Agent started v0.7.10", "node_id": "WK-XXXX" }] }
 ```
 
 ### GET /api/events/recent
@@ -80,7 +80,7 @@ Ollama model tags (proxied from local Ollama instance).
 ### GET /api/pair/status
 Pairing status with fleet.
 ```json
-{ "status": "connected", "node_id": "WK-502B", "fleet_url": "https://wicklee.dev" }
+{ "status": "connected", "node_id": "WK-XXXX", "fleet_url": "https://wicklee.dev" }
 ```
 
 ### POST /api/insights/dismiss
@@ -129,7 +129,7 @@ All nodes with full MetricsPayload.
 ```json
 {
   "nodes": [{
-    "node_id": "WK-502B",
+    "node_id": "WK-XXXX",
     "hostname": "macmini.local",
     "online": true,
     "last_seen_ms": 1774622475195,
@@ -143,7 +143,7 @@ WES scores for all nodes, ranked.
 ```json
 {
   "nodes": [
-    { "node_id": "WK-502B", "online": true, "wes": 15.0 },
+    { "node_id": "WK-XXXX", "online": true, "wes": 15.0 },
     { "node_id": "WK-99E9", "online": true, "wes": 3.2 }
   ]
 }
@@ -153,7 +153,7 @@ WES scores for all nodes, ranked.
 Single node deep dive with full MetricsPayload.
 ```json
 {
-  "node_id": "WK-502B",
+  "node_id": "WK-XXXX",
   "hostname": "macmini.local",
   "online": true,
   "last_seen_ms": 1774622475195,
@@ -166,7 +166,7 @@ Routing recommendation. Returns two candidates: latency (highest tok/s) and effi
 ```json
 {
   "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
-  "efficiency": { "node": "WK-502B", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
+  "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
   "default":    "efficiency"
 }
 ```

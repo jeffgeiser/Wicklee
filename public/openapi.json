@@ -73,7 +73,7 @@
       "get": {
         "operationId": "getNode",
         "summary": "Get single node deep dive",
-        "parameters": [{ "name": "nodeId", "in": "path", "required": true, "schema": { "type": "string" }, "example": "WK-502B" }],
+        "parameters": [{ "name": "nodeId", "in": "path", "required": true, "schema": { "type": "string" }, "example": "WK-XXXX" }],
         "responses": {
           "200": {
             "description": "Node with full metrics",
@@ -156,7 +156,7 @@
       "FleetNode": {
         "type": "object",
         "properties": {
-          "node_id": { "type": "string", "example": "WK-502B" },
+          "node_id": { "type": "string", "example": "WK-XXXX" },
           "hostname": { "type": "string", "example": "macmini.local" },
           "online": { "type": "boolean" },
           "last_seen_ms": { "type": "integer", "format": "int64" },

@@ -154,6 +154,13 @@ Auth: None required.
 | POST | /mcp | MCP JSON-RPC 2.0 endpoint |
 | GET | /.well-known/mcp.json | MCP server manifest |
 
+**Tip:** Discover your node ID with `curl -s http://localhost:7700/api/pair/status | jq .node_id` — use it for the `/api/history` endpoint:
+
+```bash
+NODE_ID=$(curl -s http://localhost:7700/api/pair/status | jq -r .node_id)
+curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | length'
+```
+
 ---
 
 ## Fleet API v1
