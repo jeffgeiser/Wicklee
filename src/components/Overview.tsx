@@ -551,14 +551,14 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             <>
               <p className="text-xs font-bold text-gray-900 dark:text-white truncate leading-none">
                 {hostname}
-                {m?.ollama_proxy_active && <span className="ml-1.5 text-[9px] text-purple-400 font-normal">proxy</span>}
+                {m?.ollama_proxy_active && <span className="ml-1.5 text-[8px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded-full font-semibold uppercase">proxy</span>}
               </p>
               <p className="text-[10px] font-telin text-gray-500 truncate leading-none mt-0.5">{nodeId}</p>
             </>
           ) : (
             <p className="text-xs font-telin font-bold text-gray-900 dark:text-white truncate leading-none">
               {nodeId}
-              {m?.ollama_proxy_active && <span className="ml-1.5 text-[9px] text-purple-400 font-normal">proxy</span>}
+              {m?.ollama_proxy_active && <span className="ml-1.5 text-[8px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded-full font-semibold uppercase">proxy</span>}
             </p>
           )}
           {dotState === 'offline' && (
@@ -829,6 +829,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
               tooltip="Average end-to-end latency from Wicklee proxy done packets. Measures total_duration from actual user requests flowing through the proxy. Real production data." />}
             {hasProxy && <DetailCell label="Proxy Requests" value={m.ollama_proxy_request_count} unit="total"
               tooltip="Total number of inference requests that have flowed through the Wicklee transparent proxy since agent startup. Resets on agent restart." />}
+            {hasProxy && m.proxy_listen_port && m.proxy_target_port && (
+              <DetailCell label="Proxy Ports" value={`:${m.proxy_listen_port} → :${m.proxy_target_port}`}
+                tooltip={`Proxy listens on :${m.proxy_listen_port} (Ollama default) and forwards to :${m.proxy_target_port} (real Ollama). Clients connect to :${m.proxy_listen_port} with no config changes.`} />
+            )}
 
             {/* Clock throttle — only on platforms that report it */}
             {m.clock_throttle_pct != null && <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%"
@@ -2412,7 +2416,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               </span>
               {sentinel?.ollama_proxy_active && (
                 <span className="text-[10px] text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full font-semibold">
-                  proxy :{sentinel.proxy_listen_port} → :{sentinel.proxy_target_port}
+                  PROXY
                 </span>
               )}
             </>) : (
