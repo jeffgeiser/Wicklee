@@ -71,14 +71,14 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
           <button
             key={item.id}
             onClick={() => setActiveTab(item.id)}
-            className={`w-full flex items-center justify-center group-hover/nav:justify-start gap-3 group-hover/nav:px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+            className={`w-full flex items-center justify-center group-hover/nav:justify-start group-hover/nav:gap-3 group-hover/nav:px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === item.id
                 ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-600/20'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent'
             }`}
           >
             <item.icon className="w-4 h-4 shrink-0" />
-            <span className="flex-1 text-left whitespace-nowrap opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100">
+            <span className="flex-1 text-left whitespace-nowrap opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100 w-0 group-hover/nav:w-auto overflow-hidden">
               {item.label}
             </span>
           </button>
