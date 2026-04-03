@@ -737,7 +737,7 @@ WES Version:     2
                   <span className="shrink-0 w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-[10px] font-bold text-emerald-400">3</span>
                   <div>
                     <p className="text-sm text-white font-medium">Physics — hardware sensors</p>
-                    <p className="text-xs text-gray-400 mt-0.5">When no runtime API is available, the agent reads GPU utilization, SoC power, ANE power, and NVIDIA board power directly. If these exceed idle thresholds while a runtime is loaded, the node is LIVE. A saturated-GPU override ({'≥'}75%) bypasses the post-probe cooldown window — probe-driven GPU residency never exceeds ~60% on Apple Silicon, so 75%+ can only be real inference.</p>
+                    <p className="text-xs text-gray-400 mt-0.5">When no runtime API is available, the agent reads GPU utilization, SoC power, ANE power, and NVIDIA board power directly. If these exceed idle thresholds while a <strong className="text-gray-300">model is loaded in VRAM</strong>, the node is LIVE. A running runtime process (e.g. Ollama) with no model loaded will not trigger Tier 3 — everyday GPU activity from other apps cannot produce a false LIVE. A saturated-GPU override ({'≥'}75%) bypasses the post-probe cooldown window — probe-driven GPU residency never exceeds ~60% on Apple Silicon, so 75%+ can only be real inference.</p>
                   </div>
                 </div>
               </div>
