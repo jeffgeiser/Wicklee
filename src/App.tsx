@@ -353,7 +353,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       Paddle.Checkout.open({
         items: [{ priceId, quantity: tier === 'team' ? 3 : 1 }],
         customData: config.custom_data,
-        customer: config.customer_email ? { email: config.customer_email } : undefined,
+        customer: currentUser.email ? { email: currentUser.email } : undefined,
         settings: {
           displayMode: 'overlay',
           theme: 'dark',
