@@ -1409,22 +1409,31 @@ curl https://wicklee.dev/api/v1/fleet \\
 
             <div>
               <p className="font-semibold text-white mb-2">Cursor</p>
-              <p className="mb-2">Edit <code>~/.cursor/mcp.json</code> (global) or <code>.cursor/mcp.json</code> (project). Add <code>wicklee</code> to <code>mcpServers</code>:</p>
+              <p className="mb-2">Edit <code>~/.cursor/mcp.json</code> (global) or <code>.cursor/mcp.json</code> (project):</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
-{`"wicklee": {
-  "command": "npx",
-  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+{`{
+  "mcpServers": {
+    "wicklee": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+    }
+  }
 }`}
               </pre>
+              <p className="text-gray-500 text-xs">If you already have other servers, add the <code>wicklee</code> entry inside the existing <code>mcpServers</code> object.</p>
             </div>
 
             <div>
               <p className="font-semibold text-white mb-2">Windsurf</p>
-              <p className="mb-2">Edit <code>~/.codeium/windsurf/mcp_config.json</code>. Add <code>wicklee</code> to <code>mcpServers</code>:</p>
+              <p className="mb-2">Edit <code>~/.codeium/windsurf/mcp_config.json</code>:</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
-{`"wicklee": {
-  "command": "npx",
-  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+{`{
+  "mcpServers": {
+    "wicklee": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+    }
+  }
 }`}
               </pre>
             </div>

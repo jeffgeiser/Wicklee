@@ -204,23 +204,33 @@ claude mcp add -s user wicklee -- npx -y mcp-remote http://localhost:7700/mcp
 
 ### Cursor
 
-Edit `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project). Add `wicklee` to `mcpServers`:
+Edit `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
 
 ```json
-"wicklee": {
-  "command": "npx",
-  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+{
+  "mcpServers": {
+    "wicklee": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+    }
+  }
 }
 ```
 
+If you already have other servers configured, add the `"wicklee"` entry inside the existing `mcpServers` object.
+
 ### Windsurf
 
-Edit `~/.codeium/windsurf/mcp_config.json`. Add `wicklee` to `mcpServers`:
+Edit `~/.codeium/windsurf/mcp_config.json`:
 
 ```json
-"wicklee": {
-  "command": "npx",
-  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+{
+  "mcpServers": {
+    "wicklee": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+    }
+  }
 }
 ```
 
