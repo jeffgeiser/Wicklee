@@ -315,17 +315,15 @@ The proxy binds to `localhost:11434` (Ollama's default port). Ollama is moved to
 **Step 1 — Move Ollama to a different port:**
 
 ```bash
-# macOS — add EnvironmentVariables to the Ollama plist:
-nano ~/Library/LaunchAgents/com.ollama.startup.plist
-# Add inside the <dict> block, before </dict>:
-#   <key>EnvironmentVariables</key>
-#   <dict>
-#     <key>OLLAMA_HOST</key>
-#     <string>127.0.0.1:11435</string>
-#   </dict>
-# Then reload:
-launchctl unload ~/Library/LaunchAgents/com.ollama.startup.plist
-launchctl load ~/Library/LaunchAgents/com.ollama.startup.plist
+# macOS (Ollama desktop app — most common)
+launchctl setenv OLLAMA_HOST 127.0.0.1:11435
+# Quit Ollama from menu bar, then reopen it.
+# Verify: curl -s http://127.0.0.1:11435/api/version
+
+# macOS (Ollama via launchd service — if you have a plist)
+# Edit ~/Library/LaunchAgents/com.ollama.startup.plist
+# Add EnvironmentVariables with OLLAMA_HOST=127.0.0.1:11435
+# Then: launchctl unload / load the plist
 
 # Linux (systemd)
 sudo systemctl edit ollama
@@ -336,10 +334,12 @@ sudo systemctl restart ollama
 
 **Step 2 — Enable the proxy in Wicklee config:**
 
-```toml
-# macOS: /Library/Application Support/Wicklee/config.toml
-# Linux: /etc/wicklee/config.toml
+```bash
+# Open the config:
+# macOS: sudo nano "/Library/Application Support/Wicklee/config.toml"
+# Linux: sudo nano /etc/wicklee/config.toml
 
+# Add at the bottom:
 [ollama_proxy]
 enabled     = true
 ollama_port = 11435   # port where Ollama now listens
