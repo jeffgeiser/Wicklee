@@ -188,6 +188,9 @@ Open the config file in your terminal:
 # macOS
 nano "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 
+# Linux
+nano ~/.config/Claude/claude_desktop_config.json
+
 # Windows (PowerShell)
 notepad "$env:APPDATA\Claude\claude_desktop_config.json"
 ```
