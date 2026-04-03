@@ -117,6 +117,23 @@ TTFT (Time to First Token) resolution priority:
 
 ---
 
+## Event Feeds
+
+Wicklee has two distinct event surfaces that serve different purposes:
+
+| | Live Activity | Recent Activity |
+|---|---|---|
+| **Location** | Intelligence page (scrollable feed) | Insights → Triage |
+| **Data source** | Fleet events from SSE stream | Alert quartet latch system |
+| **What it shows** | Connectivity, thermal transitions, model swaps, power anomalies, observation onset/resolved | Alert card lifecycle — when alerts fired and resolved, with duration |
+| **Trigger** | Immediate — fires on every state transition | Delayed — fires after 15-second onset gate |
+| **Persistence** | Current session only | sessionStorage — survives page refresh |
+| **Purpose** | Real-time operational awareness | Post-incident review |
+
+The Fleet Event Timeline on the Observability tab is a third, separate surface — it shows persisted `node_events` from Postgres (cloud) or DuckDB (localhost) with 30-day retention. This is the permanent audit record.
+
+---
+
 ## Localhost API
 
 Base URL: `http://localhost:7700`
@@ -222,7 +239,13 @@ claude mcp add -s user wicklee -- npx -y mcp-remote http://localhost:7700/mcp
 
 ### Cursor
 
-Edit `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
+Open the global config (or use `.cursor/mcp.json` for project-scoped):
+
+```bash
+nano ~/.cursor/mcp.json
+```
+
+Add the `wicklee` entry (create the file if it doesn't exist):
 
 ```json
 {
@@ -239,7 +262,13 @@ If you already have other servers configured, add the `"wicklee"` entry inside t
 
 ### Windsurf
 
-Edit `~/.codeium/windsurf/mcp_config.json`:
+Open the config:
+
+```bash
+nano ~/.codeium/windsurf/mcp_config.json
+```
+
+Add the `wicklee` entry (create the file if it doesn't exist):
 
 ```json
 {
