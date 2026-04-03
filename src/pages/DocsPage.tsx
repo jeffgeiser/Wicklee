@@ -1513,17 +1513,15 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
                     <p className="text-sm text-white font-medium">Move Ollama to a different port</p>
                     <p className="mt-0.5">Set <code className="text-gray-300 font-mono text-xs">OLLAMA_HOST</code> so Ollama listens on a different port:</p>
                     <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
-{`# macOS — add EnvironmentVariables to the Ollama plist:
-nano ~/Library/LaunchAgents/com.ollama.startup.plist
-# Add inside the <dict> block, before </dict>:
-#   <key>EnvironmentVariables</key>
-#   <dict>
-#     <key>OLLAMA_HOST</key>
-#     <string>127.0.0.1:11435</string>
-#   </dict>
-# Then reload:
-launchctl unload ~/Library/LaunchAgents/com.ollama.startup.plist
-launchctl load ~/Library/LaunchAgents/com.ollama.startup.plist
+{`# macOS (Ollama desktop app — most common)
+launchctl setenv OLLAMA_HOST 127.0.0.1:11435
+# Quit Ollama from menu bar, then reopen it.
+# Verify: curl -s http://127.0.0.1:11435/api/version
+
+# macOS (Ollama via launchd service — if you have a plist)
+# Edit ~/Library/LaunchAgents/com.ollama.startup.plist
+# Add EnvironmentVariables with OLLAMA_HOST=127.0.0.1:11435
+# Then: launchctl unload / load the plist
 
 # Linux (systemd)
 sudo systemctl edit ollama
@@ -1538,9 +1536,11 @@ sudo systemctl restart ollama`}
                   <div>
                     <p className="text-sm text-white font-medium">Enable the proxy in Wicklee config</p>
                     <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
-{`# macOS: /Library/Application Support/Wicklee/config.toml
-# Linux: /etc/wicklee/config.toml
+{`# Open the config:
+# macOS: sudo nano "/Library/Application Support/Wicklee/config.toml"
+# Linux: sudo nano /etc/wicklee/config.toml
 
+# Add at the bottom:
 [ollama_proxy]
 enabled     = true
 ollama_port = 11435   # port where Ollama now listens`}
