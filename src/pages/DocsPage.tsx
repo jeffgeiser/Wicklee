@@ -1386,18 +1386,30 @@ curl https://wicklee.dev/api/v1/fleet \\
 
             <div>
               <p className="font-semibold text-white mb-2">Claude Desktop</p>
-              <p className="mb-2">Edit <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) or <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows). Add <code>wicklee</code> to <code>mcpServers</code>:</p>
+              <p className="mb-2">Add <code>wicklee</code> to <code>mcpServers</code> in your Claude Desktop config. Open it with:</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
-{`"wicklee": {
-  "command": "/opt/homebrew/bin/npx",
-  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"],
-  "env": {
-    "HOME": "/Users/YOUR_USERNAME",
-    "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+{`# macOS
+nano "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+
+# Windows (PowerShell)
+notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
+              </pre>
+              <p className="mb-2 text-xs text-gray-400">Add the <code>wicklee</code> entry inside <code>mcpServers</code> (create the file if it doesn't exist):</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+{`{
+  "mcpServers": {
+    "wicklee": {
+      "command": "/opt/homebrew/bin/npx",
+      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"],
+      "env": {
+        "HOME": "/Users/YOUR_USERNAME",
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    }
   }
 }`}
               </pre>
-              <p className="text-gray-500 text-xs">Use <code>which npx</code> to find the correct path. Fully quit (Cmd+Q) and relaunch after editing.</p>
+              <p className="text-gray-500 text-xs">Use <code>which npx</code> to find the correct path for your system. Fully quit Claude Desktop (Cmd+Q) and relaunch after editing.</p>
             </div>
 
             <div>

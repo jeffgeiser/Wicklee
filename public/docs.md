@@ -182,10 +182,17 @@ The agent exposes a local MCP (Model Context Protocol) server for AI agents. Ava
 
 ### Connect to Claude Desktop
 
-Add Wicklee to your Claude Desktop config file:
+Open the config file in your terminal:
 
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+```bash
+# macOS
+nano "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+
+# Windows (PowerShell)
+notepad "$env:APPDATA\Claude\claude_desktop_config.json"
+```
+
+Add the `wicklee` entry inside `mcpServers` (create the file if it doesn't exist):
 
 ```json
 {
