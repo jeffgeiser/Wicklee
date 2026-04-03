@@ -1524,27 +1524,6 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             </div>
 
             <div>
-              <p className="font-semibold text-white mb-2">Environment variables (cloud backend)</p>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      <Th>Variable</Th>
-                      <Th>Default</Th>
-                      <Th>Purpose</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr><Td mono>PORT</Td><Td mono>8080</Td><Td>HTTP listener port</Td></tr>
-                    <tr><Td mono>DATABASE_URL</Td><Td mono>—</Td><Td>Postgres connection string (Railway auto-provides)</Td></tr>
-                    <tr><Td mono>CLERK_JWKS_URL</Td><Td mono>—</Td><Td>Clerk JWKS endpoint for JWT validation</Td></tr>
-                    <tr><Td mono>RESEND_API_KEY</Td><Td mono>—</Td><Td>Email delivery for alert notifications (optional)</Td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div>
               <p className="font-semibold text-white mb-2">Tiers &amp; fleet limits</p>
               <div className="overflow-x-auto">
                 <table className="w-full">
