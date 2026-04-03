@@ -449,7 +449,7 @@ Wicklee is sovereign by default:
 | Local MCP | ✅ | ✅ | ✅ | ✅ |
 | Cloud MCP | — | — | ✅ | ✅ |
 | OTel + Prometheus | — | — | ✅ | ✅ |
-| Alerts | — | Slack | Slack, PagerDuty | All |
+| Alerts | — | Slack, Email | Slack, Email, PagerDuty | All |
 
 ---
 
