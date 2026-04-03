@@ -1217,14 +1217,15 @@ WES Version:     2
               </table>
             </div>
 
-            <Code lang="shell">{`# Example: stream live metrics
+            <Code lang="shell">{`# Discover your node ID
+curl -s http://localhost:7700/api/pair/status | jq .node_id
+
+# Stream live metrics
 curl http://localhost:7700/api/metrics
 
-# Example: check agent health
-curl http://localhost:7700/api/pair/status | jq
-
-# Example: fetch 1h metric history
-curl "http://localhost:7700/api/history?node_id=WK-502B" | jq '.samples | length'`}</Code>
+# Fetch 1h metric history (replace YOUR_NODE_ID)
+NODE_ID=$(curl -s http://localhost:7700/api/pair/status | jq -r .node_id)
+curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | length'`}</Code>
 
             <NoteBox>
               The localhost API is available on every tier including Community — no account, no pairing, no internet required. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
@@ -1305,7 +1306,7 @@ curl https://wicklee.dev/api/v1/fleet \\
               <p className="text-xs font-bold text-white mb-2">Route response shape</p>
               <Code lang="json">{`{
   "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
-  "efficiency": { "node": "WK-502B", "tok_s": 19.5, "wes": 56.0, "reason": "Highest WES" },
+  "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 56.0, "reason": "Highest WES" },
   "default":    "efficiency"
 }`}</Code>
             </div>

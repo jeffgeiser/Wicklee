@@ -144,7 +144,7 @@ Auth: `X-API-Key: wk_live_...` header.
 ```json
 {
   "nodes": [
-    { "node_id": "WK-502B", "online": true, "wes": 15.0 },
+    { "node_id": "WK-XXXX", "online": true, "wes": 15.0 },
     { "node_id": "WK-99E9", "online": true, "wes": 3.2 }
   ]
 }
@@ -154,7 +154,7 @@ Auth: `X-API-Key: wk_live_...` header.
 ```json
 {
   "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3, "reason": "Highest throughput" },
-  "efficiency": { "node": "WK-502B", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
+  "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
   "default":    "efficiency"
 }
 ```
