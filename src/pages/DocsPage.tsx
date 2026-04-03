@@ -1385,29 +1385,47 @@ curl https://wicklee.dev/api/v1/fleet \\
             </div>
 
             <div>
-              <p className="font-semibold text-white mb-2">Connect to Claude Desktop</p>
-              <p className="mb-2">Add Wicklee to your Claude Desktop config. Edit <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) or <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows):</p>
+              <p className="font-semibold text-white mb-2">Claude Desktop</p>
+              <p className="mb-2">Edit <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) or <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows). Add <code>wicklee</code> to <code>mcpServers</code>:</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
-{`{
-  "mcpServers": {
-    "wicklee": {
-      "command": "/opt/homebrew/bin/npx",
-      "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"],
-      "env": {
-        "HOME": "/Users/YOUR_USERNAME",
-        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-      }
-    }
+{`"wicklee": {
+  "command": "/opt/homebrew/bin/npx",
+  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"],
+  "env": {
+    "HOME": "/Users/YOUR_USERNAME",
+    "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
   }
 }`}
               </pre>
-              <p className="text-gray-500 text-xs">Requires Node.js. Use <code>which npx</code> to find the correct path for your system. Fully quit Claude Desktop (Cmd+Q) and relaunch after editing.</p>
+              <p className="text-gray-500 text-xs">Use <code>which npx</code> to find the correct path. Fully quit (Cmd+Q) and relaunch after editing.</p>
             </div>
 
             <div>
-              <p className="font-semibold text-white mb-2">Connect to Claude Code</p>
+              <p className="font-semibold text-white mb-2">Claude Code (CLI)</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
-{`claude mcp add wicklee -- npx -y mcp-remote http://localhost:7700/mcp`}
+{`claude mcp add -s user wicklee -- npx -y mcp-remote http://localhost:7700/mcp`}
+              </pre>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Cursor</p>
+              <p className="mb-2">Edit <code>~/.cursor/mcp.json</code> (global) or <code>.cursor/mcp.json</code> (project). Add <code>wicklee</code> to <code>mcpServers</code>:</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+{`"wicklee": {
+  "command": "npx",
+  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+}`}
+              </pre>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Windsurf</p>
+              <p className="mb-2">Edit <code>~/.codeium/windsurf/mcp_config.json</code>. Add <code>wicklee</code> to <code>mcpServers</code>:</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+{`"wicklee": {
+  "command": "npx",
+  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+}`}
               </pre>
             </div>
 
@@ -1418,6 +1436,7 @@ curl https://wicklee.dev/api/v1/fleet \\
   -H "Content-Type: application/json" \\
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}'`}
               </pre>
+              <p className="text-gray-500 text-xs mt-1">All setups require Node.js for the mcp-remote bridge. Restart your IDE after configuration changes.</p>
             </div>
           </Section>
 
