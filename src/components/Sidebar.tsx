@@ -66,7 +66,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
       ].join(' ')}>
 
       {/* Nav items — pt-16 clears the sticky header zone (header height = 64px = 4rem) */}
-      <nav className="flex-1 px-2 space-y-1 pt-16 pb-4 overflow-hidden">
+      <nav className="flex-1 space-y-1 pt-16 pb-4 overflow-hidden px-0 group-hover/nav:px-2">
         {items.filter(i => i.show).map((item) => (
           <button
             key={item.id}
@@ -78,7 +78,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
             }`}
           >
             <item.icon className="w-4 h-4 shrink-0" />
-            <span className="flex-1 text-left whitespace-nowrap opacity-0 group-hover/nav:opacity-100 transition-opacity duration-100 w-0 group-hover/nav:w-auto overflow-hidden">
+            <span className="hidden group-hover/nav:inline flex-1 text-left whitespace-nowrap">
               {item.label}
             </span>
           </button>
