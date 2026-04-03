@@ -1293,8 +1293,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const [localConnected, setLocalConnected] = useState(false);
   const [localTransport, setLocalTransport] = useState<'ws' | 'sse' | null>(null);
 
-  type MetricKey = 'gpu' | 'cpu' | 'mem' | 'power';
-  interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; }
+  type MetricKey = 'gpu' | 'cpu' | 'mem' | 'power' | 'tps';
+  interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; tps: number | null; }
   const [history, setHistory]           = useState<HistoryPoint[]>([]);
   const [selectedMetric, setSelectedMetric] = useState<MetricKey>('gpu');
   const MAX_HISTORY = 3600; // 1 hour at 1 Hz — cloud unlocks longer history ranges
@@ -1389,6 +1389,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         mem:   data.memory_pressure_percent ??
                (data.total_memory_mb > 0 ? (data.used_memory_mb / data.total_memory_mb) * 100 : null),
         power: getNodePowerW(data),
+        tps:   data.ollama_tokens_per_second ?? data.vllm_tokens_per_sec ?? data.llamacpp_tokens_per_sec ?? null,
       };
       const next = [...prev, pt];
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
@@ -1513,8 +1514,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       .filter((v): v is number => v != null);
     const power = powerVals.length > 0 ? powerVals.reduce((a, b) => a + b, 0) : null;
 
+    // Tok/s — sum across all nodes that report throughput (fleet aggregate).
+    const tpsVals = all
+      .map(m => m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? m.llamacpp_tokens_per_sec ?? null)
+      .filter((v): v is number => v != null);
+    const tps = tpsVals.length > 0 ? tpsVals.reduce((a, b) => a + b, 0) : null;
+
     setHistory(prev => {
-      const pt: HistoryPoint = { time: lbl, gpu, cpu, mem, power };
+      const pt: HistoryPoint = { time: lbl, gpu, cpu, mem, power, tps };
       const next = [...prev, pt];
       return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
     });
@@ -2494,6 +2501,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           cpu:   { label: 'CPU Usage',       color: '#10b981', gradId: 'gradCpu',   unit: '%', isPercent: true  },
           mem:   { label: 'Mem Pressure',    color: '#22d3ee', gradId: 'gradMem',   unit: '%', isPercent: true  },
           power: { label: 'Board Power',     color: '#f59e0b', gradId: 'gradPower', unit: 'W', isPercent: false },
+          tps:   { label: 'Tok/s',           color: '#818cf8', gradId: 'gradTps',   unit: ' tok/s', isPercent: false },
         };
 
         // Detect which metrics have real data (after a few points)
@@ -2501,6 +2509,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         const hasGpu   = history.some(p => p.gpu   != null);
         const hasMem   = history.some(p => p.mem   != null);
         const hasPower = history.some(p => p.power != null);
+        const hasTps   = history.some(p => p.tps   != null);
 
         // Auto-fallback: if GPU selected but no GPU data, show CPU instead
         const effectiveKey = selectedMetric === 'gpu' && settled && !hasGpu ? 'cpu' : selectedMetric;
@@ -2528,7 +2537,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 transition-colors select-none"
                   >
                     <span className="font-medium">
-                      {{ gpu: 'GPU Util', cpu: 'CPU', mem: 'Mem Pressure', power: 'Board Power' }[selectedMetric]}
+                      {{ gpu: 'GPU Util', cpu: 'CPU', mem: 'Mem Pressure', power: 'Board Power', tps: 'Tok/s' }[selectedMetric]}
                     </span>
                     <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform duration-150 ${metricOpen ? 'rotate-180' : ''}`} />
                   </button>
@@ -2541,6 +2550,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                           { key: 'cpu'   as MetricKey, label: 'CPU',          na: false,                 naLabel: ''          },
                           { key: 'mem'   as MetricKey, label: 'Mem Pressure', na: settled && !hasMem,   naLabel: 'macOS only' },
                           { key: 'power' as MetricKey, label: 'Board Power',  na: settled && !hasPower, naLabel: ''          },
+                          { key: 'tps'   as MetricKey, label: 'Tok/s',        na: settled && !hasTps,   naLabel: 'no model'  },
                         ]
                       ).map(({ key, label, na, naLabel }) => (
                         <button
