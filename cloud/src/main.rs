@@ -4426,11 +4426,13 @@ async fn handle_billing_config(
     ).bind(&user_id).fetch_optional(&state.pool).await.ok().flatten();
 
     let paddle_env = std::env::var("PADDLE_ENV").unwrap_or_else(|_| "sandbox".to_string());
+    let paddle_client_token = std::env::var("PADDLE_CLIENT_TOKEN").unwrap_or_else(|_| "".to_string());
     let pro_price_id = std::env::var("PADDLE_PRO_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_pro".to_string());
     let team_price_id = std::env::var("PADDLE_TEAM_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_team".to_string());
 
     Json(serde_json::json!({
         "environment": paddle_env,
+        "client_token": paddle_client_token,
         "prices": { "pro": pro_price_id, "team": team_price_id },
         "custom_data": { "user_id": user_id },
         "customer_email": email,

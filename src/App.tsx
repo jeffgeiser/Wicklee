@@ -332,6 +332,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
       if (!r.ok) return;
       const config = await r.json() as {
         environment: 'sandbox' | 'production';
+        client_token: string;
         prices: { pro: string; team: string };
         custom_data: { user_id: string };
         customer_email: string | null;
@@ -343,8 +344,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
         return;
       }
 
-      // Initialize Paddle with environment (idempotent)
-      Paddle.Environment.set(config.environment);
+      // Initialize Paddle with client token and environment (idempotent)
+      Paddle.Initialize({ token: config.client_token, environment: config.environment });
 
       const priceId = tier === 'team' ? config.prices.team : config.prices.pro;
       Paddle.Checkout.open({
