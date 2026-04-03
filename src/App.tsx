@@ -29,6 +29,7 @@ import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
 import MetricsPage from './pages/MetricsPage';
 import DocsPage from './pages/DocsPage';
+import LegalPage from './pages/LegalPage';
 import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
 const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
@@ -394,6 +395,17 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
   // Documentation route — public, no auth required (trailing slash tolerant)
   if (currentPath === '/docs' || currentPath === '/docs/') {
     return <DocsPage onNavigate={navigate} />;
+  }
+
+  // Legal routes — public, no auth required
+  if (currentPath === '/terms' || currentPath === '/terms/') {
+    return <LegalPage onNavigate={navigate} initialTab="terms" />;
+  }
+  if (currentPath === '/privacy' || currentPath === '/privacy/') {
+    return <LegalPage onNavigate={navigate} initialTab="privacy" />;
+  }
+  if (currentPath === '/refund' || currentPath === '/refund/') {
+    return <LegalPage onNavigate={navigate} initialTab="refund" />;
   }
 
   // Pricing route — public, accessible logged in or out
