@@ -315,14 +315,22 @@ The proxy binds to `localhost:11434` (Ollama's default port). Ollama is moved to
 **Step 1 — Move Ollama to a different port:**
 
 ```bash
-# macOS (launchd)
-sudo launchctl setenv OLLAMA_HOST "127.0.0.1:11435"
-# Then restart Ollama (quit from menu bar and reopen)
+# macOS — add EnvironmentVariables to the Ollama plist:
+nano ~/Library/LaunchAgents/com.ollama.startup.plist
+# Add inside the <dict> block, before </dict>:
+#   <key>EnvironmentVariables</key>
+#   <dict>
+#     <key>OLLAMA_HOST</key>
+#     <string>127.0.0.1:11435</string>
+#   </dict>
+# Then reload:
+launchctl unload ~/Library/LaunchAgents/com.ollama.startup.plist
+launchctl load ~/Library/LaunchAgents/com.ollama.startup.plist
 
 # Linux (systemd)
 sudo systemctl edit ollama
 # Add under [Service]:
-# Environment="OLLAMA_HOST=127.0.0.1:11435"
+#   Environment="OLLAMA_HOST=127.0.0.1:11435"
 sudo systemctl restart ollama
 ```
 
