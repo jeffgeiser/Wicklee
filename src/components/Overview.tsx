@@ -549,11 +549,17 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         <div className="min-w-0">
           {hostname !== nodeId ? (
             <>
-              <p className="text-xs font-bold text-gray-900 dark:text-white truncate leading-none">{hostname}</p>
+              <p className="text-xs font-bold text-gray-900 dark:text-white truncate leading-none">
+                {hostname}
+                {m?.ollama_proxy_active && <span className="ml-1.5 text-[9px] text-purple-400 font-normal">proxy</span>}
+              </p>
               <p className="text-[10px] font-telin text-gray-500 truncate leading-none mt-0.5">{nodeId}</p>
             </>
           ) : (
-            <p className="text-xs font-telin font-bold text-gray-900 dark:text-white truncate leading-none">{nodeId}</p>
+            <p className="text-xs font-telin font-bold text-gray-900 dark:text-white truncate leading-none">
+              {nodeId}
+              {m?.ollama_proxy_active && <span className="ml-1.5 text-[9px] text-purple-400 font-normal">proxy</span>}
+            </p>
           )}
           {dotState === 'offline' && (
             <p className="text-[9px] text-gray-400 dark:text-gray-600 leading-none mt-0.5">unreachable</p>
@@ -2400,11 +2406,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
               {isLocalMode ? 'Live Hardware' : 'Fleet Status'}
             </h3>
-            {isLocalMode ? (
+            {isLocalMode ? (<>
               <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full font-semibold">
                 {transport === 'ws' ? '10 Hz' : '1 Hz'}
               </span>
-            ) : (
+              {sentinel?.ollama_proxy_active && (
+                <span className="text-[10px] text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full font-semibold">
+                  proxy :{sentinel.proxy_listen_port} → :{sentinel.proxy_target_port}
+                </span>
+              )}
+            </>) : (
               <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
                 {isLocalHost ? (sentinel ? '1' : '0') : counts.total} node{(isLocalHost ? (sentinel ? 1 : 0) : counts.total) !== 1 ? 's' : ''}
               </span>
