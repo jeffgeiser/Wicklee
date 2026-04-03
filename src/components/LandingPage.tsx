@@ -524,7 +524,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shrink-0 shadow-lg shadow-blue-500/20">3</div>
                   <div>
                     <h4 className="text-white font-semibold text-lg mb-1">Wicklee watches your hardware</h4>
-                    <p className="text-gray-500 leading-relaxed">Set custom thermal thresholds and receive Slack alerts when nodes throttle. Use the Agent API to drive your own failover logic and protect your silicon.</p>
+                    <p className="text-gray-500 leading-relaxed">Set custom thermal thresholds and receive Slack or email alerts when nodes throttle. Use the Agent API to drive your own failover logic and protect your silicon.</p>
                   </div>
                 </div>
               </div>
