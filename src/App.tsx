@@ -344,8 +344,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
         return;
       }
 
-      // Initialize Paddle with client token and environment (idempotent)
-      Paddle.Initialize({ token: config.client_token, environment: config.environment });
+      // Initialize Paddle with client token (idempotent).
+      // Environment must be set separately — it's not a valid Initialize() option.
+      Paddle.Environment.set(config.environment);
+      Paddle.Initialize({ token: config.client_token });
 
       const priceId = tier === 'team' ? config.prices.team : config.prices.pro;
       Paddle.Checkout.open({
