@@ -71,8 +71,32 @@ Requires Node.js. Use `which npx` to find the correct npx path. Fully quit Claud
 ### Connect to Claude Code
 
 ```bash
-claude mcp add wicklee -- npx -y mcp-remote http://localhost:7700/mcp
+claude mcp add -s user wicklee -- npx -y mcp-remote http://localhost:7700/mcp
 ```
+
+### Cursor
+
+Edit `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project). Add `wicklee` to `mcpServers`:
+
+```json
+"wicklee": {
+  "command": "npx",
+  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+}
+```
+
+### Windsurf
+
+Edit `~/.codeium/windsurf/mcp_config.json`. Add `wicklee` to `mcpServers`:
+
+```json
+"wicklee": {
+  "command": "npx",
+  "args": ["-y", "mcp-remote", "http://localhost:7700/mcp"]
+}
+```
+
+All setups require Node.js for the mcp-remote bridge. Restart your IDE after configuration changes.
 
 ### Test with curl
 
