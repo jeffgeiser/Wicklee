@@ -14,8 +14,11 @@ pub(crate) struct HardwareSignals {
     pub(crate) nvidia_gpu_pct: Option<f32>,
     pub(crate) nvidia_vram_mb: Option<u64>,  // non-zero = Ollama process holds GPU memory
     pub(crate) nvidia_power_w: Option<f32>,
-    // Runtime presence — gates Tier 3 to prevent false LIVE from non-AI workloads
+    // Runtime presence — gates BUSY detection (GPU load without any AI runtime)
     pub(crate) ai_runtime_loaded: bool,      // ollama_running || vllm_running
+    // Model actually loaded in VRAM — gates Tier 3 to prevent false LIVE from
+    // everyday GPU activity when a runtime process is running but idle (no model).
+    pub(crate) ai_model_loaded:   bool,      // ollama_active_model.is_some() || ...
     // Tier 1 exact
     pub(crate) vllm_requests:     Option<u32>,
     pub(crate) llamacpp_requests: Option<u32>,
@@ -46,6 +49,9 @@ pub(crate) fn read_hardware_signals(
         nvidia_vram_mb:       nvidia.nvidia_vram_used_mb,
         nvidia_power_w:       nvidia.nvidia_power_draw_w,
         ai_runtime_loaded:    ollama.ollama_running || vllm.vllm_running || llamacpp.llamacpp_running,
+        ai_model_loaded:      ollama.ollama_active_model.is_some()
+                              || vllm.vllm_model_name.is_some()
+                              || llamacpp.llamacpp_model_name.is_some(),
         vllm_requests:        vllm.vllm_requests_running,
         llamacpp_requests:    llamacpp.llamacpp_slots_processing,
         probe_active:         probe_active.load(std::sync::atomic::Ordering::Acquire),
@@ -124,7 +130,8 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     //   !probe_active — probe itself heats silicon
     //   !recent_probe — GPU residency lingers 10-15s after probe ends; without
     //                   this gate the 20% threshold hallucinates LIVE from probe heat
-    //   ai_runtime_loaded — prevents LIVE from video encoding, etc.
+    //   ai_model_loaded — prevents LIVE from everyday GPU activity when a
+    //                     runtime is running but has no model in VRAM
     //
     // High-confidence override: the synthetic probe never drives GPU above ~60%.
     // If residency is ≥ 75% during the recent_probe window it can only be real
@@ -132,7 +139,7 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     let saturated_gpu = s.apple_gpu_pct.map_or(false,  |g| g >= 75.0)
                      || s.nvidia_gpu_pct.map_or(false, |g| g >= 75.0);
 
-    if !s.probe_active && (!s.recent_probe || saturated_gpu) && s.ai_runtime_loaded {
+    if !s.probe_active && (!s.recent_probe || saturated_gpu) && s.ai_model_loaded {
         let ai_specific = s.ane_power_w.map_or(false, |p| p > 0.5);
         let physics =
             // SoC power gate (M1 Pro/Max/Ultra, M2/M3 Pro/Max — larger GPU arrays)
@@ -152,7 +159,9 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     }
 
     // ── IDLE-SPD: fresh probe baseline available ──────────────────────────────
-    if s.recent_probe {
+    // Also requires a model in VRAM — no point showing IDLE-SPD if the runtime
+    // is running but has no model loaded.
+    if s.recent_probe && s.ai_model_loaded {
         return InferenceState::IdleSpd;
     }
 
@@ -171,7 +180,7 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
 mod tests {
     use super::*;
 
-    /// Baseline: all sensors quiet, no runtime loaded.
+    /// Baseline: all sensors quiet, no runtime loaded, no model loaded.
     fn idle_signals() -> HardwareSignals {
         HardwareSignals {
             ane_power_w:          None,
@@ -181,6 +190,7 @@ mod tests {
             nvidia_vram_mb:       None,
             nvidia_power_w:       None,
             ai_runtime_loaded:    false,
+            ai_model_loaded:      false,
             vllm_requests:        None,
             llamacpp_requests:    None,
             probe_active:         false,
@@ -196,6 +206,7 @@ mod tests {
         let s = HardwareSignals {
             apple_gpu_pct:     Some(99.0),
             ai_runtime_loaded: true,
+            ai_model_loaded:   true,
             probe_active:      true,
             ..idle_signals()
         };
@@ -209,6 +220,7 @@ mod tests {
         let s = HardwareSignals {
             apple_gpu_pct:     Some(99.0),
             ai_runtime_loaded: true,
+            ai_model_loaded:   true,
             recent_probe:      true,
             ..idle_signals()
         };
@@ -222,6 +234,7 @@ mod tests {
         let s = HardwareSignals {
             apple_gpu_pct:     Some(50.0),
             ai_runtime_loaded: true,
+            ai_model_loaded:   true,
             recent_probe:      true,
             ..idle_signals()
         };
@@ -234,6 +247,7 @@ mod tests {
         let s = HardwareSignals {
             apple_gpu_pct:     Some(99.0),
             ai_runtime_loaded: true,
+            ai_model_loaded:   true,
             ..idle_signals()
         };
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
@@ -246,6 +260,7 @@ mod tests {
         let s = HardwareSignals {
             apple_gpu_pct:     Some(15.0),
             ai_runtime_loaded: true,
+            ai_model_loaded:   true,
             ..idle_signals()
         };
         assert_eq!(compute_inference_state(&s), InferenceState::Idle);
@@ -311,6 +326,7 @@ mod tests {
         let s = HardwareSignals {
             ane_power_w:       Some(1.2),
             ai_runtime_loaded: true,
+            ai_model_loaded:   true,
             ..idle_signals()
         };
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
@@ -341,10 +357,38 @@ mod tests {
             nvidia_gpu_pct:    Some(85.0),
             nvidia_vram_mb:    Some(4096),
             ai_runtime_loaded: true,
+            ai_model_loaded:   true,
             recent_probe:      true,
             ..idle_signals()
         };
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
+    }
+
+    // ── Runtime running but no model loaded + high GPU → NOT LIVE ───────────
+    // Ollama process is running but no model is in VRAM. GPU activity is from
+    // other apps (Chrome, compositing). Must not trigger Tier 3.
+    #[test]
+    fn runtime_running_no_model_high_gpu_is_not_live() {
+        let s = HardwareSignals {
+            apple_gpu_pct:     Some(25.0),
+            ai_runtime_loaded: true,   // Ollama process running
+            ai_model_loaded:   false,  // but no model loaded
+            ..idle_signals()
+        };
+        assert_eq!(compute_inference_state(&s), InferenceState::Idle);
+    }
+
+    // ── Runtime running, no model, recent probe → NOT IDLE-SPD ───────────────
+    // Edge case: recent_probe=true but no model loaded shouldn't show IDLE-SPD.
+    #[test]
+    fn runtime_no_model_recent_probe_is_idle() {
+        let s = HardwareSignals {
+            ai_runtime_loaded: true,
+            ai_model_loaded:   false,
+            recent_probe:      true,
+            ..idle_signals()
+        };
+        assert_eq!(compute_inference_state(&s), InferenceState::Idle);
     }
 
     // Bare idle — no sensors, no runtime → IDLE.

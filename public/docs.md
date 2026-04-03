@@ -57,14 +57,22 @@ Wicklee Efficiency Score — the MPG for local AI. A direct measure of how effic
 
 ## Node States
 
-The agent computes inference state once per tick as a pure function from sensor readings:
+The agent computes inference state once per second as a pure function from sensor readings. The `inference_state` field is the single source of truth — the dashboard displays it directly and never re-computes it.
 
 | State | Meaning |
 |-------|---------|
-| **live** | Active inference detected (Tier 1: vLLM requests, Tier 2: Ollama attribution, Tier 3: GPU physics) |
-| **idle-spd** | Model loaded but not inferring |
-| **busy** | GPU active but not attributed to AI inference |
+| **live** | Active inference detected |
+| **idle-spd** | Model loaded, no active inference — probe baseline visible |
+| **busy** | GPU active but no AI runtime detected (non-inference workload) |
 | **idle** | No activity |
+
+### Three-tier detection hierarchy (first match wins)
+
+1. **Tier 1 — Exact runtime API:** vLLM and llama.cpp report active request/slot counts. If `requests_running > 0` or `slots_processing > 0`, the node is LIVE — zero ambiguity.
+
+2. **Tier 2 — Ollama attribution:** When Ollama's `/api/ps` shows a model expiry change attributed to a user request (not the agent's probe), the node is LIVE for 15 seconds. A one-shot flag (`probe_caused_next_reset`) prevents the probe from being mistaken for user activity.
+
+3. **Tier 3 — Physics / sensor fusion:** GPU utilization, SoC power, ANE power, and NVIDIA board power are read directly. If these exceed idle thresholds while a **model is loaded in VRAM**, the node is LIVE. A running runtime process (e.g. Ollama) with no model loaded will not trigger Tier 3 — everyday GPU activity from other apps cannot produce a false LIVE. A saturated-GPU override (≥75%) bypasses the post-probe cooldown window.
 
 ---
 
