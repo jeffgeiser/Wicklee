@@ -1391,6 +1391,9 @@ curl https://wicklee.dev/api/v1/fleet \\
 {`# macOS
 nano "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 
+# Linux
+nano ~/.config/Claude/claude_desktop_config.json
+
 # Windows (PowerShell)
 notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
               </pre>
@@ -1421,7 +1424,11 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
 
             <div>
               <p className="font-semibold text-white mb-2">Cursor</p>
-              <p className="mb-2">Edit <code>~/.cursor/mcp.json</code> (global) or <code>.cursor/mcp.json</code> (project):</p>
+              <p className="mb-2">Open the global config (or use <code>.cursor/mcp.json</code> for project-scoped):</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+{`nano ~/.cursor/mcp.json`}
+              </pre>
+              <p className="mb-2 text-xs text-gray-400">Add the <code>wicklee</code> entry (create the file if it doesn't exist):</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`{
   "mcpServers": {
@@ -1437,7 +1444,11 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
 
             <div>
               <p className="font-semibold text-white mb-2">Windsurf</p>
-              <p className="mb-2">Edit <code>~/.codeium/windsurf/mcp_config.json</code>:</p>
+              <p className="mb-2">Open the config:</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+{`nano ~/.codeium/windsurf/mcp_config.json`}
+              </pre>
+              <p className="mb-2 text-xs text-gray-400">Add the <code>wicklee</code> entry (create the file if it doesn't exist):</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`{
   "mcpServers": {
