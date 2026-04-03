@@ -293,6 +293,71 @@ curl -X POST http://localhost:7700/mcp \
 
 ---
 
+## Inline Proxy (Ollama)
+
+By default, Wicklee monitors inference using a lightweight synthetic probe (20 tokens every ~30 seconds). The optional inline proxy intercepts real Ollama traffic to provide continuous, production-grade metrics with zero sampling gap.
+
+### What the proxy adds
+
+| Metric | Probe (default) | With Proxy |
+|--------|-----------------|------------|
+| tok/s | Synthetic baseline (~30s cadence) | Exact from real requests (continuous) |
+| TTFT | Cold-start synthetic | Rolling average from production traffic |
+| E2E Latency | — | Full request duration (prompt + generation) |
+| Request Count | — | Cumulative total since agent start |
+
+### How it works
+
+The proxy binds to `localhost:11434` (Ollama's default port). Ollama is moved to a different port. All requests flow through Wicklee transparently — the proxy extracts timing metrics from done packets and forwards everything unmodified. Your clients (Cursor, Open WebUI, etc.) don't need any configuration changes.
+
+### Setup
+
+**Step 1 — Move Ollama to a different port:**
+
+```bash
+# macOS (launchd)
+sudo launchctl setenv OLLAMA_HOST "127.0.0.1:11435"
+# Then restart Ollama (quit from menu bar and reopen)
+
+# Linux (systemd)
+sudo systemctl edit ollama
+# Add under [Service]:
+# Environment="OLLAMA_HOST=127.0.0.1:11435"
+sudo systemctl restart ollama
+```
+
+**Step 2 — Enable the proxy in Wicklee config:**
+
+```toml
+# macOS: /Library/Application Support/Wicklee/config.toml
+# Linux: /etc/wicklee/config.toml
+
+[ollama_proxy]
+enabled     = true
+ollama_port = 11435   # port where Ollama now listens
+```
+
+**Step 3 — Restart the Wicklee agent:**
+
+```bash
+curl -fsSL https://wicklee.dev/install.sh | bash
+# or manually:
+# macOS: sudo launchctl kickstart -k system/dev.wicklee.agent
+# Linux: sudo systemctl restart wicklee
+```
+
+Verify the proxy is active — your dashboard will show `proxy: :11434 → :11435` in the Diagnostics rail.
+
+### Tier note
+
+The proxy works locally on all tiers (Community included). Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for **Pro tier and above**.
+
+### Why Ollama only?
+
+vLLM already exposes production latency histograms natively via its `/metrics` Prometheus endpoint — no proxy needed. Ollama doesn't expose request-level timing, so the proxy fills that gap.
+
+---
+
 ## OpenTelemetry & Prometheus
 
 **Team tier required.**
@@ -326,7 +391,7 @@ Wicklee is zero-config by default. Optional settings:
 | node_id | Auto-generated (WK-XXXX) | Stable node identifier |
 | fleet_url | None | Cloud fleet URL (set by pairing) |
 | bind_address | 127.0.0.1 | Set to 0.0.0.0 for LAN access |
-| ollama_proxy.enabled | false | Enable transparent proxy on :11434 |
+| ollama_proxy.enabled | false | Enable [inline proxy](#inline-proxy-ollama) on :11434 |
 
 ---
 

@@ -110,6 +110,7 @@ const NAV = [
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
   { id: 'mcp',         label: 'MCP Server' },
+  { id: 'proxy',       label: 'Inline Proxy' },
   { id: 'otel',        label: 'OTel & Prometheus' },
   { id: 'config',      label: 'Configuration' },
   { id: 'sovereignty', label: 'Sovereignty' },
@@ -1472,6 +1473,99 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             </div>
           </Section>
 
+          {/* ── Inline Proxy ── */}
+          <Section
+            id="proxy"
+            icon={<Activity className="w-5 h-5" />}
+            accent="border-purple-500/20"
+            title="Inline Proxy (Ollama)"
+          >
+            <p>
+              By default, Wicklee monitors inference using a lightweight synthetic probe (20 tokens every ~30 seconds). The optional <strong className="text-white">inline proxy</strong> intercepts real Ollama traffic to provide continuous, production-grade metrics with zero sampling gap.
+            </p>
+
+            <div>
+              <p className="font-semibold text-white mb-2">What the proxy adds</p>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead><tr><Th>Metric</Th><Th>Probe (default)</Th><Th>With Proxy</Th></tr></thead>
+                  <tbody>
+                    <tr><Td>tok/s</Td><Td>Synthetic baseline (~30s cadence)</Td><Td>Exact from real requests (continuous)</Td></tr>
+                    <tr><Td>TTFT</Td><Td>Cold-start synthetic</Td><Td>Rolling average from production traffic</Td></tr>
+                    <tr><Td>E2E Latency</Td><Td>—</Td><Td>Full request duration (prompt + generation)</Td></tr>
+                    <tr><Td>Request Count</Td><Td>—</Td><Td>Cumulative total since agent start</Td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">How it works</p>
+              <p>The proxy binds to <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">localhost:11434</code> (Ollama's default port). Ollama is moved to a different port. All requests flow through Wicklee transparently — the proxy extracts timing metrics from Ollama's done packets and forwards everything unmodified. Your clients (Cursor, Open WebUI, etc.) don't need any configuration changes.</p>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Setup (3 steps)</p>
+              <div className="space-y-3 text-xs text-gray-400">
+                <div className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-[10px] font-bold text-purple-400">1</span>
+                  <div>
+                    <p className="text-sm text-white font-medium">Move Ollama to a different port</p>
+                    <p className="mt-0.5">Set the <code className="text-gray-300 font-mono text-xs">OLLAMA_HOST</code> environment variable before starting Ollama:</p>
+                    <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+{`# macOS (launchd)
+sudo launchctl setenv OLLAMA_HOST "127.0.0.1:11435"
+# Then restart Ollama (quit from menu bar and reopen, or:)
+# brew services restart ollama
+
+# Linux (systemd)
+sudo systemctl edit ollama
+# Add under [Service]:
+# Environment="OLLAMA_HOST=127.0.0.1:11435"
+sudo systemctl restart ollama`}
+                    </pre>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-[10px] font-bold text-purple-400">2</span>
+                  <div>
+                    <p className="text-sm text-white font-medium">Enable the proxy in Wicklee config</p>
+                    <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+{`# macOS: /Library/Application Support/Wicklee/config.toml
+# Linux: /etc/wicklee/config.toml
+
+[ollama_proxy]
+enabled     = true
+ollama_port = 11435   # port where Ollama now listens`}
+                    </pre>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-[10px] font-bold text-purple-400">3</span>
+                  <div>
+                    <p className="text-sm text-white font-medium">Restart the Wicklee agent</p>
+                    <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+{`curl -fsSL https://wicklee.dev/install.sh | bash
+# or manually:
+# macOS: sudo launchctl kickstart -k system/dev.wicklee.agent
+# Linux: sudo systemctl restart wicklee`}
+                    </pre>
+                    <p className="mt-1">Verify the proxy is active — your dashboard will show <code className="text-gray-300 font-mono text-xs">proxy: :11434 → :11435</code> in the Diagnostics rail.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <NoteBox>
+              <strong className="text-gray-300">Tier note:</strong> The proxy works locally on all tiers (Community included). Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for <strong className="text-gray-300">Pro tier and above</strong>.
+            </NoteBox>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Why Ollama only?</p>
+              <p>vLLM already exposes production latency histograms natively via its <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">/metrics</code> Prometheus endpoint — no proxy needed. Ollama doesn't expose request-level timing, so the proxy fills that gap.</p>
+            </div>
+          </Section>
+
           {/* ── OTel & Prometheus ── */}
           <Section
             id="otel"
@@ -1568,13 +1662,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
               </p>
             </div>
 
-            <div>
-              <p className="font-semibold text-white mb-2">Ollama transparent proxy (optional)</p>
-              <p>Enable the proxy in your <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">config.toml</code> config to get zero-lag inference detection and exact tok/s from done packets instead of the 30s sampled probe:</p>
-              <Code lang="toml">{`[ollama_proxy]
-enabled     = true
-ollama_port = 11435   # move Ollama here: OLLAMA_HOST=127.0.0.1:11435`}</Code>
-            </div>
+            <p>For optional production-grade inference metrics, see the <a href="#proxy" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Inline Proxy</a> section.</p>
           </Section>
 
           {/* ── Sovereignty ── */}
