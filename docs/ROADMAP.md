@@ -57,6 +57,36 @@ Migrated all 18 observation patterns from client-side TypeScript to server-side 
 
 ## Planned
 
+### Inference Profiler
+Correlated timeline of TTFT, tok/s, KV cache %, queue depth, thermal penalty, and power draw on a single time axis. "Chrome DevTools for Inference." Answers: "TTFT spiked at 14:32 because KV cache hit 94% while thermal penalty was 1.75x." Cloud MCP tool: `get_inference_profile(node_id, start_time, end_time)`. Team tier.
+
+### Cost Attribution Per Model
+Break down daily power cost by model. "Llama 3.1 70B cost you $0.47 yesterday. Phi-3 Mini cost $0.03." Uses proxy per-request tracking + power draw to attribute watts to specific models. Requires model identity + power draw + request timing correlation.
+
+### "Why Was That Slow?" Explainer
+Natural-language MCP tool: `explain_slowdown(node_id, timestamp)` → multi-signal root cause analysis. Correlates TTFT spike with KV cache pressure, thermal state transition, queue depth, and concurrent requests to explain why a specific request was slow.
+
+### Model-Hardware Fit Score
+"Is this model right for this hardware?" Auto-computed from VRAM headroom, tok/s vs model size ratio, thermal behavior under load, swap pressure. Returns score + recommendation (e.g., "62/100 — VRAM tight, consider Q3_K_M or smaller variant").
+
+### Fleet Capacity Planner
+"Your 3-node fleet sustains 45 tok/s at current thermal conditions. Adding one M4 Pro would add ~15 tok/s at $0.04/day." Uses real WES data from fleet to project capacity and cost of scaling.
+
+### Quantization Advisor
+"Switching from Q8_0 to Q4_K_M would: free 4.2GB VRAM, reduce power ~15%, improve WES from 8.2 to 11.4." Based on observed metrics for the same model family at different quantizations across fleet nodes.
+
+### WES Long-Term Trending
+Weekly/monthly WES trend line per node. Detects gradual degradation: thermal paste aging, dust accumulation, driver regression, background process creep. Extends Pattern C (short-term velocity drop) to 7d/90d timeframes.
+
+### Inference SLA Monitor
+p95/p99 TTFT over configurable windows. "Your p95 TTFT over the last 24h was 340ms. 3 requests exceeded 2s (all during thermal throttle at 14:00-14:15)." For teams running local inference as internal service.
+
+### Cross-Node Model Migration
+"Llama 3.1 70B on WK-A1B2 has WES 8.2, VRAM at 89%. WK-C3D4 has WES 12.1, VRAM at 52%. Recommend migrating for 47% efficiency gain." Fleet-wide model placement optimization based on measured performance.
+
+### Thermal Budget Calculator
+"Your M4 Pro sustains 40 tok/s indefinitely at Normal thermal. Pushing to 50 tok/s triggers Fair thermal within ~8 min, reducing effective throughput to 32 tok/s. Net: fewer tokens by pushing harder." Predicts when increased load backfires.
+
 ### Kubernetes Operator
 Helm chart and operator for automated Wicklee agent deployment across GPU node pools.
 
