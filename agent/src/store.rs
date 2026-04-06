@@ -77,6 +77,10 @@ pub struct Sample {
     pub ttft_ms:          Option<f64>,
     pub avg_latency_ms:   Option<f64>,
     pub queue_depth:      Option<i64>,
+    // Phase 2: backend pattern evaluation fields
+    pub penalty_avg:           Option<f64>,
+    pub nvidia_gpu_temp_c:     Option<i32>,
+    pub vllm_cache_usage_perc: Option<f64>,
 }
 
 /// Minimal subset of MetricsPayload for JSON deserialization.
@@ -110,6 +114,10 @@ struct BroadcastFrame {
     #[serde(default)] vllm_avg_e2e_latency_ms:         Option<f32>,
     #[serde(default)] ollama_proxy_avg_latency_ms:     Option<f32>,
     #[serde(default)] vllm_requests_waiting:           Option<u32>,
+    // Phase 2: backend pattern evaluation fields
+    #[serde(default)] penalty_avg:                     Option<f32>,
+    #[serde(default)] nvidia_gpu_temp_c:               Option<u32>,
+    #[serde(default)] vllm_cache_usage_perc:           Option<f32>,
 }
 
 impl BroadcastFrame {
@@ -155,7 +163,11 @@ impl BroadcastFrame {
                                   .or(self.ollama_proxy_avg_latency_ms)
                                   .map(|v| v as f64),
             // Queue depth: vLLM waiting requests
-            queue_depth:      self.vllm_requests_waiting.map(|v| v as i64),
+            queue_depth:           self.vllm_requests_waiting.map(|v| v as i64),
+            // Phase 2: backend pattern evaluation fields
+            penalty_avg:           self.penalty_avg.map(|v| v as f64),
+            nvidia_gpu_temp_c:     self.nvidia_gpu_temp_c.map(|v| v as i32),
+            vllm_cache_usage_perc: self.vllm_cache_usage_perc.map(|v| v as f64),
         }
     }
 }
@@ -443,11 +455,15 @@ impl Store {
 
             -- Migrations: add columns introduced after the initial schema.
             -- DuckDB supports ADD COLUMN IF NOT EXISTS — safe to run on every startup.
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s    DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS clock_throttle_pct DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ttft_ms           DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS avg_latency_ms    DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth       BIGINT;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s      DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS clock_throttle_pct   DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ttft_ms              DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS avg_latency_ms       DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth          BIGINT;
+            -- Phase 2: columns needed for backend pattern evaluation (C/I/M/N)
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS penalty_avg          DOUBLE;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS nvidia_gpu_temp_c    INTEGER;
+            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS vllm_cache_usage_perc DOUBLE;
         ")
     }
 
@@ -464,8 +480,9 @@ impl Store {
               cpu_power_w, gpu_power_w, gpu_util_pct,
               vram_used_mb, vram_total_mb, thermal_state, mem_pressure_pct,
               swap_write_mb_s, clock_throttle_pct,
-              ttft_ms, avg_latency_ms, queue_depth)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ttft_ms, avg_latency_ms, queue_depth,
+              penalty_avg, nvidia_gpu_temp_c, vllm_cache_usage_perc)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (ts_ms, node_id) DO NOTHING",
             params![
                 s.ts_ms,
@@ -487,6 +504,9 @@ impl Store {
                 s.ttft_ms,
                 s.avg_latency_ms,
                 s.queue_depth,
+                s.penalty_avg,
+                s.nvidia_gpu_temp_c,
+                s.vllm_cache_usage_perc,
             ],
         )?;
         Ok(())
@@ -972,21 +992,30 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT ts_ms, model, tps, thermal_state,
                     gpu_power_w, cpu_power_w, mem_pressure_pct,
-                    swap_write_mb_s
+                    swap_write_mb_s, gpu_util_pct,
+                    vram_used_mb, vram_total_mb, clock_throttle_pct,
+                    penalty_avg, nvidia_gpu_temp_c, vllm_cache_usage_perc
              FROM metrics_raw
              WHERE node_id = ? AND ts_ms >= ?
              ORDER BY ts_ms ASC",
         )?;
         let rows = stmt.query_map(params![node_id, from], |row| {
             Ok(ObsSample {
-                ts_ms:            row.get(0)?,
-                model:            row.get(1)?,
-                tps:              row.get(2)?,
-                thermal_state:    row.get(3)?,
-                gpu_power_w:      row.get(4)?,
-                cpu_power_w:      row.get(5)?,
-                mem_pressure_pct: row.get(6)?,
-                swap_write_mb_s:  row.get(7)?,
+                ts_ms:                 row.get(0)?,
+                model:                 row.get(1)?,
+                tps:                   row.get(2)?,
+                thermal_state:         row.get(3)?,
+                gpu_power_w:           row.get(4)?,
+                cpu_power_w:           row.get(5)?,
+                mem_pressure_pct:      row.get(6)?,
+                swap_write_mb_s:       row.get(7)?,
+                gpu_util_pct:          row.get(8)?,
+                vram_used_mb:          row.get(9)?,
+                vram_total_mb:         row.get(10)?,
+                clock_throttle_pct:    row.get(11)?,
+                penalty_avg:           row.get(12)?,
+                nvidia_gpu_temp_c:     row.get(13)?,
+                vllm_cache_usage_perc: row.get(14)?,
             })
         })?.collect::<Result<_, _>>()?;
         Ok(rows)
@@ -1097,14 +1126,23 @@ impl Store {
 #[derive(Debug)]
 #[allow(dead_code)] // mem_pressure_pct reserved for Pattern F
 pub struct ObsSample {
-    pub ts_ms:            i64,
-    pub model:            Option<String>,
-    pub tps:              Option<f64>,
-    pub thermal_state:    Option<String>,
-    pub gpu_power_w:      Option<f64>,
-    pub cpu_power_w:      Option<f64>,
-    pub mem_pressure_pct: Option<f64>,
-    pub swap_write_mb_s:  Option<f64>,
+    pub ts_ms:              i64,
+    pub model:              Option<String>,
+    pub tps:                Option<f64>,
+    pub thermal_state:      Option<String>,
+    pub gpu_power_w:        Option<f64>,
+    pub cpu_power_w:        Option<f64>,
+    pub mem_pressure_pct:   Option<f64>,
+    pub swap_write_mb_s:    Option<f64>,
+    // Extended fields for backend pattern evaluation (C/D/F/G/H/I/K/O)
+    pub gpu_util_pct:          Option<f64>,
+    pub vram_used_mb:          Option<i64>,
+    pub vram_total_mb:         Option<i64>,
+    pub clock_throttle_pct:    Option<f64>,
+    // Phase 2 fields (C/I/M/N)
+    pub penalty_avg:           Option<f64>,
+    pub nvidia_gpu_temp_c:     Option<i32>,
+    pub vllm_cache_usage_perc: Option<f64>,
 }
 
 /// Flat audit record combining events, traces, and dismissals.
