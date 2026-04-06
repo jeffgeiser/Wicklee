@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {
@@ -106,6 +106,7 @@ const NAV = [
   { id: 'states',      label: 'Node States' },
   { id: 'latency',     label: 'Latency & TTFT' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
+  { id: 'alerts',      label: 'Alerts & Notifications' },
   { id: 'event-feeds', label: 'Event Feeds' },
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
@@ -1086,6 +1087,81 @@ WES Version:     2
             </NoteBox>
           </Section>
 
+          {/* ── Alerts & Notifications ── */}
+          <Section
+            id="alerts"
+            icon={<Bell className="w-5 h-5" />}
+            accent="border-red-500/20"
+            title="Alerts & Notifications"
+          >
+            <p>
+              When an observation pattern fires or a fleet alert triggers, Wicklee can deliver notifications to external channels. Alerts are configured in Settings → Alerts on the cloud dashboard.
+            </p>
+
+            <p className="text-xs font-bold text-red-400 uppercase tracking-wider mt-4">Notification Channels by Tier</p>
+            <div className="overflow-x-auto mt-2">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <Th>Channel</Th>
+                    <Th>Configuration</Th>
+                    <Th>Tier</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <Td><span className="font-medium text-indigo-400">Slack</span></Td>
+                    <Td>Incoming Webhook URL from your Slack workspace. Create one at <code className="text-gray-400 font-mono text-xs">api.slack.com/messaging/webhooks</code>.</Td>
+                    <Td>Pro+</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-blue-400">Email</span></Td>
+                    <Td>Any email address. Delivered via Resend (alerts@wicklee.dev sender).</Td>
+                    <Td>Pro+</Td>
+                  </tr>
+                  <tr>
+                    <Td><span className="font-medium text-green-400">PagerDuty</span></Td>
+                    <Td>Integration Key (Routing Key) from a PagerDuty service. Uses <a href="https://developer.pagerduty.com/docs/events-api-v2/overview/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Events API v2</a>. Incidents auto-resolve when the condition clears.</Td>
+                    <Td>Team+</Td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p className="text-xs font-bold text-red-400 uppercase tracking-wider mt-6">Setup</p>
+            <div className="space-y-3 mt-2">
+              <div className="flex gap-3">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shrink-0">1</span>
+                <div>
+                  <p className="text-sm text-gray-200 font-medium">Create a notification channel</p>
+                  <p className="text-xs text-gray-500">Settings → Alerts → Add Channel. Choose Slack, Email, or PagerDuty and provide the webhook URL, email address, or routing key.</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shrink-0">2</span>
+                <div>
+                  <p className="text-sm text-gray-200 font-medium">Test the channel</p>
+                  <p className="text-xs text-gray-500">Click "Test" next to the channel to send a test alert. Verify it arrives before creating rules.</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shrink-0">3</span>
+                <div>
+                  <p className="text-sm text-gray-200 font-medium">Create alert rules</p>
+                  <p className="text-xs text-gray-500">Settings → Alerts → Add Rule. Choose an event type (e.g. <code className="text-gray-400 font-mono text-[10px]">thermal_redline</code>, <code className="text-gray-400 font-mono text-[10px]">oom_warning</code>, <code className="text-gray-400 font-mono text-[10px]">ttft_regression</code>), select a channel, and optionally scope to a specific node.</p>
+                </div>
+              </div>
+            </div>
+
+            <NoteBox>
+              <strong className="text-white">PagerDuty incident lifecycle:</strong> When an alert fires, Wicklee creates a PagerDuty incident with a dedup key (<code className="text-gray-400 font-mono text-[10px]">wicklee-WK-XXXX-event_type</code>). When the condition clears, Wicklee sends a resolve event to the same dedup key — PagerDuty automatically resolves the incident. No manual acknowledge needed for self-healing conditions.
+            </NoteBox>
+
+            <NoteBox>
+              <strong className="text-white">Community tier:</strong> Observations appear on the dashboard but no outbound notifications are sent. Upgrade to Pro for Slack/Email or Team for PagerDuty.
+            </NoteBox>
+          </Section>
+
           {/* ── Event Feeds ── */}
           <Section
             id="event-feeds"
@@ -1534,6 +1610,39 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
               </pre>
               <p className="text-gray-500 text-xs mt-1">All setups require Node.js for the mcp-remote bridge. Restart your IDE after configuration changes.</p>
             </div>
+
+            {/* Cloud MCP */}
+            <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mt-6">Cloud MCP Server (Team+)</p>
+            <p className="text-xs text-gray-500 mb-2">
+              Team+ subscribers also get a fleet-aggregated MCP server at <code className="text-gray-400 font-mono text-xs">wicklee.dev/mcp</code>. Unlike the local agent MCP (single-node), the cloud MCP provides multi-node fleet context — routing recommendations, cross-node WES comparison, and fleet-wide observations.
+            </p>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Cloud MCP Tools</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-800"><Th>Tool</Th><Th>Description</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_status</Td><Td>All nodes with online status, metrics, and WES</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_wes</Td><Td>Compact WES scores for all fleet nodes</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_node_detail</Td><Td>Full metrics for a specific node (requires node_id)</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_best_route</Td><Td>Routing recommendation — best node by throughput and efficiency</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_insights</Td><Td>Fleet health summary with active observation count</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_observations</Td><Td>Active and resolved observations across the fleet</Td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3">
+              <p className="font-semibold text-white mb-1">Auth &amp; Endpoint</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{`# Cloud MCP requires a Clerk JWT (Team+ tier)
+curl -X POST https://wicklee.dev/mcp \\
+  -H "Authorization: Bearer <your-clerk-jwt>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'`}
+              </pre>
+              <p className="text-gray-500 text-xs mt-1">Manifest at <code className="text-gray-400 font-mono text-xs">GET wicklee.dev/mcp/manifest</code>. Community/Pro users receive a 402 response.</p>
+            </div>
           </Section>
 
           {/* ── Inline Proxy ── */}
@@ -1694,35 +1803,45 @@ ollama_port = 11435   # port where Ollama now listens`}
                   <thead>
                     <tr>
                       <Th>Tier</Th>
-                      <Th>Fleet nodes</Th>
-                      <Th>Cloud history</Th>
+                      <Th>Nodes</Th>
+                      <Th>Patterns</Th>
+                      <Th>History</Th>
                       <Th>Alerts</Th>
+                      <Th>Extras</Th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <Td><span className="text-gray-300 font-medium">Community</span></Td>
-                      <Td>3 nodes</Td>
-                      <Td>24h rolling</Td>
-                      <Td>—</Td>
+                      <Td>3</Td>
+                      <Td>9</Td>
+                      <Td>24h</Td>
+                      <Td>Dashboard only</Td>
+                      <Td>Local MCP, Ollama proxy</Td>
                     </tr>
                     <tr>
                       <Td><span className="text-blue-400 font-medium">Pro ($9/mo)</span></Td>
-                      <Td>10 nodes</Td>
-                      <Td>7-day history</Td>
-                      <Td>Slack (1 channel)</Td>
+                      <Td>10</Td>
+                      <Td>18</Td>
+                      <Td>7 day</Td>
+                      <Td>Slack + Email</Td>
+                      <Td>Custom thresholds, node names</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-amber-400 font-medium">Team ($19/seat/mo)</span></Td>
-                      <Td>25 nodes (expandable +50 at $50/mo)</Td>
-                      <Td>90-day history (Postgres rollups)</Td>
-                      <Td>Slack + PagerDuty + CSV/JSON export</Td>
+                      <Td><span className="text-amber-400 font-medium">Team ($19/seat)</span></Td>
+                      <Td>25</Td>
+                      <Td>18</Td>
+                      <Td>90 day</Td>
+                      <Td>Slack + Email + PagerDuty</Td>
+                      <Td>Shared dashboard, Cloud MCP, CSV/JSON, OTel</Td>
                     </tr>
                     <tr>
                       <Td><span className="text-purple-400 font-medium">Enterprise</span></Td>
                       <Td>Unlimited</Td>
-                      <Td>Configurable + signed export</Td>
-                      <Td>All + SIEM integration</Td>
+                      <Td>18</Td>
+                      <Td>Custom</Td>
+                      <Td>All + SIEM</Td>
+                      <Td>On-prem, SSO, audit exports</Td>
                     </tr>
                   </tbody>
                 </table>
