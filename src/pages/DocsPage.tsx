@@ -1121,7 +1121,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td><span className="font-medium text-green-400">PagerDuty</span></Td>
-                    <Td>Integration Key (Routing Key) from a PagerDuty service. Uses <a href="https://developer.pagerduty.com/docs/events-api-v2/overview/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Events API v2</a>. Incidents auto-resolve when the condition clears.</Td>
+                    <Td>Integration Key (Routing Key) from a PagerDuty service. In PagerDuty: Services → select service → Integrations → Add Integration → Events API v2 → copy the <strong className="text-white">Integration Key</strong>. Uses <a href="https://developer.pagerduty.com/docs/events-api-v2/overview/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Events API v2</a>. Incidents auto-resolve when the condition clears.</Td>
                     <Td>Team+</Td>
                   </tr>
                 </tbody>
