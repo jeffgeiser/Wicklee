@@ -3046,9 +3046,40 @@ struct PcieSnapshot {
     link_max_width: Option<u32>,
 }
 
+// ── Pattern-engine math helpers ──────────────────────────────────────────────
+
+fn obs_mean(values: &[f64]) -> f64 {
+    if values.is_empty() { return 0.0; }
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+fn obs_stddev(values: &[f64]) -> f64 {
+    if values.len() < 2 { return 0.0; }
+    let m = obs_mean(values);
+    let var = values.iter().map(|&v| (v - m).powi(2)).sum::<f64>() / (values.len() - 1) as f64;
+    var.sqrt()
+}
+
+/// Ordinary least-squares slope over an ordered series (index = x, value = y).
+/// Returns units-per-sample; caller multiplies by samples/min to get per-minute slope.
+fn obs_linear_slope(values: &[f64]) -> f64 {
+    let n = values.len() as f64;
+    if n < 2.0 { return 0.0; }
+    let sum_x:  f64 = (0..values.len()).map(|i| i as f64).sum();
+    let sum_y:  f64 = values.iter().sum();
+    let sum_xy: f64 = values.iter().enumerate().map(|(i, &y)| i as f64 * y).sum();
+    let sum_x2: f64 = (0..values.len()).map(|i| (i as f64).powi(2)).sum();
+    let denom = n * sum_x2 - sum_x * sum_x;
+    if denom.abs() < f64::EPSILON { 0.0 } else { (n * sum_xy - sum_x * sum_y) / denom }
+}
+
+fn obs_confidence(ratio: f64) -> &'static str {
+    if ratio >= 0.9 { "high" } else if ratio >= 0.5 { "moderate" } else { "building" }
+}
+
 #[cfg(not(target_env = "musl"))]
 /// Pure evaluation function — no side effects, no stored state.
-/// Takes a 5-minute window of DuckDB samples + live PCIe state and returns
+/// Takes a 10-minute window of DuckDB samples + live PCIe state and returns
 /// any observations that meet their gating criteria.
 fn evaluate_local_observations(
     samples:  &[store::ObsSample],
@@ -3059,21 +3090,24 @@ fn evaluate_local_observations(
     let mut obs = Vec::new();
     let now_ms = now_ms() as i64;
 
-    // Minimum sample density: 70% of 5 min at 1 Hz = 210 samples
-    let min_density = 210_usize;
-    // 5-minute window in ms
-    let window_ms = 300_000_i64;
-
-    // Filter samples to the 5-min window
-    let cutoff = now_ms - window_ms;
+    // 5-minute window — used by patterns A/B/H/J/K
+    let min_density_5m = 210_usize;   // 70% of 300s at 1 Hz
+    let cutoff_5m = now_ms - 300_000_i64;
     let window: Vec<&store::ObsSample> = samples.iter()
-        .filter(|s| s.ts_ms >= cutoff)
+        .filter(|s| s.ts_ms >= cutoff_5m)
+        .collect();
+
+    // 10-minute window — used by patterns C/F
+    let min_density_10m = 420_usize;  // 70% of 600s at 1 Hz
+    let cutoff_10m = now_ms - 600_000_i64;
+    let long_window: Vec<&store::ObsSample> = samples.iter()
+        .filter(|s| s.ts_ms >= cutoff_10m)
         .collect();
 
     // ── Pattern A: Thermal Performance Drain ─────────────────────────────
     // thermal_state != "Normal" sustained 5 min + tok/s visible during window.
     // Hook: tok/s delta vs Normal-thermal baseline.
-    if window.len() >= min_density {
+    if window.len() >= min_density_5m {
         let thermal_samples: Vec<&store::ObsSample> = window.iter()
             .filter(|s| s.thermal_state.as_deref().is_some_and(|t| t != "Normal"))
             .copied()
@@ -3157,7 +3191,7 @@ fn evaluate_local_observations(
 
     // ── Pattern B: Phantom Load ──────────────────────────────────────────
     // Model loaded + power > 5W + tok/s < 0.5 for 5 min at 70% density.
-    if window.len() >= min_density {
+    if window.len() >= min_density_5m {
         let phantom_samples: Vec<&store::ObsSample> = window.iter()
             .filter(|s| {
                 let model_loaded = s.model.is_some();
@@ -3213,7 +3247,7 @@ fn evaluate_local_observations(
 
     // ── Pattern J: Swap I/O Pressure ─────────────────────────────────────
     // swap_write_mb_s > 2.0 sustained 5 min.
-    if window.len() >= min_density {
+    if window.len() >= min_density_5m {
         let swap_samples: Vec<&store::ObsSample> = window.iter()
             .filter(|s| s.swap_write_mb_s.unwrap_or(0.0) > 2.0)
             .copied()
@@ -3304,6 +3338,393 @@ fn evaluate_local_observations(
         }
     }
 
+    // ── Pattern C: WES Velocity Drop ─────────────────────────────────────
+    // Efficiency score declining before thermal state changes — early warning.
+    // Window: 10 min; fires if WES slope < -0.5/min AND total drop > 10%.
+    // Suppressed when thermal is already Serious/Critical (Pattern A covers it).
+    if long_window.len() >= min_density_10m {
+        // Compute WES per sample: tps / (power × penalty).  penalty defaults to 1.0.
+        let wes_vals: Vec<f64> = long_window.iter()
+            .filter_map(|s| {
+                let tps   = s.tps?;
+                let power = s.gpu_power_w.or(s.cpu_power_w)?;
+                if power <= 0.0 { return None; }
+                let penalty = s.penalty_avg.unwrap_or(1.0).max(1.0);
+                Some(tps / (power * penalty))
+            })
+            .collect();
+
+        let dense_enough = wes_vals.len() >= (min_density_10m as f64 * 0.7) as usize;
+        let latest_thermal = long_window.last()
+            .and_then(|s| s.thermal_state.as_deref());
+        let is_already_hot = matches!(latest_thermal, Some("Serious") | Some("Critical"));
+
+        if dense_enough && !is_already_hot {
+            // At 1 Hz, 60 samples = 1 minute
+            let slope_per_sample = obs_linear_slope(&wes_vals);
+            let slope_per_min    = slope_per_sample * 60.0;
+
+            if slope_per_min < -0.5 {
+                let first_wes = wes_vals[0];
+                let last_wes  = wes_vals[wes_vals.len() - 1];
+                let drop_pct  = if first_wes > 0.0 { ((first_wes - last_wes) / first_wes) * 100.0 } else { 0.0 };
+
+                if drop_pct >= 10.0 {
+                    let minutes_to_half = if last_wes > 0.0 && slope_per_min < 0.0 {
+                        Some((last_wes / 2.0) / slope_per_min.abs())
+                    } else { None };
+                    let observed_min = (wes_vals.len() as f64 / 60.0).round() as u64;
+                    let ratio = ((wes_vals.len() as f64 / 60.0) / 10.0_f64).min(1.0);
+
+                    let eta_note = match minutes_to_half {
+                        Some(m) if m < 30.0 => format!(" WES may halve in ~{} min at this rate.", m.round() as u64),
+                        _ => String::new(),
+                    };
+
+                    obs.push(LocalObservation {
+                        pattern_id:       "wes_velocity_drop",
+                        severity:         "warning",
+                        title:            "WES Velocity Drop".into(),
+                        hook:             format!("{:.1} WES/min · {:.0}% drop", slope_per_min, drop_pct),
+                        body:             format!(
+                            "{hostname}'s efficiency score has been declining at {:.1} WES/min for the \
+                             last {observed_min} min ({:.0} → {:.0} WES). Thermal state has not yet \
+                             changed — this is an early warning.{eta_note}",
+                            slope_per_min.abs(), first_wes, last_wes,
+                        ),
+                        recommendation:   format!(
+                            "Reduce workload on {hostname} now — check ambient temperature, competing \
+                             background processes, and VRAM allocation.{eta_note}",
+                        ),
+                        resolution_steps: vec![
+                            format!("Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/health | jq .wes_score\""),
+                            "Reduce OLLAMA_NUM_PARALLEL to 1 to slow the WES decline".into(),
+                            "Check if background processes (backups, builds) started recently".into(),
+                            "If WES drops below 5 within 5 min, treat as Pattern A — enact physical cooling".into(),
+                        ],
+                        action_id:        "check_thermal_zone",
+                        confidence:       obs_confidence(ratio),
+                        confidence_ratio: ratio,
+                        first_fired_ms:   now_ms,
+                        node_id:          node_id.into(),
+                        hostname:         hostname.into(),
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Pattern F: Memory Pressure Trajectory ────────────────────────────
+    // Memory pressure climbing — projected to hit critical threshold.
+    // Window: 10 min; fires if rising trend will hit 85% within 30 min.
+    // Apple Silicon only (mem_pressure_pct not available on NVIDIA nodes).
+    if long_window.len() >= min_density_10m {
+        let mem_vals: Vec<f64> = long_window.iter()
+            .filter_map(|s| s.mem_pressure_pct)
+            .collect();
+
+        let dense_enough = mem_vals.len() >= (min_density_10m as f64 * 0.7) as usize;
+
+        if dense_enough {
+            let current_mem = *mem_vals.last().unwrap();
+
+            // Suppress if already critical — a separate MemoryExhaustionCard handles that
+            if current_mem < 80.0 {
+                let slope_per_sample = obs_linear_slope(&mem_vals);
+
+                if slope_per_sample > 0.0 {
+                    let slope_per_min = slope_per_sample * 60.0;
+                    let headroom  = 85.0 - current_mem;
+                    let eta_min   = headroom / slope_per_min;
+
+                    if eta_min > 0.0 && eta_min <= 30.0 {
+                        let eta_rounded = eta_min.round() as u64;
+                        let ratio = ((mem_vals.len() as f64 / 60.0) / 10.0_f64).min(1.0);
+
+                        obs.push(LocalObservation {
+                            pattern_id:       "memory_trajectory",
+                            severity:         "warning",
+                            title:            "Memory Pressure Trajectory".into(),
+                            hook:             format!("Critical in ~{eta_rounded}m"),
+                            body:             format!(
+                                "{hostname}'s memory pressure is rising at {slope_per_min:.1}%/min \
+                                 (currently {current_mem:.0}%). At this rate it will hit the critical \
+                                 threshold (85%) in ~{eta_rounded} min. Swap activity and inference \
+                                 stalls follow immediately after.",
+                            ),
+                            recommendation:   "Unload the largest loaded model now to arrest the \
+                                               pressure rise before swap activity begins. Run `ollama ps` \
+                                               to identify the largest resident model and `ollama stop \
+                                               <model>` to release it.".into(),
+                            resolution_steps: vec![
+                                "Check loaded models: `ollama ps` — note memory footprint of each".into(),
+                                "Unload the largest model: `ollama stop <model-name>`".into(),
+                                "Close memory-heavy background processes: browsers, IDEs, Docker".into(),
+                                "Verify pressure decreasing: `curl http://localhost:7700/api/health | jq .memory_pressure_percent`".into(),
+                                "Prevent recurrence: set OLLAMA_MAX_LOADED_MODELS=1".into(),
+                            ],
+                            action_id:        "evict_idle_models",
+                            confidence:       obs_confidence(ratio),
+                            confidence_ratio: ratio,
+                            first_fired_ms:   now_ms,
+                            node_id:          node_id.into(),
+                            hostname:         hostname.into(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Pattern H: Power Jitter ───────────────────────────────────────────
+    // Power draw CoV > 20% during active inference — PSU/VRM stress or thundering herd.
+    // Window: 5 min; requires mean watts > 30 and mean tok/s > 0.5.
+    if window.len() >= min_density_5m {
+        let watts_vals: Vec<f64> = window.iter()
+            .filter_map(|s| s.gpu_power_w.or(s.cpu_power_w))
+            .collect();
+
+        let dense_enough = watts_vals.len() >= (min_density_5m as f64 * 0.7) as usize;
+
+        if dense_enough {
+            let avg_watts = obs_mean(&watts_vals);
+
+            if avg_watts >= 30.0 {
+                let tps_vals: Vec<f64> = window.iter()
+                    .filter_map(|s| s.tps)
+                    .filter(|&t| t > 0.0)
+                    .collect();
+                let avg_tps = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
+
+                if avg_tps >= 0.5 {
+                    let sd  = obs_stddev(&watts_vals);
+                    let cov = sd / avg_watts;
+
+                    if cov >= 0.20 {
+                        let tps_cov = if tps_vals.len() >= 3 {
+                            obs_stddev(&tps_vals) / obs_mean(&tps_vals).max(f64::EPSILON)
+                        } else { 0.0 };
+                        let is_thundering_herd = tps_cov > 0.25;
+                        let observed_min = 5_u64;
+                        let ratio = (watts_vals.len() as f64 / (min_density_5m as f64 / 0.7)).min(1.0);
+
+                        let recommendation = if is_thundering_herd {
+                            format!(
+                                "Power variance ({:.0}% CoV) coupled with throughput variance — consistent \
+                                 with thundering herd load. Reduce OLLAMA_NUM_PARALLEL and introduce a \
+                                 request queue to smooth bursty traffic.",
+                                cov * 100.0,
+                            )
+                        } else {
+                            format!(
+                                "Power draw variance ({:.0}% CoV at {avg_watts:.0}W average) indicates \
+                                 the GPU is cycling between saturation and near-idle. Check load balancer \
+                                 dispatch for bursty traffic. Sustained dynamic load accelerates PSU/VRM wear.",
+                                cov * 100.0,
+                            )
+                        };
+
+                        obs.push(LocalObservation {
+                            pattern_id:       "power_jitter",
+                            severity:         "warning",
+                            title:            "Power Jitter".into(),
+                            hook:             format!(
+                                "±{sd:.0}W · {:.0}% CoV{}",
+                                cov * 100.0,
+                                if is_thundering_herd { " · thundering herd" } else { "" },
+                            ),
+                            body:             format!(
+                                "{hostname}'s power draw has a {:.0}% coefficient of variation \
+                                 (±{sd:.0}W around {avg_watts:.0}W average) over the last \
+                                 {observed_min} min.{} Stable inference has predictable power draw. \
+                                 High variance is a leading indicator of PSU/VRM stress.",
+                                cov * 100.0,
+                                if is_thundering_herd {
+                                    " Throughput variance is also elevated — the GPU is cycling \
+                                     between full saturation and near-idle in sync with bursty batches."
+                                } else { "" },
+                            ),
+                            recommendation,
+                            resolution_steps: if is_thundering_herd { vec![
+                                "Check load balancer — are requests arriving in synchronized waves?".into(),
+                                "Add a request queue (FIFO dispatch) to smooth bursty traffic".into(),
+                                "Reduce OLLAMA_NUM_PARALLEL to 1–2 to prevent excessive context switching".into(),
+                                "Target < 15% CoV to confirm the fix worked".into(),
+                            ]} else { vec![
+                                "Verify PSU headroom: rated wattage should be ≥ 20% above peak draw".into(),
+                                "Check VRM temperatures if sensors available — target < 85°C under load".into(),
+                                "Reduce inference concurrency: set OLLAMA_NUM_PARALLEL=1".into(),
+                                "Check for bursty workload patterns — add client-side request smoothing".into(),
+                            ]},
+                            action_id:        "reduce_batch_size",
+                            confidence:       obs_confidence(ratio),
+                            confidence_ratio: ratio,
+                            first_fired_ms:   now_ms,
+                            node_id:          node_id.into(),
+                            hostname:         hostname.into(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Pattern K: Clock Drift ────────────────────────────────────────────
+    // GPU clocks throttled during inference despite Normal thermals — power cap or driver limit.
+    // Window: 5 min; fires if avg throttle > 15% with tps > 0.5 and Normal thermals.
+    if window.len() >= min_density_5m {
+        let clock_vals: Vec<f64> = window.iter()
+            .filter_map(|s| s.clock_throttle_pct)
+            .collect();
+
+        let dense_enough = clock_vals.len() >= (min_density_5m as f64 * 0.7) as usize;
+
+        if dense_enough {
+            let avg_throttle = obs_mean(&clock_vals);
+
+            if avg_throttle >= 15.0 {
+                let tps_vals: Vec<f64> = window.iter()
+                    .filter_map(|s| s.tps)
+                    .filter(|&t| t > 0.0)
+                    .collect();
+                let avg_tps = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
+
+                if avg_tps >= 0.5 {
+                    // Only fire when thermals are Normal — Pattern A covers hot+throttled
+                    let hot_count = window.iter()
+                        .filter(|s| s.thermal_state.as_deref().is_some_and(|t| t != "Normal"))
+                        .count();
+                    let hot_ratio = hot_count as f64 / window.len() as f64;
+
+                    if hot_ratio <= 0.30 {
+                        let is_severe   = avg_throttle >= 35.0;
+                        let speed_pct   = 100.0 - avg_throttle;
+                        let implied_tps = if avg_throttle > 0.0 {
+                            Some(avg_tps / (speed_pct / 100.0))
+                        } else { None };
+                        let ratio = (clock_vals.len() as f64 / (min_density_5m as f64 / 0.7)).min(1.0);
+
+                        obs.push(LocalObservation {
+                            pattern_id:       "clock_drift",
+                            severity:         if is_severe { "critical" } else { "warning" },
+                            title:            if is_severe {
+                                "Severe Clock Throttle During Inference".into()
+                            } else {
+                                "Clock Drift During Inference".into()
+                            },
+                            hook:             format!(
+                                "{avg_throttle:.0}% throttled · running at {speed_pct:.0}% of rated clock · {avg_tps:.1} tok/s",
+                            ),
+                            body:             format!(
+                                "{hostname} is sustaining {avg_throttle:.0}% clock throttling while \
+                                 inference is active, despite Normal thermal state. Running at {speed_pct:.0}% \
+                                 of rated frequency — due to a power limit, BIOS cap, or OS power governor.{}\
+                                 {}",
+                                implied_tps.map(|t| format!(" At full clock speed, throughput would be ~{t:.1} tok/s (current: {avg_tps:.1}).")).unwrap_or_default(),
+                                if is_severe { " At this throttle level, hardware is significantly underperforming spec." } else { "" },
+                            ),
+                            recommendation:   "Check and lift the power limit or clock cap constraining \
+                                               this node. On Linux, set the CPU governor to `performance`. \
+                                               On Apple Silicon, ensure AC power with Performance mode enabled.".into(),
+                            resolution_steps: vec![
+                                format!("Verify throttle: `curl http://localhost:7700/api/health | jq .clock_throttle_pct`"),
+                                "Linux CPU governor: `sudo cpupower frequency-set -g performance`".into(),
+                                "NVIDIA: `nvidia-smi -q -d CLOCK | grep -A4 'Clocks Throttle'`".into(),
+                                "Apple Silicon: System Settings → Battery → Options → disable 'Limit CPU speed'".into(),
+                            ],
+                            action_id:        "check_power_limits",
+                            confidence:       obs_confidence(ratio),
+                            confidence_ratio: ratio,
+                            first_fired_ms:   now_ms,
+                            node_id:          node_id.into(),
+                            hostname:         hostname.into(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Pattern N: NVIDIA Thermal Redline ────────────────────────────────
+    // NVIDIA GPU temperature above safe operating range.
+    // Dual-path: sustained >85°C for 2 min (warning) OR instantaneous >90°C (critical).
+    {
+        // Instantaneous path: latest sample > 90°C
+        let instant_temp: Option<i32> = window.last()
+            .and_then(|s| s.nvidia_gpu_temp_c)
+            .filter(|&t| t > 90);
+
+        // Sustained path: >85°C for 2 min (120 samples), 70% density
+        let sustained_result: Option<(f64, f64)> = {
+            let temp_samples: Vec<i32> = window.iter()
+                .filter_map(|s| s.nvidia_gpu_temp_c)
+                .collect();
+            if temp_samples.len() >= 84 {  // 70% of 120
+                let hot_samples: Vec<f64> = temp_samples.iter()
+                    .filter(|&&t| t > 85)
+                    .map(|&t| t as f64)
+                    .collect();
+                if hot_samples.len() >= (temp_samples.len() as f64 * 0.70) as usize {
+                    let avg = obs_mean(&hot_samples);
+                    let ratio = (temp_samples.len() as f64 / 120.0).min(1.0);
+                    Some((avg, ratio))
+                } else { None }
+            } else { None }
+        };
+
+        if instant_temp.is_some() || sustained_result.is_some() {
+            let (temp, is_critical, confidence_ratio) = if let Some(t) = instant_temp {
+                (t as f64, true, 1.0_f64)
+            } else {
+                let (avg, ratio) = sustained_result.unwrap();
+                (avg, avg > 90.0, ratio)
+            };
+
+            obs.push(LocalObservation {
+                pattern_id:       "nvidia_thermal_redline",
+                severity:         if is_critical { "critical" } else { "warning" },
+                title:            if is_critical {
+                    "NVIDIA GPU Critical Temperature".into()
+                } else {
+                    "NVIDIA GPU Thermal Redline".into()
+                },
+                hook:             format!("{temp:.0}°C GPU temperature"),
+                body:             if is_critical {
+                    format!(
+                        "{hostname}'s NVIDIA GPU is at {temp:.0}°C — exceeding the 90°C critical \
+                         threshold. The driver will aggressively throttle clocks and may shut down \
+                         the GPU to prevent damage.",
+                    )
+                } else {
+                    format!(
+                        "{hostname}'s NVIDIA GPU is sustained above 85°C. Thermal throttling \
+                         reduces clock frequency and inference throughput progressively.",
+                    )
+                },
+                recommendation:   if is_critical {
+                    "Immediately reduce GPU load: stop inference, check fan operation, and verify \
+                     airflow. If temperature doesn't drop within 60 seconds, power off to prevent \
+                     hardware damage.".into()
+                } else {
+                    "Check case airflow and fan curves. Consider lowering the power limit with \
+                     `nvidia-smi -pl` to reduce thermal output.".into()
+                },
+                resolution_steps: vec![
+                    "Check temperature and throttle: `nvidia-smi --query-gpu=temperature.gpu,clocks_throttle_reasons.active --format=csv,noheader`".into(),
+                    "Verify fan: `nvidia-smi --query-gpu=fan.speed --format=csv,noheader` — 0% may indicate failed fan".into(),
+                    "Lower power limit: `sudo nvidia-smi -pl <watts>` (try 80% of TDP)".into(),
+                    "Check ambient temperature and dust buildup on heatsink".into(),
+                ],
+                action_id:        "check_thermal_zone",
+                confidence:       obs_confidence(confidence_ratio),
+                confidence_ratio,
+                first_fired_ms:   now_ms,
+                node_id:          node_id.into(),
+                hostname:         hostname.into(),
+            });
+        }
+    }
+
     obs
 }
 
@@ -3322,10 +3743,10 @@ async fn handle_observations(
     let node_id  = node_id_ext.0.as_str().to_owned();
     let hostname = node_id.clone(); // agent uses node_id as hostname
 
-    // 1. Query last 5 minutes from DuckDB
+    // 1. Query last 10 minutes from DuckDB (patterns C and F need 10-min window)
     let node_id_q = node_id.clone();
     let samples = match tokio::task::spawn_blocking(move || {
-        store.query_observation_window(&node_id_q, 300_000)
+        store.query_observation_window(&node_id_q, 600_000)
     }).await {
         Ok(Ok(s))  => s,
         Ok(Err(e)) => return (
