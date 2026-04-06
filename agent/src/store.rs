@@ -994,6 +994,7 @@ impl Store {
                     gpu_power_w, cpu_power_w, mem_pressure_pct,
                     swap_write_mb_s, gpu_util_pct,
                     vram_used_mb, vram_total_mb, clock_throttle_pct,
+                    ttft_ms, avg_latency_ms, queue_depth,
                     penalty_avg, nvidia_gpu_temp_c, vllm_cache_usage_perc
              FROM metrics_raw
              WHERE node_id = ? AND ts_ms >= ?
@@ -1013,9 +1014,12 @@ impl Store {
                 vram_used_mb:          row.get(9)?,
                 vram_total_mb:         row.get(10)?,
                 clock_throttle_pct:    row.get(11)?,
-                penalty_avg:           row.get(12)?,
-                nvidia_gpu_temp_c:     row.get(13)?,
-                vllm_cache_usage_perc: row.get(14)?,
+                ttft_ms:               row.get(12)?,
+                avg_latency_ms:        row.get(13)?,
+                queue_depth:           row.get(14)?,
+                penalty_avg:           row.get(15)?,
+                nvidia_gpu_temp_c:     row.get(16)?,
+                vllm_cache_usage_perc: row.get(17)?,
             })
         })?.collect::<Result<_, _>>()?;
         Ok(rows)
@@ -1139,6 +1143,10 @@ pub struct ObsSample {
     pub vram_used_mb:          Option<i64>,
     pub vram_total_mb:         Option<i64>,
     pub clock_throttle_pct:    Option<f64>,
+    // Inference latency fields for patterns P/Q/R
+    pub ttft_ms:               Option<f64>,
+    pub avg_latency_ms:        Option<f64>,
+    pub queue_depth:           Option<i64>,
     // Phase 2 fields (C/I/M/N)
     pub penalty_avg:           Option<f64>,
     pub nvidia_gpu_temp_c:     Option<i32>,

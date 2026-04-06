@@ -3725,6 +3725,210 @@ fn evaluate_local_observations(
         }
     }
 
+    // ── Pattern P: TTFT Regression ───────────────────────────────────────
+    // Time-to-first-token is trending upward, indicating growing inference
+    // latency for users — KV cache thrash, memory pressure, or queue build-up.
+    // Uses 10-min window; requires ≥ 10 samples with valid ttft_ms.
+    {
+        let ttft_vals: Vec<(usize, f64)> = long_window.iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.ttft_ms.map(|v| (i, v)))
+            .collect();
+
+        if ttft_vals.len() >= 10 {
+            // Rebuild as sequential values for OLS (use position-in-window, not ts)
+            let ttft_seq: Vec<f64> = ttft_vals.iter().map(|(_, v)| *v).collect();
+            let mean_ttft = obs_mean(&ttft_seq);
+
+            // OLS slope using sample index as X-axis; convert to ms/min
+            // Each sample ~ 1s, so slope_per_sample * 60 = slope_per_min
+            let n = ttft_seq.len() as f64;
+            let x_mean = (n - 1.0) / 2.0;
+            let slope_raw: f64 = {
+                let num: f64 = ttft_seq.iter().enumerate()
+                    .map(|(i, &y)| (i as f64 - x_mean) * (y - mean_ttft))
+                    .sum();
+                let den: f64 = ttft_seq.iter().enumerate()
+                    .map(|(i, _)| (i as f64 - x_mean).powi(2))
+                    .sum();
+                if den.abs() < 1e-9 { 0.0 } else { num / den }
+            };
+            // Samples are sparse (only on inference), estimate spacing at ~10s avg
+            let slope_per_min = slope_raw * 6.0;
+
+            // Recent tail: last 30% of ttft samples vs full mean
+            let tail_start = (ttft_seq.len() as f64 * 0.70) as usize;
+            let tail_vals: Vec<f64> = ttft_seq[tail_start..].to_vec();
+            let tail_mean = if tail_vals.is_empty() { mean_ttft } else { obs_mean(&tail_vals) };
+
+            let is_critical = slope_per_min > 25.0 || tail_mean > 2000.0;
+            let fire = (slope_per_min > 5.0 && mean_ttft > 100.0) || tail_mean > 2000.0;
+
+            if fire {
+                let ratio = ((ttft_vals.len() as f64 - 10.0) / 50.0).min(1.0).max(0.3);
+                obs.push(LocalObservation {
+                    pattern_id:       "ttft_regression",
+                    severity:         if is_critical { "critical" } else { "warning" },
+                    title:            "TTFT Regression".into(),
+                    hook:             format!("TTFT +{slope_per_min:.0} ms/min, avg {mean_ttft:.0} ms"),
+                    body:             format!(
+                        "{hostname}'s time-to-first-token is trending upward (+{slope_per_min:.0} ms/min). \
+                         Current mean TTFT is {mean_ttft:.0} ms{}. \
+                         Likely causes: KV cache eviction under memory pressure, growing request queue, \
+                         or context window expansion.",
+                        if tail_mean > mean_ttft * 1.3 {
+                            format!(" with recent tail at {tail_mean:.0} ms")
+                        } else { String::new() },
+                    ),
+                    recommendation:   if is_critical {
+                        "TTFT is critically high or accelerating fast. Reduce concurrent requests, \
+                         check vLLM queue depth, and consider a shorter context window or smaller batch size.".into()
+                    } else {
+                        "Monitor for continued TTFT growth. Check KV cache hit rate and memory pressure. \
+                         Reducing max_model_len or increasing GPU VRAM allocation can stabilize TTFT.".into()
+                    },
+                    resolution_steps: vec![
+                        "vLLM queue: `curl http://localhost:18010/metrics | grep vllm:num_requests_waiting`".into(),
+                        "vLLM KV cache: `curl http://localhost:18010/metrics | grep vllm:gpu_cache_usage_perc`".into(),
+                        "Reduce concurrent load: lower `--max-num-seqs` in vLLM launch args".into(),
+                        "Check memory pressure: `curl http://localhost:7700/api/health | jq .mem_pressure_pct`".into(),
+                    ],
+                    action_id:        "check_inference_latency",
+                    confidence:       obs_confidence(ratio),
+                    confidence_ratio: ratio,
+                    first_fired_ms:   now_ms,
+                    node_id:          node_id.into(),
+                    hostname:         hostname.into(),
+                });
+            }
+        }
+    }
+
+    // ── Pattern Q: Latency Spike ─────────────────────────────────────────
+    // E2E inference latency has spiked significantly compared to the window
+    // baseline — indicates sudden degradation (thermal event, preemption, swap).
+    // Uses 10-min window; requires ≥ 10 samples with valid avg_latency_ms.
+    {
+        let lat_vals: Vec<f64> = long_window.iter()
+            .filter_map(|s| s.avg_latency_ms)
+            .collect();
+
+        if lat_vals.len() >= 10 {
+            let baseline_end = (lat_vals.len() as f64 * 0.60) as usize;
+            let baseline: Vec<f64> = lat_vals[..baseline_end].to_vec();
+            let recent:   Vec<f64> = lat_vals[baseline_end..].to_vec();
+
+            let baseline_mean = obs_mean(&baseline);
+            let recent_mean   = obs_mean(&recent);
+
+            // Spike ratio: how much worse is the recent window vs baseline?
+            let spike_ratio = if baseline_mean > 1.0 {
+                recent_mean / baseline_mean
+            } else { 1.0 };
+
+            let is_critical = spike_ratio > 3.0 || recent_mean > 10_000.0;
+            // Fire if recent is 1.5× baseline AND recent is meaningfully slow
+            let fire = spike_ratio >= 1.5 && recent_mean > 500.0;
+
+            if fire {
+                let ratio = ((spike_ratio - 1.5) / 1.5).min(1.0).max(0.3);
+                obs.push(LocalObservation {
+                    pattern_id:       "latency_spike",
+                    severity:         if is_critical { "critical" } else { "warning" },
+                    title:            "Inference Latency Spike".into(),
+                    hook:             format!("Latency {spike_ratio:.1}× baseline ({recent_mean:.0} ms)"),
+                    body:             format!(
+                        "{hostname} is experiencing a {spike_ratio:.1}× spike in E2E inference latency \
+                         (recent: {recent_mean:.0} ms vs baseline: {baseline_mean:.0} ms). \
+                         Common causes: thermal throttling, swap I/O, model preemption, or sudden increase \
+                         in concurrent requests.",
+                    ),
+                    recommendation:   if is_critical {
+                        "Latency has degraded critically. Investigate thermal state, memory pressure, \
+                         and swap usage. Consider restarting the inference server if it does not recover.".into()
+                    } else {
+                        "Check for correlated thermal events or memory pressure spikes that may have \
+                         caused this latency increase. Monitor over the next few minutes for recovery.".into()
+                    },
+                    resolution_steps: vec![
+                        "Check thermal state: `curl http://localhost:7700/api/health | jq .thermal_state`".into(),
+                        "Check swap: `curl http://localhost:7700/api/health | jq .swap_write_mb_s`".into(),
+                        "vLLM preemption metric: `curl http://localhost:18010/metrics | grep vllm:num_preemptions`".into(),
+                        "Ollama running requests: `curl http://localhost:11434/api/ps`".into(),
+                    ],
+                    action_id:        "check_inference_latency",
+                    confidence:       obs_confidence(ratio),
+                    confidence_ratio: ratio,
+                    first_fired_ms:   now_ms,
+                    node_id:          node_id.into(),
+                    hostname:         hostname.into(),
+                });
+            }
+        }
+    }
+
+    // ── Pattern R: vLLM Queue Saturation ────────────────────────────────
+    // vLLM's waiting request queue is persistently backlogged, meaning the
+    // GPU cannot drain requests as fast as they arrive.
+    // Uses 5-min window; requires ≥ 10 samples with valid queue_depth.
+    // Only fires on nodes running vLLM (queue_depth is None for Ollama/llama.cpp).
+    {
+        let queue_vals: Vec<f64> = window.iter()
+            .filter_map(|s| s.queue_depth.map(|q| q as f64))
+            .collect();
+
+        if queue_vals.len() >= 10 {
+            let avg_queue = obs_mean(&queue_vals);
+            let max_queue = queue_vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+            // OLS slope to detect queue growth vs steady state
+            let slope = obs_linear_slope(&queue_vals); // requests/sample (~1s), so /min = *60
+            let slope_per_min = slope * 60.0;
+
+            let is_critical = max_queue >= 10.0 || (avg_queue >= 5.0 && slope_per_min > 0.5);
+            let fire = avg_queue >= 3.0 || max_queue >= 8.0;
+
+            if fire {
+                let ratio = ((avg_queue - 3.0) / 7.0).min(1.0).max(0.3);
+                obs.push(LocalObservation {
+                    pattern_id:       "vllm_queue_saturation",
+                    severity:         if is_critical { "critical" } else { "warning" },
+                    title:            "vLLM Queue Saturation".into(),
+                    hook:             format!("avg {avg_queue:.1} waiting requests (max {max_queue:.0})"),
+                    body:             format!(
+                        "{hostname}'s vLLM request queue is backed up with an average of {avg_queue:.1} \
+                         waiting requests (max: {max_queue:.0}){}. \
+                         The GPU cannot service requests as fast as they arrive — throughput is \
+                         degraded and latency will increase.",
+                        if slope_per_min > 0.1 {
+                            format!(" and growing at +{slope_per_min:.1} req/min")
+                        } else { String::new() },
+                    ),
+                    recommendation:   if is_critical {
+                        "Queue is critically saturated. Increase `--max-num-seqs`, reduce max context \
+                         length, or scale out to additional nodes. Consider enabling chunked prefill to \
+                         improve scheduling fairness.".into()
+                    } else {
+                        "Queue is accumulating faster than it drains. Review request arrival rate and \
+                         consider tuning `--max-num-seqs` or `--max-num-batched-tokens` for this workload.".into()
+                    },
+                    resolution_steps: vec![
+                        "vLLM queue metrics: `curl http://localhost:18010/metrics | grep -E 'num_requests_(running|waiting|swapped)'`".into(),
+                        "Increase throughput: raise `--max-num-seqs` in vLLM launch args (watch VRAM)".into(),
+                        "Enable chunked prefill: add `--enable-chunked-prefill` to vLLM args".into(),
+                        "Scale out: register additional vLLM nodes in Wicklee fleet".into(),
+                    ],
+                    action_id:        "check_vllm_queue",
+                    confidence:       obs_confidence(ratio),
+                    confidence_ratio: ratio,
+                    first_fired_ms:   now_ms,
+                    node_id:          node_id.into(),
+                    hostname:         hostname.into(),
+                });
+            }
+        }
+    }
+
     obs
 }
 
