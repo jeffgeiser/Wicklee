@@ -3935,6 +3935,96 @@ async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
+        // 6. Fleet Load Imbalance (Pattern E)
+        // A node is thermally stressed or significantly WES-poor while at least one
+        // healthier peer with Normal thermal is available — a routing opportunity exists.
+        // Requires ≥2 active nodes. Only fires when the stressed node has active inference.
+        if snapshot.len() >= 2 {
+            // Build a fleet-wide WES map for the current tick (live MetricsPayload values).
+            let live_wes: HashMap<&str, f32> = snapshot.iter()
+                .filter_map(|(nid, m)| {
+                    let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
+                    let tok_s = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
+                    match (tok_s, watts) {
+                        (Some(t), Some(w)) if w > 0.0 => Some((nid.as_str(), t / w)),
+                        _ => None,
+                    }
+                })
+                .collect();
+
+            for (node_id, m) in &snapshot {
+                let alert_type = "fleet_load_imbalance";
+
+                // Inference must be active to be relevant
+                let is_active = matches!(m.inference_state.as_deref(), Some("live") | Some("idle-spd"));
+                if !is_active {
+                    if open_observations.contains_key(&(node_id.clone(), alert_type.into())) {
+                        to_resolve.push((node_id.clone(), alert_type.into()));
+                    }
+                    continue;
+                }
+
+                // Thermal stress: 2+ consecutive 60s ticks with non-Normal thermal state
+                let hot_ticks = ring_buffers.get(node_id.as_str())
+                    .map(|r| r.consecutive_ticks(|e| e.2.as_deref().map(|t| t != "Normal").unwrap_or(false)))
+                    .unwrap_or(0);
+                let is_thermally_stressed = hot_ticks >= 2;
+
+                // Best healthy peer: highest WES among Normal-thermal peers
+                let this_wes = live_wes.get(node_id.as_str()).copied();
+                let best_peer = snapshot.iter()
+                    .filter(|(pid, pm)| {
+                        pid.as_str() != node_id.as_str()
+                            && pm.thermal_state.as_deref() == Some("Normal")
+                            && live_wes.contains_key(pid.as_str())
+                    })
+                    .max_by(|(a, _), (b, _)| {
+                        let wa = live_wes.get(a.as_str()).copied().unwrap_or(0.0);
+                        let wb = live_wes.get(b.as_str()).copied().unwrap_or(0.0);
+                        wa.partial_cmp(&wb).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+
+                let wes_gap_pct = match (this_wes, best_peer.as_ref().and_then(|(pid, _)| live_wes.get(pid.as_str()).copied())) {
+                    (Some(this), Some(best)) if best > 0.0 => (best - this) / best * 100.0,
+                    _ => 0.0,
+                };
+                let is_wes_poor = wes_gap_pct >= 20.0;
+
+                let is_firing = best_peer.is_some() && (is_thermally_stressed || is_wes_poor);
+                let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
+
+                if is_firing && !is_open {
+                    let (best_id, _) = best_peer.unwrap();
+                    let best_wes = live_wes.get(best_id.as_str()).copied().unwrap_or(0.0);
+                    to_fire.push(PendingObs {
+                        node_id: node_id.clone(),
+                        alert_type: alert_type.into(),
+                        severity: ObsSeverity::Warning,
+                        title: "Fleet Load Imbalance".into(),
+                        detail: format!(
+                            "{} is {}{}while {} has better capacity (WES {:.1}).",
+                            node_id,
+                            if is_thermally_stressed { "thermally stressed " } else { "" },
+                            if is_wes_poor { format!("{:.0}% below fleet-peak WES ", wes_gap_pct) } else { String::new() },
+                            best_id,
+                            best_wes,
+                        ),
+                        context: serde_json::json!({
+                            "thermal_state":       m.thermal_state,
+                            "hot_ticks":           hot_ticks,
+                            "current_wes":         this_wes,
+                            "best_peer_node_id":   best_id,
+                            "best_peer_wes":       best_wes,
+                            "wes_gap_pct":         wes_gap_pct,
+                            "inference_state":     m.inference_state,
+                        }),
+                    });
+                } else if !is_firing && is_open {
+                    to_resolve.push((node_id.clone(), alert_type.into()));
+                }
+            }
+        }
+
         // Write observations.
         if !to_fire.is_empty() || !to_resolve.is_empty() {
             let affected_nodes: HashSet<String> = to_fire.iter().map(|o| o.node_id.clone())
