@@ -716,13 +716,30 @@ fn is_pro_or_above(tier: &str) -> bool {
 
 /// Pattern-to-tier allowlist. Community users see 7 patterns; Pro+ see all 18.
 fn allowed_patterns_for_tier(tier: &str) -> Vec<String> {
-    let community: Vec<&str> = vec!["A", "B", "D", "H", "J", "K", "L"];
+    // Cloud alerts (always visible to all tiers)
+    let cloud_alerts: Vec<&str> = vec![
+        "zombied_engine", "thermal_redline", "oom_warning",
+        "wes_cliff", "agent_version_mismatch", "fleet_load_imbalance",
+    ];
+
+    // Agent pattern IDs by tier
+    let community_patterns: Vec<&str> = vec![
+        "thermal_drain", "phantom_load", "swap_io_pressure", "pcie_lane_degradation",
+        "wes_velocity_drop", "memory_trajectory", "power_jitter", "clock_drift",
+        "vram_overcommit",
+    ];
+    let pro_patterns: Vec<&str> = vec![
+        "power_gpu_decoupling", "bandwidth_saturation", "efficiency_drag",
+        "vllm_kv_cache_saturation", "nvidia_thermal_redline",
+        "ttft_regression", "latency_spike", "vllm_queue_saturation",
+    ];
+
+    let mut allowed: Vec<String> = cloud_alerts.into_iter().map(String::from).collect();
+    allowed.extend(community_patterns.into_iter().map(String::from));
     if is_pro_or_above(tier) {
-        // All 18 patterns A–R
-        (b'A'..=b'R').map(|c| String::from(c as char)).collect()
-    } else {
-        community.into_iter().map(String::from).collect()
+        allowed.extend(pro_patterns.into_iter().map(String::from));
     }
+    allowed
 }
 
 /// Number of nodes available for free on the Community tier.
@@ -4003,7 +4020,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
             {
                 let alert_type = "oom_warning";
                 let oom_ticks = ring.consecutive_ticks(|e| e.3.map_or(false, |p| p > 95.0));
-                let is_firing = oom_ticks >= 1;
+                let is_firing = oom_ticks >= 2; // require sustained pressure, not single-tick spike
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
                 if is_firing && !is_open {
                     let pct = mem_pct.unwrap_or(0.0);
@@ -4260,14 +4277,14 @@ async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
-        // ── Phase 7: staleness reaper for agent-pushed observations ──────────
-        // If a node hasn't been seen in 5+ minutes, auto-resolve its agent
-        // observations — the agent went offline or lost connectivity.
+        // ── Staleness reaper: auto-resolve observations for offline nodes ────
+        // If a node hasn't been seen in 5+ minutes, resolve ALL its open
+        // observations (both agent-pushed and cloud-generated).
         {
             let stale_cutoff = (now as i64) - 300_000; // 5 minutes
             let _ = sqlx::query(
                 "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1 \
-                 WHERE source = 'agent' AND state = 'open' \
+                 WHERE state = 'open' \
                  AND node_id IN ( \
                    SELECT wk_id FROM nodes WHERE last_seen < $2 \
                  )"

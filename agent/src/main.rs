@@ -4293,6 +4293,89 @@ fn evaluate_local_observations(
     obs
 }
 
+/// Pattern O — VRAM Overcommit.  Point-in-time check: fires when the loaded
+/// model consumes >90% of available GPU memory (NVIDIA VRAM or Apple unified).
+/// Community tier, action_id = switch_quantization.
+#[cfg(not(target_env = "musl"))]
+fn evaluate_vram_overcommit(
+    ollama: &OllamaMetrics,
+    nvidia: &NvidiaMetrics,
+    apple:  &AppleSiliconMetrics,
+    node_id:  &str,
+    hostname: &str,
+) -> Option<LocalObservation> {
+    let model_gb = ollama.ollama_model_size_gb?;
+    if model_gb <= 0.0 { return None; }
+
+    // Resolve VRAM capacity: NVIDIA total → Apple unified memory budget
+    let vram_gb = nvidia.nvidia_vram_total_mb
+        .filter(|&v| v >= 1024) // ≥1 GB = real GPU
+        .map(|v| v as f64 / 1024.0)
+        .or_else(|| apple.gpu_wired_limit_mb
+            .filter(|&v| v > 0)
+            .map(|v| v as f64 / 1024.0))?;
+
+    let usage_pct = (model_gb as f64 / vram_gb) * 100.0;
+    if usage_pct < 90.0 { return None; }
+
+    let headroom_gb = vram_gb - model_gb as f64;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let is_critical = usage_pct >= 98.0;
+    let os_name = {
+        #[cfg(target_os = "macos")]   { "macOS" }
+        #[cfg(target_os = "linux")]   { "Linux" }
+        #[cfg(target_os = "windows")] { "Windows" }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        { "Unknown" }
+    };
+
+    let resolution_steps = if nvidia.nvidia_vram_total_mb.filter(|&v| v >= 1024).is_some() {
+        vec![
+            "Check VRAM: `nvidia-smi --query-gpu=memory.total,memory.used,memory.free --format=csv,noheader`".into(),
+            "List loaded models: `ollama ps`".into(),
+            "Pull smaller quantization: `ollama pull <model>:q4_K_M`".into(),
+            "Unload competing models: `ollama stop <model_name>`".into(),
+        ]
+    } else {
+        vec![
+            format!("Check GPU memory budget: `sysctl iogpu.wired_limit_mb` (current: {:.1} GB)", vram_gb),
+            "List loaded models: `ollama ps`".into(),
+            "Pull smaller quantization: `ollama pull <model>:q4_K_M`".into(),
+            "Unload competing models: `ollama stop <model_name>`".into(),
+        ]
+    };
+
+    Some(LocalObservation {
+        pattern_id:       "vram_overcommit",
+        severity:         if is_critical { "critical" } else { "warning" },
+        title:            "VRAM Overcommit".into(),
+        hook:             format!("{usage_pct:.0}% VRAM used ({headroom_gb:.1} GB free)"),
+        body:             format!(
+            "{hostname}'s loaded model ({model_gb:.1} GB) consumes {usage_pct:.0}% of the \
+             {vram_gb:.1} GB {os_name} GPU memory budget, leaving only {headroom_gb:.1} GB headroom. \
+             Inference will spill to system RAM, causing severe throughput degradation and swap pressure.",
+        ),
+        recommendation:   if is_critical {
+            "GPU memory is near-exhausted. Immediately switch to a smaller quantization variant \
+             (e.g. q4_K_M) or unload competing models to restore headroom.".into()
+        } else {
+            "Model is close to the VRAM ceiling. Consider pulling a smaller quantization variant \
+             to leave headroom for KV cache and batch processing.".into()
+        },
+        resolution_steps,
+        action_id:        "switch_quantization",
+        confidence:       "high",
+        confidence_ratio: 1.0,
+        first_fired_ms:   now_ms,
+        node_id:          node_id.into(),
+        hostname:         hostname.into(),
+    })
+}
+
 /// Newtype wrapper for the node_id Extension so it doesn't collide with other Arc<String>.
 #[derive(Clone)]
 struct NodeId(Arc<String>);
@@ -5720,6 +5803,8 @@ async fn main() {
                 {
                     let store_clone = s.clone();
                     let nvidia_clone = Arc::clone(&nvidia_metrics);
+                    let ollama_clone = Arc::clone(&ollama_metrics);
+                    let apple_clone  = Arc::clone(&apple_metrics);
                     let node_id_clone = config.node_id.clone();
                     let obs_cache = Arc::clone(&observation_cache);
                     tokio::spawn(async move {
@@ -5731,6 +5816,8 @@ async fn main() {
                             let st  = store_clone.clone();
                             let nid = node_id_clone.clone();
                             let nv  = nvidia_clone.lock().map(|g| g.clone()).unwrap_or_default();
+                            let ol  = ollama_clone.lock().map(|g| g.clone()).unwrap_or_default();
+                            let ap  = apple_clone.lock().map(|g| g.clone()).unwrap_or_default();
                             let pcie = PcieSnapshot {
                                 link_width:     nv.pcie_link_width,
                                 link_max_width: nv.pcie_link_max_width,
@@ -5738,7 +5825,14 @@ async fn main() {
                             let hostname = System::host_name().unwrap_or_else(|| nid.clone());
                             let result = tokio::task::spawn_blocking(move || {
                                 match st.query_observation_window(&nid, 600_000) {
-                                    Ok(samples) => Some(evaluate_local_observations(&samples, &pcie, &nid, &hostname)),
+                                    Ok(samples) => {
+                                        let mut obs = evaluate_local_observations(&samples, &pcie, &nid, &hostname);
+                                        // Pattern O — VRAM Overcommit (point-in-time, no history needed)
+                                        if let Some(o) = evaluate_vram_overcommit(&ol, &nv, &ap, &nid, &hostname) {
+                                            obs.push(o);
+                                        }
+                                        Some(obs)
+                                    }
                                     Err(e) => {
                                         eprintln!("[obs] evaluation error: {e}");
                                         None
