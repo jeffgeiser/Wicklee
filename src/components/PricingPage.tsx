@@ -99,7 +99,7 @@ const TIERS: TierDef[] = [
       '3-Seat Minimum · 25 Nodes Included',
       '+50 Nodes Expansion Pack ($50/mo)',
       '90-Day Metric History',
-      'Shared Team Dashboard',
+      'Shared Fleet Dashboard via Clerk Org',
       'CSV / JSON Exports',
       'Slack, Email & PagerDuty Alerts',
       'Trend Analysis + Regression Detection',

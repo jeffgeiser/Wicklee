@@ -844,7 +844,7 @@ const AlertsSection: React.FC<{
 
   // ── Channel form state ────────────────────────────────────────────────────
   const [showChanForm,  setShowChanForm]  = useState(false);
-  const [chanType,      setChanType]      = useState<'slack' | 'email'>('slack');
+  const [chanType,      setChanType]      = useState<'slack' | 'email' | 'pagerduty'>('slack');
   const [chanName,      setChanName]      = useState('');
   const [chanValue,     setChanValue]     = useState('');  // webhook URL or email
   const [chanSaving,    setChanSaving]    = useState(false);
@@ -872,6 +872,8 @@ const AlertsSection: React.FC<{
     try {
       const configJson = chanType === 'slack'
         ? JSON.stringify({ webhook_url: chanValue.trim() })
+        : chanType === 'pagerduty'
+        ? JSON.stringify({ routing_key: chanValue.trim() })
         : JSON.stringify({ address: chanValue.trim() });
       await createChannel(chanType, chanName.trim(), configJson);
       setChanName(''); setChanValue(''); setShowChanForm(false);
@@ -1009,18 +1011,18 @@ const AlertsSection: React.FC<{
             <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-4 space-y-3">
               {/* Type toggle */}
               <div className="flex items-center gap-2">
-                {(['slack', 'email'] as const).map(t => (
+                {(['slack', 'email', ...(isTeam ? ['pagerduty' as const] : [])] as const).map(t => (
                   <button
                     key={t}
-                    onClick={() => { setChanType(t); setChanValue(''); }}
+                    onClick={() => { setChanType(t as typeof chanType); setChanValue(''); }}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                       chanType === t
                         ? 'bg-indigo-600 border-indigo-600 text-white'
                         : 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400'
                     }`}
                   >
-                    {t === 'slack' ? <Slack size={11} /> : <Mail size={11} />}
-                    {t === 'slack' ? 'Slack Webhook' : 'Email'}
+                    {t === 'slack' ? <Slack size={11} /> : t === 'pagerduty' ? <Bell size={11} /> : <Mail size={11} />}
+                    {t === 'slack' ? 'Slack Webhook' : t === 'pagerduty' ? 'PagerDuty' : 'Email'}
                   </button>
                 ))}
               </div>
@@ -1037,10 +1039,10 @@ const AlertsSection: React.FC<{
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
-                    {chanType === 'slack' ? 'Webhook URL' : 'Email address'}
+                    {chanType === 'slack' ? 'Webhook URL' : chanType === 'pagerduty' ? 'Integration Key (Routing Key)' : 'Email address'}
                   </label>
                   <input
-                    type={chanType === 'email' ? 'email' : 'url'}
+                    type={chanType === 'email' ? 'email' : 'text'}
                     value={chanValue}
                     onChange={e => setChanValue(e.target.value)}
                     placeholder={chanType === 'slack' ? 'https://hooks.slack.com/...' : 'ops@example.com'}
@@ -1076,12 +1078,16 @@ const AlertsSection: React.FC<{
                 const cfg = JSON.parse(ch.config_json ?? '{}');
                 const detail = ch.channel_type === 'slack'
                   ? (cfg.webhook_url as string ?? '').replace('https://hooks.slack.com/services/', '…/services/')
+                  : ch.channel_type === 'pagerduty'
+                  ? `…${((cfg.routing_key as string) ?? '').slice(-8)}`
                   : cfg.address ?? '';
                 return (
                   <div key={ch.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 gap-3">
                     <div className="flex items-center gap-2.5 min-w-0">
                       {ch.channel_type === 'slack'
                         ? <Slack size={13} className="text-indigo-400 shrink-0" />
+                        : ch.channel_type === 'pagerduty'
+                        ? <Bell  size={13} className="text-green-400 shrink-0" />
                         : <Mail  size={13} className="text-blue-400 shrink-0" />}
                       <div className="min-w-0">
                         <p className="text-xs font-semibold text-gray-200 truncate">{ch.name}</p>

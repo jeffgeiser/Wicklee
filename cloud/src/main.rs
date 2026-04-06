@@ -468,7 +468,7 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         CREATE TABLE IF NOT EXISTS notification_channels (
             id           TEXT PRIMARY KEY,
             user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            channel_type TEXT NOT NULL CHECK (channel_type IN ('slack', 'email')),
+            channel_type TEXT NOT NULL CHECK (channel_type IN ('slack', 'email', 'pagerduty')),
             name         TEXT NOT NULL,
             config_json  JSONB NOT NULL,
             verified     INTEGER NOT NULL DEFAULT 0,
@@ -477,6 +477,11 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     ").execute(pool).await.expect("notification_channels migration failed");
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notif_channels_user ON notification_channels(user_id)")
+        .execute(pool).await.ok();
+    // Phase 7: add pagerduty to channel_type constraint (idempotent — Postgres allows re-adding same constraint).
+    sqlx::query("ALTER TABLE notification_channels DROP CONSTRAINT IF EXISTS notification_channels_channel_type_check")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE notification_channels ADD CONSTRAINT notification_channels_channel_type_check CHECK (channel_type IN ('slack', 'email', 'pagerduty'))")
         .execute(pool).await.ok();
 
     sqlx::query("
@@ -695,8 +700,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 
 // ── Tier constants ────────────────────────────────────────────────────────────
 
-/// Maximum nodes a free-tier account may pair.
+/// Maximum nodes per tier.
 const MAX_FREE_NODES: usize = 3;
+const MAX_PRO_NODES:  usize = 10;
+const MAX_TEAM_NODES: usize = 25;
 
 /// Agent API v1 rate limits (requests per 60-second sliding window).
 const API_RATE_COMMUNITY: usize = 60;
@@ -1997,8 +2004,12 @@ async fn handle_fleet(
         "SELECT wk_id, fleet_url, paired_at FROM nodes WHERE user_id = $1 ORDER BY paired_at ASC"
     ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
+    let tier_limit = if tier == "enterprise" { usize::MAX }
+        else if is_team_or_above(&tier) { MAX_TEAM_NODES }
+        else if is_pro_or_above(&tier) { MAX_PRO_NODES }
+        else { FREE_NODE_LIMIT };
     let restricted: HashSet<String> = persisted.iter()
-        .skip(if is_team_or_above(&tier) { usize::MAX } else { FREE_NODE_LIMIT })
+        .skip(tier_limit)
         .map(|(id, _, _)| id.clone())
         .collect();
 
@@ -2862,14 +2873,25 @@ async fn handle_activate(
     };
 
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
-    if !is_pro {
+    // Enforce per-tier node limits.
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    let node_limit = if tier == "enterprise" { usize::MAX }
+        else if is_team_or_above(&tier) { MAX_TEAM_NODES }
+        else if is_pro || is_pro_or_above(&tier) { MAX_PRO_NODES }
+        else { MAX_FREE_NODES };
+    {
         let count: i64 = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM nodes WHERE user_id = $1"
         ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0);
-        if count as usize >= MAX_FREE_NODES {
+        if count as usize >= node_limit {
+            let tier_name = if node_limit == MAX_FREE_NODES { "Community" }
+                else if node_limit == MAX_PRO_NODES { "Pro" }
+                else { "Team" };
             return (StatusCode::PAYMENT_REQUIRED,
                 Json(serde_json::json!({
-                    "error": format!("Free tier limit reached ({MAX_FREE_NODES} nodes). Upgrade to Wicklee Pro to add more.")
+                    "error": format!("{tier_name} tier limit reached ({node_limit} nodes). Upgrade to add more.")
                 }))).into_response();
         }
     }
@@ -2977,11 +2999,12 @@ async fn handle_fleet_stream(
             });
         }
 
-        let restricted_ids: HashSet<&str> = if is_team_or_above(&tier) {
-            HashSet::new()
-        } else {
-            ordered_nodes.iter().skip(FREE_NODE_LIMIT).map(|s| s.as_str()).collect()
-        };
+        let stream_limit = if tier == "enterprise" { usize::MAX }
+            else if is_team_or_above(&tier) { MAX_TEAM_NODES }
+            else if is_pro_or_above(&tier) { MAX_PRO_NODES }
+            else { FREE_NODE_LIMIT };
+        let restricted_ids: HashSet<&str> = ordered_nodes.iter()
+            .skip(stream_limit).map(|s| s.as_str()).collect();
 
         let metrics_map = state.metrics.read().unwrap();
         let node_list: Vec<serde_json::Value> = metrics_map
@@ -3481,6 +3504,48 @@ fn send_email(to: &str, subject: &str, text: &str, html: &str) -> bool {
     }
 }
 
+/// Send a PagerDuty Events API v2 trigger or resolve event.
+/// Uses the Events API v2 endpoint (https://events.pagerduty.com/v2/enqueue).
+/// The routing_key is an integration key from the PagerDuty service configuration.
+fn send_pagerduty(routing_key: &str, node_id: &str, event_type: &str, detail: &str, resolved: bool) -> bool {
+    let (event_action, severity) = if resolved {
+        ("resolve", "info")
+    } else {
+        ("trigger", match event_type {
+            "zombied_engine" | "thermal_redline" | "oom_warning" => "critical",
+            "wes_cliff" | "wes_drop" | "thermal_serious" => "error",
+            _ => "warning",
+        })
+    };
+    // dedup_key ensures PagerDuty links trigger + resolve for the same incident.
+    let dedup_key = format!("wicklee-{node_id}-{event_type}");
+    let payload = serde_json::json!({
+        "routing_key": routing_key,
+        "event_action": event_action,
+        "dedup_key": dedup_key,
+        "payload": {
+            "summary": format!("Wicklee {event_type} on {node_id}: {detail}"),
+            "source": node_id,
+            "severity": severity,
+            "component": "wicklee-agent",
+            "group": "inference-fleet",
+            "custom_details": {
+                "node_id": node_id,
+                "event_type": event_type,
+                "detail": detail,
+            }
+        }
+    });
+    match ureq::post("https://events.pagerduty.com/v2/enqueue")
+        .set("Content-Type", "application/json")
+        .send_string(&payload.to_string())
+    {
+        Ok(r) if r.status() == 202 => true,
+        Ok(r) => { eprintln!("[pagerduty] unexpected status: {}", r.status()); false }
+        Err(e) => { eprintln!("[pagerduty] delivery failed: {e}"); false }
+    }
+}
+
 fn slack_alert_blocks(node_id: &str, event_type: &str, detail: &str, resolved: bool) -> String {
     let (icon, color_word) = if resolved {
         ("\u{2705}", "Recovered")
@@ -3744,6 +3809,13 @@ fn deliver_alert(channel_type: &str, config_json: &str, node_id: &str, event_typ
             let subject = format!("{subject_prefix}: {node_id} \u{2014} {event_type}");
             let (text, html) = email_alert_body(node_id, event_type, detail, resolved);
             send_email(&addr, &subject, &text, &html)
+        }
+        "pagerduty" => {
+            let routing_key = match cfg.get("routing_key").and_then(|v| v.as_str()) {
+                Some(k) => k.to_owned(),
+                None => { eprintln!("[alerts] pagerduty channel missing routing_key"); return false; }
+            };
+            send_pagerduty(&routing_key, node_id, event_type, detail, resolved)
         }
         _ => { eprintln!("[alerts] unknown channel_type: {channel_type}"); false }
     }
@@ -4384,9 +4456,9 @@ async fn handle_create_channel(
     headers: HeaderMap,
     Json(body): Json<CreateChannelRequest>,
 ) -> impl IntoResponse {
-    if !matches!(body.channel_type.as_str(), "slack" | "email") {
+    if !matches!(body.channel_type.as_str(), "slack" | "email" | "pagerduty") {
         return (StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "channel_type must be 'slack' or 'email'" }))).into_response();
+            Json(serde_json::json!({ "error": "channel_type must be 'slack', 'email', or 'pagerduty'" }))).into_response();
     }
     let token = match extract_bearer(&headers) {
         Some(t) => t,
@@ -4407,6 +4479,10 @@ async fn handle_create_channel(
     if !is_pro_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "Alerting requires Pro tier or above" }))).into_response();
+    }
+    if body.channel_type == "pagerduty" && !is_team_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "PagerDuty alerts require Team tier or above" }))).into_response();
     }
 
     let id = Uuid::new_v4().to_string();
