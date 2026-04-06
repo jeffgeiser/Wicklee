@@ -2049,7 +2049,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 {/* Fleet Benchmarks — live HexHive + benchmark trigger */}
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
                   <div className="flex items-center gap-2">
-                    <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
                     <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 flex-1">
                       {isLocalHost ? 'Node Benchmark' : 'Fleet Benchmarks'}
                     </span>

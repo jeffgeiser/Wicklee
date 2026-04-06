@@ -36,7 +36,7 @@ function tierLabel(t: SubscriptionTier): string {
 
 interface InsightsLiteCardProps {
   title: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   /** Tier needed for the full card — shown as badge + upgrade CTA */
   tierRequired: SubscriptionTier;
   /** Override the default "Unlock full view on [Tier] →" CTA copy */
@@ -62,7 +62,6 @@ const InsightsLiteCard: React.FC<InsightsLiteCardProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-gray-500 shrink-0">{icon}</span>
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate">
             {title}
           </span>

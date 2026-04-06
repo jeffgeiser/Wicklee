@@ -121,14 +121,13 @@ interface InsightTileProps {
   sub?: string;
   /** Optional second sub-line — rendered more muted than sub, used for contextual conversions. */
   sub2?: string;
-  icon: React.ElementType;
+  icon?: React.ElementType;
   iconCls?: string;
 }
-const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, valueTitle, sub, sub2, icon: Icon, iconCls }) => (
+const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, valueTitle, sub, sub2 }) => (
   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between h-[116px]">
     <div className="flex items-start justify-between gap-2">
       <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">{label}</div>
-      <Icon size={13} className={iconCls ?? 'text-gray-400 dark:text-gray-600'} />
     </div>
     <div>
       <p
