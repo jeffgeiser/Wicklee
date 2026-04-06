@@ -55,7 +55,7 @@ const TIERS: TierDef[] = [
       '24-Hour Rolling History',
       '9 Observation Patterns — thermal, power, memory & hardware health',
       'WES v2 + tok/W Diagnostics',
-      'Cloud Relay Telemetry',
+      'Optional Cloud Relay',
       'Agent API v1',
       'Local MCP Server — AI agent integration',
       'Local Ollama proxy — production tok/s, TTFT & latency on-device',
