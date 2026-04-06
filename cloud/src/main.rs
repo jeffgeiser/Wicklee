@@ -4971,6 +4971,210 @@ async fn otel_exporter_task(state: AppState) {
     }
 }
 
+// ── Cloud MCP Server (Team+ tier) ─────────────────────────────────────────────
+
+async fn handle_cloud_mcp_manifest() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "schema_version": "2024-11-05",
+        "name":           "wicklee-cloud",
+        "version":        env!("CARGO_PKG_VERSION"),
+        "description":    "Fleet-aggregated GPU monitor — multi-node status, routing, observations, and efficiency scores for AI inference fleets.",
+        "transport":      { "type": "http", "url": "/mcp" },
+        "capabilities":   { "tools": true, "resources": true }
+    }))
+}
+
+fn mcp_ok(id: &serde_json::Value, r: serde_json::Value) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "jsonrpc":"2.0", "result": r, "id": id }))
+}
+fn mcp_err(id: &serde_json::Value, c: i32, m: &str) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "jsonrpc":"2.0", "error":{"code":c,"message":m}, "id": id }))
+}
+fn mcp_tool(id: &serde_json::Value, v: serde_json::Value) -> Json<serde_json::Value> {
+    mcp_ok(id, serde_json::json!({ "content":[{"type":"text","text": serde_json::to_string_pretty(&v).unwrap_or_default()}] }))
+}
+
+async fn handle_cloud_mcp(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> Json<serde_json::Value> {
+    let req: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return Json(serde_json::json!({ "jsonrpc":"2.0", "error":{"code":-32700,"message":"Parse error"}, "id": null })),
+    };
+
+    let req_id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
+
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return mcp_err(&req_id, -32000, "Missing auth token"),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return mcp_err(&req_id, -32000, "Invalid or expired session"),
+    };
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if !is_team_or_above(&tier) {
+        return mcp_err(&req_id, -32000, "Cloud MCP requires Team tier or above");
+    }
+
+    let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
+    let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
+    let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
+        .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+    let now = now_ms();
+
+    // Snapshot metrics into owned data so no RwLockReadGuard crosses an await point.
+    let metrics_snapshot: HashMap<String, MetricsEntry> = {
+        let map = state.metrics.read().unwrap();
+        node_ids.iter().filter_map(|nid| {
+            let e = map.get(nid)?;
+            Some((nid.clone(), MetricsEntry { last_seen_ms: e.last_seen_ms, metrics: e.metrics.clone() }))
+        }).collect()
+    };
+
+    match method {
+        "initialize" => mcp_ok(&req_id, serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "serverInfo": { "name": "wicklee-cloud", "version": env!("CARGO_PKG_VERSION") },
+            "capabilities": { "tools": {}, "resources": {} }
+        })),
+        "notifications/initialized" => mcp_ok(&req_id, serde_json::json!({})),
+
+        "tools/list" => mcp_ok(&req_id, serde_json::json!({ "tools": [
+            { "name": "get_fleet_status",       "description": "All nodes with online status, metrics, and WES.",              "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "get_fleet_wes",          "description": "Compact WES scores for all fleet nodes.",                      "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "get_node_detail",        "description": "Full metrics for a specific node.",                            "inputSchema": { "type": "object", "properties": { "node_id": { "type": "string" } }, "required": ["node_id"] } },
+            { "name": "get_best_route",         "description": "Routing recommendation: best node by throughput and WES.",     "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "get_fleet_insights",     "description": "Fleet health summary with active observation count.",          "inputSchema": { "type": "object", "properties": {} } },
+            { "name": "get_fleet_observations", "description": "Active and resolved observations across the fleet.",           "inputSchema": { "type": "object", "properties": { "state": { "type": "string", "enum": ["open","all"], "default": "open" } } } },
+        ] })),
+
+        "tools/call" => {
+            let tool = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+            match tool {
+                "get_fleet_status" => {
+                    let map = &metrics_snapshot;
+                    let nodes: Vec<serde_json::Value> = node_ids.iter().map(|nid| {
+                        let e = map.get(nid);
+                        let on = e.map(|e| now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS).unwrap_or(false);
+                        let m  = e.and_then(|e| e.metrics.as_ref());
+                        serde_json::json!({
+                            "node_id": nid, "hostname": m.and_then(|p| p.hostname.as_deref()), "online": on,
+                            "inference_state": m.and_then(|p| p.inference_state.as_deref()),
+                            "wes": m.and_then(wes_for_payload),
+                            "tok_s": m.and_then(|p| if p.vllm_running { p.vllm_tokens_per_sec } else { p.ollama_tokens_per_second }),
+                            "thermal_state": m.and_then(|p| p.thermal_state.as_deref()),
+                        })
+                    }).collect();
+                    let c = nodes.len();
+                    mcp_tool(&req_id, serde_json::json!({ "nodes": nodes, "count": c }))
+                }
+                "get_fleet_wes" => {
+                    let map = &metrics_snapshot;
+                    let nodes: Vec<serde_json::Value> = node_ids.iter().filter_map(|nid| {
+                        let e = map.get(nid)?; let m = e.metrics.as_ref()?; let w = wes_for_payload(m)?;
+                        Some(serde_json::json!({ "node_id": nid, "wes": w, "online": now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS }))
+                    }).collect();
+                    mcp_tool(&req_id, serde_json::json!({ "nodes": nodes }))
+                }
+                "get_node_detail" => {
+                    let target = args.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+                    if target.is_empty() { return mcp_err(&req_id, -32602, "node_id required"); }
+                    if !node_ids.contains(&target.to_string()) { return mcp_err(&req_id, -32602, "Node not in your fleet"); }
+                    let map = &metrics_snapshot;
+                    let e = map.get(target);
+                    let on = e.map(|e| now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS).unwrap_or(false);
+                    let m  = e.and_then(|e| e.metrics.as_ref());
+                    mcp_tool(&req_id, serde_json::json!({ "node_id": target, "online": on, "metrics": m.map(|p| serde_json::to_value(p).unwrap_or_default()) }))
+                }
+                "get_best_route" => {
+                    let map = &metrics_snapshot;
+                    let (mut bt, mut bw): (Option<(String, f32)>, Option<(String, f32)>) = (None, None);
+                    for nid in &node_ids {
+                        let e = match map.get(nid) { Some(e) => e, None => continue };
+                        if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { continue; }
+                        let m = match e.metrics.as_ref() { Some(m) => m, None => continue };
+                        if let Some(t) = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second } {
+                            if bt.as_ref().map_or(true, |(_, b)| t > *b) { bt = Some((nid.clone(), t)); }
+                        }
+                        if let Some(w) = wes_for_payload(m) {
+                            if bw.as_ref().map_or(true, |(_, b)| w > *b) { bw = Some((nid.clone(), w)); }
+                        }
+                    }
+                    mcp_tool(&req_id, serde_json::json!({
+                        "latency": bt.map(|(n, t)| serde_json::json!({ "node": n, "tok_s": t })),
+                        "efficiency": bw.map(|(n, w)| serde_json::json!({ "node": n, "wes": w })),
+                        "default": "efficiency"
+                    }))
+                }
+                "get_fleet_insights" => {
+                    let map = &metrics_snapshot;
+                    let online = node_ids.iter().filter(|n| map.get(*n).map(|e| now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS).unwrap_or(false)).count();
+                    let wv: Vec<f32> = node_ids.iter().filter_map(|n| { let e = map.get(n)?; if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; } wes_for_payload(e.metrics.as_ref()?) }).collect();
+                    let avg = if wv.is_empty() { None } else { Some((wv.iter().sum::<f32>() / wv.len() as f32 * 10.0).round() / 10.0) };
+                    let tv: Vec<f32> = node_ids.iter().filter_map(|n| { let e = map.get(n)?; if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; } let m = e.metrics.as_ref()?; if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second } }).collect();
+                    let ftps = if tv.is_empty() { None } else { Some((tv.iter().sum::<f32>() * 10.0).round() / 10.0) };
+                    let obs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fleet_observations WHERE tenant_id = $1 AND state = 'open'")
+                        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0);
+                    mcp_tool(&req_id, serde_json::json!({ "fleet": { "online": online, "total": node_ids.len(), "avg_wes": avg, "fleet_tok_s": ftps }, "active_observations": obs }))
+                }
+                "get_fleet_observations" => {
+                    let obs_state = args.get("state").and_then(|v| v.as_str()).unwrap_or("open");
+                    let allowed = allowed_patterns_for_tier(&tier);
+                    let sql = if obs_state == "all" {
+                        "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms FROM fleet_observations WHERE tenant_id = $1 AND alert_type = ANY($2) ORDER BY fired_at_ms DESC LIMIT 50"
+                    } else {
+                        "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms FROM fleet_observations WHERE tenant_id = $1 AND alert_type = ANY($2) AND state = 'open' ORDER BY fired_at_ms DESC LIMIT 50"
+                    };
+                    let rows: Vec<(String, String, String, String, String, String, String, Option<String>, i64, Option<i64>)> =
+                        sqlx::query_as(sql).bind(&user_id).bind(&allowed).fetch_all(&state.pool).await.unwrap_or_default();
+                    let obs: Vec<serde_json::Value> = rows.into_iter().map(|(id, nid, at, sev, st, t, d, ctx, f, r)| {
+                        serde_json::json!({ "id": id, "node_id": nid, "alert_type": at, "severity": sev, "state": st, "title": t, "detail": d, "context": ctx, "fired_at_ms": f, "resolved_at_ms": r })
+                    }).collect();
+                    let c = obs.len();
+                    mcp_tool(&req_id, serde_json::json!({ "observations": obs, "count": c }))
+                }
+                _ => mcp_err(&req_id, -32602, "Unknown tool"),
+            }
+        }
+
+        "resources/list" => mcp_ok(&req_id, serde_json::json!({ "resources": [
+            { "uri": "wicklee://fleet/status",  "name": "Fleet Status Summary",  "mimeType": "application/json" },
+            { "uri": "wicklee://fleet/thermal", "name": "Fleet Thermal States",  "mimeType": "application/json" },
+        ] })),
+
+        "resources/read" => {
+            let uri = params.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+            let map = &metrics_snapshot;
+            match uri {
+                "wicklee://fleet/status" => {
+                    let on = node_ids.iter().filter(|n| map.get(*n).map(|e| now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS).unwrap_or(false)).count();
+                    let wv: Vec<f32> = node_ids.iter().filter_map(|n| { let e = map.get(n)?; if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; } wes_for_payload(e.metrics.as_ref()?) }).collect();
+                    let avg = if wv.is_empty() { None } else { Some(wv.iter().sum::<f32>() / wv.len() as f32) };
+                    mcp_ok(&req_id, serde_json::json!({ "contents": [{ "uri": uri, "mimeType": "application/json", "text": serde_json::json!({ "online": on, "total": node_ids.len(), "avg_wes": avg }).to_string() }] }))
+                }
+                "wicklee://fleet/thermal" => {
+                    let nodes: Vec<serde_json::Value> = node_ids.iter().filter_map(|n| {
+                        let m = map.get(n)?.metrics.as_ref()?;
+                        Some(serde_json::json!({ "node_id": n, "thermal_state": m.thermal_state, "penalty_avg": m.penalty_avg, "penalty_peak": m.penalty_peak, "thermal_source": m.thermal_source }))
+                    }).collect();
+                    mcp_ok(&req_id, serde_json::json!({ "contents": [{ "uri": uri, "mimeType": "application/json", "text": serde_json::json!({ "nodes": nodes }).to_string() }] }))
+                }
+                _ => mcp_err(&req_id, -32602, "Unknown resource URI"),
+            }
+        }
+
+        _ => mcp_err(&req_id, -32601, &format!("Method not found: {method}")),
+    }
+}
+
 // ── Prometheus Scrape Endpoint (Team+ tier, API key auth) ────────────────────
 
 async fn handle_prometheus_metrics(
@@ -5198,6 +5402,8 @@ async fn main() {
         .route("/api/v1/nodes/:id",      get(handle_v1_node))
         .route("/api/v1/route/best",     get(handle_v1_route_best))
         .route("/api/v1/insights/latest", get(handle_v1_insights_latest))
+        .route("/mcp",                      post(handle_cloud_mcp))
+        .route("/mcp/manifest",             get(handle_cloud_mcp_manifest))
         .route("/metrics",                  get(handle_prometheus_metrics))
         .with_state(state)
         .layer(middleware::from_fn(cors_open));
