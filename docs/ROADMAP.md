@@ -36,14 +36,22 @@ OTLP HTTP exporter on the cloud backend. 8 gauges per node (GPU utilization, pow
 REST API for fleet telemetry. AI agent discovery via `llms.txt`, OpenAPI spec, and structured endpoint metadata.
 
 ### Custom Alerts
-User-configurable thresholds for TTFT regression, throughput, and thermal events. Slack and email notification channels.
-
----
-
-## In Progress
+User-configurable thresholds for TTFT regression, throughput, and thermal events. Slack, email, and PagerDuty notification channels. PagerDuty uses Events API v2 with auto-resolve on incident lifecycle.
 
 ### Cloud MCP Server
-Fleet-aggregated MCP endpoint for remote AI agents. Fleet status, multi-node routing, cross-node pattern correlation. Team tier.
+Fleet-aggregated MCP endpoint (`POST wicklee.dev/mcp`) for remote AI agents. 6 tools: fleet status, WES scores, node detail, best route, fleet insights, fleet observations. 2 resources: fleet status summary, fleet thermal states. Team+ tier, Clerk JWT auth.
+
+### Clerk Organizations (Shared Fleet)
+Team dashboard sharing via Clerk Organizations. Org members see the same fleet — nodes, observations, alerts, and history are all scoped to the organization. Org inherits creator's subscription tier; syncs on Paddle upgrade/downgrade. Solo users unaffected.
+
+### PagerDuty Alerts
+Events API v2 integration for Team+ tier. Trigger and resolve events with dedup key for incident lifecycle. Routing key configured in Settings → Alerts.
+
+### Per-Tier Node Limits
+Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Enterprise: unlimited. Enforced at pairing, fleet list, and SSE stream.
+
+### Server-Side Pattern Evaluation (Phase 7)
+Migrated all 18 observation patterns from client-side TypeScript to server-side Rust. Agent evaluates 17 patterns against 10-min DuckDB buffer every 10s, pushes to cloud via telemetry. Cloud evaluates `fleet_load_imbalance`. Deleted `patternEngine.ts` (2,254 lines) and `useMetricHistory.ts` (284 lines).
 
 ---
 

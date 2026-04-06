@@ -6,7 +6,7 @@
 
 ---
 
-## April 6, 2026 — v0.7.11: Server-Side Observation Migration (Phase 7) + Pattern O
+## April 6, 2026 — v0.7.11: Server-Side Patterns, Cloud MCP, PagerDuty, Clerk Orgs
 
 ### Phase 7 — Remove Client-Side Pattern Engine
 Moved all pattern evaluation from the browser (patternEngine.ts) to the Rust agent and cloud backend.
@@ -26,10 +26,45 @@ Moved all pattern evaluation from the browser (patternEngine.ts) to the Rust age
 - **Staleness reaper expanded:** Auto-resolves ALL open observations (agent + cloud) when node offline > 5 min.
 - **`oom_warning` hardened:** Requires 2 consecutive 60s ticks at > 95% memory pressure (was 1).
 
+### Cloud MCP Server (Team+)
+Fleet-aggregated MCP endpoint at `POST wicklee.dev/mcp`. Clerk JWT auth, Team+ tier gate.
+- 6 tools: `get_fleet_status`, `get_fleet_wes`, `get_node_detail`, `get_best_route`, `get_fleet_insights`, `get_fleet_observations`
+- 2 resources: `wicklee://fleet/status`, `wicklee://fleet/thermal`
+- Manifest at `GET wicklee.dev/mcp/manifest`
+- Uses owned metrics snapshot (no RwLockReadGuard across await points)
+
+### PagerDuty Alerts (Team+)
+- Events API v2 integration in `deliver_alert` — trigger and resolve with dedup key (`wicklee-{node_id}-{event_type}`)
+- `pagerduty` added to `notification_channels` CHECK constraint (migration)
+- Settings UI: PagerDuty tab with routing key input, green bell icon in channel list
+- Severity mapping: `zombied_engine`/`thermal_redline`/`oom_warning` → critical; `wes_cliff`/`thermal_serious` → error; others → warning
+
+### Per-Tier Node Limits
+- `MAX_PRO_NODES = 10`, `MAX_TEAM_NODES = 25` (Enterprise = unlimited)
+- Enforced at pairing (`handle_activate`), fleet list (restricted nodes), SSE stream (restricted flag)
+- Previously only Community (3) was enforced; Pro/Team could add unlimited nodes
+
+### Clerk Organizations — Shared Fleet Dashboard
+- Extract `org_id` from Clerk JWT claims; `X-Org-Id` header for tenant scoping
+- `organizations` table: `org_id`, `subscription_tier`, `created_by`
+- `org_id` column on `nodes`, `stream_tokens` tables
+- `tenant_scope()` helper: returns `("org_id", oid)` or `("user_id", uid)` for format!-based SQL
+- `resolve_tier()`: checks organizations table for org users, falls back to user tier
+- Org tier inherits from creating user's subscription; syncs on Paddle upgrade/downgrade
+- Frontend: `useOrganization()` in CloudApp, `X-Org-Id` in FleetStreamContext, `OrganizationProfile` replaces mock TeamManagement
+- Critical paths updated: fleet list, pairing, SSE stream, telemetry tenant resolution
+
+### Documentation Overhaul
+- Replaced letter labels (A–R) with `pattern_id` strings across all docs
+- New DocsPage sections: Alerts & Notifications (channel setup, PagerDuty lifecycle), Teams & Organizations (4-step setup, tier inheritance), Cloud MCP (tools, auth, curl example)
+- Pricing table expanded: pattern counts, alert channels per tier, extras column
+- Updated llms.txt, llms-full.txt, api.md, openapi.json, CLAUDE.md
+
 ### Total Coverage
 - 18 observation patterns: 17 agent-evaluated + 1 cloud-evaluated (`fleet_load_imbalance`)
 - 5 fleet alerts: `zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`
 - 9 Community patterns, 9 Pro patterns, 5 all-tier fleet alerts
+- All Community, Pro, and Team features complete
 
 ---
 
