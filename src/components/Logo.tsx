@@ -19,10 +19,10 @@ const STATE_CONFIG: Record<ConnectionState, {
   pulse: boolean;
   tooltip?: string;
 }> = {
-  connected:    { color: 'bg-cyan-400',   glowColor: 'bg-cyan-400/20',   glowRgba: '34,211,238',  duration: '2s', scale: '2.8', opacity: '0.8', pulse: true },
+  connected:    { color: 'bg-blue-600',   glowColor: 'bg-blue-600/20',   glowRgba: '37,99,235',   duration: '2s', scale: '2.8', opacity: '0.8', pulse: true },
   degraded:     { color: 'bg-amber-400',  glowColor: 'bg-amber-400/20',  glowRgba: '251,191,36',  duration: '4s', scale: '2.5', opacity: '0.7', pulse: true,  tooltip: 'Fleet nodes are stale' },
-  idle:         { color: 'bg-cyan-400',   glowColor: 'bg-cyan-400/10',   glowRgba: '34,211,238',  duration: '6s', scale: '2.0', opacity: '0.3', pulse: true },
-  disconnected: { color: 'bg-cyan-400',   glowColor: 'bg-cyan-400/10',   glowRgba: '34,211,238',  duration: '2s', scale: '1',   opacity: '0',   pulse: false, tooltip: 'Fleet connection lost' },
+  idle:         { color: 'bg-blue-600',   glowColor: 'bg-blue-600/10',   glowRgba: '37,99,235',   duration: '6s', scale: '2.0', opacity: '0.3', pulse: true },
+  disconnected: { color: 'bg-blue-600',   glowColor: 'bg-blue-600/10',   glowRgba: '37,99,235',   duration: '2s', scale: '1',   opacity: '0',   pulse: false, tooltip: 'Fleet connection lost' },
 };
 
 const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconnected', theme }) => {
