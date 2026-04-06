@@ -75,15 +75,19 @@ Base URL: `https://wicklee.dev/api/v1`
 - `ollama_ttft_ms`: Time to first token (Ollama probe baseline)
 - `vllm_avg_ttft_ms`: Time to first token (vLLM production histogram)
 
-## 18 Observation Patterns (A-R)
+## 18 Observation Patterns + 5 Fleet Alerts
 
-Community (9): A (Thermal Drain), B (Phantom Load), C (WES Velocity Drop),
-F (Memory Trajectory), H (Power Jitter), J (Swap Pressure), K (Clock Drift),
-N (NVIDIA Thermal Ceiling), O (VRAM Overcommit)
+Agent-evaluated (17 patterns, 10-min DuckDB buffer, every 10s):
+Community (9): thermal_drain, phantom_load, wes_velocity_drop, memory_trajectory,
+power_jitter, swap_io_pressure, clock_drift, nvidia_thermal_redline, vram_overcommit
+Pro (8): power_gpu_decoupling, bandwidth_saturation, efficiency_drag,
+pcie_lane_degradation, vllm_kv_cache_saturation, ttft_regression, latency_spike,
+vllm_queue_saturation
 
-Pro (9): D (Power-GPU Decoupling), E (Fleet Load Imbalance), G (Bandwidth Saturation),
-I (Efficiency Penalty Drag), L (PCIe Degradation), M (vLLM KV Cache Saturation),
-P (TTFT Regression), Q (Latency Spike), R (vLLM Queue Saturation)
+Cloud-evaluated (1 pattern): fleet_load_imbalance (Pro)
+
+Fleet alerts (5, cloud, all tiers): zombied_engine, thermal_redline, oom_warning,
+wes_cliff, agent_version_mismatch
 
 ## Runtimes Supported
 

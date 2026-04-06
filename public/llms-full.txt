@@ -42,7 +42,7 @@ SSE stream. 1 Hz cadence. Returns `data: {MetricsPayload}\n\n` per tick.
 WebSocket. 10 Hz cadence. Same MetricsPayload as SSE, higher frequency for charts.
 
 ### GET /api/observations
-Returns local hardware pattern evaluation (Patterns A, B, J, L) against 1-hour DuckDB buffer.
+Returns 17 server-side observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds. Patterns are pushed to the fleet cloud when paired.
 ```json
 { "observations": [{ "pattern_id": "thermal_drain", "severity": "warning", ... }] }
 ```
@@ -102,7 +102,7 @@ Tools:
 - `get_node_status` — Full MetricsPayload snapshot (~60 fields: CPU, GPU, memory, power, thermal, inference state, model, WES penalty, tok/s)
 - `get_inference_state` — Current inference state (live/idle-spd/busy/idle) with which detection tier matched and sensor values
 - `get_active_models` — List of loaded models across Ollama (model, size, quantization, tok/s), vLLM (model, requests, cache), llama.cpp (model, tok/s, slots)
-- `get_observations` — Evaluates local patterns (A: Thermal Drain, B: Phantom Load, J: Swap Pressure, L: PCIe Degradation) against 1h DuckDB buffer
+- `get_observations` — Returns 17 server-side observation patterns evaluated against 10-minute DuckDB buffer
 - `get_metrics_history` — 1-hour rolling telemetry (redirects to REST /api/history)
 
 Resources:
@@ -306,35 +306,43 @@ Four states, evaluated once per second as a pure function:
 
 ---
 
-## 18 Observation Patterns
+## 18 Observation Patterns + 5 Fleet Alerts
 
-### Localhost-Only (4)
-Evaluated by agent against local 1-hour DuckDB buffer.
+### Agent-Evaluated (17 patterns)
+Evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds.
+Pushed to the fleet cloud when paired for fleet-wide visibility.
 
-- **A — Thermal Drain:** Sustained throttle reducing tok/s > 8% vs Normal baseline
-- **B — Phantom Load:** Model loaded + power > 5W + tok/s < 0.5 (idle model burning power)
-- **J — Swap Pressure:** Swap write > 2 MB/s sustained (model spilling to disk)
-- **L — PCIe Degradation:** PCIe link width below rated max (NVIDIA only, Pro)
+Community (9):
+- **thermal_drain:** Sustained throttle reducing tok/s > 8% vs Normal baseline
+- **phantom_load:** Model loaded + power > 5W + tok/s < 0.5 (idle model burning power)
+- **wes_velocity_drop:** WES declining > 10% before thermal state changes
+- **memory_trajectory:** Memory pressure rising > 1 pct/min sustained
+- **power_jitter:** Power CV > 20% during inference
+- **swap_io_pressure:** Swap write > 2 MB/s sustained (model spilling to disk)
+- **clock_drift:** Clock throttle > 15% with Normal thermal
+- **nvidia_thermal_redline:** GPU temp > 85C sustained or > 90C instant
+- **vram_overcommit:** Model size > 90% of VRAM capacity
 
-### Cloud-Only (4)
-Require fleet context or multi-node comparison.
+Pro (8):
+- **power_gpu_decoupling:** High power + low GPU% during inference
+- **bandwidth_saturation:** Low GPU% + high VRAM + dropping WES
+- **efficiency_drag:** WES penalty > 30% with Normal thermal
+- **pcie_lane_degradation:** PCIe link width below rated max (NVIDIA only)
+- **vllm_kv_cache_saturation:** KV cache > 90% sustained
+- **ttft_regression:** TTFT slope > +5 ms/min with mean > 100 ms
+- **latency_spike:** Recent E2E latency > 1.5x baseline and > 500 ms
+- **vllm_queue_saturation:** requests_waiting avg > 3 sustained
 
-- **C — WES Velocity Drop:** WES declining > 10% before thermal state changes
-- **E — Fleet Load Imbalance:** Node WES < 50% of best peer with spare capacity (Pro)
-- **F — Memory Pressure Trajectory:** Memory pressure rising > 1 pct/min sustained
-- **I — Efficiency Penalty Drag:** WES penalty > 30% with Normal thermal (Pro)
+### Cloud-Evaluated (1 pattern)
+- **fleet_load_imbalance:** Node WES > 20% below best healthy peer (Pro)
 
-### Both — Localhost + Cloud (10)
-- **D — Power-GPU Decoupling:** High power + low GPU% during inference (Pro)
-- **G — Bandwidth Saturation:** Low GPU% + high VRAM + dropping WES (Pro)
-- **H — Power Jitter:** Power CV > 20% during inference
-- **K — Clock Drift:** Clock throttle > 15% with Normal thermal
-- **M — vLLM KV Cache Saturation:** Cache > 90% sustained (Pro)
-- **N — NVIDIA Thermal Ceiling:** GPU temp > 85C sustained
-- **O — VRAM Overcommit:** Model size > 90% of VRAM capacity
-- **P — TTFT Regression:** Recent TTFT > 2x baseline (Pro)
-- **Q — Latency Spike:** E2E latency > 2s for 3+ samples (Pro)
-- **R — vLLM Queue Saturation:** requests_waiting > 5 sustained (Pro)
+### Fleet Alerts (5, all tiers)
+Evaluated by the cloud backend every 60 seconds.
+- **zombied_engine:** Inference stuck in "busy" > 10 minutes
+- **thermal_redline:** Node in "Critical" thermal for 2+ consecutive ticks
+- **oom_warning:** Memory pressure > 95% for 2+ consecutive ticks
+- **wes_cliff:** WES < 35% of 24h baseline during active inference
+- **agent_version_mismatch:** Agent version differs from fleet majority
 
 ---
 

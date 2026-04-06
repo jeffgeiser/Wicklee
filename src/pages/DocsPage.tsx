@@ -865,17 +865,17 @@ WES Version:     2
               The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. Each observation includes actionable commands tailored to your platform (macOS, Linux, or NVIDIA).
             </p>
             <p>
-              Wicklee evaluates 18 patterns across three scopes: patterns that run on both localhost and the fleet cloud, patterns that require fleet context (cloud-only), and patterns that rely on local-only sensors. 9 patterns are available on the Community tier; 9 additional patterns require Pro.
+              Wicklee evaluates 18 observation patterns plus 5 fleet health alerts. The Rust agent evaluates 17 patterns locally against a 10-minute DuckDB buffer every 10 seconds. One pattern (<code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code>) requires multi-node fleet context and runs in the cloud evaluator. When paired with wicklee.dev, agent observations are pushed to the cloud automatically for fleet-wide visibility. 9 patterns are available on the Community tier; 9 additional patterns require Pro.
             </p>
 
-            {/* ── Localhost + Cloud patterns ── */}
-            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Localhost-Only (4 patterns)</p>
-            <p className="text-xs text-gray-500 mb-2">Evaluated by the agent against the local 1-hour DuckDB buffer via <code className="text-gray-400 font-mono text-xs">GET /api/observations</code>. No fleet connection required.</p>
+            {/* ── Agent-evaluated observations ── */}
+            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Agent Observations (17 patterns)</p>
+            <p className="text-xs text-gray-500 mb-2">Evaluated by the Rust agent against the local 10-minute DuckDB buffer via <code className="text-gray-400 font-mono text-xs">GET /api/observations</code>. Pushed to the fleet cloud when paired. No fleet connection required for localhost.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr>
-                    <Th>Pattern</Th>
+                    <Th>Pattern ID</Th>
                     <Th>What it detects</Th>
                     <Th>Primary action</Th>
                     <Th>Window</Th>
@@ -884,77 +884,121 @@ WES Version:     2
                 </thead>
                 <tbody>
                   <tr>
-                    <Td><span className="font-medium text-amber-400">A — Thermal Drain</span></Td>
+                    <Td><code className="font-medium text-amber-400">thermal_drain</code></Td>
                     <Td>Sustained throttle state reducing tok/s vs. the node's own Normal-temperature baseline (&gt; 8% degradation)</Td>
                     <Td><code className="text-[10px] text-gray-500">sudo powermetrics --samplers gpu_power</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-violet-400">B — Phantom Load</span></Td>
+                    <Td><code className="font-medium text-violet-400">phantom_load</code></Td>
                     <Td>Model loaded + power &gt; 5W + tok/s &lt; 0.5 — idle model burning electricity with no inference</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama stop &lt;model&gt;</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-rose-400">J — Swap I/O Pressure</span></Td>
-                    <Td>Swap write rate &gt; 2 MB/s sustained — model layers spilling to disk, degrading throughput. Escalates to "Swap Storm" at &gt; 10 MB/s</Td>
-                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Community</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-orange-400">L — PCIe Degradation</span></Td>
-                    <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only</Td>
-                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d PCIE</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Pro</Td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            {/* ── Cloud-only patterns ── */}
-            <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mt-6">Cloud-Only (4 patterns)</p>
-            <p className="text-xs text-gray-500 mb-2">Require fleet context or multi-node comparison. Only available when paired with wicklee.dev.</p>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <Th>Pattern</Th>
-                    <Th>What it detects</Th>
-                    <Th>Primary action</Th>
-                    <Th>Window</Th>
-                    <Th>Tier</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <Td><span className="font-medium text-indigo-400">C — WES Velocity Drop</span></Td>
+                    <Td><code className="font-medium text-indigo-400">wes_velocity_drop</code></Td>
                     <Td>Efficiency score declining &gt; 10% over a sustained period before thermal state has changed — early warning</Td>
                     <Td><code className="text-[10px] text-gray-500">curl localhost:7700/api/metrics</code></Td>
                     <Td mono>10 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-sky-400">E — Fleet Load Imbalance</span></Td>
-                    <Td>Node thermally stressed or WES &lt; 50% of best peer while a healthier node has spare capacity</Td>
-                    <Td><code className="text-[10px] text-gray-500">Route to healthier peer</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Pro</Td>
+                    <Td><code className="font-medium text-cyan-400">memory_trajectory</code></Td>
+                    <Td>Memory pressure rising &gt; 1 pct/min sustained — projected to hit critical threshold before operator can react</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
+                    <Td mono>10 min</Td>
+                    <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-cyan-400">F — Memory Pressure Trajectory</span></Td>
-                    <Td>Memory pressure rising &gt; 1 pct/min sustained — projected to hit critical threshold before operator can react</Td>
+                    <Td><code className="font-medium text-yellow-400">power_jitter</code></Td>
+                    <Td>Mean power &gt; 30W with active inference and coefficient of variation &gt; 20% — unstable power delivery or erratic batch scheduling</Td>
+                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-rose-400">swap_io_pressure</code></Td>
+                    <Td>Swap write rate &gt; 2 MB/s sustained — model layers spilling to disk, degrading throughput. Escalates to "Swap Storm" at &gt; 10 MB/s</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Community</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-fuchsia-400">I — Efficiency Penalty Drag</span></Td>
+                    <Td><code className="font-medium text-lime-400">clock_drift</code></Td>
+                    <Td>Clock throttle &gt; 15% during inference with Normal thermal state — power cap or driver limit constraining clocks, not heat</Td>
+                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d CLOCK</code> / <code className="text-[10px] text-gray-500">sudo cpupower frequency-info</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-red-400">nvidia_thermal_redline</code></Td>
+                    <Td>GPU temperature &gt; 85°C sustained or &gt; 90°C instantaneous — driver will aggressively throttle clocks. NVIDIA only</Td>
+                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d TEMPERATURE</code></Td>
+                    <Td mono>2 min</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-emerald-400">vram_overcommit</code></Td>
+                    <Td>Loaded model consumes &gt; 90% of VRAM/unified memory — no headroom for KV cache, context, or concurrency</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code> / <code className="text-[10px] text-gray-500">nvidia-smi</code></Td>
+                    <Td mono>instant</Td>
+                    <Td>Community</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-purple-400">power_gpu_decoupling</code></Td>
+                    <Td>High power draw (&gt; 50W) with active inference but GPU utilization &lt; 20% — layers running on CPU instead of GPU</Td>
+                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-teal-400">bandwidth_saturation</code></Td>
+                    <Td>GPU utilization &lt; 40% but VRAM &gt; 80% full with WES dropping — memory bandwidth bottleneck, not compute</Td>
+                    <Td><code className="text-[10px] text-gray-500">Switch to smaller quantization</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-fuchsia-400">efficiency_drag</code></Td>
                     <Td>WES penalty_avg &gt; 30% loss with Normal thermal state, active GPU, and no memory pressure — hidden context/batch inefficiency</Td>
                     <Td><code className="text-[10px] text-gray-500">Reduce context length / batch</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-orange-400">pcie_lane_degradation</code></Td>
+                    <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only</Td>
+                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d PCIE</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-pink-400">vllm_kv_cache_saturation</code></Td>
+                    <Td>vLLM KV cache &gt; 90% full — scheduler cannot admit new sequences, requests will queue or return 503</Td>
+                    <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep cache</code></Td>
+                    <Td mono>3 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-pink-400">ttft_regression</code></Td>
+                    <Td>Time to first token growing &gt; +5 ms/min with mean TTFT &gt; 100 ms — queue contention, model swap, or prompt complexity increase</Td>
+                    <Td><code className="text-[10px] text-gray-500">curl localhost:7700/api/metrics | jq .vllm_requests_waiting</code></Td>
+                    <Td mono>10 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-red-300">latency_spike</code></Td>
+                    <Td>Recent E2E latency &gt; 1.5x baseline and &gt; 500 ms — inference pipeline bottleneck</Td>
+                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
+                    <Td mono>10 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-violet-300">vllm_queue_saturation</code></Td>
+                    <Td>vLLM requests_waiting avg &gt; 3 sustained — incoming requests exceed engine capacity, needs horizontal scaling or routing</Td>
+                    <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep vllm_num_requests</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>
                   </tr>
@@ -962,90 +1006,55 @@ WES Version:     2
               </table>
             </div>
 
-            {/* ── Localhost-only patterns ── */}
-            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-6">Both — Localhost + Cloud (10 patterns)</p>
-            <p className="text-xs text-gray-500 mb-2">Evaluated on both the local agent and the cloud pattern engine. Available in standalone and fleet mode.</p>
+            {/* ── Fleet observations (cloud-evaluated) ── */}
+            <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mt-6">Fleet Observations + Cloud Alerts (6)</p>
+            <p className="text-xs text-gray-500 mb-2">Evaluated by the cloud backend every 60 seconds. Require fleet pairing with wicklee.dev. <code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code> is a cross-node observation pattern; the other 5 are fleet health alerts that monitor node liveness and stability.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr>
-                    <Th>Pattern</Th>
+                    <Th>Alert ID</Th>
                     <Th>What it detects</Th>
-                    <Th>Primary action</Th>
-                    <Th>Window</Th>
+                    <Th>Threshold</Th>
                     <Th>Tier</Th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <Td><span className="font-medium text-purple-400">D — Power-GPU Decoupling</span></Td>
-                    <Td>High power draw (&gt; 50W) with active inference but GPU utilization &lt; 20% — layers running on CPU instead of GPU</Td>
-                    <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
-                    <Td mono>5 min</Td>
+                    <Td><code className="font-medium text-sky-400">fleet_load_imbalance</code></Td>
+                    <Td>Node thermally stressed or WES &gt; 20% below best healthy peer while a cooler node has spare capacity</Td>
+                    <Td>2+ thermal ticks or 20% WES gap</Td>
                     <Td>Pro</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-teal-400">G — Bandwidth Saturation</span></Td>
-                    <Td>GPU utilization &lt; 40% but VRAM &gt; 80% full with WES dropping — memory bandwidth bottleneck, not compute</Td>
-                    <Td><code className="text-[10px] text-gray-500">Switch to smaller quantization</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Pro</Td>
+                    <Td><code className="font-medium text-red-400">zombied_engine</code></Td>
+                    <Td>Inference engine stuck in "busy" state — no tokens produced despite sustained GPU reservation</Td>
+                    <Td>10+ consecutive 60s ticks</Td>
+                    <Td>All</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-yellow-400">H — Power Jitter</span></Td>
-                    <Td>Mean power &gt; 30W with active inference and coefficient of variation &gt; 20% — unstable power delivery or erratic batch scheduling</Td>
-                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Community</Td>
+                    <Td><code className="font-medium text-orange-400">thermal_redline</code></Td>
+                    <Td>Node in "Critical" thermal state — hardware will aggressively throttle or shut down</Td>
+                    <Td>2+ consecutive 60s ticks</Td>
+                    <Td>All</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-lime-400">K — Clock Drift</span></Td>
-                    <Td>Clock throttle &gt; 15% during inference with Normal thermal state — power cap or driver limit constraining clocks, not heat</Td>
-                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d CLOCK</code> / <code className="text-[10px] text-gray-500">sudo cpupower frequency-info</code></Td>
-                    <Td mono>5 min</Td>
-                    <Td>Community</Td>
+                    <Td><code className="font-medium text-amber-400">oom_warning</code></Td>
+                    <Td>Memory pressure exceeds 95% — system at risk of OOM kill or swap storm</Td>
+                    <Td>2+ consecutive 60s ticks</Td>
+                    <Td>All</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-pink-400">M — vLLM Cache Saturation</span></Td>
-                    <Td>vLLM KV cache &gt; 90% full — scheduler cannot admit new sequences, requests will queue or return 503</Td>
-                    <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep cache</code></Td>
-                    <Td mono>3 min</Td>
-                    <Td>Pro</Td>
+                    <Td><code className="font-medium text-yellow-400">wes_cliff</code></Td>
+                    <Td>WES dropped below 35% of 24h baseline during active inference — efficiency collapse</Td>
+                    <Td>&lt; 35% baseline AND &lt; 3.0 absolute</Td>
+                    <Td>All</Td>
                   </tr>
                   <tr>
-                    <Td><span className="font-medium text-red-400">N — NVIDIA Thermal Redline</span></Td>
-                    <Td>GPU temperature &gt; 85°C sustained or &gt; 90°C instantaneous — driver will aggressively throttle clocks. NVIDIA only</Td>
-                    <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d TEMPERATURE</code></Td>
-                    <Td mono>2 min</Td>
-                    <Td>Community</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-emerald-400">O — VRAM Overcommit</span></Td>
-                    <Td>Loaded model consumes &gt; 90% of VRAM/unified memory — no headroom for KV cache, context, or concurrency</Td>
-                    <Td><code className="text-[10px] text-gray-500">ollama ps</code> / <code className="text-[10px] text-gray-500">nvidia-smi</code></Td>
-                    <Td mono>instant</Td>
-                    <Td>Community</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-pink-400">P — TTFT Regression</span></Td>
-                    <Td>Time to first token spikes &gt; 2× the 5-minute baseline — queue contention, model swap, or prompt complexity increase</Td>
-                    <Td><code className="text-[10px] text-gray-500">curl localhost:7700/api/metrics | jq .vllm_requests_waiting</code></Td>
-                    <Td mono>2 min</Td>
-                    <Td>Pro</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-red-300">Q — Latency Spike</span></Td>
-                    <Td>End-to-end request latency exceeds 2 seconds for 3+ consecutive samples — inference pipeline bottleneck</Td>
-                    <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
-                    <Td mono>3 min</Td>
-                    <Td>Pro</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-violet-300">R — vLLM Queue Saturation</span></Td>
-                    <Td>vLLM requests_waiting &gt; 5 sustained — incoming requests exceed engine capacity, needs horizontal scaling or routing</Td>
-                    <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep vllm_num_requests</code></Td>
-                    <Td mono>3 min</Td>
-                    <Td>Pro</Td>
+                    <Td><code className="font-medium text-gray-400">agent_version_mismatch</code></Td>
+                    <Td>Node running a different agent version than the fleet majority — potential compatibility issue</Td>
+                    <Td>Version differs from majority</Td>
+                    <Td>All</Td>
                   </tr>
                 </tbody>
               </table>
@@ -1067,12 +1076,12 @@ WES Version:     2
             <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2">
               <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Action commands</p>
               <p className="text-xs text-gray-400 leading-relaxed">
-                Each observation includes one or two actionable commands you can copy and run. Commands are platform-aware — Pattern O shows <code className="text-gray-300">sysctl iogpu.wired_limit_mb</code> on Apple Silicon and <code className="text-gray-300">nvidia-smi --query-gpu=memory.total,memory.used,memory.free</code> on NVIDIA. Latency patterns (P, Q, R) leverage TTFT and queue depth metrics from vLLM Prometheus, the Ollama proxy, and probe responses. All commands target the local agent or runtime and never send data externally.
+                Each observation includes one or two actionable commands you can copy and run. Commands are platform-aware — <code className="text-gray-300">vram_overcommit</code> shows <code className="text-gray-300">sysctl iogpu.wired_limit_mb</code> on Apple Silicon and <code className="text-gray-300">nvidia-smi --query-gpu=memory.total,memory.used,memory.free</code> on NVIDIA. Latency patterns (<code className="text-gray-300">ttft_regression</code>, <code className="text-gray-300">latency_spike</code>, <code className="text-gray-300">vllm_queue_saturation</code>) leverage TTFT and queue depth metrics from vLLM Prometheus, the Ollama proxy, and probe responses. All commands target the local agent or runtime and never send data externally.
               </p>
             </div>
 
             <NoteBox>
-              Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window. Point-in-time patterns (Pattern O) always fire at High confidence since a single observation provides complete evidence.
+              Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window. Point-in-time patterns (<code className="text-gray-300">vram_overcommit</code>) always fire at High confidence since a single observation provides complete evidence.
             </NoteBox>
           </Section>
 
@@ -1175,7 +1184,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td mono>GET /api/observations</Td>
-                    <Td>Local hardware pattern evaluation — 4 sovereign patterns (A: Thermal Drain, B: Phantom Load, J: Swap Pressure, L: PCIe Degradation) against 1h DuckDB buffer</Td>
+                    <Td>Server-side pattern evaluation — 17 observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/history?node_id=WK-XXXX</Td>
@@ -1369,7 +1378,7 @@ curl https://wicklee.dev/api/v1/fleet \\
                   <tr className="border-b border-gray-800"><Td>get_node_status</Td><Td>Full hardware + inference metrics snapshot</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_inference_state</Td><Td>Live/idle/busy state with sensor context and tier match</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_active_models</Td><Td>Running models across Ollama, vLLM, llama.cpp</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_observations</Td><Td>Local hardware pattern evaluation (A, B, J, L)</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_observations</Td><Td>Server-side pattern evaluation — 17 agent-evaluated observations</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_metrics_history</Td><Td>1-hour rolling telemetry buffer from DuckDB</Td></tr>
                 </tbody>
               </table>

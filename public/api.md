@@ -9,7 +9,7 @@ Auth: None required.
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry with full MetricsPayload |
 | GET | /ws | WebSocket — 10 Hz live telemetry |
-| GET | /api/observations | Local hardware patterns (A, B, J, L) against 1h DuckDB buffer |
+| GET | /api/observations | 17 server-side observation patterns against 10-min DuckDB buffer |
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
@@ -37,7 +37,7 @@ The agent exposes a local MCP server for AI agents (Cursor, Claude Desktop, cust
 | `get_node_status` | Full hardware + inference metrics snapshot |
 | `get_inference_state` | Live/idle/busy state with sensor context |
 | `get_active_models` | Running models across Ollama, vLLM, llama.cpp |
-| `get_observations` | Local hardware pattern evaluation (A, B, J, L) |
+| `get_observations` | Server-side pattern evaluation — 17 agent-evaluated observations |
 | `get_metrics_history` | 1-hour rolling telemetry buffer |
 
 ### Resources
