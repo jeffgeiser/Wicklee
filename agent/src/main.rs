@@ -3270,7 +3270,7 @@ fn evaluate_local_observations(
 
             let confidence_ratio = swap_ratio.min(1.0);
             obs.push(LocalObservation {
-                pattern_id:       "swap_pressure",
+                pattern_id:       "swap_io_pressure",
                 severity:         if is_storm { "critical" } else { "warning" },
                 title:            if is_storm { "Swap Storm".into() } else { "Swap I/O Pressure".into() },
                 hook:             format!(
@@ -3309,7 +3309,7 @@ fn evaluate_local_observations(
     if let (Some(cur), Some(max)) = (pcie.link_width, pcie.link_max_width) {
         if cur < max {
             obs.push(LocalObservation {
-                pattern_id:       "pcie_degradation",
+                pattern_id:       "pcie_lane_degradation",
                 severity:         if cur <= max / 2 { "critical" } else { "warning" },
                 title:            "PCIe Lane Degradation".into(),
                 hook:             format!("x{} in x{} slot", cur, max),

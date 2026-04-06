@@ -1,7 +1,7 @@
 /**
  * useLocalObservations — polls the local agent's /api/observations endpoint.
  *
- * Returns server-side evaluated hardware observations (Patterns A, B, J, L)
+ * Returns server-side evaluated observations (Patterns A/B/C/F/H/J/K/L/N/P/Q/R)
  * from the Rust agent's DuckDB buffer.  Only active when running on localhost.
  */
 

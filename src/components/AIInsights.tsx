@@ -1742,12 +1742,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* ── Hardware Observations (localhost only — agent-side Patterns A/B/J/L) ──
-                  Server-evaluated against the DuckDB 1-hour buffer. Displayed as
-                  accordion cards identical to the pattern-engine observations below. */}
+              {/* ── Agent Observations (localhost only) ─────────────────────────────
+                  Server-evaluated by the Rust agent against the local DuckDB buffer.
+                  Covers patterns A/B/C/F/H/J/K/L/N/P/Q/R. These take precedence over
+                  client-side evaluations for the same pattern IDs (see visibleObs filter). */}
               {isLocalHost && localAgentObs.length > 0 && (
                 <div className="space-y-2">
-                  <SectionHeader>Hardware Observations</SectionHeader>
+                  <SectionHeader>Agent Observations</SectionHeader>
                   {localAgentObs.map(insight => (
                     <AccordionObservationCard
                       key={`${insight.patternId}-${insight.nodeId}`}
@@ -1837,7 +1838,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
                 // Filter: hide resolved by default
                 const hasResolved = deduped.some(e => e.resolvedMs !== null);
-                const visibleObs = showResolved ? deduped : deduped.filter(e => e.resolvedMs === null);
+                // On localhost, suppress any pattern already served by the Rust agent
+                // (/api/observations) to prevent duplicates between the two sections.
+                const agentPatternIds = new Set(localAgentObs.map(o => o.patternId));
+                const visibleObs = (showResolved ? deduped : deduped.filter(e => e.resolvedMs === null))
+                  .filter(e => !isLocalHost || !agentPatternIds.has(e.insight.patternId));
 
                 return (
                   <div className="space-y-2">
