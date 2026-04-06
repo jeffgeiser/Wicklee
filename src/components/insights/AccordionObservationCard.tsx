@@ -9,7 +9,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { ChevronDown, X, CheckCircle, Lightbulb, ListChecks } from 'lucide-react';
-import type { DetectedInsight } from '../../lib/patternEngine';
+import type { DetectedInsight } from '../../types/observations';
 import { appendRecentEvent } from '../../lib/insightLifecycle';
 import {
   readDismissed,

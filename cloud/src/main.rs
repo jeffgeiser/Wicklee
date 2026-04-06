@@ -182,6 +182,34 @@ struct MetricsPayload {
     /// Persisted to cloud `node_events` for fleet event history.
     #[serde(default)]
     live_activities: Vec<LiveActivityEventPayload>,
+    // ── Agent-evaluated observations (v0.7.11+, Phase 7) ────────────────────
+    /// Pattern observations evaluated by the agent against its local DuckDB buffer.
+    /// Pushed to cloud for fleet dashboard rendering.  Empty for old agents.
+    #[serde(default)]
+    observations: Vec<AgentObservationPayload>,
+}
+
+/// An observation pushed by the agent.  Matches LocalObservation in agent/src/main.rs.
+#[derive(Deserialize, Serialize, Clone)]
+struct AgentObservationPayload {
+    pattern_id:       String,
+    severity:         String,
+    title:            String,
+    hook:             String,
+    body:             String,
+    recommendation:   String,
+    #[serde(default)]
+    resolution_steps: Vec<String>,
+    action_id:        String,
+    confidence:       String,
+    #[serde(default)]
+    confidence_ratio: f64,
+    #[serde(default)]
+    first_fired_ms:   i64,
+    #[serde(default)]
+    node_id:          Option<String>,
+    #[serde(default)]
+    hostname:         Option<String>,
 }
 
 /// A single Live Activity event as received from the agent's telemetry push.
@@ -600,6 +628,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 
     // Additive column migration — acknowledged_by tracks who acknowledged (Clerk user_id).
     sqlx::query("ALTER TABLE fleet_observations ADD COLUMN IF NOT EXISTS acknowledged_by TEXT")
+        .execute(pool).await.ok();
+
+    // Phase 7: source column distinguishes agent-pushed vs cloud-generated observations.
+    sqlx::query("ALTER TABLE fleet_observations ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'cloud'")
         .execute(pool).await.ok();
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_observations_tenant_state ON fleet_observations(tenant_id, state, fired_at_ms)")
@@ -1841,6 +1873,7 @@ async fn handle_telemetry(
 
     let duck_row = metrics_row_from_payload(&payload, ts);
     let live_activities = payload.live_activities.clone();
+    let agent_observations = payload.observations.clone();
     let metrics_snap: Option<MetricsPayload> = Some(payload.clone());
 
     // Serialize payload as JSON for last_telemetry_json column.
@@ -1908,6 +1941,11 @@ async fn handle_telemetry(
                 if let Some(ref metrics_snapshot) = metrics_snap {
                     evaluate_alerts(&tenant_id, &nid, metrics_snapshot, &pool).await;
                 }
+            }
+
+            // ── Phase 7: upsert agent-pushed observations ────────────────────
+            if !agent_observations.is_empty() {
+                upsert_agent_observations(&tenant_id, &nid, &agent_observations, ts, &pool).await;
             }
         }
     });
@@ -2033,6 +2071,95 @@ async fn handle_fleet_events_history(
     };
 
     Json(serde_json::json!({ "events": events })).into_response()
+}
+
+/// Upsert agent-pushed observations into fleet_observations.
+/// For each observation in the payload:
+///   - If an open observation with the same (tenant_id, node_id, alert_type, source='agent')
+///     already exists, update its detail and context_json.
+///   - Otherwise, INSERT a new row.
+/// Any previously-open agent observations for this node that are NOT in the current
+/// payload are auto-resolved (the agent no longer sees the condition).
+async fn upsert_agent_observations(
+    tenant_id: &str,
+    node_id: &str,
+    observations: &[AgentObservationPayload],
+    ts: u64,
+    pool: &sqlx::PgPool,
+) {
+    let now_ms = ts as i64;
+
+    // Collect the set of active pattern_ids from this push.
+    let active_ids: std::collections::HashSet<&str> =
+        observations.iter().map(|o| o.pattern_id.as_str()).collect();
+
+    // Upsert each observation.
+    for obs in observations {
+        let context = serde_json::json!({
+            "confidence":       obs.confidence,
+            "confidence_ratio": obs.confidence_ratio,
+            "action_id":        obs.action_id,
+            "resolution_steps": obs.resolution_steps,
+            "hook":             obs.hook,
+        });
+
+        // Check if already open for this (tenant, node, pattern, source=agent).
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM fleet_observations \
+             WHERE tenant_id = $1 AND node_id = $2 AND alert_type = $3 \
+             AND source = 'agent' AND state = 'open' \
+             LIMIT 1"
+        )
+        .bind(tenant_id).bind(node_id).bind(&obs.pattern_id)
+        .fetch_optional(pool).await.ok().flatten();
+
+        if let Some(obs_id) = existing {
+            // Update detail + context (observation may have evolved).
+            let _ = sqlx::query(
+                "UPDATE fleet_observations SET detail = $1, context_json = $2, \
+                 title = $3, severity = $4 \
+                 WHERE id = $5"
+            )
+            .bind(&obs.body).bind(&context)
+            .bind(&obs.title).bind(&obs.severity)
+            .bind(&obs_id)
+            .execute(pool).await;
+        } else {
+            // Insert new observation.
+            let id = uuid::Uuid::new_v4().to_string();
+            let _ = sqlx::query(
+                "INSERT INTO fleet_observations \
+                 (id, tenant_id, node_id, alert_type, severity, state, title, detail, \
+                  context_json, fired_at_ms, source) \
+                 VALUES ($1, $2, $3, $4, $5, 'open', $6, $7, $8, $9, 'agent')"
+            )
+            .bind(&id).bind(tenant_id).bind(node_id)
+            .bind(&obs.pattern_id).bind(&obs.severity)
+            .bind(&obs.title).bind(&obs.body).bind(&context)
+            .bind(now_ms)
+            .execute(pool).await;
+        }
+    }
+
+    // Auto-resolve agent observations that are no longer active.
+    // Fetch all open agent observations for this node, resolve any not in active_ids.
+    if let Ok(open_rows) = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, alert_type FROM fleet_observations \
+         WHERE tenant_id = $1 AND node_id = $2 AND source = 'agent' AND state = 'open'"
+    )
+    .bind(tenant_id).bind(node_id)
+    .fetch_all(pool).await
+    {
+        for (obs_id, alert_type) in &open_rows {
+            if !active_ids.contains(alert_type.as_str()) {
+                let _ = sqlx::query(
+                    "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1 WHERE id = $2"
+                )
+                .bind(now_ms).bind(obs_id)
+                .execute(pool).await;
+            }
+        }
+    }
 }
 
 /// GET /api/fleet/observations
@@ -4131,6 +4258,22 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                     println!("[evaluator] resolved {} for {}", alert_type, node_id);
                 }
             }
+        }
+
+        // ── Phase 7: staleness reaper for agent-pushed observations ──────────
+        // If a node hasn't been seen in 5+ minutes, auto-resolve its agent
+        // observations — the agent went offline or lost connectivity.
+        {
+            let stale_cutoff = (now as i64) - 300_000; // 5 minutes
+            let _ = sqlx::query(
+                "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1 \
+                 WHERE source = 'agent' AND state = 'open' \
+                 AND node_id IN ( \
+                   SELECT wk_id FROM nodes WHERE last_seen < $2 \
+                 )"
+            )
+            .bind(now as i64).bind(stale_cutoff)
+            .execute(&state.pool).await;
         }
     }
 }

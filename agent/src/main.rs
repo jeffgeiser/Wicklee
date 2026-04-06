@@ -3017,9 +3017,15 @@ async fn handle_dismissed_list(
 
 // ── Local Observations (Patterns A, B, J, L) ─────────────────────────────────
 //
-// Server-side evaluation of 4 hardware-focused patterns against the 1-hour
-// DuckDB buffer. Returned by GET /api/observations so the localhost frontend
-// can render them without needing a cloud connection.
+// Server-side evaluation of 16 hardware-focused patterns against the 10-min
+// DuckDB buffer. Returned by GET /api/observations for the localhost frontend
+// and pushed to the cloud for fleet views via the observation cache.
+
+/// Shared cache of the latest evaluated observations.  Written by the 10 s
+/// observation evaluator task; read by cloud_push (embed in telemetry) and
+/// handle_observations (GET /api/observations).
+#[cfg(not(target_env = "musl"))]
+pub(crate) type ObservationCache = Arc<Mutex<Vec<LocalObservation>>>;
 
 #[cfg(not(target_env = "musl"))]
 #[derive(Serialize, Clone)]
@@ -4293,43 +4299,10 @@ struct NodeId(Arc<String>);
 
 #[cfg(not(target_env = "musl"))]
 async fn handle_observations(
-    axum::extract::Extension(store):          axum::extract::Extension<store::Store>,
-    axum::extract::Extension(nvidia_metrics): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
-    axum::extract::Extension(node_id_ext):    axum::extract::Extension<NodeId>,
+    axum::extract::Extension(obs_cache): axum::extract::Extension<ObservationCache>,
 ) -> impl IntoResponse {
-    use axum::http::StatusCode;
-
-    let node_id  = node_id_ext.0.as_str().to_owned();
-    let hostname = node_id.clone(); // agent uses node_id as hostname
-
-    // 1. Query last 10 minutes from DuckDB (patterns C and F need 10-min window)
-    let node_id_q = node_id.clone();
-    let samples = match tokio::task::spawn_blocking(move || {
-        store.query_observation_window(&node_id_q, 600_000)
-    }).await {
-        Ok(Ok(s))  => s,
-        Ok(Err(e)) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        ).into_response(),
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        ).into_response(),
-    };
-
-    // 2. Read PCIe state from live NvidiaMetrics
-    let pcie = {
-        let nv = nvidia_metrics.lock().unwrap();
-        PcieSnapshot {
-            link_width:     nv.pcie_link_width,
-            link_max_width: nv.pcie_link_max_width,
-        }
-    };
-
-    // 3. Evaluate patterns
-    let observations = evaluate_local_observations(&samples, &pcie, &node_id, &hostname);
-
+    // Return the latest cached observations from the 10 s evaluator task.
+    let observations = obs_cache.lock().map(|c| c.clone()).unwrap_or_default();
     Json(serde_json::json!({ "observations": observations })).into_response()
 }
 
@@ -5596,7 +5569,21 @@ async fn main() {
         Arc::clone(&cpu_usage_atomic),
     );
 
+    // Shared observation cache — written by the 10 s evaluator task, read by
+    // cloud_push (embed in telemetry JSON) and handle_observations (GET /api/observations).
+    #[cfg(not(target_env = "musl"))]
+    let observation_cache: ObservationCache = Arc::new(Mutex::new(Vec::new()));
+    #[cfg(target_env = "musl")]
+    let observation_cache: Arc<Mutex<Vec<()>>> = Arc::new(Mutex::new(Vec::new()));
+
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
+    #[cfg(not(target_env = "musl"))]
+    cloud_push::start_cloud_push(
+        Arc::clone(&pairing_state),
+        broadcast_tx.clone(),
+        Arc::clone(&observation_cache),
+    );
+    #[cfg(target_env = "musl")]
     cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone());
 
     // ── Local metrics store (DuckDB) ──────────────────────────────────────────
@@ -5726,6 +5713,47 @@ async fn main() {
                     });
                 }
 
+                // Observation evaluator — runs every 10 s, writes to shared cache.
+                // Patterns A–R (except E, which is fleet-only) are evaluated against
+                // the DuckDB 10-min buffer. The cache is read by cloud_push to embed
+                // observations in the telemetry JSON for fleet dashboards.
+                {
+                    let store_clone = s.clone();
+                    let nvidia_clone = Arc::clone(&nvidia_metrics);
+                    let node_id_clone = config.node_id.clone();
+                    let obs_cache = Arc::clone(&observation_cache);
+                    tokio::spawn(async move {
+                        // Wait for DuckDB to accumulate a few samples before first eval.
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                        let mut interval = tokio::time::interval(Duration::from_secs(10));
+                        loop {
+                            interval.tick().await;
+                            let st  = store_clone.clone();
+                            let nid = node_id_clone.clone();
+                            let nv  = nvidia_clone.lock().map(|g| g.clone()).unwrap_or_default();
+                            let pcie = PcieSnapshot {
+                                link_width:     nv.pcie_link_width,
+                                link_max_width: nv.pcie_link_max_width,
+                            };
+                            let hostname = System::host_name().unwrap_or_else(|| nid.clone());
+                            let result = tokio::task::spawn_blocking(move || {
+                                match st.query_observation_window(&nid, 600_000) {
+                                    Ok(samples) => Some(evaluate_local_observations(&samples, &pcie, &nid, &hostname)),
+                                    Err(e) => {
+                                        eprintln!("[obs] evaluation error: {e}");
+                                        None
+                                    }
+                                }
+                            }).await;
+                            if let Ok(Some(observations)) = result {
+                                if let Ok(mut cache) = obs_cache.lock() {
+                                    *cache = observations;
+                                }
+                            }
+                        }
+                    });
+                }
+
                 Some(s)
             }
             Err(e) => {
@@ -5797,6 +5825,7 @@ async fn main() {
              .route("/api/insights/dismissed",  get(handle_dismissed_list))
              .route("/api/observations",        get(handle_observations))
              .layer(axum::extract::Extension(st.clone()))
+             .layer(axum::extract::Extension(Arc::clone(&observation_cache)))
         } else {
             r
         };

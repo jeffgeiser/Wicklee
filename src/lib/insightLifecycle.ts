@@ -21,7 +21,7 @@
  * rapid onset/resolved churn in the Live Activity Feed and localStorage buffer.
  */
 
-import type { ActionId, PatternConfidence } from './patternEngine';
+import type { ActionId, PatternConfidence } from '../types/observations';
 
 // ── Alert-fatigue constants ───────────────────────────────────────────────────
 

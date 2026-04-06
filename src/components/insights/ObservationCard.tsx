@@ -13,7 +13,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves, ListChecks, HardDrive } from 'lucide-react';
-import type { DetectedInsight, ActionId } from '../../lib/patternEngine';
+import type { DetectedInsight, ActionId } from '../../types/observations';
 import { appendRecentEvent } from '../../lib/insightLifecycle';
 
 // ── Dismiss helpers ───────────────────────────────────────────────────────────

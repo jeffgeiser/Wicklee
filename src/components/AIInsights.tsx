@@ -48,36 +48,6 @@ const CLOUD_URL = (() => {
   return v.startsWith('http') ? v : `https://${v}`;
 })();
 
-/** Save a client-side pattern detection to cloud Postgres (Pro+ only, best-effort). */
-async function submitObservationToCloud(
-  getToken: () => Promise<string | null>,
-  obs: { node_id: string; alert_type: string; severity: string; title: string; detail: string; context?: object },
-) {
-  try {
-    const token = await getToken();
-    if (!token) return null;
-    const res = await fetch(`${CLOUD_URL}/api/fleet/observations`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(obs),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.id as string | null;
-  } catch { return null; }
-}
-
-/** Resolve a cloud-persisted observation (Pro+ only, best-effort). */
-async function resolveObservationOnCloud(getToken: () => Promise<string | null>, obsId: string) {
-  try {
-    const token = await getToken();
-    if (!token) return;
-    await fetch(`${CLOUD_URL}/api/fleet/observations/${obsId}/resolve`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  } catch { /* best-effort */ }
-}
 import BenchmarkReportModal from './BenchmarkReportModal';
 import { computeModelFitScore } from '../utils/modelFit';
 import { useSettings } from '../hooks/useSettings';
@@ -112,10 +82,8 @@ import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
 import InsightsBriefingCard from './insights/InsightsBriefingCard';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
-import { useMetricHistory, metricsToSample } from '../hooks/useMetricHistory';
 import { useLocalObservations } from '../hooks/useLocalObservations';
-import { evaluatePatterns } from '../lib/patternEngine';
-import type { DetectedInsight, FleetNodeSummary } from '../lib/patternEngine';
+import type { DetectedInsight } from '../types/observations';
 import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -222,6 +190,34 @@ const ALERT_HOLD_MS   = 5 * 60_000;    // 5 min
 const OBS_HOLD_MS     = 10 * 60_000;   // 10 min
 /** Maximum entries stored in the Recent Activity log. */
 const MAX_LOG_ENTRIES = 50;
+
+/** Map a cloud FleetObservation to the DetectedInsight shape used by observation cards. */
+function serverObsToInsight(o: FleetObservation): DetectedInsight {
+  // Parse context_json for extra fields if available
+  let ctx: Record<string, unknown> = {};
+  try { if (o.context_json) ctx = JSON.parse(o.context_json); } catch {}
+
+  return {
+    patternId:       o.alert_type,
+    nodeId:          o.node_id,
+    hostname:        o.node_id,
+    title:           o.title,
+    hook:            (ctx.hook as string) ?? o.detail,
+    body:            o.detail,
+    recommendation:  (ctx.recommendation as string) ?? '',
+    resolution_steps: (ctx.resolution_steps as string[]) ?? [],
+    action_id:       (ctx.action_id as DetectedInsight['action_id']) ?? 'check_thermal_zone',
+    requiredMs:      300_000,
+    observedMs:      Date.now() - o.fired_at_ms,
+    confidence:      (ctx.confidence as DetectedInsight['confidence']) ?? (o.severity === 'critical' ? 'high' : 'moderate'),
+    confidenceRatio: (ctx.confidence_ratio as number) ?? 1.0,
+    tier:            'community',
+    actions:         [],
+    firstFiredMs:    o.fired_at_ms,
+    best_node_id:    null,
+    best_node_hostname: null,
+  };
+}
 
 /** Cached pattern-engine observation with lifecycle timestamps. */
 interface ObsEntry {
@@ -728,8 +724,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
-  // Maps "patternId:nodeId" → cloud observation ID for resolve calls (Pro+ only)
-  const cloudObsIdRef = useRef(new Map<string, string>());
   const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
 
   // Seed obsCacheRef from server observations on mount (Pro+ persistent cards)
@@ -739,41 +733,15 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     serverSeededRef.current = true;
     const cache = obsCacheRef.current;
     for (const obs of serverObservations) {
-      if (obs.state === 'acknowledged') continue; // dismissed — don't resurface
+      if (obs.state === 'acknowledged') continue;
       const key = `${obs.alert_type}:${obs.node_id}`;
-      if (cache.has(key)) {
-        // Client already has this pattern — just store the cloud ID
-        cloudObsIdRef.current.set(key, obs.id);
-        continue;
-      }
-      // Inject server observation as a cache entry so it renders as a card
+      if (cache.has(key)) continue;
       cache.set(key, {
-        insight: {
-          patternId:       obs.alert_type,
-          nodeId:          obs.node_id,
-          hostname:        obs.node_id, // will be resolved later by pattern engine
-          title:           obs.title,
-          hook:            obs.detail,
-          body:            obs.detail,
-          recommendation:  '',
-          resolution_steps: [],
-          action_id:       'check_thermal_zone' as any,
-          requiredMs:      0,
-          observedMs:      0,
-          confidence:      obs.severity === 'critical' ? 'high' : 'moderate',
-          confidenceRatio: 1.0,
-          tier:            'community',
-          actions:         [],
-          firstFiredMs:    obs.fired_at_ms,
-          best_node_id:    null,
-          best_node_hostname: null,
-        },
+        insight:      serverObsToInsight(obs),
         firstFiredMs: obs.fired_at_ms,
         resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
       });
-      cloudObsIdRef.current.set(key, obs.id);
     }
-    // Trigger re-render with seeded entries
     setObsEntries(Array.from(cache.values()));
   }, [serverObservations, isProOrAbove]);
 
@@ -830,8 +798,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const { getNodeSettings } = useSettings();
 
-  // ── Pattern engine — time-windowed deterministic observations ─────────────
-  const metricHistory                               = useMetricHistory();
+  // ── Server-side observations (agent + cloud) ────────────────────────────────
   const [observations, setObservations]             = useState<DetectedInsight[]>([]);
   const lastObsEvalRef                              = useRef<number>(0);
 
@@ -917,84 +884,22 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     }
   }, [allNodeMetrics]);
 
-  // ── Pattern engine: push samples + evaluate ───────────────────────────────
-  // Runs on every telemetry update (allNodeMetrics or localSentinel).
-  // Downsampling is handled inside useMetricHistory.push() — rapid SSE frames
-  // are deduplicated to one sample per 30-second bucket automatically.
+  // ── Server-side observation sync ───────────────────────────────────────────
+  // Observations now come from the server: localAgentObs (localhost, from Rust
+  // agent's DuckDB) or serverObservations (cloud, from fleet_observations table).
+  // The client-side pattern engine has been removed — evaluation happens in Rust.
   useEffect(() => {
-    // Build set of restricted node IDs — these nodes still get history pushed
-    // (so we don't lose telemetry data) but are excluded from pattern evaluation.
-    const restrictedIdSet = new Set(nodes.filter(n => n.restricted).map(n => n.id));
-
-    const metricsToProcess: SentinelMetrics[] = isLocalHost && localSentinel
-      ? [localSentinel]
-      : Object.values(allNodeMetrics);
-
-    for (const m of metricsToProcess) {
-      const wesScore = computeNodeWes(m);
-      const sample   = metricsToSample(m, wesScore);
-      metricHistory.push(m.node_id, sample);
-    }
-
-    // Throttle evaluation to at most once per 30s to match sample interval
+    // Throttle to at most once per 10s (matches agent evaluator cadence)
     const nowMs = Date.now();
-    if (nowMs - lastObsEvalRef.current < 30_000) return;
+    if (nowMs - lastObsEvalRef.current < 10_000) return;
     lastObsEvalRef.current = nowMs;
 
-    // Prune stale history once per eval cycle
-    metricHistory.prune();
-
-    // Build fleet peer context for cross-node recommendations.
-    // Each entry is a lightweight snapshot of a live fleet node.
-    // The 90s online gate matches the SSE "last_seen" stale threshold.
-    const ONLINE_GATE_MS = 90_000;
-    const nowForGate     = Date.now();
-    const fleetSummaries: FleetNodeSummary[] = metricsToProcess.map(m => {
-      const wesScore  = computeNodeWes(m);
-      const isNvGpu   = (m.nvidia_vram_total_mb ?? 0) >= 1024;
-      const vramTotal = isNvGpu ? (m.nvidia_vram_total_mb ?? 0) : 0;
-      const vramUsed  = isNvGpu ? (m.nvidia_vram_used_mb  ?? 0) : 0;
-      const vramHeadroomPct = vramTotal > 0
-        ? ((vramTotal - vramUsed) / vramTotal) * 100
-        : null;
-
-      // last_seen_ms is not in SentinelMetrics — use timestamp_ms as proxy;
-      // if the frame is fresh (< 90s old) the node is considered online.
-      const lastSeen    = m.timestamp_ms ?? 0;
-      const isOnline    = nowForGate - lastSeen < ONLINE_GATE_MS;
-
-      return {
-        nodeId:              m.node_id,
-        hostname:            m.hostname ?? m.node_id,
-        isOnline,
-        currentThermalState: m.thermal_state ?? null,
-        currentWes:          wesScore,
-        currentTokS:         m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? null,
-        vramHeadroomPct,
-        wesTier:             m.wes_tier ?? null,
-      } satisfies FleetNodeSummary;
-    });
-
-    const allObservations: DetectedInsight[] = [];
-    // Only evaluate patterns for non-restricted nodes
-    for (const m of metricsToProcess.filter(m => !restrictedIdSet.has(m.node_id))) {
-      const ns      = getNodeSettings(m.node_id);
-      const history = metricHistory.getHistory(m.node_id);
-      // Fleet context excludes this node — cross-node patterns filter it internally,
-      // but excluding here keeps the list clean for single-node Cockpit mode.
-      const peerContext = fleetSummaries.filter(s => s.nodeId !== m.node_id);
-      const results = evaluatePatterns({
-        nodeId:       m.node_id,
-        hostname:     m.hostname ?? m.node_id,
-        history,
-        fleetContext: peerContext,
-        kwhRate:      ns.kwhRate,
-        wesTier:      m.wes_tier ?? null,
-        os:           m.os ?? null,
-        subscriptionTier: subscriptionTier as 'community' | 'pro' | 'team' | 'enterprise',
-      });
-      allObservations.push(...results);
-    }
+    // Merge observations from the appropriate source
+    const allObservations: DetectedInsight[] = isLocalHost
+      ? [...localAgentObs]
+      : serverObservations
+          .filter(o => o.state === 'open')
+          .map(o => serverObsToInsight(o));
 
     // ── Observation cache: sticky firstFiredMs + hold-after-clear ─────────
     const cache  = obsCacheRef.current;
@@ -1006,9 +911,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       const existing = cache.get(key);
       const isNew    = !existing;
 
-      // Preserve resolvedMs if the pattern was already in hold (flickering condition).
-      // Only clear resolvedMs for genuinely new patterns. This prevents noisy conditions
-      // from resetting the OBS_HOLD_MS countdown on every re-fire cycle.
       cache.set(key, {
         insight:      result,
         firstFiredMs: existing?.firstFiredMs ?? nowMs2,
@@ -1016,15 +918,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       });
 
       // ── Onset event (Live Activity Feed + localStorage buffer) ────────────
-      // Only fires when:
-      //   1. This is a genuinely new pattern (not a re-eval of an already-active one).
-      //   2. Confidence is moderate or high — 'building' patterns are silent.
-      //   3. Per-node suppression: ONSET_SUPPRESSION_MS has elapsed for this patternId+nodeId.
-      //   4. Fleet-wide suppression: same patternId hasn't fired on ANY node in the
-      //      last 60s — prevents 3 nodes from spamming the same pattern simultaneously.
       if (isNew && result.confidence !== 'building') {
         const lastOnsetMs = patternOnsetMapRef.current.get(key) ?? 0;
-        // Fleet-wide: check if this patternId fired on ANY node in the last 60s
         const FLEET_COALESCE_MS = 60_000;
         const fleetKey = `fleet:${result.patternId}`;
         const lastFleetOnsetMs = patternOnsetMapRef.current.get(fleetKey) ?? 0;
@@ -1032,8 +927,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         const fleetOk  = nowMs2 - lastFleetOnsetMs >= FLEET_COALESCE_MS;
 
         if (perNodeOk && fleetOk) {
-          const nodeWes = fleetSummaries.find(s => s.nodeId === result.nodeId)?.currentWes ?? null;
-
           emitFleetEvent({
             id:          crypto.randomUUID(),
             ts:          nowMs2,
@@ -1043,7 +936,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             patternId:   result.patternId,
             action_id:   result.action_id,
             hook:        result.hook,
-            wes_at_onset: nodeWes,
+            wes_at_onset: null,
             detail:      `${result.title} · ${result.hook} on ${result.hostname}`,
           });
 
@@ -1059,32 +952,17 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             hook:               result.hook,
             recommendation:     result.recommendation,
             confidence:         result.confidence,
-            wes_at_onset:       nodeWes,
+            wes_at_onset:       null,
             best_node_id:       result.best_node_id,
             best_node_hostname: result.best_node_hostname,
           });
 
           patternOnsetMapRef.current.set(key, nowMs2);
           patternOnsetMapRef.current.set(fleetKey, nowMs2);
-          // Persist to localStorage so suppression survives tab switches.
           try {
             localStorage.setItem('wicklee:patternOnsetMap',
               JSON.stringify([...patternOnsetMapRef.current.entries()]));
           } catch {}
-
-          // Save to cloud Postgres for cross-device persistence (Pro+ only)
-          if (isProOrAbove && !isLocalHost && getToken) {
-            submitObservationToCloud(getToken, {
-              node_id:    result.nodeId,
-              alert_type: result.patternId,
-              severity:   result.confidence === 'high' ? 'critical' : 'warning',
-              title:      result.title,
-              detail:     `${result.hook} · ${result.recommendation}`,
-              context:    { confidence: result.confidence, action_id: result.action_id },
-            }).then(obsId => {
-              if (obsId) cloudObsIdRef.current.set(key, obsId);
-            });
-          }
         }
       }
     }
@@ -1095,12 +973,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       const stillActive = allObservations.some(r => `${r.patternId}:${r.nodeId}` === key);
       if (!stillActive) {
         if (entry.resolvedMs === null) {
-          // First eval cycle where pattern is absent — start the hold countdown.
           cache.set(key, { ...entry, resolvedMs: nowMs2 });
         } else if (nowMs2 - entry.resolvedMs > OBS_HOLD_MS) {
-          // OBS_HOLD_MS has elapsed — pattern is confirmed resolved.
-          // durationMs = time the hardware was actually stressed, excluding the hold wait.
-          // entry.resolvedMs is the timestamp the pattern FIRST stopped firing (lastSeenFiringMs).
           const durationMs = entry.resolvedMs - entry.firstFiredMs;
 
           pendingLog.push({
@@ -1112,7 +986,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             resolvedAt: entry.resolvedMs,
           });
 
-          // ── Resolved event (Live Activity Feed + localStorage buffer) ─────
           emitFleetEvent({
             id:        crypto.randomUUID(),
             ts:        nowMs2,
@@ -1140,19 +1013,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             durationMs,
           });
 
-          // Resolve on cloud (Pro+ only)
-          const cloudId = cloudObsIdRef.current.get(key);
-          if (cloudId && isProOrAbove && !isLocalHost && getToken) {
-            resolveObservationOnCloud(getToken, cloudId);
-            cloudObsIdRef.current.delete(key);
-          }
-
           cache.delete(key);
         }
       }
     }
 
-    // Flush evicted entries into the session log
     if (pendingLog.length > 0) {
       setAlertLog(prev => {
         const updated = [...pendingLog, ...prev].slice(0, MAX_LOG_ENTRIES);
@@ -1161,7 +1026,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       });
     }
 
-    // Build sorted display list: active first, then resolved; newest first within each group
     const sorted: ObsEntry[] = [...cache.values()].sort((a, b) => {
       if ((a.resolvedMs === null) !== (b.resolvedMs === null)) {
         return a.resolvedMs === null ? -1 : 1;
@@ -1169,11 +1033,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       return b.firstFiredMs - a.firstFiredMs;
     });
     setObsEntries(sorted);
-
-    // Keep legacy observations state in sync (used by some downstream consumers)
     setObservations(allObservations);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allNodeMetrics, localSentinel]);
+  }, [localAgentObs, serverObservations]);
 
   // ── Effective node list ────────────────────────────────────────────────────
 
@@ -1838,11 +1700,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
                 // Filter: hide resolved by default
                 const hasResolved = deduped.some(e => e.resolvedMs !== null);
-                // On localhost, suppress any pattern already served by the Rust agent
-                // (/api/observations) to prevent duplicates between the two sections.
-                const agentPatternIds = new Set(localAgentObs.map(o => o.patternId));
-                const visibleObs = (showResolved ? deduped : deduped.filter(e => e.resolvedMs === null))
-                  .filter(e => !isLocalHost || !agentPatternIds.has(e.insight.patternId));
+                // All observations now come from server (agent or cloud) — no client-side dedup needed.
+                const visibleObs = showResolved ? deduped : deduped.filter(e => e.resolvedMs === null);
 
                 return (
                   <div className="space-y-2">
@@ -1896,16 +1755,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                             detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
                           });
                           // Pro+: acknowledge on cloud so dismiss syncs across devices
-                          const cloudKey = `${entry.insight.patternId}:${entry.insight.nodeId}`;
-                          const cloudId = cloudObsIdRef.current.get(cloudKey);
-                          if (cloudId && getToken) {
-                            getToken().then(t => {
-                              if (!t) return;
-                              fetch(`${CLOUD_URL}/api/fleet/observations/${cloudId}/acknowledge`, {
-                                method: 'POST',
-                                headers: { Authorization: `Bearer ${t}` },
-                              }).catch(() => {});
-                            });
+                          const matchingObs = serverObservations.find(
+                            o => o.alert_type === entry.insight.patternId && o.node_id === entry.insight.nodeId && o.state === 'open'
+                          );
+                          if (matchingObs) {
+                            acknowledgeObs(matchingObs.id);
                           }
                         }}
                       />

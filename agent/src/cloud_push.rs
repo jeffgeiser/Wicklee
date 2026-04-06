@@ -7,9 +7,34 @@ pub(crate) const CLOUD_URL: &str = "https://wicklee.dev";
 /// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
 /// throttles pushes to 1 per 2 s so we don't hammer Railway.
 /// Stops automatically when the session_token is cleared (on disconnect).
+///
+/// On non-musl targets, embeds the latest evaluated observations from the shared
+/// ObservationCache into each push so the fleet dashboard gets pattern data
+/// without needing its own evaluation logic.
+#[cfg(not(target_env = "musl"))]
 pub(crate) fn start_cloud_push(
     pairing_state: Arc<Mutex<PairingState>>,
     broadcast_tx:  tokio::sync::broadcast::Sender<String>,
+    obs_cache:     crate::ObservationCache,
+) {
+    start_cloud_push_inner(pairing_state, broadcast_tx, Some(obs_cache));
+}
+
+#[cfg(target_env = "musl")]
+pub(crate) fn start_cloud_push(
+    pairing_state: Arc<Mutex<PairingState>>,
+    broadcast_tx:  tokio::sync::broadcast::Sender<String>,
+) {
+    start_cloud_push_inner(pairing_state, broadcast_tx, None);
+}
+
+fn start_cloud_push_inner(
+    pairing_state: Arc<Mutex<PairingState>>,
+    broadcast_tx:  tokio::sync::broadcast::Sender<String>,
+    #[cfg(not(target_env = "musl"))]
+    obs_cache:     Option<crate::ObservationCache>,
+    #[cfg(target_env = "musl")]
+    _obs_cache:    Option<()>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
 
@@ -59,12 +84,19 @@ pub(crate) fn start_cloud_push(
             // Patch the JSON frame: replace node_id with the WK-XXXX identifier
             // so it matches the nodes table key. The `hostname` field is already
             // set correctly by the broadcast loop (System::host_name()) — do NOT
-            // overwrite it. Previously this code copied node_id into hostname,
-            // which worked when node_id was the machine name but broke once
-            // node_id became the WK-XXXX config value.
+            // overwrite it.
             let patched = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&frame) {
                 val["node_id"] = serde_json::json!(wk_id);
-                // hostname already correct from broadcast — leave it untouched
+                // Embed current observations from the shared cache (non-musl only).
+                // Empty array is omitted by the cloud's serde(default) — no overhead.
+                #[cfg(not(target_env = "musl"))]
+                if let Some(ref cache) = obs_cache {
+                    if let Ok(obs) = cache.lock() {
+                        if !obs.is_empty() {
+                            val["observations"] = serde_json::to_value(&*obs).unwrap_or_default();
+                        }
+                    }
+                }
                 val.to_string()
             } else {
                 frame
@@ -75,9 +107,6 @@ pub(crate) fn start_cloud_push(
             // If the request fails (network blip, 5xx, timeout) last_pushed_state stays
             // at the old value — state_changed remains true on the next tick and we retry
             // immediately rather than waiting for the 2s throttle to expire.
-            // Without this guard a single failed POST silently drops a state transition
-            // (e.g. idle-spd → live) and the fleet view can stay stale until the *next*
-            // state change forces another bypass — which may never come.
             let resp = client
                 .post(format!("{cloud}/api/telemetry"))
                 .header("content-type", "application/json")

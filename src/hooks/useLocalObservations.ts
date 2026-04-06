@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { DetectedInsight } from '../lib/patternEngine';
+import type { DetectedInsight } from '../types/observations';
 
 const AGENT_PORT = 7700;
 const POLL_INTERVAL_MS = 30_000;
