@@ -8,6 +8,9 @@
 
 One Rust binary per node. Live hardware dashboard at `localhost:7700`. Optional fleet aggregation at [wicklee.dev](https://wicklee.dev). No proxy in the inference path by default — your models run untouched.
 
+<img width="1681" height="691" alt="Screenshot 2026-04-06 at 5 47 03 PM" src="https://github.com/user-attachments/assets/4f12d129-864a-4559-807e-634d57786bdd" />
+
+
 ---
 
 ## Install
