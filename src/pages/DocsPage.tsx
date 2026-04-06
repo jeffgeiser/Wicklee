@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2 } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {
@@ -109,6 +109,7 @@ const NAV = [
   { id: 'event-feeds', label: 'Event Feeds' },
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
+  { id: 'teams',       label: 'Teams & Orgs' },
   { id: 'mcp',         label: 'MCP Server' },
   { id: 'proxy',       label: 'Inline Proxy' },
   { id: 'otel',        label: 'OTel & Prometheus' },
@@ -1348,6 +1349,58 @@ curl https://wicklee.dev/api/v1/fleet \\
               <p className="font-semibold text-white mb-1">Rate limits</p>
               <p>Community: 60 req/min &nbsp;·&nbsp; Pro: 300 req/min &nbsp;·&nbsp; Team: 600 req/min &nbsp;·&nbsp; Enterprise: unlimited. Rate limits are operational throttles, not feature gates — API access is available on all tiers.</p>
             </div>
+          </Section>
+
+          {/* ── Teams & Organizations ── */}
+          <Section
+            id="teams"
+            icon={<Users className="w-5 h-5" />}
+            accent="border-amber-500/20"
+            title="Teams & Organizations"
+          >
+            <p>
+              Wicklee uses <a href="https://clerk.com/docs/organizations/overview" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Clerk Organizations</a> for shared fleet access. When you create an organization, every member of that org sees the same fleet dashboard — nodes, observations, alerts, and history are all shared.
+            </p>
+
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">How It Works</p>
+            <div className="space-y-3 mt-2">
+              <div className="flex gap-3">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">1</span>
+                <div>
+                  <p className="text-sm text-gray-200 font-medium">Create an organization</p>
+                  <p className="text-xs text-gray-500">Go to Settings → Team Management and create a new organization. This is powered by Clerk — no separate account needed.</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">2</span>
+                <div>
+                  <p className="text-sm text-gray-200 font-medium">Invite team members</p>
+                  <p className="text-xs text-gray-500">Use the built-in invite flow to add colleagues by email. They'll receive an invitation and can join with their existing Clerk account or by creating a new one.</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">3</span>
+                <div>
+                  <p className="text-sm text-gray-200 font-medium">Pair nodes while the org is active</p>
+                  <p className="text-xs text-gray-500">Any node paired while your organization is selected belongs to the org — all members can see it. Nodes paired before the org was created remain personal.</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">4</span>
+                <div>
+                  <p className="text-sm text-gray-200 font-medium">Shared everything</p>
+                  <p className="text-xs text-gray-500">Fleet dashboard, observations, alerts, notification channels, and metric history are all scoped to the organization. Every member sees the same data.</p>
+                </div>
+              </div>
+            </div>
+
+            <NoteBox>
+              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team ($19/seat/mo), the org unlocks 25 nodes, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
+            </NoteBox>
+
+            <NoteBox>
+              <strong className="text-white">Solo users:</strong> Organizations are optional. Community and Pro users who don't need shared access can continue using Wicklee as a single-user dashboard — nothing changes.
+            </NoteBox>
           </Section>
 
           {/* ── MCP Server ── */}
