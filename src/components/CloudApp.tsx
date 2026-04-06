@@ -1,5 +1,5 @@
 import React from 'react';
-import { useAuth, useUser } from '@clerk/clerk-react';
+import { useAuth, useUser, useOrganization } from '@clerk/clerk-react';
 
 // Lazy-loaded wrapper that calls Clerk hooks inside ClerkProvider context.
 // By isolating this in its own file (loaded via React.lazy), @clerk/clerk-react
@@ -11,7 +11,9 @@ import { useAuth, useUser } from '@clerk/clerk-react';
 const CloudApp: React.FC<{ AppCore: React.FC<any> }> = ({ AppCore }) => {
   const { isSignedIn, isLoaded, getToken } = useAuth();
   const { user } = useUser();
-  return <AppCore isSignedIn={isSignedIn} isLoaded={isLoaded} getToken={getToken} user={user} />;
+  const { organization } = useOrganization();
+  const orgId = organization?.id ?? null;
+  return <AppCore isSignedIn={isSignedIn} isLoaded={isLoaded} getToken={getToken} user={user} orgId={orgId} />;
 };
 
 export default CloudApp;

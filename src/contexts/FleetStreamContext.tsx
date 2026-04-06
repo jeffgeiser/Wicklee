@@ -63,6 +63,8 @@ interface FleetStreamProviderProps {
   children:          React.ReactNode;
   isSignedIn:        boolean;
   getToken:          () => Promise<string | null>;
+  /** Clerk organization ID — included in stream token request for shared fleet access. */
+  orgId?:            string | null;
   /** Called on every SSE frame — App.tsx uses this to patch node hostnames. */
   onNodesSnapshot?:  (nodes: FleetNode[]) => void;
 }
@@ -71,6 +73,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   children,
   isSignedIn,
   getToken,
+  orgId,
   onNodesSnapshot,
 }) => {
   // ── State ──────────────────────────────────────────────────────────────────
@@ -117,9 +120,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
       try {
         const jwt = await getToken();
         if (!jwt || cancelled) { retryTimer = setTimeout(connect, RETRY_MS); return; }
-        const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, {
-          headers: { Authorization: `Bearer ${jwt}` },
-        });
+        const hdrs: Record<string, string> = { Authorization: `Bearer ${jwt}` };
+        if (orgId) hdrs['X-Org-Id'] = orgId;
+        const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, { headers: hdrs });
         if (!res.ok || cancelled) { retryTimer = setTimeout(connect, RETRY_MS); return; }
         streamToken = (await res.json()).stream_token;
       } catch {

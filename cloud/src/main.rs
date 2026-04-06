@@ -438,6 +438,11 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         .execute(pool).await.ok();
     sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS tags TEXT")
         .execute(pool).await.ok();
+    // Clerk Organizations: org_id on nodes enables shared fleet access.
+    sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS org_id TEXT")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_nodes_org ON nodes(org_id)")
+        .execute(pool).await.ok();
 
     sqlx::query("
         CREATE TABLE IF NOT EXISTS stream_tokens (
@@ -448,6 +453,8 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     ").execute(pool).await.expect("stream_tokens migration failed");
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_stream_tokens_expires ON stream_tokens(expires_ms)")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE stream_tokens ADD COLUMN IF NOT EXISTS org_id TEXT")
         .execute(pool).await.ok();
 
     sqlx::query("
@@ -667,6 +674,17 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("otel_config migration failed");
 
+    // ── Organizations (Clerk Organizations, Team+ tier) ────────────────────
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS organizations (
+            org_id              TEXT PRIMARY KEY,
+            name                TEXT,
+            subscription_tier   TEXT NOT NULL DEFAULT 'team',
+            created_by          TEXT,
+            created_at          BIGINT NOT NULL DEFAULT 0
+        )
+    ").execute(pool).await.expect("organizations migration failed");
+
     // ── TimescaleDB policies ────────────────────────────────────────────────
     // Retention: metrics_raw 2 days, node_events 30 days
     // These are idempotent — TimescaleDB ignores if already set.
@@ -799,10 +817,14 @@ fn fetch_jwks(url: &str) -> Vec<JwkKey> {
     }
 }
 
-/// Verify a Clerk JWT and return the `sub` claim (Clerk user ID).
-fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
+/// Verify a Clerk JWT and return the `sub` claim (Clerk user ID) and optional `org_id`.
+fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<String>)> {
     #[derive(Deserialize)]
-    struct ClerkClaims { sub: String }
+    struct ClerkClaims {
+        sub: String,
+        #[serde(default)]
+        org_id: Option<String>,
+    }
 
     if keys.is_empty() {
         eprintln!("[auth] clerk_keys is empty — CLERK_JWKS_URL not set or fetch failed");
@@ -837,8 +859,8 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<String> {
             Err(e) => { eprintln!("[auth] DecodingKey build failed for kid={}: {e}", jwk.kid); }
             Ok(key) => match decode::<ClerkClaims>(token, &key, &val) {
                 Ok(data) => {
-                    eprintln!("[auth] JWT valid");
-                    return Some(data.claims.sub);
+                    eprintln!("[auth] JWT valid (org_id={:?})", data.claims.org_id);
+                    return Some((data.claims.sub, data.claims.org_id));
                 }
                 Err(e) => { eprintln!("[auth] JWT decode failed for kid={}: {e}", jwk.kid); }
             }
@@ -897,8 +919,43 @@ async fn require_user(token: &str, pool: &sqlx::PgPool, clerk_keys: &[JwkKey]) -
     }
 
     // Clerk JWT.
-    let sub = validate_clerk_jwt(token, clerk_keys)?;
+    let (sub, _org_id) = validate_clerk_jwt(token, clerk_keys)?;
     resolve_clerk_user(&sub, pool).await
+}
+
+/// Extract org_id from X-Org-Id header (sent by frontend when user has active org).
+fn extract_org_id(headers: &HeaderMap) -> Option<String> {
+    headers.get("x-org-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned())
+}
+
+/// Returns (column_name, bind_value) for tenant-scoped queries.
+/// When user has an org_id, scope to org_id. Otherwise scope to user_id.
+fn tenant_scope<'a>(user_id: &'a str, org_id: &'a Option<String>) -> (&'static str, &'a str) {
+    match org_id.as_deref() {
+        Some(oid) => ("org_id", oid),
+        None => ("user_id", user_id),
+    }
+}
+
+/// Resolve subscription tier — checks organizations table for org users,
+/// falls back to users table for solo users.
+async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPool) -> String {
+    if let Some(oid) = org_id {
+        // Org-level tier takes precedence
+        if let Ok(tier) = sqlx::query_scalar::<_, String>(
+            "SELECT subscription_tier FROM organizations WHERE org_id = $1"
+        ).bind(oid).fetch_one(pool).await {
+            return tier;
+        }
+    }
+    // Fall back to user-level tier
+    sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(user_id).fetch_one(pool).await
+    .unwrap_or_else(|_| "community".to_string())
 }
 
 /// Like require_user but also returns email and is_pro for tier checks.
@@ -1645,12 +1702,13 @@ async fn handle_stream_token(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
+    let org_id = extract_org_id(&headers);
     let stream_token = Uuid::new_v4().to_string();
     let expires_ms = (now_ms() + 60_000) as i64;
 
     let _ = sqlx::query(
-        "INSERT INTO stream_tokens (token, user_id, expires_ms) VALUES ($1, $2, $3)"
-    ).bind(&stream_token).bind(&user_id).bind(expires_ms)
+        "INSERT INTO stream_tokens (token, user_id, expires_ms, org_id) VALUES ($1, $2, $3, $4)"
+    ).bind(&stream_token).bind(&user_id).bind(expires_ms).bind(&org_id)
     .execute(&state.pool).await;
 
     (StatusCode::OK, Json(serde_json::json!({ "stream_token": stream_token }))).into_response()
@@ -1935,9 +1993,9 @@ async fn handle_telemetry(
             .execute(&pool).await;
         }
 
-        // Resolve tenant_id and enqueue for ingest.
+        // Resolve tenant_id (org_id for shared fleets, user_id for solo).
         if let Ok(tenant_id) = sqlx::query_scalar::<_, String>(
-            "SELECT user_id FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
+            "SELECT COALESCE(org_id, user_id) FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
         ).bind(&nid).fetch_one(&pool).await {
             let row = MetricsRow { tenant_id: tenant_id.clone(), ..duck_row };
             if let Err(e) = metrics_tx.try_send(row) {
@@ -1995,14 +2053,13 @@ async fn handle_fleet(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await
-    .unwrap_or_else(|_| "community".to_string());
+    let org_id = extract_org_id(&headers);
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let persisted: Vec<(String, String, i64)> = sqlx::query_as(
-        "SELECT wk_id, fleet_url, paired_at FROM nodes WHERE user_id = $1 ORDER BY paired_at ASC"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id, fleet_url, paired_at FROM nodes WHERE {} = $1 ORDER BY paired_at ASC", tcol)
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let tier_limit = if tier == "enterprise" { usize::MAX }
         else if is_team_or_above(&tier) { MAX_TEAM_NODES }
@@ -2873,18 +2930,18 @@ async fn handle_activate(
     };
 
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
+    let org_id = extract_org_id(&headers);
     // Enforce per-tier node limits.
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     let node_limit = if tier == "enterprise" { usize::MAX }
         else if is_team_or_above(&tier) { MAX_TEAM_NODES }
         else if is_pro || is_pro_or_above(&tier) { MAX_PRO_NODES }
         else { MAX_FREE_NODES };
     {
+        let (tcol, tval) = tenant_scope(&user_id, &org_id);
         let count: i64 = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM nodes WHERE user_id = $1"
-        ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0);
+            &format!("SELECT COUNT(*) FROM nodes WHERE {} = $1", tcol)
+        ).bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
         if count as usize >= node_limit {
             let tier_name = if node_limit == MAX_FREE_NODES { "Community" }
                 else if node_limit == MAX_PRO_NODES { "Pro" }
@@ -2904,9 +2961,17 @@ async fn handle_activate(
         Err(_) => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Code not found or already used. Make sure the agent is running and try again." }))).into_response(),
         Ok((node_id, fleet_url)) => {
-            let _ = sqlx::query("UPDATE nodes SET user_id = $1 WHERE wk_id = $2")
-                .bind(&user_id).bind(&node_id)
+            let _ = sqlx::query("UPDATE nodes SET user_id = $1, org_id = $2 WHERE wk_id = $3")
+                .bind(&user_id).bind(&org_id).bind(&node_id)
                 .execute(&state.pool).await;
+            // Auto-provision org record if this is the first pairing for this org
+            if let Some(ref oid) = org_id {
+                let _ = sqlx::query(
+                    "INSERT INTO organizations (org_id, subscription_tier, created_by, created_at) \
+                     VALUES ($1, 'team', $2, $3) ON CONFLICT DO NOTHING"
+                ).bind(oid).bind(&user_id).bind(now_ms() as i64)
+                .execute(&state.pool).await;
+            }
             (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response()
         }
     }
@@ -2924,30 +2989,40 @@ async fn handle_fleet_stream(
     };
 
     let now = now_ms() as i64;
-    let user_id = match sqlx::query_scalar::<_, String>(
-        "SELECT user_id FROM stream_tokens WHERE token = $1 AND expires_ms > $2"
-    ).bind(&stream_token).bind(now).fetch_one(&state.pool).await {
-        Ok(uid) => uid,
+    let token_row = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT user_id, org_id FROM stream_tokens WHERE token = $1 AND expires_ms > $2"
+    ).bind(&stream_token).bind(now).fetch_one(&state.pool).await;
+    let (user_id, org_id) = match token_row {
+        Ok(r) => r,
         Err(_) => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
 
-    // Load initial node set and tier.
+    // Load initial node set and tier (tenant-scoped).
     let pool = state.pool.clone();
     let uid2 = user_id.clone();
-    let initial_nodes = user_node_set_blocking(&uid2, &pool);
+    let oid2 = org_id.clone();
+    let (tcol, tval_owned) = { let (c, v) = tenant_scope(&uid2, &oid2); (c, v.to_owned()) };
+    let tval2 = tval_owned.clone();
+    let tc = tcol;
+    let initial_nodes: HashSet<String> = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            sqlx::query_scalar::<_, String>(
+                &format!("SELECT wk_id FROM nodes WHERE {} = $1", tc)
+            ).bind(&tval2).fetch_all(&pool).await.unwrap_or_default().into_iter().collect()
+        })
+    });
+    let tval3 = tval_owned.clone();
     let initial_ordered: Vec<String> = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             sqlx::query_scalar::<_, String>(
-                "SELECT wk_id FROM nodes WHERE user_id = $1 ORDER BY paired_at ASC"
-            ).bind(&uid2).fetch_all(&pool).await.unwrap_or_default()
+                &format!("SELECT wk_id FROM nodes WHERE {} = $1 ORDER BY paired_at ASC", tc)
+            ).bind(&tval3).fetch_all(&pool).await.unwrap_or_default()
         })
     });
     let initial_tier: String = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            sqlx::query_scalar::<_, String>(
-                "SELECT subscription_tier FROM users WHERE id = $1"
-            ).bind(&uid2).fetch_one(&pool).await.unwrap_or_else(|_| "community".to_string())
+            resolve_tier(&uid2, &oid2, &pool).await
         })
     });
 
@@ -2956,15 +3031,17 @@ async fn handle_fleet_stream(
     );
 
     let uid_stream = user_id.clone();
+    let oid_stream = org_id.clone();
     let mut nodes          = initial_nodes;
     let mut ordered_nodes  = initial_ordered;
     let mut tier           = initial_tier;
+    let tval4 = tval_owned.clone();
     // display_name cache: node_id → custom name (Pro+ feature)
     let mut display_names: HashMap<String, String> = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             sqlx::query_as::<_, (String, String)>(
-                "SELECT wk_id, display_name FROM nodes WHERE user_id = $1 AND display_name IS NOT NULL"
-            ).bind(&uid2).fetch_all(&pool).await.unwrap_or_default()
+                &format!("SELECT wk_id, display_name FROM nodes WHERE {} = $1 AND display_name IS NOT NULL", tc)
+            ).bind(&tval4).fetch_all(&pool).await.unwrap_or_default()
                 .into_iter().collect()
         })
     });
@@ -2974,26 +3051,32 @@ async fn handle_fleet_stream(
         tick += 1;
         if tick % 30 == 0 {
             let uid_ref = uid_stream.clone();
-            nodes = user_node_set_blocking(&uid_ref, &pool);
+            let oid_ref = oid_stream.clone();
+            let tv = { let (_, v) = tenant_scope(&uid_ref, &oid_ref); v.to_owned() };
+            nodes = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    sqlx::query_scalar::<_, String>(
+                        &format!("SELECT wk_id FROM nodes WHERE {} = $1", tc)
+                    ).bind(&tv).fetch_all(&pool).await.unwrap_or_default().into_iter().collect()
+                })
+            });
             ordered_nodes = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     sqlx::query_scalar::<_, String>(
-                        "SELECT wk_id FROM nodes WHERE user_id = $1 ORDER BY paired_at ASC"
-                    ).bind(&uid_ref).fetch_all(&pool).await.unwrap_or_default()
+                        &format!("SELECT wk_id FROM nodes WHERE {} = $1 ORDER BY paired_at ASC", tc)
+                    ).bind(&tv).fetch_all(&pool).await.unwrap_or_default()
                 })
             });
             tier = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
-                    sqlx::query_scalar::<_, String>(
-                        "SELECT subscription_tier FROM users WHERE id = $1"
-                    ).bind(&uid_ref).fetch_one(&pool).await.unwrap_or_else(|_| "community".to_string())
+                    resolve_tier(&uid_ref, &oid_ref, &pool).await
                 })
             });
             display_names = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     sqlx::query_as::<_, (String, String)>(
-                        "SELECT wk_id, display_name FROM nodes WHERE user_id = $1 AND display_name IS NOT NULL"
-                    ).bind(&uid_ref).fetch_all(&pool).await.unwrap_or_default()
+                        &format!("SELECT wk_id, display_name FROM nodes WHERE {} = $1 AND display_name IS NOT NULL", tc)
+                    ).bind(&tv).fetch_all(&pool).await.unwrap_or_default()
                         .into_iter().collect()
                 })
             });

@@ -141,9 +141,11 @@ interface AppCoreProps {
     primaryEmailAddress?: { emailAddress?: string | null } | null;
     fullName?: string | null;
   } | null;
+  /** Clerk organization ID when user has an active org (Team+ shared fleet). Null for solo users. */
+  orgId?: string | null;
 }
 
-const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user }) => {
+const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user, orgId = null }) => {
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
@@ -532,6 +534,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user 
     <FleetStreamProvider
       isSignedIn={!!isSignedIn}
       getToken={getToken}
+      orgId={orgId}
       onNodesSnapshot={handleNodesSnapshot}
     >
       <DashboardShell
