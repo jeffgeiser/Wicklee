@@ -679,7 +679,7 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         CREATE TABLE IF NOT EXISTS organizations (
             org_id              TEXT PRIMARY KEY,
             name                TEXT,
-            subscription_tier   TEXT NOT NULL DEFAULT 'team',
+            subscription_tier   TEXT NOT NULL DEFAULT 'community',
             created_by          TEXT,
             created_at          BIGINT NOT NULL DEFAULT 0
         )
@@ -2966,9 +2966,12 @@ async fn handle_activate(
                 .execute(&state.pool).await;
             // Auto-provision org record if this is the first pairing for this org
             if let Some(ref oid) = org_id {
+                // Auto-provision org record on first pairing — inherits the
+                // creating user's tier. Upgraded to 'team' when they subscribe.
                 let _ = sqlx::query(
                     "INSERT INTO organizations (org_id, subscription_tier, created_by, created_at) \
-                     VALUES ($1, 'team', $2, $3) ON CONFLICT DO NOTHING"
+                     VALUES ($1, (SELECT subscription_tier FROM users WHERE id = $2), $2, $3) \
+                     ON CONFLICT DO NOTHING"
                 ).bind(oid).bind(&user_id).bind(now_ms() as i64)
                 .execute(&state.pool).await;
             }
@@ -4911,14 +4914,27 @@ async fn handle_paddle_webhook(
                     "UPDATE users SET subscription_tier = $1, paddle_customer_id = $2, paddle_subscription_id = $3 WHERE id = $4"
                 ).bind(tier).bind(&customer_id).bind(&subscription_id).bind(&user_id)
                 .execute(&state.pool).await;
+                // Sync tier to organization if user owns one (shared fleet access).
+                let _ = sqlx::query(
+                    "UPDATE organizations SET subscription_tier = $1 WHERE created_by = $2"
+                ).bind(tier).bind(&user_id).execute(&state.pool).await;
                 println!("[billing] paddle: {user_id} \u{2192} {tier} (sub={subscription_id})");
             }
         }
         "subscription.canceled" | "subscription.past_due" => {
             let customer_id = data["customer_id"].as_str().unwrap_or("").to_string();
+            // Downgrade user and any org they own.
+            let downgraded_user: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM users WHERE paddle_customer_id = $1"
+            ).bind(&customer_id).fetch_optional(&state.pool).await.ok().flatten();
             let _ = sqlx::query(
                 "UPDATE users SET subscription_tier = 'community', paddle_subscription_id = NULL WHERE paddle_customer_id = $1"
             ).bind(&customer_id).execute(&state.pool).await;
+            if let Some(ref uid) = downgraded_user {
+                let _ = sqlx::query(
+                    "UPDATE organizations SET subscription_tier = 'community' WHERE created_by = $1"
+                ).bind(uid).execute(&state.pool).await;
+            }
             println!("[billing] paddle: downgraded customer={customer_id} \u{2192} community");
         }
         _ => {
