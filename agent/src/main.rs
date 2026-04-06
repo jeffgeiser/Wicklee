@@ -3725,6 +3725,361 @@ fn evaluate_local_observations(
         }
     }
 
+    // ── Pattern D: Power-GPU Decoupling ──────────────────────────────────
+    // High watts + active inference + low GPU utilization.
+    // Inference is CPU-bound or memory-bound, not GPU-bound.
+    // Uses 5-min window; requires gpu_util_pct data.
+    {
+        let min_gpu_density = (min_density_5m as f64 * 0.7) as usize;
+        let gpu_count = window.iter().filter(|s| s.gpu_util_pct.is_some()).count();
+
+        if gpu_count >= min_gpu_density {
+            // Qualifying samples: high watts + inference active + low GPU util
+            let decoupled: Vec<&&store::ObsSample> = window.iter()
+                .filter(|s| {
+                    let watts = s.gpu_power_w.unwrap_or(0.0) + s.cpu_power_w.unwrap_or(0.0);
+                    watts > 50.0
+                        && s.tps.unwrap_or(0.0) > 0.0
+                        && s.gpu_util_pct.unwrap_or(100.0) < 20.0
+                })
+                .collect();
+
+            let min_decoupled = (min_density_5m as f64 * 0.6) as usize;
+            if decoupled.len() >= min_decoupled {
+                let watts_vals: Vec<f64> = decoupled.iter()
+                    .map(|s| s.gpu_power_w.unwrap_or(0.0) + s.cpu_power_w.unwrap_or(0.0))
+                    .collect();
+                let gpu_util_vals: Vec<f64> = decoupled.iter()
+                    .filter_map(|s| s.gpu_util_pct)
+                    .collect();
+                let tps_vals: Vec<f64> = decoupled.iter()
+                    .filter_map(|s| s.tps)
+                    .collect();
+
+                let avg_watts    = obs_mean(&watts_vals);
+                let avg_gpu_util = if gpu_util_vals.is_empty() { 0.0 } else { obs_mean(&gpu_util_vals) };
+                let avg_tps      = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
+                let ratio        = (decoupled.len() as f64 / min_density_5m as f64).min(1.0);
+
+                obs.push(LocalObservation {
+                    pattern_id:       "power_gpu_decoupling",
+                    severity:         "warning",
+                    title:            "Power-GPU Decoupling".into(),
+                    hook:             format!("{avg_gpu_util:.0}% GPU · {avg_watts:.0}W"),
+                    body:             format!(
+                        "{hostname} is drawing {avg_watts:.0}W and generating {avg_tps:.1} tok/s, \
+                         but GPU utilization is only {avg_gpu_util:.0}% — significantly below what \
+                         the power draw suggests. Inference appears CPU-bound or memory-bound. \
+                         Common causes: large context window filling KV cache, CPU-offloaded layers \
+                         in a mixed quantization, or a batch size too small to saturate GPU SIMD lanes.",
+                    ),
+                    recommendation:   "Try reducing concurrent context length or switching to a \
+                                       quantization with fewer CPU-offloaded layers (e.g. Q4_K_M over \
+                                       Q2_K). If using vLLM, tune --max-num-batched-tokens to the \
+                                       GPU-saturating sweet spot.".into(),
+                    resolution_steps: vec![
+                        format!("Check GPU util: `curl http://localhost:7700/api/health | jq '{{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}}'`"),
+                        "Set all layers to GPU: OLLAMA_NUM_GPU=99 ollama serve".into(),
+                        "Switch to Q4_K_M: `ollama pull <model>:q4_K_M` — fully GPU-offloads vs Q2_K".into(),
+                        "For vLLM: raise --max-num-seqs to create batches that saturate GPU SIMD lanes".into(),
+                        "Trim max_tokens in your app — KV cache fills CPU memory when context > VRAM".into(),
+                    ],
+                    action_id:        "reduce_batch_size",
+                    confidence:       obs_confidence(ratio),
+                    confidence_ratio: ratio,
+                    first_fired_ms:   now_ms,
+                    node_id:          node_id.into(),
+                    hostname:         hostname.into(),
+                });
+            }
+        }
+    }
+
+    // ── Pattern G: Bandwidth Saturation ──────────────────────────────────
+    // GPU compute utilization is low despite active inference and high memory
+    // pressure — the GPU cores are stalled waiting for weights from VRAM/memory bus.
+    // Uses 5-min window for recent state; 10-min window for WES session peak.
+    {
+        let min_gpu_density = (min_density_5m as f64 * 0.7) as usize;
+        let gpu_samples: Vec<&&store::ObsSample> = window.iter()
+            .filter(|s| s.gpu_util_pct.is_some())
+            .collect();
+
+        if gpu_samples.len() >= min_gpu_density {
+            let avg_gpu_util: f64 = {
+                let v: Vec<f64> = gpu_samples.iter().filter_map(|s| s.gpu_util_pct).collect();
+                if v.is_empty() { 100.0 } else { obs_mean(&v) }
+            };
+            let tps_vals: Vec<f64> = window.iter().filter_map(|s| s.tps).collect();
+            let avg_tps = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
+
+            // GPU compute must be low AND inference active
+            if avg_gpu_util < 45.0 && avg_tps >= 0.5 {
+                // Thermals must be Normal — not a thermal issue
+                let hot_count = window.iter()
+                    .filter(|s| s.thermal_state.as_deref().map(|t| t != "Normal").unwrap_or(false))
+                    .count();
+                let hot_limit = (min_density_5m as f64 * 0.3) as usize;
+
+                if hot_count <= hot_limit {
+                    // Memory pressure: VRAM path (NVIDIA) or unified memory (Apple Silicon)
+                    let vram_samples: Vec<&&store::ObsSample> = window.iter()
+                        .filter(|s| s.vram_used_mb.is_some() && s.vram_total_mb.map(|v| v > 0).unwrap_or(false))
+                        .collect();
+                    let vram_density = (min_density_5m as f64 * 0.5) as usize;
+
+                    let (mem_pressure_ok, vram_pct_display, mem_label) =
+                        if vram_samples.len() >= vram_density {
+                            let avg_vram_pct: f64 = {
+                                let v: Vec<f64> = vram_samples.iter()
+                                    .map(|s| s.vram_used_mb.unwrap() as f64 / s.vram_total_mb.unwrap() as f64 * 100.0)
+                                    .collect();
+                                obs_mean(&v)
+                            };
+                            (avg_vram_pct >= 80.0, avg_vram_pct, "VRAM")
+                        } else {
+                            let mem_vals: Vec<f64> = window.iter()
+                                .filter_map(|s| s.mem_pressure_pct)
+                                .collect();
+                            if mem_vals.len() >= vram_density {
+                                let avg_mem = obs_mean(&mem_vals);
+                                (avg_mem >= 70.0, avg_mem, "memory")
+                            } else {
+                                (false, 0.0, "memory")
+                            }
+                        };
+
+                    if mem_pressure_ok {
+                        // WES drop: compare 10-min session peak vs 5-min recent
+                        let compute_wes = |s: &&store::ObsSample| -> Option<f64> {
+                            let tps = s.tps.filter(|&t| t > 0.0)?;
+                            let watts = s.gpu_power_w.unwrap_or(0.0) + s.cpu_power_w.unwrap_or(0.0);
+                            if watts <= 0.0 { return None; }
+                            let penalty = s.penalty_avg.unwrap_or(1.0);
+                            Some(tps / (watts * penalty))
+                        };
+
+                        let session_wes: Vec<f64> = long_window.iter().filter_map(compute_wes).collect();
+                        let recent_wes:  Vec<f64> = window.iter().filter_map(compute_wes).collect();
+
+                        if session_wes.len() >= 5 && recent_wes.len() >= (min_density_5m as f64 * 0.5) as usize {
+                            let peak_wes   = session_wes.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                            let recent_avg = obs_mean(&recent_wes);
+                            let wes_drop   = if peak_wes > 0.0 { (peak_wes - recent_avg) / peak_wes * 100.0 } else { 0.0 };
+
+                            if wes_drop >= 35.0 {
+                                let ratio = (gpu_samples.len() as f64 / min_density_5m as f64).min(1.0);
+                                obs.push(LocalObservation {
+                                    pattern_id:       "bandwidth_saturation",
+                                    severity:         "warning",
+                                    title:            "Bandwidth Saturation".into(),
+                                    hook:             format!("{avg_gpu_util:.0}% GPU · {vram_pct_display:.0}% {mem_label} · −{wes_drop:.0}% WES"),
+                                    body:             format!(
+                                        "{hostname} is generating {avg_tps:.1} tok/s at only \
+                                         {avg_gpu_util:.0}% GPU utilization with {vram_pct_display:.0}% \
+                                         {mem_label} occupied. Thermals are Normal — the GPU cores are \
+                                         idle waiting for model weight data from {mem_label}, not blocked \
+                                         by compute or temperature. WES has dropped {wes_drop:.0}% from \
+                                         its session peak. This is the {mem_label} bandwidth ceiling: \
+                                         model weights saturate the bus faster than the GPU can consume them.",
+                                    ),
+                                    recommendation:   format!(
+                                        "Reduce quantization (e.g. Q8 → Q4) to cut {mem_label} bandwidth \
+                                         demand by ~50%, or switch to a lower parameter count model to \
+                                         recover throughput.",
+                                    ),
+                                    resolution_steps: vec![
+                                        format!("Confirm bottleneck: `curl http://localhost:7700/api/health | jq '{{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}}'`"),
+                                        "Switch to lower quantization to halve bandwidth demand: `ollama pull <model>:q4_K_M`".into(),
+                                        "If already on Q4, try Q3_K_M or Q2_K — quality trade-off worth the bandwidth recovery".into(),
+                                        "Reduce context window size — longer contexts increase KV cache weight streaming".into(),
+                                        "Consider a hardware upgrade to a node with higher memory bandwidth for sustained relief".into(),
+                                    ],
+                                    action_id:        "switch_quantization",
+                                    confidence:       obs_confidence(ratio),
+                                    confidence_ratio: ratio,
+                                    first_fired_ms:   now_ms,
+                                    node_id:          node_id.into(),
+                                    hostname:         hostname.into(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Pattern I: Efficiency Penalty Drag ───────────────────────────────
+    // WES penalty_avg is persistently elevated despite Normal thermals and active
+    // GPU — indicates workload configuration overhead (context length, batch
+    // fragmentation, KV cache pressure, MoE routing overhead).
+    // Requires penalty_avg data (written by agent since Phase 2 migration).
+    {
+        let penalty_vals: Vec<f64> = window.iter().filter_map(|s| s.penalty_avg).collect();
+        let min_pen_density = (min_density_5m as f64 * 0.7) as usize;
+
+        if penalty_vals.len() >= min_pen_density {
+            let avg_multiplier = obs_mean(&penalty_vals);
+            // multiplier 1.0 = no penalty; skip early if no real overhead
+            if avg_multiplier > 1.0 {
+                // Efficiency loss fraction: 1 - (1/multiplier)
+                // e.g. multiplier 1.75 → 43% loss
+                let avg_penalty = 1.0 - (1.0 / avg_multiplier);
+
+                if avg_penalty >= 0.30 {
+                    let tps_vals: Vec<f64> = window.iter().filter_map(|s| s.tps).collect();
+                    let avg_tps = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
+
+                    if avg_tps >= 0.5 {
+                        // Thermals must be Normal
+                        let hot_count = window.iter()
+                            .filter(|s| s.thermal_state.as_deref().map(|t| t != "Normal").unwrap_or(false))
+                            .count();
+                        let hot_limit = (min_density_5m as f64 * 0.3) as usize;
+
+                        // GPU must be working (not decoupled — Pattern D territory)
+                        let gpu_vals: Vec<f64> = window.iter().filter_map(|s| s.gpu_util_pct).collect();
+                        let avg_gpu = if gpu_vals.len() >= (min_density_5m as f64 * 0.5) as usize {
+                            obs_mean(&gpu_vals)
+                        } else { 50.0 }; // assume ok if no GPU data
+
+                        // Not memory-bound (not Pattern F or G territory)
+                        let mem_vals: Vec<f64> = window.iter().filter_map(|s| s.mem_pressure_pct).collect();
+                        let avg_mem = if mem_vals.is_empty() { 0.0 } else { obs_mean(&mem_vals) };
+
+                        let vram_samples: Vec<&&store::ObsSample> = window.iter()
+                            .filter(|s| s.vram_used_mb.is_some() && s.vram_total_mb.map(|v| v > 0).unwrap_or(false))
+                            .collect();
+                        let avg_vram_pct = if vram_samples.len() >= (min_density_5m as f64 * 0.5) as usize {
+                            let v: Vec<f64> = vram_samples.iter()
+                                .map(|s| s.vram_used_mb.unwrap() as f64 / s.vram_total_mb.unwrap() as f64 * 100.0)
+                                .collect();
+                            obs_mean(&v)
+                        } else { 0.0 };
+
+                        if hot_count <= hot_limit && avg_gpu >= 30.0 && avg_mem < 75.0 && avg_vram_pct < 80.0 {
+                            let penalty_pct = (avg_penalty * 100.0) as u32;
+                            let lost_tok_s  = avg_tps * (avg_multiplier - 1.0);
+
+                            // Implied max WES without penalty
+                            let wes_vals: Vec<f64> = window.iter()
+                                .filter_map(|s| {
+                                    let tps = s.tps.filter(|&t| t > 0.0)?;
+                                    let watts = s.gpu_power_w.unwrap_or(0.0) + s.cpu_power_w.unwrap_or(0.0);
+                                    if watts <= 0.0 { return None; }
+                                    Some(tps / (watts * s.penalty_avg.unwrap_or(1.0)))
+                                })
+                                .collect();
+                            let avg_wes     = if wes_vals.is_empty() { None } else { Some(obs_mean(&wes_vals)) };
+                            let implied_max = avg_wes.map(|w| w * avg_multiplier);
+
+                            let ratio = (penalty_vals.len() as f64 / min_density_5m as f64).min(1.0);
+                            obs.push(LocalObservation {
+                                pattern_id:       "efficiency_drag",
+                                severity:         "warning",
+                                title:            "Efficiency Penalty Drag".into(),
+                                hook:             format!("{penalty_pct}% WES penalty · {lost_tok_s:.1} tok/s headroom being lost"),
+                                body:             format!(
+                                    "{hostname} is sustaining a {penalty_pct}% WES efficiency penalty \
+                                     despite Normal thermals, active GPU utilization, and no memory \
+                                     saturation. The penalty_avg field captures overhead not caused by \
+                                     heat or bandwidth — context window size, batch fragmentation, \
+                                     KV cache pressure, or expert routing overhead in MoE models.{}",
+                                    match implied_max.zip(avg_wes) {
+                                        Some((imp, cur)) => format!(" Without this penalty, WES would be ~{imp:.0} (current: {cur:.0})."),
+                                        None => String::new(),
+                                    }
+                                ),
+                                recommendation:   "This penalty is recoverable through workload \
+                                                   configuration. Reduce maximum context window to the \
+                                                   shortest that meets quality needs, and increase batch \
+                                                   concurrency slightly to better saturate the GPU pipeline. \
+                                                   If using a MoE model (e.g. Mixtral), ensure all experts \
+                                                   are VRAM-resident.".into(),
+                                resolution_steps: vec![
+                                    "Check penalty: `curl http://localhost:7700/api/health | jq .penalty_avg` — confirm consistently > 1.30".into(),
+                                    "Reduce context window: lower max_tokens or num_ctx to 2048–4096 in your application".into(),
+                                    "Increase batch slightly: OLLAMA_NUM_PARALLEL=2 (more concurrent reqs fill GPU pipeline bubbles)".into(),
+                                    "MoE models (Mixtral, Qwen-MoE): verify all expert weights are VRAM-resident with `ollama ps`".into(),
+                                    "vLLM: enable --enable-chunked-prefill to reduce KV cache fragmentation from variable-length requests".into(),
+                                ],
+                                action_id:        "reduce_batch_size",
+                                confidence:       obs_confidence(ratio),
+                                confidence_ratio: ratio,
+                                first_fired_ms:   now_ms,
+                                node_id:          node_id.into(),
+                                hostname:         hostname.into(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Pattern M: vLLM KV Cache Saturation ──────────────────────────────
+    // vLLM's KV cache is persistently full — the scheduler cannot admit new
+    // sequences; requests queue, get preempted, or return 503.
+    // Uses 5-min window; only fires on nodes running vLLM (field is None elsewhere).
+    {
+        let cache_vals: Vec<f64> = window.iter()
+            .filter_map(|s| s.vllm_cache_usage_perc)
+            .collect();
+        let min_cache_density = (min_density_5m as f64 * 0.7) as usize;
+
+        if cache_vals.len() >= min_cache_density {
+            let saturated_count = cache_vals.iter().filter(|&&v| v > 90.0).count();
+            let min_saturated   = (cache_vals.len() as f64 * 0.7) as usize;
+
+            if saturated_count >= min_saturated {
+                let avg_cache: f64 = cache_vals.iter()
+                    .filter(|&&v| v > 90.0)
+                    .sum::<f64>() / saturated_count as f64;
+
+                // Check for back-pressure from queue_depth
+                let queue_vals: Vec<f64> = window.iter()
+                    .filter_map(|s| s.queue_depth.filter(|&q| q > 0).map(|q| q as f64))
+                    .collect();
+                let avg_queue = if queue_vals.is_empty() { 0.0 } else { obs_mean(&queue_vals) };
+
+                let ratio = (cache_vals.len() as f64 / min_density_5m as f64).min(1.0);
+                obs.push(LocalObservation {
+                    pattern_id:       "vllm_kv_cache_saturation",
+                    severity:         "warning",
+                    title:            "vLLM KV Cache Saturation".into(),
+                    hook:             format!("{avg_cache:.0}% KV cache full"),
+                    body:             format!(
+                        "{hostname}'s vLLM KV cache has been above 90% for the last 5 min \
+                         (avg {avg_cache:.1}%). When the cache fills, the scheduler cannot \
+                         admit new sequences — incoming requests queue, get preempted, or \
+                         return 503.{}",
+                        if avg_queue > 0.0 {
+                            format!(" Currently {avg_queue:.0} requests queued on average — confirming back-pressure.")
+                        } else { String::new() }
+                    ),
+                    recommendation:   "Reduce concurrent load: lower --max-num-seqs or \
+                                       --max-num-batched-tokens to free KV cache headroom. \
+                                       If demand is sustained, scale horizontally or switch \
+                                       to a smaller model/quantization.".into(),
+                    resolution_steps: vec![
+                        "Check KV cache: `curl http://localhost:7700/api/health | jq .vllm_cache_usage_perc`".into(),
+                        "Reduce concurrent sequences: restart vLLM with --max-num-seqs 4 (default is often 256)".into(),
+                        "Lower batched tokens: --max-num-batched-tokens 2048 reduces per-batch KV footprint".into(),
+                        "Long contexts: --max-model-len to cap per-sequence KV allocation".into(),
+                        "Monitor: `watch -n 5 \"curl -s http://localhost:7700/api/health | jq .vllm_cache_usage_perc\"`".into(),
+                    ],
+                    action_id:        "reduce_batch_size",
+                    confidence:       obs_confidence(ratio),
+                    confidence_ratio: ratio,
+                    first_fired_ms:   now_ms,
+                    node_id:          node_id.into(),
+                    hostname:         hostname.into(),
+                });
+            }
+        }
+    }
+
     // ── Pattern P: TTFT Regression ───────────────────────────────────────
     // Time-to-first-token is trending upward, indicating growing inference
     // latency for users — KV cache thrash, memory pressure, or queue build-up.
