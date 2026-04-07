@@ -2125,9 +2125,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               : '—'
           }
           valueCls={
-            isLocalMode && localIsAppleSilicon
-              ? (localGpuUsedGb == null ? 'text-gray-400 dark:text-gray-600' : undefined)
-              : vramUtilPct == null && effectiveMetrics.length === 0
+            (isLocalMode && localIsAppleSilicon && localGpuUsedGb == null)
+              || (!isLocalMode && vramUtilPct == null && effectiveMetrics.length === 0)
               ? 'text-gray-400 dark:text-gray-600'
               : undefined
           }
@@ -2136,9 +2135,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               ? (localGpuUsedGb != null && localWiredLimitGb != null
                   ? `${localGpuUsedGb} / ${localWiredLimitGb} GB`
                   : undefined)
-              : vramUtilPct != null
+              : (vramUsedGB != null && vramCapacityGB != null && Number(vramCapacityGB) > 0)
               ? `${vramUsedGB} / ${vramCapacityGB} GB${vramSubHint ? ` · ${vramSubHint}` : ''}`
-              : (vramUtilPct == null && effectiveMetrics.length > 0)
+              : (effectiveMetrics.length > 0 && vramUsedGB != null)
               ? `${vramUsedGB} GB used${vramSubHint ? ` · ${vramSubHint}` : ''}`
               : undefined
           }
