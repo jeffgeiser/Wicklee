@@ -5197,10 +5197,26 @@ async fn handle_cloud_mcp(
         return mcp_err(&req_id, -32000, "Cloud MCP requires Team tier or above");
     }
 
+    // Rate limit: sliding window (600 req/60s, same as Team-tier API)
+    {
+        let now_rate = now_ms();
+        let window_ms = 60_000u64;
+        let mut limits = state.api_rate_limits.lock().unwrap();
+        let timestamps = limits.entry(format!("mcp:{user_id}")).or_insert_with(Vec::new);
+        timestamps.retain(|&ts| now_rate.saturating_sub(ts) < window_ms);
+        if timestamps.len() >= API_RATE_TEAM {
+            return mcp_err(&req_id, -32000, "Rate limit exceeded (600 req/min)");
+        }
+        timestamps.push(now_rate);
+    }
+
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
-    let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
-        .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+    let org_id = extract_org_id(&headers);
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let node_ids: Vec<String> = sqlx::query_scalar(
+        &format!("SELECT wk_id FROM nodes WHERE {} = $1", tcol)
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
     let now = now_ms();
 
     // Snapshot metrics into owned data so no RwLockReadGuard crosses an await point.
