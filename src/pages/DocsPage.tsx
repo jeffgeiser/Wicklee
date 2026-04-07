@@ -1255,7 +1255,7 @@ WES Version:     2
             </p>
 
             <NoteBox>
-              <strong className="text-white">MCP integration:</strong> All 5 local MCP tools return live data (including <code className="text-gray-300 font-mono text-[10px]">get_observations</code> and <code className="text-gray-300 font-mono text-[10px]">get_metrics_history</code>). The Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools for Team+ tier.
+              <strong className="text-white">MCP integration:</strong> All 5 local MCP tools return live data. <code className="text-gray-300 font-mono text-[10px]">get_active_models</code> includes <code className="text-gray-300 font-mono text-[10px]">context_length</code> and <code className="text-gray-300 font-mono text-[10px]">parameter_count</code> from Ollama's <code className="text-gray-300 font-mono text-[10px]">/api/show</code> (refreshed on model change). Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools for Team+ tier.
             </NoteBox>
           </Section>
 
@@ -1298,7 +1298,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td mono>GET /api/observations</Td>
-                    <Td>Server-side pattern evaluation — 17 observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds</Td>
+                    <Td>17 observation patterns (10-min DuckDB buffer). Each observation includes <code className="text-gray-400 font-mono text-[10px]">routing_hint</code> (steer_away / reduce_batch / monitor). Response envelope includes node-level <code className="text-gray-400 font-mono text-[10px]">routing_hint</code> + <code className="text-gray-400 font-mono text-[10px]">routing_hint_source</code> (worst active pattern)</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/profile?minutes=60</Td>

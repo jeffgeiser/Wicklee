@@ -165,7 +165,7 @@ Auth: None required.
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry |
 | GET | /ws | WebSocket — 10 Hz telemetry |
-| GET | /api/observations | 17 server-side observation patterns (10-min DuckDB buffer) |
+| GET | /api/observations | 17 observation patterns with per-observation `routing_hint` (steer_away/reduce_batch/monitor) + node-level `routing_hint` + `routing_hint_source` |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Root cause analysis for slow inference requests |
@@ -231,8 +231,8 @@ The agent exposes a local MCP (Model Context Protocol) server for AI agents. Ava
 |------|-------------|
 | get_node_status | Full hardware + inference metrics snapshot |
 | get_inference_state | Live/idle/busy state with sensor context |
-| get_active_models | Running models across Ollama, vLLM, llama.cpp |
-| get_observations | 17 server-side observation patterns — live data from DuckDB |
+| get_active_models | Running models with context_length, parameter_count, quantization, tok/s |
+| get_observations | 17 patterns with routing_hint per observation + node-level aggregate |
 | get_metrics_history | 1-hour rolling telemetry buffer from DuckDB |
 
 ### Resources

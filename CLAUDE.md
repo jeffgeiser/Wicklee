@@ -149,6 +149,29 @@ When adding new API endpoints, metrics fields, or observation patterns, update A
 - `docs/progress.md` — Release notes
 - `CLAUDE.md` — Developer guide (this file)
 
+## v0.7.12 — Inference Intelligence, Routing Hints, Model Enrichment (2026-04-07)
+
+### Inference Intelligence (4 endpoints)
+- `GET /api/profile?minutes=60` — correlated timeline (TTFT, KV cache, queue, thermal, power). Auto-scaling resolution.
+- `GET /api/cost-by-model?hours=24` — per-model daily cost breakdown (model, hours, watts, cost USD)
+- `GET /api/explain-slowdown?ts_ms=N` — root cause analysis: 6 hardware factors, ranked severity, natural-language summary
+- `GET /api/model-comparison?hours=168` — side-by-side WES, tok/s, watts, TTFT, cost for all models that have run on this node
+- Frontend: Cost by Model table on Overview, Inference Profiler chart on Performance tab
+- Cloud MCP tools: `get_inference_profile`, `explain_slowdown` (Team+)
+
+### Observation Routing Hints
+- Per-observation `routing_hint`: `steer_away` | `reduce_batch` | `monitor`
+- Node-level aggregate on `/api/observations` envelope: `routing_hint` + `routing_hint_source`
+- Mapping: critical → steer_away; thermal/swap/VRAM/bandwidth → steer_away; queue/latency/TTFT → reduce_batch; WES/memory/clock → monitor
+
+### Ollama Model Enrichment
+- `context_length` and `parameter_count` from `/api/show` (cached on model change)
+- Exposed in MCP `get_active_models` and MetricsPayload
+
+### MCP Fixes
+- `get_observations` and `get_metrics_history` now return live data (were redirecting to REST)
+- Cloud MCP: rate limiting (600 req/60s) + org_id scope fix
+
 ## v0.7.10 — Inference Metrics Expansion, Patterns P/Q/R, Pro Features (2026-03-31)
 
 ### Inference Metrics (13 new fields, three-way sync)

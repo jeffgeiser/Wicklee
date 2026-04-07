@@ -126,7 +126,7 @@ Tools:
 - `get_node_status` — Full MetricsPayload snapshot (~60 fields: CPU, GPU, memory, power, thermal, inference state, model, WES penalty, tok/s)
 - `get_inference_state` — Current inference state (live/idle-spd/busy/idle) with which detection tier matched and sensor values
 - `get_active_models` — List of loaded models across Ollama (model, size, quantization, tok/s), vLLM (model, requests, cache), llama.cpp (model, tok/s, slots)
-- `get_observations` — Returns 17 server-side observation patterns evaluated against 10-minute DuckDB buffer
+- `get_observations` — 17 patterns with per-observation routing_hint (steer_away/reduce_batch/monitor) + node-level routing_hint + routing_hint_source
 - `get_metrics_history` — 1-hour rolling telemetry (redirects to REST /api/history)
 
 Resources:

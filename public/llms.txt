@@ -46,8 +46,8 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 
 - `get_node_status` — Full hardware + inference metrics snapshot
 - `get_inference_state` — Live/idle/busy state with sensor context
-- `get_active_models` — Running models across Ollama, vLLM, llama.cpp
-- `get_observations` — Local hardware pattern evaluation
+- `get_active_models` — Running models with context_length, parameter_count, quantization, tok/s
+- `get_observations` — 17 patterns with routing_hint (steer_away/reduce_batch/monitor) per observation + node-level aggregate
 - `get_metrics_history` — 1-hour rolling telemetry buffer
 
 ### MCP Resources

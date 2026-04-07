@@ -33,6 +33,25 @@
 - `get_observations` and `get_metrics_history` now return actual data (via internal HTTP call to agent REST API) instead of redirect messages
 - All 5 local MCP tools are fully functional
 
+### Ollama Model Enrichment
+- `get_active_models` MCP tool now includes `context_length` and `parameter_count` from Ollama `/api/show`
+- Cached on model change — not queried every tick
+- Enables NRO bandwidth estimation and capacity planning
+
+### Observation Routing Hints
+- Every observation now includes `routing_hint`: `steer_away` | `reduce_batch` | `monitor`
+- Node-level aggregate: `routing_hint` + `routing_hint_source` on `/api/observations` response envelope
+- Derived from pattern_id + severity via `routing_hint_for()` — no extra configuration
+- Machine-readable signal for NRO/partner routing automation
+
+### MCP Tool Fixes
+- `get_observations` and `get_metrics_history` now return actual data via internal HTTP calls (were redirecting to REST)
+- All 5 local MCP tools fully functional
+
+### Cloud MCP Security
+- Added 600 req/60s sliding-window rate limiting
+- Fixed org_id scope — Cloud MCP now uses `tenant_scope()` for shared fleet access
+
 ---
 
 ## April 6, 2026 — v0.7.11: Server-Side Patterns, Cloud MCP, PagerDuty, Clerk Orgs
