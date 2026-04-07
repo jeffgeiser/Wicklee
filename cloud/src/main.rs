@@ -5227,6 +5227,8 @@ async fn handle_cloud_mcp(
             { "name": "get_best_route",         "description": "Routing recommendation: best node by throughput and WES.",     "inputSchema": { "type": "object", "properties": {} } },
             { "name": "get_fleet_insights",     "description": "Fleet health summary with active observation count.",          "inputSchema": { "type": "object", "properties": {} } },
             { "name": "get_fleet_observations", "description": "Active and resolved observations across the fleet.",           "inputSchema": { "type": "object", "properties": { "state": { "type": "string", "enum": ["open","all"], "default": "open" } } } },
+            { "name": "get_inference_profile",  "description": "Correlated inference timeline: TTFT, tok/s, KV cache, queue depth, thermal, power on one time axis. Chrome DevTools for inference.", "inputSchema": { "type": "object", "properties": { "node_id": { "type": "string" }, "minutes": { "type": "integer", "default": 60 } }, "required": ["node_id"] } },
+            { "name": "explain_slowdown",       "description": "Root cause analysis for a slow inference request. Correlates TTFT spike with KV cache, thermal, queue, swap to explain why.", "inputSchema": { "type": "object", "properties": { "node_id": { "type": "string" }, "ts_ms": { "type": "integer", "description": "Timestamp of the slow request in Unix milliseconds" } }, "required": ["node_id", "ts_ms"] } },
         ] })),
 
         "tools/call" => {
@@ -5315,6 +5317,64 @@ async fn handle_cloud_mcp(
                     }).collect();
                     let c = obs.len();
                     mcp_tool(&req_id, serde_json::json!({ "observations": obs, "count": c }))
+                }
+                "get_inference_profile" => {
+                    let target = args.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+                    if target.is_empty() { return mcp_err(&req_id, -32602, "node_id required"); }
+                    if !node_ids.contains(&target.to_string()) { return mcp_err(&req_id, -32602, "Node not in your fleet"); }
+                    let minutes = args.get("minutes").and_then(|v| v.as_i64()).unwrap_or(60);
+                    let map = &metrics_snapshot;
+                    let e = map.get(target);
+                    let m = e.and_then(|e| e.metrics.as_ref());
+                    // Return current snapshot as a profile point + guidance to use the agent's local /api/profile endpoint for full history
+                    let current = m.map(|p| serde_json::json!({
+                        "ts_ms": p.timestamp_ms,
+                        "model": p.ollama_active_model.as_deref().or(p.vllm_model_name.as_deref()),
+                        "tok_s": if p.vllm_running { p.vllm_tokens_per_sec } else { p.ollama_tokens_per_second },
+                        "ttft_ms": p.vllm_avg_ttft_ms.or(p.ollama_proxy_avg_ttft_ms).or(p.ollama_ttft_ms),
+                        "latency_ms": p.vllm_avg_e2e_latency_ms.or(p.ollama_proxy_avg_latency_ms),
+                        "queue_depth": p.vllm_requests_waiting,
+                        "kv_cache_pct": p.vllm_cache_usage_perc,
+                        "power_w": p.nvidia_power_draw_w.or(p.apple_soc_power_w).or(p.cpu_power_w),
+                        "thermal_state": p.thermal_state.as_deref(),
+                        "thermal_penalty": p.penalty_avg,
+                        "gpu_util_pct": p.nvidia_gpu_utilization_percent.or(p.gpu_utilization_percent),
+                        "gpu_temp_c": p.nvidia_gpu_temp_c,
+                    }));
+                    mcp_tool(&req_id, serde_json::json!({
+                        "node_id": target,
+                        "range_minutes": minutes,
+                        "current_snapshot": current,
+                        "note": "For full historical profiler timeline, query the agent directly: GET http://<node>:7700/api/profile?minutes=N",
+                    }))
+                }
+                "explain_slowdown" => {
+                    let target = args.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let ts = args.get("ts_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+                    if target.is_empty() { return mcp_err(&req_id, -32602, "node_id required"); }
+                    if ts == 0 { return mcp_err(&req_id, -32602, "ts_ms required (Unix milliseconds of the slow request)"); }
+                    if !node_ids.contains(&target.to_string()) { return mcp_err(&req_id, -32602, "Node not in your fleet"); }
+                    // Cloud doesn't have per-request traces — return current hardware context + guidance
+                    let map = &metrics_snapshot;
+                    let e = map.get(target);
+                    let m = e.and_then(|e| e.metrics.as_ref());
+                    let context = m.map(|p| serde_json::json!({
+                        "current_thermal_state": p.thermal_state,
+                        "current_thermal_penalty": p.penalty_avg,
+                        "current_ttft_ms": p.vllm_avg_ttft_ms.or(p.ollama_proxy_avg_ttft_ms).or(p.ollama_ttft_ms),
+                        "current_queue_depth": p.vllm_requests_waiting,
+                        "current_kv_cache_pct": p.vllm_cache_usage_perc,
+                        "current_power_w": p.nvidia_power_draw_w.or(p.apple_soc_power_w).or(p.cpu_power_w),
+                        "current_gpu_temp_c": p.nvidia_gpu_temp_c,
+                        "current_swap_write_mb_s": p.swap_write_mb_s,
+                        "current_memory_pressure_pct": p.memory_pressure_percent,
+                    }));
+                    mcp_tool(&req_id, serde_json::json!({
+                        "node_id": target,
+                        "ts_ms": ts,
+                        "current_hardware_context": context,
+                        "note": "For full root-cause analysis with per-request trace correlation, query the agent directly: GET http://<node>:7700/api/explain-slowdown?ts_ms=N",
+                    }))
                 }
                 _ => mcp_err(&req_id, -32602, "Unknown tool"),
             }

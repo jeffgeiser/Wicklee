@@ -4389,6 +4389,66 @@ async fn handle_observations(
     Json(serde_json::json!({ "observations": observations })).into_response()
 }
 
+// ── Inference Intelligence endpoints (Pro+) ─────────────────────────────────
+
+/// GET /api/profile?minutes=60 — correlated inference profiler timeline.
+#[cfg(not(target_env = "musl"))]
+async fn handle_profile(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> impl IntoResponse {
+    let minutes: i64 = params.get("minutes").and_then(|v| v.parse().ok()).unwrap_or(60).min(1440);
+    let node_id = node_id_ext.0.as_str().to_owned();
+    let result = tokio::task::spawn_blocking(move || store.query_profile(&node_id, minutes)).await;
+    match result {
+        Ok(Ok(samples)) => {
+            let resolution_s = if minutes <= 10 { 1 } else if minutes <= 60 { 10 } else if minutes <= 360 { 30 } else { 60 };
+            Json(serde_json::json!({ "node_id": node_id_ext.0.as_str(), "range_minutes": minutes, "resolution_s": resolution_s, "samples": samples })).into_response()
+        }
+        Ok(Err(e)) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+/// GET /api/cost-by-model?hours=24&kwh_rate=0.12 — cost attribution per model.
+#[cfg(not(target_env = "musl"))]
+async fn handle_cost_by_model(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> impl IntoResponse {
+    let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(24).min(720);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.12);
+    let node_id = node_id_ext.0.as_str().to_owned();
+    let result = tokio::task::spawn_blocking(move || store.query_cost_by_model(&node_id, hours, kwh_rate)).await;
+    match result {
+        Ok(Ok(data)) => Json(data).into_response(),
+        Ok(Err(e)) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+/// GET /api/explain-slowdown?ts_ms=1234567890 — root cause analysis for a slow request.
+#[cfg(not(target_env = "musl"))]
+async fn handle_explain_slowdown(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> impl IntoResponse {
+    let ts_ms: i64 = match params.get("ts_ms").and_then(|v| v.parse().ok()) {
+        Some(ts) => ts,
+        None => return (axum::http::StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "ts_ms parameter required" }))).into_response(),
+    };
+    let node_id = node_id_ext.0.as_str().to_owned();
+    let result = tokio::task::spawn_blocking(move || store.query_explain_slowdown(&node_id, ts_ms)).await;
+    match result {
+        Ok(Ok(data)) => Json(data).into_response(),
+        Ok(Err(e)) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
 /// Returns the last 20 lifecycle events from the recent_events_log ring buffer,
 /// filtered to those within the last 5 minutes. Used by the frontend to seed
 /// the Live Activity feed on every fresh WS connect — catches the startup event
@@ -5918,6 +5978,9 @@ async fn main() {
              .route("/api/insights/dismiss",    post(handle_dismiss))
              .route("/api/insights/dismissed",  get(handle_dismissed_list))
              .route("/api/observations",        get(handle_observations))
+             .route("/api/profile",             get(handle_profile))
+             .route("/api/cost-by-model",       get(handle_cost_by_model))
+             .route("/api/explain-slowdown",    get(handle_explain_slowdown))
              .layer(axum::extract::Extension(st.clone()))
              .layer(axum::extract::Extension(Arc::clone(&observation_cache)))
         } else {

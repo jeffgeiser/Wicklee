@@ -1059,6 +1059,290 @@ impl Store {
         }
     }
 
+    // ── Inference Intelligence queries (Pro+) ─────────────────────────────────
+
+    /// Inference Profiler — correlated time-series for a time window.
+    /// Buckets auto-scale: ≤10min→1s, ≤1h→10s, ≤6h→30s, ≤24h→60s.
+    pub fn query_profile(
+        &self,
+        node_id: &str,
+        minutes: i64,
+    ) -> Result<Vec<serde_json::Value>, duckdb::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let from = now - minutes * 60 * 1000;
+        let bucket_ms: i64 = if minutes <= 10 { 1000 }
+            else if minutes <= 60 { 10_000 }
+            else if minutes <= 360 { 30_000 }
+            else { 60_000 };
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT (ts_ms / ? * ?) AS bucket,
+                    FIRST(model) AS model,
+                    AVG(tps) AS tok_s,
+                    AVG(ttft_ms) AS ttft_ms,
+                    AVG(avg_latency_ms) AS latency_ms,
+                    AVG(queue_depth) AS queue_depth,
+                    AVG(vllm_cache_usage_perc) AS kv_cache_pct,
+                    AVG(gpu_power_w + COALESCE(cpu_power_w, 0)) AS power_w,
+                    FIRST(thermal_state) AS thermal_state,
+                    AVG(penalty_avg) AS thermal_penalty,
+                    AVG(gpu_util_pct) AS gpu_util_pct,
+                    AVG(nvidia_gpu_temp_c) AS gpu_temp_c
+             FROM metrics_raw
+             WHERE node_id = ? AND ts_ms >= ?
+             GROUP BY bucket ORDER BY bucket",
+        )?;
+        let mut rows = stmt.query(params![bucket_ms, bucket_ms, node_id, from])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(serde_json::json!({
+                "ts_ms":           row.get::<_, Option<i64>>(0)?,
+                "model":           row.get::<_, Option<String>>(1)?,
+                "tok_s":           row.get::<_, Option<f64>>(2)?,
+                "ttft_ms":         row.get::<_, Option<f64>>(3)?,
+                "latency_ms":      row.get::<_, Option<f64>>(4)?,
+                "queue_depth":     row.get::<_, Option<f64>>(5)?,
+                "kv_cache_pct":    row.get::<_, Option<f64>>(6)?,
+                "power_w":         row.get::<_, Option<f64>>(7)?,
+                "thermal_state":   row.get::<_, Option<String>>(8)?,
+                "thermal_penalty": row.get::<_, Option<f64>>(9)?,
+                "gpu_util_pct":    row.get::<_, Option<f64>>(10)?,
+                "gpu_temp_c":      row.get::<_, Option<f64>>(11)?,
+            }));
+        }
+        Ok(out)
+    }
+
+    /// Cost Attribution Per Model — GROUP BY model with power aggregation.
+    /// Uses metrics_raw for ≤24h, metrics_1min for >24h.
+    pub fn query_cost_by_model(
+        &self,
+        node_id:  &str,
+        hours:    i64,
+        kwh_rate: f64,
+    ) -> Result<serde_json::Value, duckdb::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let from = now - hours * 3600 * 1000;
+        let conn = self.0.lock().unwrap();
+
+        let (sql, sample_interval_h) = if hours <= 24 {
+            // 1Hz raw data — each sample = 1 second = 1/3600 hour
+            ("SELECT model, COUNT(*) AS samples,
+                     AVG(gpu_power_w + COALESCE(cpu_power_w, 0)) AS avg_watts,
+                     AVG(tps) AS avg_tps
+              FROM metrics_raw
+              WHERE node_id = ? AND ts_ms >= ?
+              GROUP BY model ORDER BY avg_watts DESC".to_string(),
+             1.0 / 3600.0)
+        } else {
+            // 1-min aggregated data — each sample = 1 minute = 1/60 hour
+            ("SELECT model, SUM(sample_count) AS samples,
+                     AVG(gpu_power_avg) AS avg_watts,
+                     AVG(tps_avg) AS avg_tps
+              FROM metrics_1min
+              WHERE node_id = ? AND ts_ms >= ?
+              GROUP BY model ORDER BY avg_watts DESC".to_string(),
+             1.0 / 60.0)
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![node_id, from])?;
+        let mut models = Vec::new();
+        let mut total_cost = 0.0_f64;
+
+        while let Some(row) = rows.next()? {
+            let model: Option<String> = row.get(0)?;
+            let samples: i64 = row.get(1)?;
+            let avg_watts: Option<f64> = row.get(2)?;
+            let avg_tps: Option<f64> = row.get(3)?;
+
+            let hours_active = samples as f64 * sample_interval_h;
+            let watts = avg_watts.unwrap_or(0.0);
+            let total_wh = watts * hours_active;
+            let cost = total_wh / 1000.0 * kwh_rate;
+            total_cost += cost;
+
+            models.push(serde_json::json!({
+                "model":        model,
+                "hours_active": (hours_active * 100.0).round() / 100.0,
+                "avg_watts":    (watts * 10.0).round() / 10.0,
+                "total_wh":     (total_wh * 10.0).round() / 10.0,
+                "cost_usd":     (cost * 10000.0).round() / 10000.0,
+                "tok_s_avg":    avg_tps.map(|t| (t * 10.0).round() / 10.0),
+                "sample_count": samples,
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "node_id":       node_id,
+            "range_hours":   hours,
+            "kwh_rate":      kwh_rate,
+            "models":        models,
+            "total_cost_usd": (total_cost * 10000.0).round() / 10000.0,
+        }))
+    }
+
+    /// "Why Was That Slow?" Explainer — find closest trace, correlate with hardware.
+    pub fn query_explain_slowdown(
+        &self,
+        node_id: &str,
+        ts_ms:   i64,
+    ) -> Result<serde_json::Value, duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+
+        // 1. Find the closest inference trace to the given timestamp (±60s window)
+        let mut trace_stmt = conn.prepare(
+            "SELECT ts_ms, model, ttft_ms, latency_ms, tpot_ms, eval_count, status
+             FROM inference_traces
+             WHERE node_id = ? AND ts_ms BETWEEN ? AND ?
+             ORDER BY ABS(ts_ms - ?) LIMIT 1",
+        )?;
+        let trace = trace_stmt.query_row(
+            params![node_id, ts_ms - 60_000, ts_ms + 60_000, ts_ms],
+            |row| {
+                Ok(serde_json::json!({
+                    "ts_ms":      row.get::<_, i64>(0)?,
+                    "model":      row.get::<_, Option<String>>(1)?,
+                    "ttft_ms":    row.get::<_, i64>(2)?,
+                    "latency_ms": row.get::<_, i64>(3)?,
+                    "tpot_ms":    row.get::<_, Option<f64>>(4)?,
+                    "eval_count": row.get::<_, Option<i64>>(5)?,
+                    "status":     row.get::<_, i32>(6)?,
+                }))
+            },
+        );
+
+        let trace_val = match trace {
+            Ok(t) => t,
+            Err(_) => return Ok(serde_json::json!({
+                "error": "No inference trace found near the given timestamp",
+                "ts_ms": ts_ms,
+            })),
+        };
+
+        let trace_ts = trace_val["ts_ms"].as_i64().unwrap_or(ts_ms);
+
+        // 2. Read metrics_raw for ±30s around the trace
+        let mut hw_stmt = conn.prepare(
+            "SELECT AVG(vllm_cache_usage_perc) AS kv_cache,
+                    AVG(penalty_avg) AS penalty,
+                    FIRST(thermal_state) AS thermal,
+                    AVG(queue_depth) AS queue,
+                    AVG(gpu_power_w + COALESCE(cpu_power_w, 0)) AS power_w,
+                    AVG(gpu_util_pct) AS gpu_pct,
+                    AVG(nvidia_gpu_temp_c) AS gpu_temp,
+                    AVG(swap_write_mb_s) AS swap,
+                    AVG(mem_pressure_pct) AS mem_pct,
+                    AVG(clock_throttle_pct) AS clock_throttle
+             FROM metrics_raw
+             WHERE node_id = ? AND ts_ms BETWEEN ? AND ?",
+        )?;
+        let hw = hw_stmt.query_row(
+            params![node_id, trace_ts - 30_000, trace_ts + 30_000],
+            |row| {
+                Ok((
+                    row.get::<_, Option<f64>>(0)?,  // kv_cache
+                    row.get::<_, Option<f64>>(1)?,  // penalty
+                    row.get::<_, Option<String>>(2)?, // thermal
+                    row.get::<_, Option<f64>>(3)?,  // queue
+                    row.get::<_, Option<f64>>(4)?,  // power
+                    row.get::<_, Option<f64>>(5)?,  // gpu_pct
+                    row.get::<_, Option<f64>>(6)?,  // gpu_temp
+                    row.get::<_, Option<f64>>(7)?,  // swap
+                    row.get::<_, Option<f64>>(8)?,  // mem_pct
+                    row.get::<_, Option<f64>>(9)?,  // clock_throttle
+                ))
+            },
+        ).unwrap_or((None, None, None, None, None, None, None, None, None, None));
+
+        // 3. Evaluate factors
+        let mut factors = Vec::new();
+        let mut summary_parts = Vec::new();
+
+        if let Some(kv) = hw.0 {
+            if kv > 90.0 {
+                factors.push(serde_json::json!({ "factor": "kv_cache_pressure", "severity": "high",
+                    "detail": format!("KV cache at {kv:.0}% — scheduler may have preempted sequences"), "value": kv, "threshold": 90.0 }));
+                summary_parts.push(format!("KV cache at {kv:.0}% (high)"));
+            } else if kv > 75.0 {
+                factors.push(serde_json::json!({ "factor": "kv_cache_pressure", "severity": "moderate",
+                    "detail": format!("KV cache at {kv:.0}% — approaching saturation"), "value": kv, "threshold": 75.0 }));
+            }
+        }
+        if let Some(penalty) = hw.1 {
+            if penalty > 1.2 {
+                let sev = if penalty >= 1.75 { "high" } else { "moderate" };
+                let thermal = hw.2.as_deref().unwrap_or("unknown");
+                factors.push(serde_json::json!({ "factor": "thermal_penalty", "severity": sev,
+                    "detail": format!("Thermal state {thermal} ({penalty:.2}x penalty)"), "value": penalty, "threshold": 1.25 }));
+                summary_parts.push(format!("thermal penalty {penalty:.2}x ({thermal})"));
+            }
+        }
+        if let Some(queue) = hw.3 {
+            if queue >= 3.0 {
+                factors.push(serde_json::json!({ "factor": "queue_depth", "severity": if queue >= 5.0 { "high" } else { "moderate" },
+                    "detail": format!("{queue:.0} concurrent requests queued"), "value": queue, "threshold": 3.0 }));
+                summary_parts.push(format!("queue depth {queue:.0}"));
+            } else if queue >= 1.0 {
+                factors.push(serde_json::json!({ "factor": "queue_depth", "severity": "low",
+                    "detail": format!("{queue:.0} concurrent request(s) in queue"), "value": queue, "threshold": 3.0 }));
+            }
+        }
+        if let Some(swap) = hw.7 {
+            if swap > 2.0 {
+                factors.push(serde_json::json!({ "factor": "swap_pressure", "severity": if swap > 10.0 { "high" } else { "moderate" },
+                    "detail": format!("Swap write rate {swap:.1} MB/s — model layers spilling to disk"), "value": swap, "threshold": 2.0 }));
+                summary_parts.push(format!("swap at {swap:.1} MB/s"));
+            }
+        }
+        if let Some(mem) = hw.8 {
+            if mem > 80.0 {
+                factors.push(serde_json::json!({ "factor": "memory_pressure", "severity": if mem > 95.0 { "high" } else { "moderate" },
+                    "detail": format!("Memory pressure at {mem:.0}%"), "value": mem, "threshold": 80.0 }));
+            }
+        }
+        if let Some(throttle) = hw.9 {
+            if throttle > 15.0 {
+                factors.push(serde_json::json!({ "factor": "clock_throttle", "severity": if throttle > 35.0 { "high" } else { "moderate" },
+                    "detail": format!("Clock throttled {throttle:.0}% from maximum"), "value": throttle, "threshold": 15.0 }));
+            }
+        }
+
+        // Sort factors by severity (high > moderate > low)
+        factors.sort_by(|a, b| {
+            let sev_rank = |s: &str| match s { "high" => 0, "moderate" => 1, _ => 2 };
+            sev_rank(a["severity"].as_str().unwrap_or("low"))
+                .cmp(&sev_rank(b["severity"].as_str().unwrap_or("low")))
+        });
+
+        let ttft = trace_val["ttft_ms"].as_i64().unwrap_or(0);
+        let summary = if summary_parts.is_empty() {
+            format!("TTFT was {ttft}ms. No significant hardware factors detected — may be model or prompt complexity.")
+        } else {
+            format!("TTFT spiked to {ttft}ms primarily due to {}.", summary_parts.join(" and "))
+        };
+
+        Ok(serde_json::json!({
+            "request": trace_val,
+            "hardware_context": {
+                "kv_cache_pct":    hw.0,
+                "thermal_penalty": hw.1,
+                "thermal_state":   hw.2,
+                "queue_depth":     hw.3,
+                "power_w":         hw.4,
+                "gpu_util_pct":    hw.5,
+                "gpu_temp_c":      hw.6,
+                "swap_write_mb_s": hw.7,
+                "mem_pressure_pct": hw.8,
+                "clock_throttle_pct": hw.9,
+            },
+            "factors": factors,
+            "summary": summary,
+        }))
+    }
+
     /// Export a unified audit log joining events, traces, and dismissals.
     /// Returns flat records sorted newest-first, capped at `limit`.
     pub fn export_audit_log(
