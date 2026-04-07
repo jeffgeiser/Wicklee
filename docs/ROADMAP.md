@@ -86,6 +86,9 @@ p95/p99 TTFT over configurable windows. "Your p95 TTFT over the last 24h was 340
 ### Thermal Budget Calculator
 "Your M4 Pro sustains 40 tok/s indefinitely at Normal thermal. Pushing to 50 tok/s triggers Fair thermal within ~8 min, reducing effective throughput to 32 tok/s. Net: fewer tokens by pushing harder." Predicts when increased load backfires.
 
+### Deployment Profiles
+Single config selector (`sovereign_dev`, `dedicated_server`, `production_fleet`) that adjusts all observation thresholds, evidence windows, and alert sensitivity coherently. sovereign_dev: high thresholds, long windows — laptop running inference alongside other workloads. dedicated_server: standard thresholds — single-purpose inference node. production_fleet: aggressive early warning — serving real users where latency matters. Eliminates per-pattern threshold knobs in favor of a single intent declaration. Maps cleanly to routing_hint severity: steer_away on a dev profile means genuinely broken, on production it means slightly degraded.
+
 ### Threshold Webhooks (Event-Driven Push)
 Register interest in specific state transitions (inference_state changed, thermal_state > Fair, WES dropped below threshold) and receive push notifications without polling. Essential for NRO/agent automation loops that need sub-second reaction to fleet state changes. Would run off the existing SSE stream with a subscription/filter model.
 
