@@ -1575,6 +1575,9 @@ curl https://wicklee.dev/api/v1/fleet \\
                   <tr className="border-b border-gray-800"><Td>wicklee://node/thermal</Td><Td>Thermal state + WES penalty values</Td></tr>
                 </tbody>
               </table>
+              <p className="text-xs text-gray-500 mt-2">
+                Read a resource with <code className="text-gray-400 font-mono text-[10px]">{`{"method":"resources/read","params":{"uri":"wicklee://node/metrics"}}`}</code>. Returns the resource content as a JSON string in <code className="text-gray-400 font-mono text-[10px]">contents[0].text</code>.
+              </p>
             </div>
 
             <div>
@@ -1671,28 +1674,60 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             </p>
 
             <div>
-              <p className="font-semibold text-white mb-2">Cloud MCP Tools</p>
+              <p className="font-semibold text-white mb-2">Cloud MCP Tools (8)</p>
               <table className="w-full text-xs">
                 <thead><tr className="border-b border-gray-800"><Th>Tool</Th><Th>Description</Th></tr></thead>
                 <tbody>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_status</Td><Td>All nodes with online status, metrics, and WES</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_status</Td><Td>All nodes with online status, inference state, WES, tok/s, thermal</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_fleet_wes</Td><Td>Compact WES scores for all fleet nodes</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_node_detail</Td><Td>Full metrics for a specific node (requires node_id)</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_node_detail</Td><Td>Full MetricsPayload for a specific node (requires node_id)</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_best_route</Td><Td>Routing recommendation — best node by throughput and efficiency</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_insights</Td><Td>Fleet health summary with active observation count</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_observations</Td><Td>Active and resolved observations across the fleet</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_insights</Td><Td>Fleet health summary — online/total, avg WES, fleet tok/s, observation count</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_observations</Td><Td>Active and resolved observations across the fleet (tier-filtered)</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_inference_profile</Td><Td>Correlated profiler snapshot — TTFT, KV cache, thermal, power</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>explain_slowdown</Td><Td>Hardware context for root cause analysis of slow requests</Td></tr>
                 </tbody>
               </table>
             </div>
 
             <div className="mt-3">
-              <p className="font-semibold text-white mb-1">Auth &amp; Endpoint</p>
+              <p className="font-semibold text-white mb-2">Cloud MCP Resources (2)</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-800"><Th>URI</Th><Th>Description</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-800"><Td>wicklee://fleet/status</Td><Td>Fleet summary: online count, total nodes, avg WES</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>wicklee://fleet/thermal</Td><Td>Per-node thermal states + WES penalty values</Td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3">
+              <p className="font-semibold text-white mb-2">Example: Reading a Resource</p>
               <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
-{`# Cloud MCP requires a Clerk JWT (Team+ tier)
-curl -X POST https://wicklee.dev/mcp \\
-  -H "Authorization: Bearer <your-clerk-jwt>" \\
+{`curl -X POST https://wicklee.dev/mcp \\
+  -H "Authorization: Bearer <jwt>" \\
   -H "Content-Type: application/json" \\
-  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'`}
+  -d '{"jsonrpc":"2.0","method":"resources/read","params":{"uri":"wicklee://fleet/status"},"id":1}'
+
+# Response:
+# {"result":{"contents":[{"uri":"wicklee://fleet/status",
+#   "mimeType":"application/json",
+#   "text":"{\"online\":3,\"total\":5,\"avg_wes\":8.4}"}]}}`}
+              </pre>
+            </div>
+
+            <div className="mt-3">
+              <p className="font-semibold text-white mb-2">Example: Calling a Tool</p>
+              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+{`curl -X POST https://wicklee.dev/mcp \\
+  -H "Authorization: Bearer <jwt>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_best_route","arguments":{}},"id":2}'
+
+# Response:
+# {"result":{"content":[{"type":"text",
+#   "text":"{\"latency\":{\"node\":\"WK-A1B2\",\"tok_s\":45.2},
+#            \"efficiency\":{\"node\":\"WK-C3D4\",\"wes\":12.1}}"}]}}`}
               </pre>
               <p className="text-gray-500 text-xs mt-1">Manifest at <code className="text-gray-400 font-mono text-xs">GET wicklee.dev/mcp/manifest</code>. Community/Pro users receive a 402 response.</p>
             </div>

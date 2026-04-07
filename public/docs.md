@@ -338,18 +338,97 @@ curl -X POST http://localhost:7700/mcp \
 
 ### Cloud MCP Server (Team+)
 
-Fleet-aggregated MCP at `POST wicklee.dev/mcp`. Clerk JWT auth. 6 tools:
+Fleet-aggregated MCP at `POST wicklee.dev/mcp`. Clerk JWT auth. 8 tools + 2 resources:
 
 | Tool | Description |
 |------|-------------|
-| get_fleet_status | All nodes with online status, metrics, WES |
+| get_fleet_status | All nodes with online status, inference state, WES, tok/s, thermal |
 | get_fleet_wes | Compact WES scores for all fleet nodes |
-| get_node_detail | Full metrics for a specific node |
-| get_best_route | Routing recommendation by throughput and efficiency |
-| get_fleet_insights | Fleet health summary + active observation count |
-| get_fleet_observations | Active/resolved observations across the fleet |
+| get_node_detail | Full MetricsPayload for a specific node (requires node_id) |
+| get_best_route | Routing recommendation — best node by throughput and efficiency |
+| get_fleet_insights | Fleet health summary — online/total, avg WES, fleet tok/s, observation count |
+| get_fleet_observations | Active/resolved observations across the fleet (tier-filtered) |
+| get_inference_profile | Correlated profiler snapshot for a node (TTFT, KV cache, thermal, power) |
+| explain_slowdown | Hardware context for root cause analysis of slow requests |
 
-Plus `get_inference_profile` and `explain_slowdown` for correlated profiling and root cause analysis.
+**Resources:**
+
+| URI | Description |
+|-----|-------------|
+| wicklee://fleet/status | Fleet summary: online count, total nodes, avg WES |
+| wicklee://fleet/thermal | Per-node thermal states + WES penalty values |
+
+### Using MCP Resources
+
+Resources are read via the `resources/read` method. Unlike tools (which take arguments), resources return a fixed payload for a given URI:
+
+```json
+// Request: read a resource
+{
+  "jsonrpc": "2.0",
+  "method": "resources/read",
+  "params": { "uri": "wicklee://fleet/status" },
+  "id": 1
+}
+
+// Response
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "contents": [{
+      "uri": "wicklee://fleet/status",
+      "mimeType": "application/json",
+      "text": "{\"online\": 3, \"total\": 5, \"avg_wes\": 8.4}"
+    }]
+  },
+  "id": 1
+}
+```
+
+Local resources (`wicklee://node/metrics`, `wicklee://node/thermal`) work the same way on `localhost:7700/mcp`. No auth needed.
+
+### Using MCP Tools
+
+Tools are called via the `tools/call` method with a `name` and optional `arguments`:
+
+```json
+// Request: call a tool
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "get_best_route",
+    "arguments": {}
+  },
+  "id": 2
+}
+
+// Response
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [{
+      "type": "text",
+      "text": "{\"latency\": {\"node\": \"WK-A1B2\", \"tok_s\": 45.2}, \"efficiency\": {\"node\": \"WK-C3D4\", \"wes\": 12.1}, \"default\": \"efficiency\"}"
+    }]
+  },
+  "id": 2
+}
+```
+
+Tools that require arguments (like `get_node_detail`):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "get_node_detail",
+    "arguments": { "node_id": "WK-A1B2" }
+  },
+  "id": 3
+}
+```
 
 ---
 
