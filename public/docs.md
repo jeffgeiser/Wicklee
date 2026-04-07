@@ -85,35 +85,57 @@ TTFT (Time to First Token) resolution priority:
 
 ---
 
-## 18 Observation Patterns (A–R)
+## 18 Observation Patterns + 5 Fleet Alerts
 
-### Community (9 patterns)
+### Agent-Evaluated (17 patterns, 10-min DuckDB buffer, every 10s)
 
-| ID | Pattern | Scope |
-|----|---------|-------|
-| A | Thermal Drain | Local |
-| B | Phantom Load | Local |
-| C | WES Velocity Drop | Cloud |
-| F | Memory Pressure Trajectory | Cloud |
-| H | Power Jitter | Both |
-| J | Swap Pressure | Local |
-| K | Clock Drift | Both |
-| N | NVIDIA Thermal Ceiling | Both |
-| O | VRAM Overcommit | Both |
+**Community (9):** `thermal_drain`, `phantom_load`, `wes_velocity_drop`, `memory_trajectory`, `power_jitter`, `swap_io_pressure`, `clock_drift`, `nvidia_thermal_redline`, `vram_overcommit`
 
-### Pro (9 additional patterns)
+**Pro (8):** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `pcie_lane_degradation`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`
 
-| ID | Pattern | Scope |
-|----|---------|-------|
-| D | Power-GPU Decoupling | Both |
-| E | Fleet Load Imbalance | Cloud |
-| G | Bandwidth Saturation | Both |
-| I | Efficiency Penalty Drag | Cloud |
-| L | PCIe Degradation | Local |
-| M | vLLM KV Cache Saturation | Both |
-| P | TTFT Regression | Both |
-| Q | Latency Spike | Both |
-| R | vLLM Queue Saturation | Both |
+### Cloud-Evaluated (1 pattern)
+`fleet_load_imbalance` — node WES > 20% below best healthy peer (Pro)
+
+### Fleet Alerts (5, all tiers, cloud, 60s cadence)
+`zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`
+
+---
+
+## Alerts & Notifications
+
+When observations or fleet alerts fire, Wicklee delivers notifications to external channels.
+
+| Channel | Configuration | Tier |
+|---------|--------------|------|
+| **Slack** | Incoming Webhook URL | Pro+ |
+| **Email** | Any email address (via Resend) | Pro+ |
+| **PagerDuty** | Integration Key (Routing Key) — Events API v2 with auto-resolve | Team+ |
+
+Setup: Settings → Alerts → Add Channel → choose type → Test → Create Rules.
+
+PagerDuty uses dedup keys (`wicklee-{node_id}-{event_type}`) for incident lifecycle — incidents auto-resolve when the condition clears.
+
+Community tier: observations appear on the dashboard but no outbound notifications.
+
+---
+
+## Deep Intelligence
+
+Wicklee uniquely has hardware telemetry, inference metrics, model identity, and per-request traces in the same DuckDB database. These endpoints leverage that combination:
+
+### Inference Profiler
+`GET /api/profile?minutes=60` — correlated timeline of TTFT, tok/s, KV cache %, queue depth, thermal penalty, and power on a single time axis. Resolution auto-scales (1s raw at 10min, 60s buckets at 24h).
+
+### Cost Attribution Per Model
+`GET /api/cost-by-model?hours=24` — per-model daily cost breakdown: model name, hours active, avg watts, cost USD. Uses power draw × model identity from DuckDB.
+
+### "Why Was That Slow?" Explainer
+`GET /api/explain-slowdown?ts_ms=N` — root cause analysis. Finds closest inference trace, reads ±30s hardware context, evaluates 6 factors (KV cache, thermal, queue, swap, memory, clock throttle), ranks by severity, generates natural-language summary.
+
+### Model Comparison
+`GET /api/model-comparison?hours=168` — side-by-side efficiency data for every model that has run on this node. Shows WES, tok/s, watts, TTFT, cost/hr. Answers "which model is most efficient on my hardware?" with real measured data.
+
+Cloud MCP tools: `get_inference_profile` and `explain_slowdown` available for Team+ tier.
 
 ---
 
@@ -143,7 +165,11 @@ Auth: None required.
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry |
 | GET | /ws | WebSocket — 10 Hz telemetry |
-| GET | /api/observations | Local patterns (A, B, J, L) against 1h DuckDB buffer |
+| GET | /api/observations | 17 server-side observation patterns (10-min DuckDB buffer) |
+| GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
+| GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
+| GET | /api/explain-slowdown?ts_ms=N | Root cause analysis for slow inference requests |
+| GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for all models |
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
@@ -181,6 +207,18 @@ Auth: `X-API-Key: wk_live_...` header.
 
 ---
 
+## Teams & Organizations
+
+Wicklee uses Clerk Organizations for shared fleet access. When you create an organization, every member sees the same fleet dashboard — nodes, observations, alerts, and history are all shared.
+
+**Setup:** Create org → Invite members by email → Pair nodes while org is active → All members see the same fleet.
+
+**Tier inheritance:** The org inherits the subscription tier of its creator. Upgrade to Team and all members benefit — no individual subscriptions needed.
+
+**Solo users:** Organizations are optional. Community and Pro users can use Wicklee as a single-user dashboard with no changes.
+
+---
+
 ## MCP Server
 
 The agent exposes a local MCP (Model Context Protocol) server for AI agents. Available on all tiers, localhost only, no auth.
@@ -194,8 +232,8 @@ The agent exposes a local MCP (Model Context Protocol) server for AI agents. Ava
 | get_node_status | Full hardware + inference metrics snapshot |
 | get_inference_state | Live/idle/busy state with sensor context |
 | get_active_models | Running models across Ollama, vLLM, llama.cpp |
-| get_observations | Local hardware pattern evaluation (A, B, J, L) |
-| get_metrics_history | 1-hour rolling telemetry buffer |
+| get_observations | 17 server-side observation patterns — live data from DuckDB |
+| get_metrics_history | 1-hour rolling telemetry buffer from DuckDB |
 
 ### Resources
 
@@ -297,6 +335,21 @@ curl -X POST http://localhost:7700/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}'
 ```
+
+### Cloud MCP Server (Team+)
+
+Fleet-aggregated MCP at `POST wicklee.dev/mcp`. Clerk JWT auth. 6 tools:
+
+| Tool | Description |
+|------|-------------|
+| get_fleet_status | All nodes with online status, metrics, WES |
+| get_fleet_wes | Compact WES scores for all fleet nodes |
+| get_node_detail | Full metrics for a specific node |
+| get_best_route | Routing recommendation by throughput and efficiency |
+| get_fleet_insights | Fleet health summary + active observation count |
+| get_fleet_observations | Active/resolved observations across the fleet |
+
+Plus `get_inference_profile` and `explain_slowdown` for correlated profiling and root cause analysis.
 
 ---
 

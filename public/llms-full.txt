@@ -65,6 +65,12 @@ Root cause analysis for a slow inference request. Finds closest trace, reads ±3
 { "request": { "ts_ms": 1234, "model": "llama3.1:70b", "ttft_ms": 2100, "latency_ms": 8500 }, "factors": [{ "factor": "kv_cache_pressure", "severity": "high", "detail": "KV cache at 93%", "value": 93.2 }], "summary": "TTFT spiked to 2.1s primarily due to KV cache at 93% (high) and thermal penalty at 1.75x." }
 ```
 
+### GET /api/model-comparison?hours=168&kwh_rate=0.12
+Side-by-side efficiency data for every model that has run on this node. Answers "which model is most efficient on my hardware?" with real measured data.
+```json
+{ "node_id": "WK-XXXX", "range_hours": 168, "models": [{ "model": "llama3.1:70b-q4", "hours_active": 18.3, "avg_tok_s": 22.5, "avg_watts": 12.1, "wes": 1.86, "avg_ttft_ms": 245, "cost_per_hour": 0.0015, "total_cost": 0.027 }, { "model": "phi3:mini", "hours_active": 42.0, "avg_tok_s": 85.1, "avg_watts": 3.1, "wes": 27.5, "avg_ttft_ms": 34, "cost_per_hour": 0.0004, "total_cost": 0.017 }] }
+```
+
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
 ```json

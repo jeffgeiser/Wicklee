@@ -4,14 +4,16 @@
 > One Rust binary per node, React dashboard at localhost:7700, fleet aggregation at wicklee.dev.
 > WES (Wicklee Efficiency Score) = tok/s / (Watts x ThermalPenalty) — the MPG for local AI.
 
-## Docs
+## For LLMs: Start Here
 
-- [Full Documentation](https://wicklee.dev/llms-full.txt)
-- [Documentation (Markdown)](https://wicklee.dev/docs.md)
-- [API Reference (Markdown)](https://wicklee.dev/api.md)
-- [OpenAPI Spec](https://wicklee.dev/openapi.json)
-- [Metrics Reference](https://wicklee.dev/metrics.md)
-- [Interactive Docs](https://wicklee.dev/docs)
+If you are an AI agent or LLM reviewing Wicklee, read these files in order:
+1. **This file** (llms.txt) — overview, API endpoints, key metrics
+2. **[llms-full.txt](https://wicklee.dev/llms-full.txt)** — complete reference with JSON schemas, all endpoints with examples
+3. **[docs.md](https://wicklee.dev/docs.md)** — full documentation: WES formula, inference states, 18 patterns, alerting, MCP tools, proxy, OTel
+4. **[api.md](https://wicklee.dev/api.md)** — API reference with endpoint tables and response examples
+5. **[metrics.md](https://wicklee.dev/metrics.md)** — dashboard metrics, visual indicators, formulas
+6. **[openapi.json](https://wicklee.dev/openapi.json)** — OpenAPI 3.0 spec for structured integration
+7. **[Interactive docs](https://wicklee.dev/docs)** — HTML documentation page
 
 ## Install
 
@@ -29,6 +31,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `GET /api/profile?minutes=60` — Inference Profiler: correlated TTFT/KV/queue/thermal/power timeline
 - `GET /api/cost-by-model?hours=24` — Cost attribution per model (daily breakdown)
 - `GET /api/explain-slowdown?ts_ms=N` — Root cause analysis for slow inference requests
+- `GET /api/model-comparison?hours=168` — Side-by-side model efficiency (WES, tok/s, watts, cost)
 - `GET /api/history?node_id=WK-XXXX` — DuckDB metric history (1h buffer)
 - `GET /api/traces` — Proxy inference traces
 - `GET /api/events/history` — Node event log
@@ -51,6 +54,18 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 
 - `wicklee://node/metrics` — Live MetricsPayload JSON
 - `wicklee://node/thermal` — Thermal state + WES penalty values
+
+## Cloud MCP Server (Team+, Bearer auth)
+
+`POST wicklee.dev/mcp` — fleet-aggregated MCP. 8 tools:
+- `get_fleet_status` — all nodes with metrics + WES
+- `get_fleet_wes` — compact WES scores
+- `get_node_detail` — full metrics for a specific node
+- `get_best_route` — routing recommendation by throughput/efficiency
+- `get_fleet_insights` — fleet health summary + observation count
+- `get_fleet_observations` — active/resolved observations
+- `get_inference_profile` — correlated profiler timeline
+- `explain_slowdown` — root cause analysis for slow requests
 
 ## Fleet API v1 (X-API-Key auth)
 
@@ -100,7 +115,7 @@ wes_cliff, agent_version_mismatch
 
 ## Pricing
 
-- Community: Free forever, 3 nodes, 24h history, 9 patterns
-- Pro: $9/mo, 10 nodes, 7-day history, 18 patterns, Slack alerts
-- Team: $19/seat/mo (3-seat min), 25 nodes, 90-day history, shared dashboards
-- Enterprise: From $200/mo, proxy, airgapped/sovereign deployment
+- Community: Free forever, 3 nodes, 24h history, 9 patterns, local MCP, Ollama proxy
+- Pro: $9/mo, 10 nodes, 7-day history, 18 patterns, Slack+Email alerts, custom thresholds
+- Team: $19/seat/mo (3-seat min), 25 nodes, 90-day history, shared dashboards, PagerDuty, Cloud MCP, OTel+Prometheus, CSV/JSON export
+- Enterprise: From $200/mo, unlimited nodes, sovereign deployment
