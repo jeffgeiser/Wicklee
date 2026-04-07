@@ -93,7 +93,16 @@ fn start_cloud_push_inner(
                 if let Some(ref cache) = obs_cache {
                     if let Ok(obs) = cache.lock() {
                         if !obs.is_empty() {
-                            val["observations"] = serde_json::to_value(&*obs).unwrap_or_default();
+                            // Enrich with computed routing_hint before serializing
+                            let enriched: Vec<serde_json::Value> = obs.iter().map(|o| {
+                                let mut v = serde_json::to_value(o).unwrap_or_default();
+                                if let Some(obj) = v.as_object_mut() {
+                                    obj.insert("routing_hint".into(),
+                                        serde_json::json!(crate::routing_hint_for(o.pattern_id, o.severity)));
+                                }
+                                v
+                            }).collect();
+                            val["observations"] = serde_json::to_value(&enriched).unwrap_or_default();
                         }
                     }
                 }

@@ -107,6 +107,10 @@ pub(crate) struct OllamaMetrics {
     pub(crate) ollama_active_model:      Option<String>,
     pub(crate) ollama_model_size_gb:     Option<f32>,
     pub(crate) ollama_quantization:      Option<String>,
+    /// Context window size from /api/show model_info (e.g. 8192, 131072).
+    pub(crate) ollama_context_length:    Option<u64>,
+    /// Parameter count from /api/show model_info (e.g. 7_000_000_000 for 7B).
+    pub(crate) ollama_parameter_count:   Option<u64>,
     /// Sustained tok/s: eval_rate from Ollama /api/generate probe every 30s.
     /// Reflects actual node throughput under current thermal/load conditions.
     pub(crate) ollama_tokens_per_second: Option<f32>,
@@ -3045,6 +3049,35 @@ struct LocalObservation {
     hostname:         String,
 }
 
+#[cfg(not(target_env = "musl"))]
+impl LocalObservation {
+    /// Machine-readable routing signal for agent/NRO consumers.
+    /// Computed from pattern_id + severity — not stored, derived on access.
+    fn routing_hint(&self) -> &'static str {
+        routing_hint_for(self.pattern_id, self.severity)
+    }
+}
+
+/// Map pattern + severity to a machine-readable routing signal.
+#[cfg(not(target_env = "musl"))]
+pub(crate) fn routing_hint_for(pattern_id: &str, severity: &str) -> &'static str {
+    match (pattern_id, severity) {
+        // Critical severity = steer away immediately
+        (_, "critical") => "steer_away",
+        // Patterns that indicate the node shouldn't receive new traffic
+        ("thermal_drain", _) | ("nvidia_thermal_redline", _) | ("swap_io_pressure", _)
+        | ("vram_overcommit", _) | ("bandwidth_saturation", _) => "steer_away",
+        // Patterns that indicate reducing concurrency
+        ("vllm_kv_cache_saturation", _) | ("vllm_queue_saturation", _)
+        | ("ttft_regression", _) | ("latency_spike", _) | ("power_jitter", _) => "reduce_batch",
+        // Patterns that indicate monitoring but node is still usable
+        ("wes_velocity_drop", _) | ("memory_trajectory", _) | ("clock_drift", _)
+        | ("efficiency_drag", _) | ("power_gpu_decoupling", _) => "monitor",
+        // Everything else (phantom_load, pcie_lane_degradation)
+        _ => "monitor",
+    }
+}
+
 /// PCIe state snapshot from live NvidiaMetrics (not stored in DuckDB).
 #[cfg(not(target_env = "musl"))]
 struct PcieSnapshot {
@@ -4403,9 +4436,16 @@ struct NodeId(Arc<String>);
 async fn handle_observations(
     axum::extract::Extension(obs_cache): axum::extract::Extension<ObservationCache>,
 ) -> impl IntoResponse {
-    // Return the latest cached observations from the 10 s evaluator task.
+    // Return observations with computed routing_hint field.
     let observations = obs_cache.lock().map(|c| c.clone()).unwrap_or_default();
-    Json(serde_json::json!({ "observations": observations })).into_response()
+    let enriched: Vec<serde_json::Value> = observations.iter().map(|o| {
+        let mut v = serde_json::to_value(o).unwrap_or_default();
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("routing_hint".into(), serde_json::json!(o.routing_hint()));
+        }
+        v
+    }).collect();
+    Json(serde_json::json!({ "observations": enriched })).into_response()
 }
 
 // ── Inference Intelligence endpoints (Pro+) ─────────────────────────────────
@@ -4791,6 +4831,8 @@ async fn handle_mcp(
                             "inference_active": ollama.ollama_inference_active,
                             "tokens_per_second": ollama.ollama_tokens_per_second,
                             "quantization": ollama.ollama_quantization,
+                            "context_length": ollama.ollama_context_length,
+                            "parameter_count": ollama.ollama_parameter_count,
                         }));
                     }
                     if vllm.vllm_running {

@@ -257,6 +257,10 @@ pub(crate) fn start_ollama_harvester(
 
             let mut interval      = tokio::time::interval(Duration::from_secs(5));
             let mut prev_expires:  Option<String>             = None;
+            let mut prev_model:    Option<String>             = None;
+            // Cached /api/show data — refreshed only when model changes.
+            let mut cached_context_length:  Option<u64> = None;
+            let mut cached_parameter_count: Option<u64> = None;
             let mut last_infer_ts: Option<std::time::Instant> = None;
 
             // ── Inner poll loop — runs while Ollama is present ───────────────
@@ -303,6 +307,9 @@ pub(crate) fn start_ollama_harvester(
                     ollama_prompt_eval_tps:   prev_state.ollama_prompt_eval_tps,
                     ollama_ttft_ms:           prev_state.ollama_ttft_ms,
                     ollama_load_duration_ms:  prev_state.ollama_load_duration_ms,
+                    // Carry forward /api/show-derived fields (refreshed on model change)
+                    ollama_context_length:    prev_state.ollama_context_length,
+                    ollama_parameter_count:   prev_state.ollama_parameter_count,
                     ..Default::default()
                 };
 
@@ -315,6 +322,32 @@ pub(crate) fn start_ollama_harvester(
                                 .map(|b| b as f32 / 1_073_741_824.0);
                             m.ollama_quantization = first["details"]["quantization_level"]
                                 .as_str().map(|s| s.to_string());
+
+                            // Fetch context_length + parameter_count from /api/show when model changes.
+                            let current_model = m.ollama_active_model.clone();
+                            if current_model != prev_model {
+                                prev_model = current_model.clone();
+                                if let Some(ref model_name) = current_model {
+                                    if let Ok(show_resp) = client.post(format!("{base}/api/show"))
+                                        .json(&serde_json::json!({ "name": model_name }))
+                                        .send().await
+                                    {
+                                        if let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
+                                            let mi = &show_json["model_info"];
+                                            cached_context_length = mi["general.context_length"].as_u64()
+                                                .or_else(|| mi["llama.context_length"].as_u64());
+                                            cached_parameter_count = mi["general.parameter_count"].as_u64()
+                                                .or_else(|| mi["llama.parameter_count"].as_u64());
+                                        }
+                                    }
+                                } else {
+                                    cached_context_length = None;
+                                    cached_parameter_count = None;
+                                }
+                            }
+                            m.ollama_context_length = cached_context_length;
+                            m.ollama_parameter_count = cached_parameter_count;
+
                             // Detect inference activity via expires_at resets.
                             // Ollama resets expires_at = now + keep_alive after each request
                             // completes. When the string changes between polls, a request just
