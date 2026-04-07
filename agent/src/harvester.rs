@@ -373,14 +373,15 @@ pub(crate) fn start_ollama_harvester(
     });
 
     // ── Probe task: scheduled 20-token benchmark every 30s ──────────────────
-    // Skipped entirely when the proxy is active — the proxy provides exact tok/s
-    // from done packets, so synthetic probes are redundant and wasteful.
-    // Dynamic scheduling: the probe only fires when the GPU is idle enough to
-    // give a clean reading. When GPU util ≥ GPU_LOAD_THRESHOLD_PCT, we skip
-    // the probe and write None — the dashboard estimation formula takes over
-    // (peak_tps × gpu_util%). Firing tokens into a loaded scheduler would
-    // queue behind the active job and produce a noisy / depressed reading.
-    if proxy_arc.is_none() {
+    // Runs on all nodes (with or without proxy). When the proxy is active and
+    // has recent traffic (request in the last 60s), the probe skips — the proxy
+    // provides exact tok/s, TTFT, and latency from real done packets, making
+    // synthetic probes redundant and potentially disruptive.
+    // When the proxy is active but IDLE (no recent traffic), the probe fires
+    // to populate baseline TTFT, prefill speed, and load duration — fields the
+    // proxy never provides (they're probe-only metrics).
+    let proxy_for_probe = proxy_arc.clone();
+    {
         let shared_probe = Arc::clone(&shared);
         let apple_probe  = Arc::clone(&apple);
         let nvidia_probe = Arc::clone(&nvidia);
@@ -461,6 +462,16 @@ pub(crate) fn start_ollama_harvester(
                         gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT,
                     );
                     continue;
+                }
+
+                // When proxy is active with recent traffic, skip — proxy provides
+                // exact tok/s from done packets; probing would interfere.
+                if let Some(ref ps) = proxy_for_probe {
+                    let recent_req = ps.last_done_ts.lock().unwrap()
+                        .map_or(false, |t| t.elapsed().as_secs() < 60);
+                    if recent_req {
+                        continue; // proxy has fresh production data — no probe needed
+                    }
                 }
 
                 // GPU is idle enough — fire the full 20-token benchmark.
