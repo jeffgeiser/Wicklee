@@ -4436,7 +4436,7 @@ struct NodeId(Arc<String>);
 async fn handle_observations(
     axum::extract::Extension(obs_cache): axum::extract::Extension<ObservationCache>,
 ) -> impl IntoResponse {
-    // Return observations with computed routing_hint field.
+    // Return observations with per-observation + node-level routing hints.
     let observations = obs_cache.lock().map(|c| c.clone()).unwrap_or_default();
     let enriched: Vec<serde_json::Value> = observations.iter().map(|o| {
         let mut v = serde_json::to_value(o).unwrap_or_default();
@@ -4445,7 +4445,24 @@ async fn handle_observations(
         }
         v
     }).collect();
-    Json(serde_json::json!({ "observations": enriched })).into_response()
+
+    // Node-level aggregate: worst routing_hint across all active observations.
+    // Priority: steer_away > reduce_batch > monitor > clear
+    let (node_hint, node_hint_source) = observations.iter()
+        .map(|o| (o.routing_hint(), o.pattern_id))
+        .min_by_key(|(hint, _)| match *hint {
+            "steer_away" => 0,
+            "reduce_batch" => 1,
+            "monitor" => 2,
+            _ => 3,
+        })
+        .unwrap_or(("clear", "none"));
+
+    Json(serde_json::json!({
+        "observations": enriched,
+        "routing_hint": node_hint,
+        "routing_hint_source": node_hint_source,
+    })).into_response()
 }
 
 // ── Inference Intelligence endpoints (Pro+) ─────────────────────────────────
