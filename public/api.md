@@ -14,6 +14,7 @@ Auth: None required.
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Slowdown explainer — root cause analysis for a slow request |
+| GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for every model that has run |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
 | GET | /api/events/recent | Recent in-memory events |
@@ -40,7 +41,7 @@ The agent exposes a local MCP server for AI agents (Cursor, Claude Desktop, cust
 | `get_node_status` | Full hardware + inference metrics snapshot |
 | `get_inference_state` | Live/idle/busy state with sensor context |
 | `get_active_models` | Running models across Ollama, vLLM, llama.cpp |
-| `get_observations` | Server-side pattern evaluation — 17 agent-evaluated observations |
+| `get_observations` | Server-side pattern evaluation — 17 agent-evaluated observations (live data) |
 | `get_metrics_history` | 1-hour rolling telemetry buffer |
 
 ### Resources

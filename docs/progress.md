@@ -24,6 +24,15 @@
 - Cloud MCP tool: `explain_slowdown(node_id, ts_ms)` — Team+
 - Observation enrichment: Patterns P (`ttft_regression`) and Q (`latency_spike`) now include contributing hardware factors in body text
 
+### Model Comparison
+- `GET /api/model-comparison?hours=168&kwh_rate=0.12` — side-by-side efficiency data for every model that has run on this node
+- Returns: model name, hours active, avg tok/s, avg watts, WES, TTFT, cost/hr, total cost, sample count
+- Uses metrics_raw (≤24h) or metrics_1min (>24h) for up to 30 days
+
+### MCP Tool Fixes
+- `get_observations` and `get_metrics_history` now return actual data (via internal HTTP call to agent REST API) instead of redirect messages
+- All 5 local MCP tools are fully functional
+
 ---
 
 ## April 6, 2026 — v0.7.11: Server-Side Patterns, Cloud MCP, PagerDuty, Clerk Orgs

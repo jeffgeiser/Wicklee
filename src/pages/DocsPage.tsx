@@ -1244,13 +1244,18 @@ WES Version:     2
               <code className="text-gray-300 font-mono text-[10px]">GET /api/cost-by-model?hours=24</code> — Breaks down your daily power cost by which model was running. "Llama 3.1 70B cost $0.22 for 6.2 hours of inference. Phi-3 Mini cost $0.13 for 18 hours." Uses DuckDB metrics_raw (per-second model identity + power draw) for the last 24 hours, or metrics_1min rollups for up to 30 days. The Overview tab shows this as a collapsible table sorted by cost.
             </p>
 
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Model Comparison</p>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              <code className="text-gray-300 font-mono text-[10px]">GET /api/model-comparison?hours=168</code> — Side-by-side efficiency data for every model that has run on this node. Shows avg tok/s, avg watts, WES, TTFT, cost per hour, and total cost for each model. Answers "which model is most efficient on my hardware?" with real measured data from actual usage — not synthetic benchmarks. Query up to 30 days of history.
+            </p>
+
             <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">"Why Was That Slow?" Explainer</p>
             <p className="text-xs text-gray-400 leading-relaxed">
               <code className="text-gray-300 font-mono text-[10px]">GET /api/explain-slowdown?ts_ms=N</code> — Point at any timestamp and get a root cause analysis. Finds the closest inference trace, reads hardware metrics for the surrounding ±30 seconds, evaluates 6 factors (KV cache pressure, thermal penalty, queue depth, swap I/O, memory pressure, clock throttling), ranks them by severity, and generates a natural-language summary: "TTFT spiked to 2.1s primarily due to KV cache at 93% (high) and thermal penalty at 1.75x (Serious state)."
             </p>
 
             <NoteBox>
-              <strong className="text-white">MCP integration:</strong> The Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools (<code className="text-gray-300 font-mono text-[10px]">get_inference_profile</code>, <code className="text-gray-300 font-mono text-[10px]">explain_slowdown</code>) for Team+ tier. Your AI agent can ask "why was my last request slow?" and get a structured multi-factor answer.
+              <strong className="text-white">MCP integration:</strong> All 5 local MCP tools return live data (including <code className="text-gray-300 font-mono text-[10px]">get_observations</code> and <code className="text-gray-300 font-mono text-[10px]">get_metrics_history</code>). The Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools for Team+ tier.
             </NoteBox>
           </Section>
 
@@ -1306,6 +1311,10 @@ WES Version:     2
                   <tr>
                     <Td mono>GET /api/explain-slowdown?ts_ms=N</Td>
                     <Td>Root cause analysis — finds closest trace, evaluates 6 hardware factors, generates natural-language summary</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/model-comparison?hours=168</Td>
+                    <Td>Model comparison — side-by-side WES, tok/s, watts, TTFT, cost for every model that has run on this node</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/history?node_id=WK-XXXX</Td>

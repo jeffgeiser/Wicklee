@@ -55,8 +55,11 @@ Migrated all 18 observation patterns from client-side TypeScript to server-side 
 
 ---
 
-### Inference Intelligence (3 features)
-Three DuckDB-backed intelligence endpoints on the agent (`/api/profile`, `/api/cost-by-model`, `/api/explain-slowdown`) + Cloud MCP tools (`get_inference_profile`, `explain_slowdown`). Inference Profiler: correlated timeline of TTFT, KV cache, queue depth, thermal penalty, power on a single time axis with auto-scaling resolution. Cost Attribution: per-model daily cost breakdown (model, hours active, avg watts, cost USD). Slowdown Explainer: root cause analysis correlating per-request traces with ±30s hardware context, evaluates 6 factors, generates natural-language summary. Frontend: Cost by Model table on Overview, Profiler chart on Performance tab, enriched observation card body text for Patterns P and Q.
+### Inference Intelligence (4 features)
+Four DuckDB-backed intelligence endpoints on the agent + Cloud MCP tools. Inference Profiler (`/api/profile`): correlated timeline of TTFT, KV cache, queue depth, thermal penalty, power. Cost Attribution (`/api/cost-by-model`): per-model daily cost breakdown. Slowdown Explainer (`/api/explain-slowdown`): root cause analysis with 6 hardware factors. Model Comparison (`/api/model-comparison`): side-by-side WES, tok/s, watts, TTFT, cost for every model that has run on this node — answers "which model is most efficient on my hardware?" Frontend: Cost by Model table on Overview, Profiler chart on Performance tab, enriched observation body text.
+
+### MCP Tool Fixes
+`get_observations` and `get_metrics_history` now return live data via internal HTTP calls to the agent's own REST API instead of redirecting users to REST endpoints.
 
 ---
 
