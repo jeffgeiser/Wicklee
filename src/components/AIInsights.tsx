@@ -528,6 +528,127 @@ interface AIInsightsProps {
   onNavigateToObservability?: (params?: ObservabilityNavParams) => void;
 }
 
+// ── InferenceProfiler — correlated multi-signal timeline (localhost) ────────────
+//
+// Fetches from GET /api/profile?minutes=N and renders a dual-series area chart:
+// Primary series (selectable): TTFT, KV Cache %, Queue Depth, Thermal Penalty
+// Always shows tok/s as a faded reference line for inference activity context.
+
+type ProfileMetric = 'ttft_ms' | 'kv_cache_pct' | 'queue_depth' | 'thermal_penalty' | 'power_w';
+const PROFILE_METRICS: { key: ProfileMetric; label: string; unit: string; color: string }[] = [
+  { key: 'ttft_ms',         label: 'TTFT',        unit: 'ms',  color: '#f59e0b' },
+  { key: 'kv_cache_pct',    label: 'KV Cache',    unit: '%',   color: '#ec4899' },
+  { key: 'queue_depth',     label: 'Queue',       unit: '',    color: '#8b5cf6' },
+  { key: 'thermal_penalty', label: 'Thermal Pen.', unit: '×',  color: '#ef4444' },
+  { key: 'power_w',         label: 'Power',       unit: 'W',   color: '#a78bfa' },
+];
+
+const InferenceProfiler: React.FC = () => {
+  const [metric, setMetric] = React.useState<ProfileMetric>('ttft_ms');
+  const [minutes, setMinutes] = React.useState(60);
+  const [samples, setSamples] = React.useState<any[]>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/profile?minutes=${minutes}`);
+      if (r.ok) {
+        const data = await r.json();
+        setSamples(data.samples ?? []);
+      }
+    } catch { /* agent may not support this endpoint */ }
+    setLoading(false);
+  }, [minutes]);
+
+  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => {
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const cfg = PROFILE_METRICS.find(m => m.key === metric)!;
+  const chartData = samples
+    .filter(s => s[metric] != null)
+    .map(s => ({ ts: s.ts_ms, v: s[metric], tps: s.tok_s }));
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Inference Profiler</span>
+          <select
+            value={minutes}
+            onChange={e => setMinutes(Number(e.target.value))}
+            className="text-[9px] text-gray-400 bg-gray-950 border border-gray-800 rounded px-1.5 py-0.5 font-mono"
+          >
+            <option value={10}>10m</option>
+            <option value={30}>30m</option>
+            <option value={60}>1h</option>
+            <option value={360}>6h</option>
+            <option value={1440}>24h</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1 bg-gray-950 border border-gray-800 rounded-lg p-0.5">
+          {PROFILE_METRICS.map(m => (
+            <button
+              key={m.key}
+              onClick={() => setMetric(m.key)}
+              className={`px-2 py-1 rounded text-[9px] font-semibold transition-colors ${
+                metric === m.key
+                  ? 'bg-gray-800 text-white'
+                  : 'text-gray-600 hover:text-gray-400'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {loading && samples.length === 0 ? (
+        <p className="text-xs text-gray-700 py-4 text-center">Loading profiler data…</p>
+      ) : chartData.length === 0 ? (
+        <p className="text-xs text-gray-700 py-4 text-center">No {cfg.label} data in the selected window</p>
+      ) : (
+        <ResponsiveContainer width="100%" height={180}>
+          <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id="profGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={cfg.color} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={cfg.color} stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="tpsRefGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.1} />
+                <stop offset="95%" stopColor="#22d3ee" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <XAxis
+              dataKey="ts"
+              type="number"
+              domain={['dataMin', 'dataMax']}
+              tickFormatter={(ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              tick={{ fill: '#6b7280', fontSize: 9 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis tick={{ fill: '#6b7280', fontSize: 9 }} axisLine={false} tickLine={false} width={40} />
+            <Tooltip
+              contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 11 }}
+              labelFormatter={(ts: number) => new Date(ts).toLocaleTimeString()}
+              formatter={(val: number, name: string) => {
+                if (name === 'tps') return [`${val?.toFixed(1)} tok/s`, 'tok/s (ref)'];
+                return [`${val?.toFixed(1)}${cfg.unit}`, cfg.label];
+              }}
+            />
+            <Area type="monotone" dataKey="tps" stroke="#22d3ee" strokeWidth={1} strokeOpacity={0.3} fill="url(#tpsRefGrad)" dot={false} isAnimationActive={false} />
+            <Area type="monotone" dataKey="v" stroke={cfg.color} strokeWidth={1.5} fill="url(#profGrad)" dot={false} isAnimationActive={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+};
+
 // ── LocalPerformanceHistory — DuckDB-backed multi-metric chart (localhost) ─────
 //
 // Fetches the last 1 hour of raw samples from GET /api/history and renders a
@@ -2090,6 +2211,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Localhost: Performance History from DuckDB (1h window) */}
               {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}
+
+              {/* Localhost: Inference Profiler — correlated TTFT/KV/Queue/Thermal/Power timeline */}
+              {isLocalHost && <InferenceProfiler />}
 
               {/* WES Trend Chart (cloud only) */}
               {!isLocalHost && getToken && (

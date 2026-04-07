@@ -4132,15 +4132,24 @@ fn evaluate_local_observations(
                     severity:         if is_critical { "critical" } else { "warning" },
                     title:            "TTFT Regression".into(),
                     hook:             format!("TTFT +{slope_per_min:.0} ms/min, avg {mean_ttft:.0} ms"),
-                    body:             format!(
-                        "{hostname}'s time-to-first-token is trending upward (+{slope_per_min:.0} ms/min). \
-                         Current mean TTFT is {mean_ttft:.0} ms{}. \
-                         Likely causes: KV cache eviction under memory pressure, growing request queue, \
-                         or context window expansion.",
-                        if tail_mean > mean_ttft * 1.3 {
-                            format!(" with recent tail at {tail_mean:.0} ms")
-                        } else { String::new() },
-                    ),
+                    body:             {
+                        // Enrich with contributing hardware factors from the window
+                        let kv_vals: Vec<f64> = window.iter().filter_map(|s| s.vllm_cache_usage_perc).collect();
+                        let q_vals: Vec<f64> = window.iter().filter_map(|s| s.queue_depth.map(|q| q as f64)).collect();
+                        let p_vals: Vec<f64> = window.iter().filter_map(|s| s.penalty_avg).collect();
+                        let mut factors = Vec::new();
+                        if !kv_vals.is_empty() { let avg = obs_mean(&kv_vals); if avg > 75.0 { factors.push(format!("KV cache at {avg:.0}%")); } }
+                        if !q_vals.is_empty() { let avg = obs_mean(&q_vals); if avg >= 2.0 { factors.push(format!("queue depth {avg:.0}")); } }
+                        if !p_vals.is_empty() { let avg = obs_mean(&p_vals); if avg > 1.2 { factors.push(format!("thermal penalty {avg:.2}x")); } }
+                        let factor_str = if factors.is_empty() { String::new() } else { format!(" Contributing factors: {}.", factors.join(", ")) };
+                        format!(
+                            "{hostname}'s time-to-first-token is trending upward (+{slope_per_min:.0} ms/min). \
+                             Current mean TTFT is {mean_ttft:.0} ms{}.{factor_str}",
+                            if tail_mean > mean_ttft * 1.3 {
+                                format!(" with recent tail at {tail_mean:.0} ms")
+                            } else { String::new() },
+                        )
+                    },
                     recommendation:   if is_critical {
                         "TTFT is critically high or accelerating fast. Reduce concurrent requests, \
                          check vLLM queue depth, and consider a shorter context window or smaller batch size.".into()
@@ -4198,12 +4207,22 @@ fn evaluate_local_observations(
                     severity:         if is_critical { "critical" } else { "warning" },
                     title:            "Inference Latency Spike".into(),
                     hook:             format!("Latency {spike_ratio:.1}× baseline ({recent_mean:.0} ms)"),
-                    body:             format!(
-                        "{hostname} is experiencing a {spike_ratio:.1}× spike in E2E inference latency \
-                         (recent: {recent_mean:.0} ms vs baseline: {baseline_mean:.0} ms). \
-                         Common causes: thermal throttling, swap I/O, model preemption, or sudden increase \
-                         in concurrent requests.",
-                    ),
+                    body:             {
+                        let kv_vals: Vec<f64> = window.iter().filter_map(|s| s.vllm_cache_usage_perc).collect();
+                        let q_vals: Vec<f64> = window.iter().filter_map(|s| s.queue_depth.map(|q| q as f64)).collect();
+                        let p_vals: Vec<f64> = window.iter().filter_map(|s| s.penalty_avg).collect();
+                        let sw_vals: Vec<f64> = window.iter().filter_map(|s| s.swap_write_mb_s).collect();
+                        let mut factors = Vec::new();
+                        if !kv_vals.is_empty() { let avg = obs_mean(&kv_vals); if avg > 75.0 { factors.push(format!("KV cache at {avg:.0}%")); } }
+                        if !q_vals.is_empty() { let avg = obs_mean(&q_vals); if avg >= 2.0 { factors.push(format!("queue depth {avg:.0}")); } }
+                        if !p_vals.is_empty() { let avg = obs_mean(&p_vals); if avg > 1.2 { factors.push(format!("thermal penalty {avg:.2}x")); } }
+                        if !sw_vals.is_empty() { let avg = obs_mean(&sw_vals); if avg > 2.0 { factors.push(format!("swap at {avg:.1} MB/s")); } }
+                        let factor_str = if factors.is_empty() { String::new() } else { format!(" Contributing factors: {}.", factors.join(", ")) };
+                        format!(
+                            "{hostname} is experiencing a {spike_ratio:.1}× spike in E2E inference latency \
+                             (recent: {recent_mean:.0} ms vs baseline: {baseline_mean:.0} ms).{factor_str}",
+                        )
+                    },
                     recommendation:   if is_critical {
                         "Latency has degraded critically. Investigate thermal state, memory pressure, \
                          and swap usage. Consider restarting the inference server if it does not recover.".into()

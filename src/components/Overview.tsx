@@ -1312,6 +1312,27 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const metricDropdownRef = useRef<HTMLDivElement>(null);
   const [showActiveOnly, setShowActiveOnly] = useState(false);
 
+  // ── Cost by Model (localhost, Pro+ feature) ──────────────────────────────
+  interface CostByModelEntry { model: string | null; hours_active: number | null; avg_watts: number | null; cost_usd: number | null; tok_s_avg: number | null; sample_count: number }
+  const [costByModel, setCostByModel] = useState<CostByModelEntry[]>([]);
+  const [costByModelTotal, setCostByModelTotal] = useState(0);
+  const [costByModelOpen, setCostByModelOpen] = useState(false);
+  useEffect(() => {
+    if (!isLocalMode) return;
+    const fetchCost = async () => {
+      try {
+        const res = await fetch(`http://localhost:7700/api/cost-by-model?hours=24`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setCostByModel(data.models ?? []);
+        setCostByModelTotal(data.total_cost_usd ?? 0);
+      } catch { /* agent may not support this endpoint yet */ }
+    };
+    fetchCost();
+    const id = setInterval(fetchCost, 60_000); // refresh every 60s
+    return () => clearInterval(id);
+  }, [isLocalMode]);
+
   const wsRef = useRef<WebSocket | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
@@ -2399,6 +2420,51 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         {/* Removed: Avg Latency (redundant with TTFT tile) and Swap Write (visible in Live Hardware rail + Pattern J) */}
 
       </div>
+
+      {/* ── Cost by Model (Pro+, localhost only) ──────────────────────────────── */}
+      {isLocalMode && costByModel.length > 0 && (
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+          <button
+            onClick={() => setCostByModelOpen(o => !o)}
+            className="flex items-center justify-between w-full px-5 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors"
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Cost by Model (24h)</span>
+            <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform ${costByModelOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {costByModelOpen && (
+            <div className="px-5 pb-4">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-[9px] uppercase tracking-wider text-gray-500 border-b border-gray-100 dark:border-gray-800">
+                    <th className="text-left py-2 font-semibold">Model</th>
+                    <th className="text-right py-2 font-semibold">Hours</th>
+                    <th className="text-right py-2 font-semibold">Avg W</th>
+                    <th className="text-right py-2 font-semibold">tok/s</th>
+                    <th className="text-right py-2 font-semibold">Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {costByModel.map((m, i) => (
+                    <tr key={i} className="border-b border-gray-50 dark:border-gray-800/50">
+                      <td className="py-2 text-gray-300 font-mono text-[11px]">{m.model ?? '(idle)'}</td>
+                      <td className="py-2 text-right text-gray-400">{m.hours_active?.toFixed(1) ?? '—'}</td>
+                      <td className="py-2 text-right text-gray-400">{m.avg_watts?.toFixed(1) ?? '—'}</td>
+                      <td className="py-2 text-right text-gray-400">{m.tok_s_avg?.toFixed(1) ?? '—'}</td>
+                      <td className="py-2 text-right font-semibold text-emerald-400">${m.cost_usd?.toFixed(4) ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4} className="py-2 text-right text-[9px] uppercase tracking-wider text-gray-500 font-semibold">Total (24h)</td>
+                    <td className="py-2 text-right font-bold text-emerald-400">${costByModelTotal.toFixed(4)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Fleet Status (cloud) / Diagnostic Rail (agent) ───────────────────── */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
