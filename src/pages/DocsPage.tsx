@@ -1264,6 +1264,18 @@ WES Version:     2
                     <Td>Server-side pattern evaluation — 17 observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds</Td>
                   </tr>
                   <tr>
+                    <Td mono>GET /api/profile?minutes=60</Td>
+                    <Td>Inference Profiler — correlated TTFT, KV cache, queue depth, thermal penalty, power on a single time axis. Auto-scaling resolution.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/cost-by-model?hours=24</Td>
+                    <Td>Cost attribution per model — daily power cost breakdown by model (hours active, avg watts, cost USD)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/explain-slowdown?ts_ms=N</Td>
+                    <Td>Root cause analysis — finds closest trace, evaluates 6 hardware factors, generates natural-language summary</Td>
+                  </tr>
+                  <tr>
                     <Td mono>GET /api/history?node_id=WK-XXXX</Td>
                     <Td>DuckDB metric history — 1h of raw samples (tok/s, GPU util, power, memory pressure, swap)</Td>
                   </tr>

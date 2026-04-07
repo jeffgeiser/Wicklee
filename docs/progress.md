@@ -6,6 +6,26 @@
 
 ---
 
+## April 7, 2026 — v0.7.12: Inference Intelligence
+
+### Inference Profiler
+- `GET /api/profile?minutes=60` — correlated timeline: TTFT, tok/s, KV cache %, queue depth, thermal penalty, power, GPU util on a single time axis
+- Resolution auto-scales: ≤10min raw 1s, ≤1h 10s, ≤6h 30s, ≤24h 60s
+- Frontend: multi-series Recharts chart on Performance tab with 5 selectable metrics + tok/s reference line
+- Cloud MCP tool: `get_inference_profile(node_id, minutes)` — Team+
+
+### Cost Attribution Per Model
+- `GET /api/cost-by-model?hours=24&kwh_rate=0.12` — GROUP BY model with hours active, avg watts, total Wh, cost USD, avg tok/s
+- Uses metrics_raw (≤24h) or metrics_1min (>24h) for up to 30 days
+- Frontend: collapsible "Cost by Model (24h)" table on Overview tab, auto-refreshes every 60s
+
+### "Why Was That Slow?" Explainer
+- `GET /api/explain-slowdown?ts_ms=N` — finds closest inference_trace, reads ±30s hardware context, evaluates 6 factors (KV cache, thermal, queue, swap, memory, clock throttle), ranks by severity, generates natural-language summary
+- Cloud MCP tool: `explain_slowdown(node_id, ts_ms)` — Team+
+- Observation enrichment: Patterns P (`ttft_regression`) and Q (`latency_spike`) now include contributing hardware factors in body text
+
+---
+
 ## April 6, 2026 — v0.7.11: Server-Side Patterns, Cloud MCP, PagerDuty, Clerk Orgs
 
 ### Phase 7 — Remove Client-Side Pattern Engine

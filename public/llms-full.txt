@@ -47,6 +47,24 @@ Returns 17 server-side observation patterns evaluated by the Rust agent against 
 { "observations": [{ "pattern_id": "thermal_drain", "severity": "warning", ... }] }
 ```
 
+### GET /api/profile?minutes=60
+Inference Profiler — correlated timeline of TTFT, tok/s, KV cache %, queue depth, thermal penalty, power. Resolution auto-scales by time range. Max 1440 minutes (24h).
+```json
+{ "node_id": "WK-XXXX", "range_minutes": 60, "resolution_s": 10, "samples": [{ "ts_ms": 1234, "model": "llama3.1:70b", "tok_s": 42.5, "ttft_ms": 145, "kv_cache_pct": 87, "queue_depth": 2, "power_w": 12.1, "thermal_state": "Normal", "thermal_penalty": 1.0, "gpu_util_pct": 85 }] }
+```
+
+### GET /api/cost-by-model?hours=24&kwh_rate=0.12
+Cost attribution per model — daily power cost breakdown by model. Max 720 hours (30 days).
+```json
+{ "node_id": "WK-XXXX", "range_hours": 24, "kwh_rate": 0.12, "models": [{ "model": "llama3.1:70b", "hours_active": 6.2, "avg_watts": 12.3, "cost_usd": 0.0092, "tok_s_avg": 42.5 }], "total_cost_usd": 0.0211 }
+```
+
+### GET /api/explain-slowdown?ts_ms=1234567890
+Root cause analysis for a slow inference request. Finds closest trace, reads ±30s hardware context, evaluates 6 factors, generates natural-language summary.
+```json
+{ "request": { "ts_ms": 1234, "model": "llama3.1:70b", "ttft_ms": 2100, "latency_ms": 8500 }, "factors": [{ "factor": "kv_cache_pressure", "severity": "high", "detail": "KV cache at 93%", "value": 93.2 }], "summary": "TTFT spiked to 2.1s primarily due to KV cache at 93% (high) and thermal penalty at 1.75x." }
+```
+
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
 ```json

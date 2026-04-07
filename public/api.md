@@ -11,6 +11,9 @@ Auth: None required.
 | GET | /ws | WebSocket — 10 Hz live telemetry |
 | GET | /api/observations | 17 server-side observation patterns against 10-min DuckDB buffer |
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
+| GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
+| GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
+| GET | /api/explain-slowdown?ts_ms=N | Slowdown explainer — root cause analysis for a slow request |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
 | GET | /api/events/recent | Recent in-memory events |

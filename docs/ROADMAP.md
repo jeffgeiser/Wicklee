@@ -55,16 +55,12 @@ Migrated all 18 observation patterns from client-side TypeScript to server-side 
 
 ---
 
+### Inference Intelligence (3 features)
+Three DuckDB-backed intelligence endpoints on the agent (`/api/profile`, `/api/cost-by-model`, `/api/explain-slowdown`) + Cloud MCP tools (`get_inference_profile`, `explain_slowdown`). Inference Profiler: correlated timeline of TTFT, KV cache, queue depth, thermal penalty, power on a single time axis with auto-scaling resolution. Cost Attribution: per-model daily cost breakdown (model, hours active, avg watts, cost USD). Slowdown Explainer: root cause analysis correlating per-request traces with ±30s hardware context, evaluates 6 factors, generates natural-language summary. Frontend: Cost by Model table on Overview, Profiler chart on Performance tab, enriched observation card body text for Patterns P and Q.
+
+---
+
 ## Planned
-
-### Inference Profiler
-Correlated timeline of TTFT, tok/s, KV cache %, queue depth, thermal penalty, and power draw on a single time axis. "Chrome DevTools for Inference." Answers: "TTFT spiked at 14:32 because KV cache hit 94% while thermal penalty was 1.75x." Cloud MCP tool: `get_inference_profile(node_id, start_time, end_time)`. Team tier.
-
-### Cost Attribution Per Model
-Break down daily power cost by model. "Llama 3.1 70B cost you $0.47 yesterday. Phi-3 Mini cost $0.03." Uses proxy per-request tracking + power draw to attribute watts to specific models. Requires model identity + power draw + request timing correlation.
-
-### "Why Was That Slow?" Explainer
-Natural-language MCP tool: `explain_slowdown(node_id, timestamp)` → multi-signal root cause analysis. Correlates TTFT spike with KV cache pressure, thermal state transition, queue depth, and concurrent requests to explain why a specific request was slow.
 
 ### Model-Hardware Fit Score
 "Is this model right for this hardware?" Auto-computed from VRAM headroom, tok/s vs model size ratio, thermal behavior under load, swap pressure. Returns score + recommendation (e.g., "62/100 — VRAM tight, consider Q3_K_M or smaller variant").
