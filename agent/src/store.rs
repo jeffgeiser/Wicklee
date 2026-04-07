@@ -1343,6 +1343,88 @@ impl Store {
         }))
     }
 
+    /// Model Comparison — side-by-side efficiency data for models that have run on this node.
+    /// Queries historical data grouped by model, returns avg tok/s, watts, WES, TTFT, cost.
+    pub fn query_model_comparison(
+        &self,
+        node_id:  &str,
+        hours:    i64,
+        kwh_rate: f64,
+    ) -> Result<Vec<serde_json::Value>, duckdb::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let from = now - hours * 3600 * 1000;
+        let conn = self.0.lock().unwrap();
+
+        let (sql, sample_interval_h) = if hours <= 24 {
+            ("SELECT model, COUNT(*) AS samples,
+                     AVG(tps) AS avg_tps,
+                     AVG(gpu_power_w + COALESCE(cpu_power_w, 0)) AS avg_watts,
+                     AVG(ttft_ms) AS avg_ttft,
+                     AVG(avg_latency_ms) AS avg_latency,
+                     AVG(penalty_avg) AS avg_penalty,
+                     MIN(ts_ms) AS first_seen,
+                     MAX(ts_ms) AS last_seen
+              FROM metrics_raw
+              WHERE node_id = ? AND ts_ms >= ? AND model IS NOT NULL AND model != ''
+              GROUP BY model ORDER BY AVG(tps) DESC".to_string(),
+             1.0 / 3600.0)
+        } else {
+            ("SELECT model, SUM(sample_count) AS samples,
+                     AVG(tps_avg) AS avg_tps,
+                     AVG(gpu_power_avg) AS avg_watts,
+                     NULL AS avg_ttft,
+                     NULL AS avg_latency,
+                     NULL AS avg_penalty,
+                     MIN(ts_ms) AS first_seen,
+                     MAX(ts_ms) AS last_seen
+              FROM metrics_1min
+              WHERE node_id = ? AND ts_ms >= ? AND model IS NOT NULL AND model != ''
+              GROUP BY model ORDER BY AVG(tps_avg) DESC".to_string(),
+             1.0 / 60.0)
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![node_id, from])?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let model: Option<String> = row.get(0)?;
+            let samples: i64 = row.get(1)?;
+            let avg_tps: Option<f64> = row.get(2)?;
+            let avg_watts: Option<f64> = row.get(3)?;
+            let avg_ttft: Option<f64> = row.get(4)?;
+            let avg_latency: Option<f64> = row.get(5)?;
+            let avg_penalty: Option<f64> = row.get(6)?;
+            let first_seen: Option<i64> = row.get(7)?;
+            let last_seen: Option<i64> = row.get(8)?;
+
+            let hours_active = samples as f64 * sample_interval_h;
+            let watts = avg_watts.unwrap_or(0.0);
+            let tps = avg_tps.unwrap_or(0.0);
+            let penalty = avg_penalty.unwrap_or(1.0);
+            let wes = if watts > 0.0 && tps > 0.0 { tps / (watts * penalty) } else { 0.0 };
+            let cost_per_hour = watts / 1000.0 * kwh_rate;
+            let total_cost = cost_per_hour * hours_active;
+
+            out.push(serde_json::json!({
+                "model":          model,
+                "hours_active":   (hours_active * 100.0).round() / 100.0,
+                "avg_tok_s":      avg_tps.map(|t| (t * 10.0).round() / 10.0),
+                "avg_watts":      avg_watts.map(|w| (w * 10.0).round() / 10.0),
+                "wes":            (wes * 100.0).round() / 100.0,
+                "avg_ttft_ms":    avg_ttft.map(|t| (t * 10.0).round() / 10.0),
+                "avg_latency_ms": avg_latency.map(|l| (l * 10.0).round() / 10.0),
+                "cost_per_hour":  (cost_per_hour * 10000.0).round() / 10000.0,
+                "total_cost":     (total_cost * 10000.0).round() / 10000.0,
+                "sample_count":   samples,
+                "first_seen_ms":  first_seen,
+                "last_seen_ms":   last_seen,
+            }));
+        }
+        Ok(out)
+    }
+
     /// Export a unified audit log joining events, traces, and dismissals.
     /// Returns flat records sorted newest-first, capped at `limit`.
     pub fn export_audit_log(

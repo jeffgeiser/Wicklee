@@ -4468,6 +4468,24 @@ async fn handle_explain_slowdown(
     }
 }
 
+/// GET /api/model-comparison?hours=168&kwh_rate=0.12 — side-by-side model efficiency data.
+#[cfg(not(target_env = "musl"))]
+async fn handle_model_comparison(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> impl IntoResponse {
+    let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(168).min(720);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.12);
+    let node_id = node_id_ext.0.as_str().to_owned();
+    let result = tokio::task::spawn_blocking(move || store.query_model_comparison(&node_id, hours, kwh_rate)).await;
+    match result {
+        Ok(Ok(models)) => Json(serde_json::json!({ "node_id": node_id_ext.0.as_str(), "range_hours": hours, "kwh_rate": kwh_rate, "models": models })).into_response(),
+        Ok(Err(e)) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
 /// Returns the last 20 lifecycle events from the recent_events_log ring buffer,
 /// filtered to those within the last 5 minutes. Used by the frontend to seed
 /// the Live Activity feed on every fresh WS connect — catches the startup event
@@ -4799,26 +4817,40 @@ async fn handle_mcp(
                     })))
                 }
 
-                "get_observations" | "get_metrics_history" => {
-                    // These require DuckDB — return a helpful message on musl/no-store builds.
-                    #[cfg(not(target_env = "musl"))]
-                    {
-                        // Note: DuckDB store is wired as an Extension only on store-backed routes.
-                        // For MCP, we return a message directing users to the REST endpoint.
-                        let msg = if tool_name == "get_observations" {
-                            "Local observations are available via GET /api/observations. The MCP handler does not have direct DuckDB access — use the REST endpoint or the wicklee://node/metrics resource for current state."
-                        } else {
-                            "Metrics history is available via GET /api/history?node_id=<id>&minutes=60. The MCP handler proxies to the live snapshot — use the REST endpoint for historical data."
-                        };
-                        Json(JsonRpcResponse::success(id, serde_json::json!({
-                            "content": [{ "type": "text", "text": msg }]
-                        })))
+                "get_observations" => {
+                    // Fetch from local REST endpoint (backed by ObservationCache → DuckDB)
+                    let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap_or_default();
+                    match client.get("http://127.0.0.1:7700/api/observations").send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            let body = resp.text().await.unwrap_or_else(|_| "{}".into());
+                            Json(JsonRpcResponse::success(id, serde_json::json!({
+                                "content": [{ "type": "text", "text": body }]
+                            })))
+                        }
+                        _ => Json(JsonRpcResponse::success(id, serde_json::json!({
+                            "content": [{ "type": "text", "text": "Observations endpoint unavailable — DuckDB may still be initializing." }]
+                        }))),
                     }
-                    #[cfg(target_env = "musl")]
-                    {
-                        Json(JsonRpcResponse::success(id, serde_json::json!({
-                            "content": [{ "type": "text", "text": "DuckDB is not available on this build (musl). Historical data and observations require the standard build." }]
-                        })))
+                }
+                "get_metrics_history" => {
+                    let minutes = req.params.as_ref()
+                        .and_then(|p| p.get("arguments"))
+                        .and_then(|a| a.get("minutes"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(60).min(60);
+                    let nid = node_id.0.as_str();
+                    let url = format!("http://127.0.0.1:7700/api/history?node_id={nid}&minutes={minutes}");
+                    let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap_or_default();
+                    match client.get(&url).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            let body = resp.text().await.unwrap_or_else(|_| "{}".into());
+                            Json(JsonRpcResponse::success(id, serde_json::json!({
+                                "content": [{ "type": "text", "text": body }]
+                            })))
+                        }
+                        _ => Json(JsonRpcResponse::success(id, serde_json::json!({
+                            "content": [{ "type": "text", "text": "Metrics history unavailable — DuckDB may still be initializing." }]
+                        }))),
                     }
                 }
 
@@ -6000,6 +6032,7 @@ async fn main() {
              .route("/api/profile",             get(handle_profile))
              .route("/api/cost-by-model",       get(handle_cost_by_model))
              .route("/api/explain-slowdown",    get(handle_explain_slowdown))
+             .route("/api/model-comparison",    get(handle_model_comparison))
              .layer(axum::extract::Extension(st.clone()))
              .layer(axum::extract::Extension(Arc::clone(&observation_cache)))
         } else {
