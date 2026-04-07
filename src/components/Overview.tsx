@@ -2134,17 +2134,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           sub={
             isLocalMode && localIsAppleSilicon
               ? (localGpuUsedGb != null && localWiredLimitGb != null
-                  ? `${localGpuUsedGb} GB used · wired budget`
+                  ? `${localGpuUsedGb} / ${localWiredLimitGb} GB`
                   : undefined)
               : vramUtilPct != null
               ? `${vramUsedGB} / ${vramCapacityGB} GB${vramSubHint ? ` · ${vramSubHint}` : ''}`
               : (vramUtilPct == null && effectiveMetrics.length > 0)
               ? `${vramUsedGB} GB used${vramSubHint ? ` · ${vramSubHint}` : ''}`
-              : undefined
-          }
-          sub2={
-            isLocalMode && localIsAppleSilicon && localWiredLimitGb != null
-              ? `${localWiredLimitGb} GB total`
               : undefined
           }
           icon={Database}

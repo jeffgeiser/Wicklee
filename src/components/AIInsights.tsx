@@ -192,7 +192,7 @@ const OBS_HOLD_MS     = 10 * 60_000;   // 10 min
 const MAX_LOG_ENTRIES = 50;
 
 /** Map a cloud FleetObservation to the DetectedInsight shape used by observation cards. */
-function serverObsToInsight(o: FleetObservation): DetectedInsight {
+function serverObsToInsight(o: FleetObservation, resolvedHostname?: string): DetectedInsight {
   // Parse context_json for extra fields if available
   let ctx: Record<string, unknown> = {};
   try { if (o.context_json) ctx = JSON.parse(o.context_json); } catch {}
@@ -200,7 +200,7 @@ function serverObsToInsight(o: FleetObservation): DetectedInsight {
   return {
     patternId:       o.alert_type,
     nodeId:          o.node_id,
-    hostname:        o.node_id,
+    hostname:        resolvedHostname ?? o.node_id,
     title:           o.title,
     hook:            (ctx.hook as string) ?? o.detail,
     body:            o.detail,
@@ -858,7 +858,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       const key = `${obs.alert_type}:${obs.node_id}`;
       if (cache.has(key)) continue;
       cache.set(key, {
-        insight:      serverObsToInsight(obs),
+        insight:      serverObsToInsight(obs, allNodeMetrics[obs.node_id]?.hostname ?? obs.node_id),
         firstFiredMs: obs.fired_at_ms,
         resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
       });
@@ -1020,7 +1020,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       ? [...localAgentObs]
       : serverObservations
           .filter(o => o.state === 'open')
-          .map(o => serverObsToInsight(o));
+          .map(o => serverObsToInsight(o, allNodeMetrics[o.node_id]?.hostname ?? o.node_id));
 
     // ── Observation cache: sticky firstFiredMs + hold-after-clear ─────────
     const cache  = obsCacheRef.current;

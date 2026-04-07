@@ -173,7 +173,10 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             const wasLive   = prevLiveRef.current[nodeId];
 
             if (isNowLive && n.metrics) {
-              updatedMetrics[nodeId] = n.metrics;
+              // Patch display_name into metrics.hostname so downstream consumers
+              // (AIInsights, Overview) always show the custom name when set.
+              const patched = { ...n.metrics, hostname: hostname };
+              updatedMetrics[nodeId] = patched;
             }
 
             // ── Get or create this node's pending-change slot ─────────────
