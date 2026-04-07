@@ -108,6 +108,7 @@ const NAV = [
   { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'alerts',      label: 'Alerts & Notifications' },
   { id: 'event-feeds', label: 'Event Feeds' },
+  { id: 'deep-intel',   label: 'Deep Intelligence' },
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
   { id: 'teams',       label: 'Teams & Orgs' },
@@ -1219,6 +1220,37 @@ WES Version:     2
 
             <NoteBox>
               The Fleet Event Timeline on the Observability tab is a third, separate surface — it shows persisted <code className="font-mono text-xs text-gray-300">node_events</code> from Postgres (cloud) or DuckDB (localhost) with 30-day retention. This is the permanent audit record. Live Activity and Recent Activity are session-scoped and intended for real-time operations, not compliance.
+            </NoteBox>
+          </Section>
+
+          {/* ── Deep Intelligence ── */}
+          <Section
+            id="deep-intel"
+            icon={<Lightbulb className="w-5 h-5" />}
+            accent="border-amber-500/20"
+            title="Deep Intelligence"
+          >
+            <p>
+              Wicklee is the only inference monitoring tool that has hardware telemetry, inference metrics, model identity, and per-request traces in the same database. These three endpoints use that unique combination to answer questions no other tool can.
+            </p>
+
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Inference Profiler</p>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              <code className="text-gray-300 font-mono text-[10px]">GET /api/profile?minutes=60</code> — A correlated timeline of TTFT, tok/s, KV cache utilization, queue depth, thermal penalty, and power draw on a single time axis. Like Chrome DevTools for inference — see exactly what your hardware was doing at the moment latency spiked. Resolution auto-scales from 1-second raw data (10-minute window) to 60-second buckets (24-hour window). The Performance tab renders this as an interactive multi-series chart with toggleable metrics.
+            </p>
+
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Cost Attribution Per Model</p>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              <code className="text-gray-300 font-mono text-[10px]">GET /api/cost-by-model?hours=24</code> — Breaks down your daily power cost by which model was running. "Llama 3.1 70B cost $0.22 for 6.2 hours of inference. Phi-3 Mini cost $0.13 for 18 hours." Uses DuckDB metrics_raw (per-second model identity + power draw) for the last 24 hours, or metrics_1min rollups for up to 30 days. The Overview tab shows this as a collapsible table sorted by cost.
+            </p>
+
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">"Why Was That Slow?" Explainer</p>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              <code className="text-gray-300 font-mono text-[10px]">GET /api/explain-slowdown?ts_ms=N</code> — Point at any timestamp and get a root cause analysis. Finds the closest inference trace, reads hardware metrics for the surrounding ±30 seconds, evaluates 6 factors (KV cache pressure, thermal penalty, queue depth, swap I/O, memory pressure, clock throttling), ranks them by severity, and generates a natural-language summary: "TTFT spiked to 2.1s primarily due to KV cache at 93% (high) and thermal penalty at 1.75x (Serious state)."
+            </p>
+
+            <NoteBox>
+              <strong className="text-white">MCP integration:</strong> The Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools (<code className="text-gray-300 font-mono text-[10px]">get_inference_profile</code>, <code className="text-gray-300 font-mono text-[10px]">explain_slowdown</code>) for Team+ tier. Your AI agent can ask "why was my last request slow?" and get a structured multi-factor answer.
             </NoteBox>
           </Section>
 
