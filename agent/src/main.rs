@@ -539,6 +539,10 @@ pub(crate) struct RuntimePortsConfig {
     pub(crate) ollama: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) vllm: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) llamacpp: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sglang: Option<u16>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -5699,17 +5703,23 @@ async fn main() {
     let (llamacpp_port_tx, llamacpp_port_rx) = watch::channel(None::<u16>);
     let (llamacpp_disc_tx, llamacpp_disc_rx) = watch::channel(None::<u16>);
     let (llamabox_disc_tx, llamabox_disc_rx) = watch::channel(None::<u16>);
+    let (_sglang_port_tx, _sglang_port_rx) = watch::channel(None::<u16>); // ready for future harvester
 
     // Seed channels: config overrides take precedence over process auto-detection.
     // Config overrides are used when the runtime runs as a different OS user and
     // the agent cannot read its process cmdline (cross-user /proc restriction).
     let initial = process_discovery::scan_runtimes();
     let rp = config.runtime_ports.as_ref();
-    let ollama_cfg = rp.and_then(|r| r.ollama);
-    let vllm_cfg   = rp.and_then(|r| r.vllm);
+    // Port resolution: TOML config → env var → auto-discovery → default
+    let env_port = |var: &str| -> Option<u16> { std::env::var(var).ok().and_then(|v| v.parse().ok()) };
+    let ollama_cfg   = rp.and_then(|r| r.ollama).or_else(|| env_port("WICKLEE_OLLAMA_PORT"));
+    let vllm_cfg     = rp.and_then(|r| r.vllm).or_else(|| env_port("WICKLEE_VLLM_PORT"));
+    let llamacpp_cfg = rp.and_then(|r| r.llamacpp).or_else(|| env_port("WICKLEE_LLAMACPP_PORT"));
+    let sglang_cfg   = rp.and_then(|r| r.sglang).or_else(|| env_port("WICKLEE_SGLANG_PORT"));
     let ollama_port   = ollama_cfg.or_else(|| initial.get("ollama").copied());
-    let vllm_port     = vllm_cfg  .or_else(|| initial.get("vllm").copied());
-    let llamacpp_port = initial.get("llamacpp").copied().or_else(|| initial.get("llama-box").copied());
+    let vllm_port     = vllm_cfg.or_else(|| initial.get("vllm").copied());
+    let llamacpp_port = llamacpp_cfg.or_else(|| initial.get("llamacpp").copied().or_else(|| initial.get("llama-box").copied()));
+    let sglang_port   = sglang_cfg.or_else(|| initial.get("sglang").copied());
     // When the proxy is enabled, the harvester + probe must talk to Ollama
     // directly on its moved port (e.g. 11435), NOT through the proxy on 11434.
     // The proxy occupies the default port, so auto-discovery would incorrectly
@@ -5722,6 +5732,7 @@ async fn main() {
     if let Some(p) = effective_ollama_port { let _ = ollama_port_tx.send(Some(p)); }
     if let Some(p) = vllm_port     { let _ = vllm_port_tx.send(Some(p)); }
     if let Some(p) = llamacpp_port { let _ = llamacpp_port_tx.send(Some(p)); }
+    if let Some(p) = sglang_port  { let _ = _sglang_port_tx.send(Some(p)); }
 
     // Merge llamacpp + llama-box discovery into the single harvester channel.
     {
@@ -5747,9 +5758,10 @@ async fn main() {
     // When proxy is enabled, ollama port is fixed to proxy_cfg.ollama_port —
     // do not let auto-discovery overwrite it (same logic as TOML override).
     if ollama_cfg.is_none() && proxy_arc.is_none() { discovery_txs.insert("ollama", ollama_port_tx); }
-    if vllm_cfg.is_none()   { discovery_txs.insert("vllm",   vllm_port_tx);   }
-    discovery_txs.insert("llamacpp",  llamacpp_disc_tx);
-    discovery_txs.insert("llama-box", llamabox_disc_tx);
+    if vllm_cfg.is_none()     { discovery_txs.insert("vllm",      vllm_port_tx);     }
+    if llamacpp_cfg.is_none() { discovery_txs.insert("llamacpp",  llamacpp_disc_tx);  }
+    if llamacpp_cfg.is_none() { discovery_txs.insert("llama-box", llamabox_disc_tx);  }
+    if sglang_cfg.is_none()   { discovery_txs.insert("sglang",   _sglang_port_tx);   }
     process_discovery::start_discovery_loop(discovery_txs, 30);
 
     // Proxy ports and runtime overrides are immutable after startup — compute once.

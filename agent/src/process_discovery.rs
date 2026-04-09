@@ -171,10 +171,23 @@ pub const RUNTIME_SPECS: &[RuntimeSpec] = &[
         port_arg:        "--port",
         default_port:    8080,
     },
+    // SGLang — emerging vLLM alternative with Prometheus metrics
+    RuntimeSpec {
+        name:            "sglang",
+        exact_binary:    &["sglang"],
+        cmdline_markers: &["sglang.launch_server", "sglang serve", "-m sglang"],
+        port_arg:        "--port",
+        default_port:    30000,
+    },
     // RuntimeSpec { name: "lmstudio",  exact_binary: &["lms"],                       cmdline_markers: &[],              port_arg: "--port", default_port: 1234 },
     // RuntimeSpec { name: "tgi",       exact_binary: &["text-generation-launcher"],  cmdline_markers: &[],              port_arg: "--port", default_port: 3000 },
     // RuntimeSpec { name: "triton",    exact_binary: &["tritonserver"],              cmdline_markers: &[],              port_arg: "--http-port", default_port: 8000 },
 ];
+
+/// Look up the default port for a runtime by name.
+pub fn default_port_for(name: &str) -> Option<u16> {
+    RUNTIME_SPECS.iter().find(|s| s.name == name).map(|s| s.default_port)
+}
 
 // ── Watch channel types ───────────────────────────────────────────────────────
 

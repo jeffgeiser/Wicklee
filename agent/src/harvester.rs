@@ -225,7 +225,8 @@ pub(crate) fn start_ollama_harvester(
                 if api_ok {
                     discovered_port
                 } else {
-                    let default_port: u16 = 11434;
+                    // Use the RuntimeSpec default instead of hardcoding
+                    let default_port: u16 = crate::process_discovery::default_port_for("ollama").unwrap_or(11434);
                     if discovered_port == default_port {
                         // Already tried default — nothing to fall back to.
                         eprintln!("[ollama] API not responding on :{default_port} — will retry");
