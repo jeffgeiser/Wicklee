@@ -65,7 +65,7 @@ const TIERS: TierDef[] = [
   {
     id: 'pro',
     name: 'Pro',
-    price: '$9',
+    price: '$29',
     period: '/mo',
     tagline: 'Unattended monitoring with Slack alerts and pattern intelligence.',
     accent: 'border-blue-500/50',
@@ -78,7 +78,7 @@ const TIERS: TierDef[] = [
       'All 18 Patterns — adds fleet, inference latency & advanced diagnostics',
       'Custom Alert Thresholds',
       'Node Naming & Tags',
-      'Slack & Email Alerts (Single Channel)',
+      'Slack & Email Alerts',
       'Persistent Insight Cards',
       'Fleet proxy metrics — production tok/s, TTFT & latency in cloud dashboard',
     ],
@@ -87,17 +87,14 @@ const TIERS: TierDef[] = [
   {
     id: 'team',
     name: 'Team',
-    price: '$19',
+    price: '$49',
     period: '/seat/mo',
     tagline: 'Production fleet with shared dashboards, exports, and PagerDuty.',
     accent: 'border-amber-500/50',
     accentBg: 'bg-amber-500/5',
     accentText: 'text-amber-400',
-    badge: 'Coming Soon',
-    badgeCls: 'bg-amber-600 shadow-amber-600/30',
     features: [
-      '3-Seat Minimum · 25 Nodes Included',
-      '+50 Nodes Expansion Pack ($50/mo)',
+      '25 Nodes Included · +$2/node/mo over 25',
       '90-Day Metric History',
       'Shared Fleet Dashboard — invite team via Org',
       'CSV / JSON Exports',
@@ -123,7 +120,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
 }) => {
 
   const tierRank = (t: SubscriptionTier | null): number =>
-    t === 'enterprise' ? 4 : t === 'team' ? 3 : t === 'pro' ? 2 : 1;
+    t === 'enterprise' ? 5 : t === 'business' ? 4 : t === 'team' ? 3 : t === 'pro' ? 2 : 1;
 
   const currentRank = tierRank(currentTier);
 
@@ -277,21 +274,54 @@ const PricingPage: React.FC<PricingPageProps> = ({
         </div>
 
         {/* ── Enterprise footer ───────────────────────────────────────── */}
+        {/* ── Business Tier — full-width banner ──────────────────── */}
+        <div className="rounded-2xl border border-teal-500/30 bg-gradient-to-r from-teal-500/5 to-emerald-500/5 p-6 sm:p-8">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+            <div className="flex-1">
+              <div className="flex items-center gap-3 mb-2">
+                <h4 className="text-lg font-bold text-white">Business</h4>
+                <span className="text-2xl font-bold text-teal-400">$499</span>
+                <span className="text-sm text-gray-500">/mo</span>
+              </div>
+              <p className="text-sm text-gray-400 mb-4">
+                For growing teams that need more nodes and enterprise security. Everything in Team, plus:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2">
+                {[
+                  'Up to 100 Nodes',
+                  'Everything in Team',
+                  'SSO / SAML Integration',
+                  'Basic Audit Logging',
+                  '90-Day Metric History',
+                  'Priority Support',
+                ].map(f => (
+                  <div key={f} className="flex items-center gap-2">
+                    <Check className="w-3 h-3 text-teal-400 shrink-0" />
+                    <span className="text-sm text-gray-300">{f}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <a
+              href="mailto:sales@wicklee.dev"
+              className="shrink-0 px-8 py-3 rounded-xl text-sm font-bold text-teal-300 border border-teal-500/30 bg-teal-500/10 hover:bg-teal-500/20 transition-colors"
+            >
+              Contact Sales
+            </a>
+          </div>
+        </div>
+
+        {/* ── Enterprise — contact only ──────────────────────────── */}
         <div className="rounded-2xl border border-gray-800 bg-gray-900/40 p-6 sm:p-8 flex flex-col sm:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/20">
               <Shield className="w-6 h-6 text-purple-400" />
             </div>
             <div>
-              <h4 className="text-base font-bold text-white flex items-center gap-2">
-                Enterprise — Airgapped / Sovereign
-                <span className="text-[9px] font-bold uppercase tracking-widest text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full">
-                  From $200/mo
-                </span>
-              </h4>
+              <h4 className="text-base font-bold text-white">Enterprise — Sovereign Deployment</h4>
               <p className="text-sm text-gray-500 mt-0.5">
-                On-premise deployment. No outbound telemetry. Inline proxy for inference tracing,
-                Kubernetes Operator, Prometheus export, SSO/SAML, signed PDF audits, and SIEM integration.
+                Unlimited nodes. On-premise deployment. No outbound telemetry. Kubernetes Operator,
+                SIEM integration, custom SLA, and dedicated support.
               </p>
             </div>
           </div>

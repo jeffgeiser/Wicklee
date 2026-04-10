@@ -37,6 +37,7 @@ function tierLabel(t: SubscriptionTier): string {
     community:  'Community',
     pro:        'Pro',
     team:       'Team',
+    business:   'Business',
     enterprise: 'Enterprise',
   };
   return map[t];

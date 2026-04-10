@@ -1524,7 +1524,7 @@ curl https://wicklee.dev/api/v1/fleet \\
             </div>
 
             <NoteBox>
-              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team ($19/seat/mo), the org unlocks 25 nodes, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
+              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team ($49/seat/mo), the org unlocks 25 nodes, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
             </NoteBox>
 
             <NoteBox>
@@ -1908,7 +1908,7 @@ ollama_port = 11435   # port where Ollama now listens`}
                       <Td>Local MCP, Ollama proxy</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-blue-400 font-medium">Pro ($9/mo)</span></Td>
+                      <Td><span className="text-blue-400 font-medium">Pro ($29/mo)</span></Td>
                       <Td>10</Td>
                       <Td>18</Td>
                       <Td>7 day</Td>
@@ -1916,7 +1916,7 @@ ollama_port = 11435   # port where Ollama now listens`}
                       <Td>Custom thresholds, node names</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-amber-400 font-medium">Team ($19/seat)</span></Td>
+                      <Td><span className="text-amber-400 font-medium">Team ($49/seat)</span></Td>
                       <Td>25</Td>
                       <Td>18</Td>
                       <Td>90 day</Td>
@@ -1924,12 +1924,20 @@ ollama_port = 11435   # port where Ollama now listens`}
                       <Td>Shared dashboard, Cloud MCP, CSV/JSON, OTel</Td>
                     </tr>
                     <tr>
+                      <Td><span className="text-teal-400 font-medium">Business ($499/mo)</span></Td>
+                      <Td>100</Td>
+                      <Td>18</Td>
+                      <Td>90 day</Td>
+                      <Td>All Team + SSO</Td>
+                      <Td>SSO/SAML, audit logging, priority support</Td>
+                    </tr>
+                    <tr>
                       <Td><span className="text-purple-400 font-medium">Enterprise</span></Td>
                       <Td>Unlimited</Td>
                       <Td>18</Td>
                       <Td>Custom</Td>
                       <Td>All + SIEM</Td>
-                      <Td>On-prem, SSO, audit exports</Td>
+                      <Td>On-prem, K8s operator, custom SLA</Td>
                     </tr>
                   </tbody>
                 </table>

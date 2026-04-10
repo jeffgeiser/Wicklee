@@ -394,7 +394,7 @@ export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
  * Subscription tier stored in Clerk publicMetadata.tier.
  * Community = free, Pro = $9/mo, Team = $29/mo, Enterprise = $199/mo.
  */
-export type SubscriptionTier = 'community' | 'pro' | 'team' | 'enterprise';
+export type SubscriptionTier = 'community' | 'pro' | 'team' | 'business' | 'enterprise';
 
 /** OpenTelemetry export configuration (Team+ tier). */
 export interface OtelConfig {
@@ -568,5 +568,6 @@ export const TIER_BADGE: Record<SubscriptionTier, { label: string; color: string
   community:  { label: 'Community',  color: 'text-gray-400  bg-gray-500/10  border-gray-500/20'  },
   pro:        { label: 'Pro',        color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' },
   team:       { label: 'Team',       color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
+  business:   { label: 'Business',  color: 'text-teal-400  bg-teal-500/10  border-teal-500/20'  },
   enterprise: { label: 'Enterprise', color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
 };

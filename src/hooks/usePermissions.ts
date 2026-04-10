@@ -6,6 +6,7 @@ const SUBSCRIPTION_TO_INSIGHTS: Record<SubscriptionTier, InsightsTier> = {
   community:  'live_session',
   pro:        'persistent',
   team:       'trend',
+  business:   'trend',
   enterprise: 'predictive',
 };
 
@@ -78,7 +79,7 @@ export const usePermissions = (user: User | null) => {
 
     // ── History depth ─────────────────────────────────────────────────────
     historyDays: (
-      { community: 1, pro: 7, team: 90, enterprise: Infinity } as Record<SubscriptionTier, number>
+      { community: 1, pro: 7, team: 90, business: 90, enterprise: Infinity } as Record<SubscriptionTier, number>
     )[subscriptionTier],
 
     // ── Enterprise capabilities ───────────────────────────────────────────
@@ -91,7 +92,8 @@ export const usePermissions = (user: User | null) => {
 
     // ── Convenience booleans ──────────────────────────────────────────────
     isPro:        subscriptionTier !== 'community',
-    isTeamOrAbove:  subscriptionTier === 'team' || subscriptionTier === 'enterprise',
+    isTeamOrAbove:  subscriptionTier === 'team' || subscriptionTier === 'business' || subscriptionTier === 'enterprise',
+    isBusinessOrAbove: subscriptionTier === 'business' || subscriptionTier === 'enterprise',
     isEnterprise: subscriptionTier === 'enterprise',
   };
 };

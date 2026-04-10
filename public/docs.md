@@ -572,16 +572,18 @@ Wicklee is sovereign by default:
 
 ## Pricing
 
-| | Community | Pro | Team | Enterprise |
-|---|---|---|---|---|
-| Price | Free | $9/mo | $19/seat/mo | From $200/mo |
-| Nodes | 3 | 10 | 25+ | Custom |
-| History | 24h | 7 days | 90 days | Custom |
-| Patterns | 9 | 18 | 18 | 18 |
-| Local MCP | ✅ | ✅ | ✅ | ✅ |
-| Cloud MCP | — | — | ✅ | ✅ |
-| OTel + Prometheus | — | — | ✅ | ✅ |
-| Alerts | — | Slack, Email | Slack, Email, PagerDuty | All |
+| | Community | Pro | Team | Business | Enterprise |
+|---|---|---|---|---|---|
+| Price | Free | $29/mo | $49/seat/mo | $499/mo | Contact Sales |
+| Nodes | 3 | 10 | 25 (+$2/node over) | 100 | Unlimited |
+| History | 24h | 7 days | 90 days | 90 days | Custom |
+| Patterns | 9 | 18 | 18 | 18 | 18 |
+| Local MCP | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cloud MCP | — | — | ✅ | ✅ | ✅ |
+| OTel + Prometheus | — | — | ✅ | ✅ | ✅ |
+| SSO / SAML | — | — | — | ✅ | ✅ |
+| Audit Logging | — | — | — | ✅ | ✅ |
+| Alerts | — | Slack, Email | + PagerDuty | + PagerDuty | All + SIEM |
 
 ---
 

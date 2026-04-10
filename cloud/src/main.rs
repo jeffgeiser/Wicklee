@@ -719,9 +719,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 // ── Tier constants ────────────────────────────────────────────────────────────
 
 /// Maximum nodes per tier.
-const MAX_FREE_NODES: usize = 3;
-const MAX_PRO_NODES:  usize = 10;
-const MAX_TEAM_NODES: usize = 25;
+const MAX_FREE_NODES:     usize = 3;
+const MAX_PRO_NODES:      usize = 10;
+const MAX_TEAM_NODES:     usize = 25;
+const MAX_BUSINESS_NODES: usize = 100;
 
 /// Agent API v1 rate limits (requests per 60-second sliding window).
 const API_RATE_COMMUNITY: usize = 60;
@@ -732,11 +733,15 @@ const ALERT_QUIET_PERIOD_MS: u64 = 300_000; // 5 minutes
 
 /// Returns true if the account has Team or Enterprise tier (alerting unlocked).
 fn is_team_or_above(tier: &str) -> bool {
-    matches!(tier, "team" | "enterprise")
+    matches!(tier, "team" | "business" | "enterprise")
 }
 
 fn is_pro_or_above(tier: &str) -> bool {
-    matches!(tier, "pro" | "team" | "enterprise")
+    matches!(tier, "pro" | "team" | "business" | "enterprise")
+}
+
+fn is_business_or_above(tier: &str) -> bool {
+    matches!(tier, "business" | "enterprise")
 }
 
 /// Pattern-to-tier allowlist. Community users see 7 patterns; Pro+ see all 18.
@@ -2062,6 +2067,7 @@ async fn handle_fleet(
     ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let tier_limit = if tier == "enterprise" { usize::MAX }
+        else if is_business_or_above(&tier) { MAX_BUSINESS_NODES }
         else if is_team_or_above(&tier) { MAX_TEAM_NODES }
         else if is_pro_or_above(&tier) { MAX_PRO_NODES }
         else { FREE_NODE_LIMIT };
@@ -2934,6 +2940,7 @@ async fn handle_activate(
     // Enforce per-tier node limits.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     let node_limit = if tier == "enterprise" { usize::MAX }
+        else if is_business_or_above(&tier) { MAX_BUSINESS_NODES }
         else if is_team_or_above(&tier) { MAX_TEAM_NODES }
         else if is_pro || is_pro_or_above(&tier) { MAX_PRO_NODES }
         else { MAX_FREE_NODES };
@@ -3086,6 +3093,7 @@ async fn handle_fleet_stream(
         }
 
         let stream_limit = if tier == "enterprise" { usize::MAX }
+            else if is_business_or_above(&tier) { MAX_BUSINESS_NODES }
             else if is_team_or_above(&tier) { MAX_TEAM_NODES }
             else if is_pro_or_above(&tier) { MAX_PRO_NODES }
             else { FREE_NODE_LIMIT };
@@ -4841,11 +4849,12 @@ async fn handle_billing_config(
     let paddle_client_token = std::env::var("PADDLE_CLIENT_TOKEN").unwrap_or_else(|_| "".to_string());
     let pro_price_id = std::env::var("PADDLE_PRO_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_pro".to_string());
     let team_price_id = std::env::var("PADDLE_TEAM_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_team".to_string());
+    let business_price_id = std::env::var("PADDLE_BUSINESS_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_business".to_string());
 
     Json(serde_json::json!({
         "environment": paddle_env,
         "client_token": paddle_client_token,
-        "prices": { "pro": pro_price_id, "team": team_price_id },
+        "prices": { "pro": pro_price_id, "team": team_price_id, "business": business_price_id },
         "custom_data": { "user_id": user_id },
         "customer_email": email,
     })).into_response()
@@ -4904,7 +4913,9 @@ async fn handle_paddle_webhook(
                 .unwrap_or("");
             let pro_price = std::env::var("PADDLE_PRO_PRICE_ID").unwrap_or_default();
             let team_price = std::env::var("PADDLE_TEAM_PRICE_ID").unwrap_or_default();
-            let tier = if price_id == team_price { "team" }
+            let business_price = std::env::var("PADDLE_BUSINESS_PRICE_ID").unwrap_or_default();
+            let tier = if price_id == business_price { "business" }
+                       else if price_id == team_price { "team" }
                        else if price_id == pro_price { "pro" }
                        else { "pro" };
 
