@@ -118,5 +118,5 @@ wes_cliff, agent_version_mismatch
 - Community: Free forever, 3 nodes, 24h history, 9 patterns, local MCP, Ollama proxy
 - Pro: $29/mo, 10 nodes, 7-day history, 18 patterns, Slack+Email alerts, custom thresholds
 - Team: $49/seat/mo, 25 nodes (+$2/node over 25), 90-day history, shared dashboards, PagerDuty, Cloud MCP, OTel+Prometheus
-- Business: $499/mo, 100 nodes, everything in Team + SSO/SAML + audit logging
+- Business: $499/mo, unlimited seats, 100 nodes, 365-day history, everything in Team + SSO/SAML + audit logging
 - Enterprise: Contact sales, unlimited nodes, sovereign deployment, custom SLA

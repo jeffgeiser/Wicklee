@@ -692,7 +692,7 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         .execute(pool).await.ok();
     sqlx::query("SELECT add_retention_policy('node_events', INTERVAL '30 days', if_not_exists => true)")
         .execute(pool).await.ok();
-    sqlx::query("SELECT add_retention_policy('metrics_5min', INTERVAL '90 days', if_not_exists => true)")
+    sqlx::query("SELECT add_retention_policy('metrics_5min', INTERVAL '365 days', if_not_exists => true)")
         .execute(pool).await.ok();
 
     // Compression policies
@@ -3478,9 +3478,9 @@ async fn run_nightly_maintenance(pool: &sqlx::PgPool) {
     let _ = sqlx::query("DELETE FROM node_events WHERE ts < to_timestamp($1::float8 / 1000.0)")
         .bind(now - 30 * 86_400_000).execute(pool).await;
 
-    // Prune metrics_5min older than 90 days.
+    // Prune metrics_5min older than 365 days (Business tier gets full year).
     let _ = sqlx::query("DELETE FROM metrics_5min WHERE ts < to_timestamp($1::float8 / 1000.0)")
-        .bind(now - 90 * 86_400_000).execute(pool).await;
+        .bind(now - 365 * 86_400_000).execute(pool).await;
 
     // Prune resolved/acknowledged observations older than 30 days.
     let _ = sqlx::query(

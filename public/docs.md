@@ -575,8 +575,8 @@ Wicklee is sovereign by default:
 | | Community | Pro | Team | Business | Enterprise |
 |---|---|---|---|---|---|
 | Price | Free | $29/mo | $49/seat/mo | $499/mo | Contact Sales |
-| Nodes | 3 | 10 | 25 (+$2/node over) | 100 | Unlimited |
-| History | 24h | 7 days | 90 days | 90 days | Custom |
+| Nodes | 3 | 10 | 25 (+$2/node over) | 100 (unlimited seats) | Unlimited |
+| History | 24h | 7 days | 90 days | 365 days | Custom |
 | Patterns | 9 | 18 | 18 | 18 | 18 |
 | Local MCP | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cloud MCP | — | — | ✅ | ✅ | ✅ |

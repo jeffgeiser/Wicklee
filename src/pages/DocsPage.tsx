@@ -1925,9 +1925,9 @@ ollama_port = 11435   # port where Ollama now listens`}
                     </tr>
                     <tr>
                       <Td><span className="text-teal-400 font-medium">Business ($499/mo)</span></Td>
-                      <Td>100</Td>
+                      <Td>100 (unlimited seats)</Td>
                       <Td>18</Td>
-                      <Td>90 day</Td>
+                      <Td>365 day</Td>
                       <Td>All Team + SSO</Td>
                       <Td>SSO/SAML, audit logging, priority support</Td>
                     </tr>

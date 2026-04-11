@@ -288,11 +288,11 @@ const PricingPage: React.FC<PricingPageProps> = ({
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2">
                 {[
-                  'Up to 100 Nodes',
+                  'Unlimited Seats · Up to 100 Nodes',
                   'Everything in Team',
                   'SSO / SAML Integration',
                   'Basic Audit Logging',
-                  '90-Day Metric History',
+                  '365-Day Metric History',
                   'Priority Support',
                 ].map(f => (
                   <div key={f} className="flex items-center gap-2">
@@ -319,7 +319,10 @@ const PricingPage: React.FC<PricingPageProps> = ({
             </div>
             <div>
               <h4 className="text-base font-bold text-white">Enterprise — Sovereign Deployment</h4>
-              <p className="text-sm text-gray-500 mt-0.5">
+              <p className="text-sm text-gray-400 mt-0.5">
+                For regulated, sovereign, and air-gapped deployments.
+              </p>
+              <p className="text-sm text-gray-500 mt-1">
                 Unlimited nodes. On-premise deployment. No outbound telemetry. Kubernetes Operator,
                 SIEM integration, custom SLA, and dedicated support.
               </p>

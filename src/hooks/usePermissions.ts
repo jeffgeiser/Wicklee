@@ -79,7 +79,7 @@ export const usePermissions = (user: User | null) => {
 
     // ── History depth ─────────────────────────────────────────────────────
     historyDays: (
-      { community: 1, pro: 7, team: 90, business: 90, enterprise: Infinity } as Record<SubscriptionTier, number>
+      { community: 1, pro: 7, team: 90, business: 365, enterprise: Infinity } as Record<SubscriptionTier, number>
     )[subscriptionTier],
 
     // ── Enterprise capabilities ───────────────────────────────────────────
