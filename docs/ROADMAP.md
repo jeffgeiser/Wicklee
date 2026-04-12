@@ -21,7 +21,7 @@ WES (Wicklee Efficiency Score) — tokens per watt with thermal penalty. 18 hard
 Ollama and vLLM runtime detection. Prompt eval speed, TTFT, queue depth, KV cache utilization. Optional transparent proxy for production request metrics.
 
 ### Cloud Infrastructure
-Postgres time-series storage, 5-minute rollups, 90-day history, fleet alerting with per-node pattern suppression.
+Postgres time-series storage, 5-minute rollups, tiered history retention (24h Community, 7d Pro, 90d Team, 365d Business, unlimited Enterprise), fleet alerting with per-node pattern suppression.
 
 ### Platform Support
 macOS (Apple Silicon + Intel), Linux (x86_64 + aarch64), Windows, NVIDIA GPU builds with NVML.
@@ -48,7 +48,10 @@ Team dashboard sharing via Clerk Organizations. Org members see the same fleet �
 Events API v2 integration for Team+ tier. Trigger and resolve events with dedup key for incident lifecycle. Routing key configured in Settings → Alerts.
 
 ### Per-Tier Node Limits
-Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Enterprise: unlimited. Enforced at pairing, fleet list, and SSE stream.
+Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Business: 100 nodes (unlimited seats), Enterprise: unlimited. Enforced at pairing, fleet list, and SSE stream.
+
+### Five-Tier Pricing
+Community (Free) → Pro ($29/mo) → Team ($49/seat/mo) → Business ($499/mo) → Enterprise (Contact Sales). Business adds 365-day history, unlimited seats, SSO/SAML, and audit logging. Paddle billing with webhook-driven tier sync.
 
 ### Server-Side Pattern Evaluation (Phase 7)
 Migrated all 18 observation patterns from client-side TypeScript to server-side Rust. Agent evaluates 17 patterns against 10-min DuckDB buffer every 10s, pushes to cloud via telemetry. Cloud evaluates `fleet_load_imbalance`. Deleted `patternEngine.ts` (2,254 lines) and `useMetricHistory.ts` (284 lines).
@@ -94,6 +97,18 @@ Register interest in specific state transitions (inference_state changed, therma
 
 ### Kubernetes Operator
 Helm chart and operator for automated Wicklee agent deployment across GPU node pools.
+
+### Install Telemetry
+Anonymous install event tracking (OS, arch, version) via fire-and-forget ping from `install.sh` to cloud endpoint. Powers activation funnel metrics without collecting PII.
+
+### Audit Logging (Business+)
+Immutable audit trail for sensitive fleet operations: node add/remove, alert config changes, API key lifecycle, team member management. Postgres-backed with `GET /api/audit-log` endpoint and Settings UI.
+
+### WES Leaderboard (Public)
+Anonymous hardware benchmark submissions with public ranking. "MPG for AI" — compare tok/W across hardware configurations. Public read API + submission endpoint.
+
+### SSO/SAML (Business+)
+SAML 2.0 single sign-on via Clerk Organizations. Configured per-org in Clerk dashboard. Business and Enterprise tiers.
 
 ---
 
