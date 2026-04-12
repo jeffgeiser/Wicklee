@@ -6,6 +6,33 @@
 
 ---
 
+## April 11, 2026 — v0.7.13: Five-Tier Pricing, Business Tier
+
+### Five-Tier Pricing Revision
+- **Pro** $9 → $29/mo, **Team** $19 → $49/seat/mo (prices aligned to value delivered)
+- **Business tier added** ($499/mo): 100 nodes, unlimited seats, SSO/SAML, audit logging, 365-day metric history, priority support
+- **Enterprise** simplified to "Contact Sales" (removed $200/mo floor)
+- `SubscriptionTier` union type updated across 12 files (types.ts, PricingPage, TracesView, usePermissions, 3 Insights card components, DocsPage, docs.md, llms.txt, cloud/src/main.rs)
+
+### Business Tier — Cloud Backend
+- `MAX_BUSINESS_NODES = 100`, `is_business_or_above()` helper
+- All node limit checks updated (pairing, fleet list, SSE stream)
+- Paddle webhook maps `PADDLE_BUSINESS_PRICE_ID`
+- `metrics_5min` retention extended from 90 → 365 days (TimescaleDB policy + nightly fallback DELETE)
+
+### Business Tier — Frontend
+- Business banner card on pricing page (teal accent, between grid and Enterprise)
+- "Unlimited Seats · Up to 100 Nodes" as primary value prop
+- 365-day history in `usePermissions.ts` (`historyDays: 365`)
+- `isBusinessOrAbove` convenience boolean for tier gating
+- Enterprise positioning preamble: "For regulated, sovereign, and air-gapped deployments"
+
+### Documentation
+- Pricing tables updated in DocsPage.tsx, docs.md, llms.txt (5 tiers, all features)
+- Roadmap updated with Business tier, install telemetry, audit logging, WES leaderboard planned items
+
+---
+
 ## April 7, 2026 — v0.7.12: Inference Intelligence
 
 ### Inference Profiler
