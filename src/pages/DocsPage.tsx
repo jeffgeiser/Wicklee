@@ -117,6 +117,7 @@ const NAV = [
   { id: 'otel',        label: 'OTel & Prometheus' },
   { id: 'config',      label: 'Configuration' },
   { id: 'sovereignty', label: 'Sovereignty' },
+  { id: 'data-flow',   label: 'Data Flow' },
   { id: 'platforms',   label: 'Platform Support' },
 ];
 
@@ -1294,7 +1295,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td mono>GET /ws</Td>
-                    <Td>WebSocket — 10 Hz live telemetry for high-frequency charts (localhost only)</Td>
+                    <Td>WebSocket — 1 Hz live telemetry, same payload as SSE (localhost only, browser fallback path)</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/observations</Td>
@@ -2084,6 +2085,93 @@ ollama_port = 11435   # port where Ollama now listens`}
             <p className="mt-4 text-sm text-gray-400">
               Unpaired nodes running only the local agent at <code className="text-gray-300">localhost:7700</code> make zero outbound connections. All metrics remain on-device. The fleet pairing is opt-in and can be revoked at any time from <strong className="text-white">Settings → Account & Data</strong>.
             </p>
+          </Section>
+
+          {/* ── Data Flow ── */}
+          <Section
+            id="data-flow"
+            icon={<Activity className="w-5 h-5" />}
+            accent="border-cyan-500/20"
+            title="Data Flow & Transport"
+          >
+            <p>
+              Every telemetry path in Wicklee — from hardware sensor to dashboard pixel — is documented here. Understanding which protocol carries what, and at which cadence, is essential for integration and debugging.
+            </p>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">Transport paths</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                    <th className="pb-2 pr-4">Path</th>
+                    <th className="pb-2 pr-4">Protocol</th>
+                    <th className="pb-2 pr-4">Rate</th>
+                    <th className="pb-2">Purpose</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Browser → Agent</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">SSE <code className="text-[10px]">GET /api/metrics</code></td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">1 Hz</td>
+                    <td className="py-2 text-gray-400">Local dashboard — primary transport. Full MetricsPayload per tick.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Browser → Agent</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">WebSocket <code className="text-[10px]">GET /ws</code></td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">1 Hz</td>
+                    <td className="py-2 text-gray-400">Local dashboard — fallback transport. Same payload, same cadence. Browser tries WebSocket first, falls back to SSE if unavailable.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Agent → Cloud</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">HTTP POST <code className="text-[10px]">/api/telemetry</code></td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 text-gray-400">Fleet telemetry push. ~2 KB per push. State-change bypass: immediate push on inference state transitions. Only when paired.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Cloud → Fleet Browser</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">SSE <code className="text-[10px]">GET /api/fleet/stream</code></td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 text-gray-400">Fleet dashboard. Cloud reads from in-memory cache (populated by agent push), serves all nodes to authenticated browser.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Cloud → Postgres</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">Batch INSERT</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">30s</td>
+                    <td className="py-2 text-gray-400">Metrics writer task flushes in-memory buffer to <code className="text-[10px]">metrics_raw</code> (1000 rows/chunk). 5-min rollups to <code className="text-[10px]">metrics_5min</code>.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Agent → DuckDB</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">INSERT</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
+                    <td className="py-2 text-gray-400">Local store writes to <code className="text-[10px]">metrics_raw</code>. Three-tier retention: 1 Hz raw (24h) → 1-min aggregates (30d) → 1-hr aggregates (90d).</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">How the broadcast loop works</p>
+              <p className="text-sm text-gray-400">
+                The agent runs a single 1 Hz broadcast loop that assembles a <code className="text-gray-300 font-mono text-xs">MetricsPayload</code> from all harvester shared state (CPU, GPU, memory, power, inference, observations). This single JSON object is serialized once per tick and pushed to both the SSE stream and all connected WebSocket clients simultaneously. The same payload — byte-for-byte — is what the cloud push sends every 2 seconds when paired. There is no separate high-frequency path.
+              </p>
+            </div>
+
+            <div className="mt-4 p-3 rounded-lg border border-gray-800 bg-gray-900/60">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Data path diagram</p>
+              <pre className="text-[11px] text-gray-400 font-mono leading-relaxed whitespace-pre overflow-x-auto">{`Hardware sensors (1 Hz)
+  └─▶ Broadcast loop (1 Hz) ──▶ MetricsPayload JSON
+        ├─▶ SSE  /api/metrics    → Local browser dashboard
+        ├─▶ WS   /ws             → Local browser dashboard (fallback)
+        ├─▶ DuckDB INSERT (2s)   → Local pattern evaluation + Intelligence endpoints
+        └─▶ HTTP POST (2s)       → wicklee.dev/api/telemetry (when paired)
+                                      ├─▶ In-memory cache → SSE /api/fleet/stream → Fleet browser
+                                      └─▶ Postgres batch (30s) → metrics_raw → metrics_5min rollup`}</pre>
+            </div>
+
+            <NoteBox>
+              Both the local SSE and WebSocket streams deliver identical data at 1 Hz. The WebSocket is not a higher-frequency channel — it exists as a transport fallback. The cloud path is HTTP POST (not WebSocket), sent every 2 seconds by the agent's <code className="font-mono text-xs text-gray-300">cloud_push</code> task.
+            </NoteBox>
           </Section>
 
           {/* ── Platform support ── */}

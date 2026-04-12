@@ -164,7 +164,7 @@ Auth: None required.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry |
-| GET | /ws | WebSocket — 10 Hz telemetry |
+| GET | /ws | WebSocket — 1 Hz telemetry (same payload as SSE, fallback transport) |
 | GET | /api/observations | 17 observation patterns with per-observation `routing_hint` (steer_away/reduce_batch/monitor) + node-level `routing_hint` + `routing_hint_source` |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |

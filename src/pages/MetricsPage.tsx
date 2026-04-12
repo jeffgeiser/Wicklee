@@ -152,8 +152,8 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
           <div className="bg-gray-900 border border-indigo-500/20 rounded-2xl p-6 space-y-5">
             {([
               {
-                label: 'Hardware Harvester (10 Hz)',
-                body: 'The agent queries your kernel and GPU drivers (NVML / IOReg / RAPL) at high frequency to capture micro-spikes in power, thermals, and utilization that 1-minute Prometheus scrapes miss.',
+                label: 'Hardware Harvester (1 Hz)',
+                body: 'The agent queries your kernel and GPU drivers (NVML / IOReg / RAPL) once per second to capture micro-spikes in power, thermals, and utilization that 1-minute Prometheus scrapes miss.',
               },
               {
                 label: 'Performance Probe (30 s)',

@@ -26,7 +26,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 ## Localhost API (no auth, any tier)
 
 - `GET /api/metrics` — SSE stream, 1 Hz telemetry
-- `GET /ws` — WebSocket, 10 Hz telemetry
+- `GET /ws` — WebSocket, 1 Hz telemetry (same payload as SSE, fallback transport)
 - `GET /api/observations` — 17 server-side observation patterns (10-min DuckDB buffer)
 - `GET /api/profile?minutes=60` — Inference Profiler: correlated TTFT/KV/queue/thermal/power timeline
 - `GET /api/cost-by-model?hours=24` — Cost attribution per model (daily breakdown)

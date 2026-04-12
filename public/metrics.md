@@ -8,7 +8,7 @@
 
 Wicklee is a sovereign Rust binary that observes your inference fleet without ever touching your private data. Unlike standard scrapers that pull static counters, Wicklee performs Synchronous Observation by merging two high-fidelity telemetry streams:
 
-- **Hardware Harvester (10 Hz):** The agent queries your kernel and GPU drivers (NVML / IOReg / RAPL) at high frequency to capture micro-spikes in power, thermals, and utilization that 1-minute Prometheus scrapes miss.
+- **Hardware Harvester (1 Hz):** The agent queries your kernel and GPU drivers (NVML / IOReg / RAPL) once per second to capture micro-spikes in power, thermals, and utilization that 1-minute Prometheus scrapes miss.
 
 - **Performance Probe (30 s):** Every 30 seconds, the agent fires a 20-token generation request to your local inference API to measure real-time throughput without intercepting actual user traffic. The probe is skipped when GPU utilization is ≥ 40% — at that point the scheduler is already under load and a probe reading would be depressed. Throughput estimation covers the gap (see below).
 
@@ -138,7 +138,7 @@ Eight summary cards at the top of the dashboard. All displayed values pass throu
 
 ## Dashboard: Fleet Status Table
 
-Ten columns in the main node table. Values update at up to 10 Hz but are smoothed over an 8-sample rolling window before display.
+Ten columns in the main node table. Values update at 1 Hz and are smoothed over an 8-sample rolling window before display.
 
 | Column | What it shows | Data source | Color logic |
 |--------|--------------|-------------|-------------|
@@ -204,7 +204,7 @@ All numbers in the dashboard pass through a rolling-average (simple moving avera
 
 **Localhost broadcast rate**
 
-The local Wicklee agent broadcasts telemetry at **1 Hz** (once per second). This was intentionally throttled from an earlier 10 Hz rate: at 10 Hz the 8-sample window covered only ~800 ms, making metrics visibly jumpy. At 1 Hz the same window covers ~8 seconds, matching the effective smoothing depth of the cloud fleet dashboard and producing a consistent reading experience across both environments.
+The local Wicklee agent broadcasts telemetry at **1 Hz** (once per second) over both SSE and WebSocket. Both transports deliver the same MetricsPayload at the same cadence. The 8-sample rolling window covers ~8 seconds at 1 Hz, matching the effective smoothing depth of the cloud fleet dashboard and producing a consistent reading experience across both local and fleet environments.
 
 **Additional protections**
 

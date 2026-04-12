@@ -145,7 +145,7 @@ wicklee (single binary)
 ├── Axum HTTP server (port 7700)
 │   ├── Embedded React dashboard
 │   ├── SSE telemetry stream (1 Hz)
-│   ├── WebSocket live charts (10 Hz)
+│   ├── WebSocket live charts (1 Hz)
 │   └── MCP server (JSON-RPC 2.0)
 ├── Hardware harvester (Tokio background tasks)
 │   ├── Apple Silicon: ioreg, powermetrics, pmset, vm_stat

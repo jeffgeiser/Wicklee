@@ -39,7 +39,7 @@ Auth: None required. All endpoints available on every tier.
 SSE stream. 1 Hz cadence. Returns `data: {MetricsPayload}\n\n` per tick.
 
 ### GET /ws
-WebSocket. 10 Hz cadence. Same MetricsPayload as SSE, higher frequency for charts.
+WebSocket. 1 Hz cadence. Same MetricsPayload as SSE. Fallback transport — browser tries WebSocket first, falls back to SSE if unavailable.
 
 ### GET /api/observations
 Returns 17 server-side observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds. Patterns are pushed to the fleet cloud when paired.

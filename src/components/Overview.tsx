@@ -976,9 +976,9 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
   </div>
 );
 
-// ── High-Frequency Diagnostic Rail — agent build only, replaces Fleet Status ──
-// Renders 4 live rows (CPU · GPU · Mem Pressure · Board Power) fed by the 10Hz
-// WebSocket stream. Replaces the fleet table when isLocalMode is true.
+// ── Live Diagnostic Rail — agent build only, replaces Fleet Status ──
+// Renders 4 live rows (CPU · GPU · Mem Pressure · Board Power) fed by the 1 Hz
+// SSE/WebSocket stream. Replaces the fleet table when isLocalMode is true.
 interface RailRowProps {
   label:     string;
   value:     string;
@@ -2471,7 +2471,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             </h3>
             {isLocalMode ? (<>
               <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full font-semibold">
-                {transport === 'ws' ? '10 Hz' : '1 Hz'}
+                1 Hz
               </span>
               {sentinel?.ollama_proxy_active && (
                 <span className="text-[10px] text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full font-semibold">
@@ -2513,7 +2513,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         </div>
 
         {isLocalMode ? (
-          // ── Diagnostic Rail: live hardware metrics at 10 Hz ──────────────────
+          // ── Diagnostic Rail: live hardware metrics at 1 Hz ──────────────────
           <DiagnosticRail
             sentinel={sentinel}
             transport={transport}
@@ -2599,7 +2599,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     {cfg.label}
                     {isLive && (
                       <span className="ml-2 text-[10px] text-indigo-400 font-normal tabular-nums">
-                        LIVE · {transport === 'ws' ? '10 Hz' : '1 Hz'} · Current Session
+                        LIVE · 1 Hz · Current Session
                       </span>
                     )}
                   </h3>
