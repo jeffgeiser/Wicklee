@@ -46,12 +46,12 @@ const TIERS: TierDef[] = [
     name: 'Community',
     price: '$0',
     period: 'forever',
-    tagline: 'Local experimentation and single-node monitoring.',
+    tagline: 'Full local observability, unlimited local nodes.',
     accent: 'border-gray-700',
     accentBg: 'bg-gray-500/5',
     accentText: 'text-gray-400',
     features: [
-      '3 Nodes',
+      'Unlimited nodes locally · 3 synced to fleet',
       '24-Hour Rolling History',
       '9 Observation Patterns — thermal, power, memory & hardware health',
       'WES v2 + tok/W Diagnostics',
@@ -135,6 +135,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
   }
 
   function ctaLabel(tier: TierDef): string {
+    if (tier.id === 'team') return 'Coming Soon';
     if (!isLoggedIn) return 'Get Started';
     if (tier.id === currentTier) return 'Current Plan';
     if (tierRank(tier.id) < currentRank) return 'Current Plan Includes This';
@@ -142,6 +143,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
   }
 
   function isCtaDisabled(tier: TierDef): boolean {
+    if (tier.id === 'team') return true;
     if (!isLoggedIn) return false;
     return tierRank(tier.id) <= currentRank;
   }
