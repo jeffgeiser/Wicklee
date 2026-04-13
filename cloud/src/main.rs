@@ -3834,17 +3834,117 @@ fn slack_alert_blocks(node_id: &str, event_type: &str, detail: &str, resolved: b
 }
 
 fn email_alert_body(node_id: &str, event_type: &str, detail: &str, resolved: bool) -> (String, String) {
-    let state_word = if resolved { "RECOVERED" } else { "FIRING" };
-    let subject_prefix = if resolved { "\u{2705} Recovered" } else { "\u{26A0}\u{FE0F} Alert" };
-    let text = format!("{subject_prefix}: {node_id} \u{2014} {event_type}\n\n{detail}\n\nView dashboard: https://wicklee.dev");
+    // ── Plain text version ────────────────────────────────────────────────
+    let status_label = if resolved { "Resolved" } else { "Detected" };
+    let text = format!(
+        "Wicklee Alert — {status_label}\n\
+         Node: {node_id}\n\
+         Pattern: {event_type}\n\n\
+         {detail}\n\n\
+         View in dashboard: https://wicklee.dev\n\
+         Manage alerts: https://wicklee.dev (Settings → Alerts)"
+    );
+
+    // ── HTML version — matches Wicklee's Hardware-Centric Dark design ────
+    let (accent, accent_bg, status_text, status_icon) = if resolved {
+        ("#4ade80", "rgba(74,222,128,0.08)", "Resolved", "\u{2705}")
+    } else {
+        ("#f97316", "rgba(249,115,22,0.08)", "Detected", "\u{26A0}\u{FE0F}")
+    };
+
+    // Human-readable pattern name: thermal_drain → Thermal Drain
+    let pattern_display: String = event_type.split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
     let html = format!(
-        r#"<html><body style="font-family:monospace;background:#030712;color:#e5e7eb;padding:24px">
-<h2 style="color:{color}">{state_word}: {node_id}</h2>
-<p style="color:#9ca3af;font-size:12px;text-transform:uppercase">{event_type}</p>
-<pre style="background:#111827;padding:16px;border-radius:8px;color:#d1d5db">{detail}</pre>
-<p><a href="https://wicklee.dev" style="color:#6366f1">View Dashboard →</a></p>
-</body></html>"#,
-        color = if resolved { "#4ade80" } else { "#fb923c" },
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark">
+<title>Wicklee Alert</title></head>
+<body style="margin:0;padding:0;background-color:#030712;color:#e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;-webkit-text-size-adjust:100%">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#030712">
+<tr><td align="center" style="padding:32px 16px">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%">
+
+<!-- Logo + Wordmark -->
+<tr><td style="padding:0 0 24px 0">
+  <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+    <td style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:-0.02em">wicklee</td>
+    <td style="padding-left:8px;font-size:10px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;vertical-align:middle">sovereign observability</td>
+  </tr></table>
+</td></tr>
+
+<!-- Status Badge -->
+<tr><td style="padding:0 0 20px 0">
+  <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+    <td style="background-color:{accent_bg};border:1px solid {accent}33;border-radius:20px;padding:4px 14px 4px 10px">
+      <span style="font-size:11px;font-weight:700;color:{accent};text-transform:uppercase;letter-spacing:0.08em">{status_icon}&nbsp; {status_text}</span>
+    </td>
+  </tr></table>
+</td></tr>
+
+<!-- Main Card -->
+<tr><td style="background-color:#0a0f1a;border:1px solid #1f2937;border-radius:16px;padding:28px 24px">
+
+  <!-- Node + Pattern -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr><td style="font-size:10px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;padding-bottom:4px">Node</td></tr>
+    <tr><td style="font-size:18px;font-weight:700;color:#ffffff;padding-bottom:16px;font-family:'JetBrains Mono',monospace">{node_id}</td></tr>
+    <tr><td style="font-size:10px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;padding-bottom:4px">Pattern</td></tr>
+    <tr><td style="font-size:14px;font-weight:600;color:{accent};padding-bottom:20px">{pattern_display}</td></tr>
+  </table>
+
+  <!-- Divider -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr><td style="border-top:1px solid #1f2937;padding-top:16px"></td></tr>
+  </table>
+
+  <!-- Detail -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr><td style="font-size:10px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;padding-bottom:8px">Detail</td></tr>
+    <tr><td style="background-color:#111827;border-radius:8px;padding:14px 16px">
+      <p style="margin:0;font-size:13px;line-height:1.6;color:#d1d5db;font-family:'JetBrains Mono',monospace;white-space:pre-wrap">{detail}</p>
+    </td></tr>
+  </table>
+
+  <!-- CTA Button -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr><td style="padding-top:24px" align="center">
+      <a href="https://wicklee.dev" target="_blank" style="display:inline-block;background-color:#2563eb;color:#ffffff;font-size:13px;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:10px">
+        View in Dashboard
+      </a>
+    </td></tr>
+  </table>
+
+</td></tr>
+
+<!-- Footer -->
+<tr><td style="padding:24px 0 0 0;text-align:center">
+  <p style="margin:0 0 4px 0;font-size:11px;color:#4b5563">
+    Wicklee — sovereign GPU fleet monitoring for local AI inference
+  </p>
+  <p style="margin:0;font-size:11px;color:#374151">
+    <a href="https://wicklee.dev" style="color:#6366f1;text-decoration:none">Dashboard</a>
+    &nbsp;&middot;&nbsp;
+    <a href="https://wicklee.dev/docs" style="color:#6366f1;text-decoration:none">Docs</a>
+    &nbsp;&middot;&nbsp;
+    <a href="https://wicklee.dev" style="color:#6366f1;text-decoration:none">Manage Alerts</a>
+  </p>
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+</body></html>"##,
     );
     (text, html)
 }
@@ -4063,8 +4163,15 @@ fn deliver_alert(channel_type: &str, config_json: &str, node_id: &str, event_typ
                 Some(a) => a.to_owned(),
                 None => { eprintln!("[alerts] email channel missing address"); return false; }
             };
-            let subject_prefix = if resolved { "\u{2705} Recovered" } else { "\u{26A0}\u{FE0F} Alert" };
-            let subject = format!("{subject_prefix}: {node_id} \u{2014} {event_type}");
+            // Human-readable pattern name for subject line
+            let pattern_label: String = event_type.split('_')
+                .map(|w| { let mut c = w.chars(); match c.next() { None => String::new(), Some(f) => f.to_uppercase().collect::<String>() + c.as_str() } })
+                .collect::<Vec<_>>().join(" ");
+            let subject = if resolved {
+                format!("\u{2705} Resolved: {pattern_label} on {node_id}")
+            } else {
+                format!("Wicklee: {pattern_label} detected on {node_id}")
+            };
             let (text, html) = email_alert_body(node_id, event_type, detail, resolved);
             send_email(&addr, &subject, &text, &html)
         }
