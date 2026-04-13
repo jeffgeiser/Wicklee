@@ -5024,6 +5024,30 @@ async fn handle_billing_config(
     })).into_response()
 }
 
+/// Update Clerk publicMetadata.tier so the frontend sees the tier change immediately.
+/// Requires CLERK_SECRET_KEY env var (sk_live_... or sk_test_...).
+/// Fire-and-forget — failure is logged but doesn't block the webhook response.
+fn sync_tier_to_clerk(clerk_id: String, tier: String) {
+    let secret = match std::env::var("CLERK_SECRET_KEY") {
+        Ok(s) if !s.is_empty() => s,
+        _ => { eprintln!("[clerk] CLERK_SECRET_KEY not set — skipping metadata sync"); return; }
+    };
+    tokio::task::spawn_blocking(move || {
+        let url = format!("https://api.clerk.com/v1/users/{clerk_id}/metadata");
+        let body = serde_json::json!({
+            "public_metadata": { "tier": tier }
+        });
+        match ureq::request("PATCH", &url)
+            .set("Authorization", &format!("Bearer {secret}"))
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string())
+        {
+            Ok(_) => println!("[clerk] synced tier={tier} for {clerk_id}"),
+            Err(e) => eprintln!("[clerk] metadata sync failed for {clerk_id}: {e}"),
+        }
+    });
+}
+
 /// POST /api/webhooks/paddle — handles Paddle subscription lifecycle events.
 /// Signature verification uses HMAC-SHA256 with PADDLE_WEBHOOK_SECRET.
 async fn handle_paddle_webhook(
@@ -5094,6 +5118,15 @@ async fn handle_paddle_webhook(
                     "UPDATE organizations SET subscription_tier = $1 WHERE created_by = $2"
                 ).bind(tier).bind(&user_id).execute(&state.pool).await;
                 println!("[billing] paddle: {user_id} \u{2192} {tier} (sub={subscription_id})");
+                // Sync tier to Clerk so the frontend sees the change immediately.
+                let clerk_id: Option<String> = sqlx::query_scalar(
+                    "SELECT clerk_id FROM users WHERE id = $1"
+                ).bind(&user_id).fetch_optional(&state.pool).await.ok().flatten();
+                if let Some(cid) = clerk_id {
+                    sync_tier_to_clerk(cid, tier.to_string());
+                } else {
+                    eprintln!("[billing] no clerk_id found for user_id={user_id} — cannot sync tier to Clerk");
+                }
                 forward_to_taarn("subscription_activated", serde_json::json!({
                     "user_id": &user_id, "tier": tier,
                     "subscription_id": &subscription_id, "customer_id": &customer_id,
@@ -5115,6 +5148,15 @@ async fn handle_paddle_webhook(
                 ).bind(uid).execute(&state.pool).await;
             }
             println!("[billing] paddle: downgraded customer={customer_id} \u{2192} community");
+            // Sync downgrade to Clerk.
+            if let Some(ref uid) = downgraded_user {
+                let clerk_id: Option<String> = sqlx::query_scalar(
+                    "SELECT clerk_id FROM users WHERE id = $1"
+                ).bind(uid).fetch_optional(&state.pool).await.ok().flatten();
+                if let Some(cid) = clerk_id {
+                    sync_tier_to_clerk(cid, "community".to_string());
+                }
+            }
             forward_to_taarn("subscription_canceled", serde_json::json!({
                 "customer_id": &customer_id,
                 "user_id": downgraded_user.as_deref().unwrap_or("unknown"),
