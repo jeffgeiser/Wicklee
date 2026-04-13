@@ -193,6 +193,17 @@ fi
 INSTALLED_VERSION="$("${INSTALL_PATH}" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 VERSION_LABEL="${INSTALLED_VERSION:-${RELEASE_TAG}}"
 
+# ── Anonymous install telemetry ───────────────────────────────────────────────
+# Fire-and-forget ping — no PII, no blocking. Silently ignored on failure.
+UPGRADE_FLAG="false"
+[[ "$GHOST_KILLED" == "true" ]] && UPGRADE_FLAG="true"
+NVIDIA_FLAG="false"
+[[ -n "$NVIDIA_SUFFIX" ]] && NVIDIA_FLAG="true"
+curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \
+  -H "Content-Type: application/json" \
+  -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${VERSION_LABEL}\",\"nvidia\":${NVIDIA_FLAG},\"upgrade\":${UPGRADE_FLAG}}" \
+  >/dev/null 2>&1 &
+
 echo ""
 green "  ✓ Wicklee agent installed successfully  —  ${VERSION_LABEL}"
 echo ""

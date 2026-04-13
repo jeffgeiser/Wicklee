@@ -685,6 +685,19 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("organizations migration failed");
 
+    // Install telemetry — anonymous counter, no PII.
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS installs (
+            id      BIGSERIAL PRIMARY KEY,
+            ts      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            os      TEXT NOT NULL,
+            arch    TEXT NOT NULL,
+            version TEXT NOT NULL DEFAULT 'unknown',
+            nvidia  BOOLEAN NOT NULL DEFAULT FALSE,
+            upgrade BOOLEAN NOT NULL DEFAULT FALSE
+        )
+    ").execute(pool).await.expect("installs migration failed");
+
     // ── TimescaleDB policies ────────────────────────────────────────────────
     // Retention: metrics_raw 2 days, node_events 30 days
     // These are idempotent — TimescaleDB ignores if already set.
@@ -1925,7 +1938,85 @@ async fn handle_claim(
         .entry(node_id.clone())
         .or_insert(MetricsEntry { last_seen_ms: now_ms(), metrics: None });
 
+    forward_to_taarn("node_paired", serde_json::json!({
+        "node_id": &node_id, "fleet_url": &body.fleet_url, "ts": ts,
+    }));
+
     (StatusCode::OK, Json(ClaimResponse { session_token: token, node_id })).into_response()
+}
+
+// ── Taarn Webhook Forwarder ────────────────────────────────────────────────────
+//
+// Fire-and-forget event forwarding to the Taarn agent runtime. Uses two env vars:
+//   TAARN_WEBHOOK_URL  — e.g. http://localhost:3334/api/webhooks/events
+//   TAARN_EVENT_SECRET — shared Bearer token
+//
+// If either is unset the call is silently skipped — Wicklee works without Taarn.
+
+fn forward_to_taarn(event_type: &str, payload: serde_json::Value) {
+    let url = match std::env::var("TAARN_WEBHOOK_URL") {
+        Ok(u) if !u.is_empty() => u,
+        _ => return, // Taarn not configured — skip silently
+    };
+    let secret = std::env::var("TAARN_EVENT_SECRET").unwrap_or_default();
+    let body = serde_json::json!({ "type": event_type, "payload": payload });
+
+    // Spawn a blocking task so we don't hold up the response.
+    tokio::task::spawn_blocking(move || {
+        let result = ureq::post(&url)
+            .set("Authorization", &format!("Bearer {secret}"))
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string());
+        match result {
+            Ok(_) => println!("[taarn] forwarded {}", body["type"]),
+            Err(e) => eprintln!("[taarn] forward failed: {e}"),
+        }
+    });
+}
+
+// ── Install Telemetry ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct InstallEvent {
+    os: String,
+    arch: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    nvidia: bool,
+    #[serde(default)]
+    upgrade: bool,
+}
+
+/// POST /api/telemetry/install — anonymous install ping from install.sh.
+/// No auth required. Rate-limited by IP (handled at infra layer).
+/// Records the install and optionally forwards to Taarn.
+async fn handle_install_telemetry(
+    State(state): State<AppState>,
+    Json(body): Json<InstallEvent>,
+) -> StatusCode {
+    let ts = now_ms() as i64;
+    let os = &body.os;
+    let arch = &body.arch;
+    let version = if body.version.is_empty() { "unknown" } else { &body.version };
+    let nvidia = body.nvidia;
+    let upgrade = body.upgrade;
+
+    // Persist to a simple installs table (created in migrations if not exists).
+    let _ = sqlx::query(
+        "INSERT INTO installs (ts, os, arch, version, nvidia, upgrade) VALUES (to_timestamp($1::float8 / 1000.0), $2, $3, $4, $5, $6)"
+    ).bind(ts).bind(os).bind(arch).bind(version).bind(nvidia).bind(upgrade)
+    .execute(&state.pool).await;
+
+    let kind = if upgrade { "install_upgrade" } else { "install_complete" };
+    println!("[install] {kind}: {os}/{arch} v{version} nvidia={nvidia}");
+
+    forward_to_taarn(kind, serde_json::json!({
+        "os": os, "arch": arch, "version": version,
+        "nvidia": nvidia, "upgrade": upgrade, "ts": ts,
+    }));
+
+    StatusCode::OK
 }
 
 /// POST /api/telemetry
@@ -4930,6 +5021,10 @@ async fn handle_paddle_webhook(
                     "UPDATE organizations SET subscription_tier = $1 WHERE created_by = $2"
                 ).bind(tier).bind(&user_id).execute(&state.pool).await;
                 println!("[billing] paddle: {user_id} \u{2192} {tier} (sub={subscription_id})");
+                forward_to_taarn("subscription_activated", serde_json::json!({
+                    "user_id": &user_id, "tier": tier,
+                    "subscription_id": &subscription_id, "customer_id": &customer_id,
+                }));
             }
         }
         "subscription.canceled" | "subscription.past_due" => {
@@ -4947,6 +5042,10 @@ async fn handle_paddle_webhook(
                 ).bind(uid).execute(&state.pool).await;
             }
             println!("[billing] paddle: downgraded customer={customer_id} \u{2192} community");
+            forward_to_taarn("subscription_canceled", serde_json::json!({
+                "customer_id": &customer_id,
+                "user_id": downgraded_user.as_deref().unwrap_or("unknown"),
+            }));
         }
         _ => {
             println!("[billing] paddle: unhandled event_type={event_type}");
@@ -5655,7 +5754,8 @@ async fn main() {
     let open_routes = Router::new()
         .route("/health",                  get(handle_health))
         .route("/api/agent/version",       get(handle_agent_version))
-        .route("/api/telemetry",    post(handle_telemetry))
+        .route("/api/telemetry",           post(handle_telemetry))
+        .route("/api/telemetry/install",   post(handle_install_telemetry))
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))
         .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))
