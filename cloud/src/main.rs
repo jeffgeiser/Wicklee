@@ -3879,7 +3879,7 @@ fn email_alert_body(node_id: &str, event_type: &str, detail: &str, resolved: boo
 <tr><td style="padding:0 0 24px 0">
   <table role="presentation" cellpadding="0" cellspacing="0"><tr>
     <td style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:-0.02em">wicklee</td>
-    <td style="padding-left:8px;font-size:10px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;vertical-align:middle">sovereign observability</td>
+    <td style="padding-left:8px;font-size:10px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;vertical-align:middle">inference observability</td>
   </tr></table>
 </td></tr>
 
