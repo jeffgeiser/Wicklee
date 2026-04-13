@@ -1,6 +1,6 @@
 import React, { Suspense, useState, useRef, useEffect } from 'react';
 import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog, CreditCard } from 'lucide-react';
-import { ConnectionState, DashboardTab, User, UserRole } from '../types';
+import { ConnectionState, DashboardTab, User, UserRole, TIER_BADGE } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
@@ -113,8 +113,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-gray-900 dark:text-gray-200 truncate">{currentUser.fullName}</p>
                   <p className="text-[10px] text-gray-500 truncate">{currentUser.email}</p>
-                  <span className="inline-flex items-center px-1.5 py-0.5 mt-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500">
-                    Free Plan
+                  <span className={`inline-flex items-center px-1.5 py-0.5 mt-0.5 rounded border text-[9px] font-medium ${TIER_BADGE[currentUser.tier ?? 'community'].color}`}>
+                    {TIER_BADGE[currentUser.tier ?? 'community'].label}
                   </span>
                 </div>
               </div>
