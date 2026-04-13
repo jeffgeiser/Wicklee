@@ -2019,6 +2019,79 @@ async fn handle_install_telemetry(
     StatusCode::OK
 }
 
+// ── Event Poll (Taarn consumption) ────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct EventPollQuery {
+    /// Unix ms cursor — return events after this timestamp. Defaults to last 5 minutes.
+    since_ms: Option<i64>,
+    /// Max events to return. Defaults to 100, max 500.
+    limit: Option<i64>,
+}
+
+/// GET /api/events/poll — Taarn polls this for new install/pairing/subscription events.
+/// Auth: Bearer {TAARN_EVENT_SECRET}. Returns JSON array of events sorted by timestamp.
+async fn handle_event_poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<EventPollQuery>,
+) -> impl IntoResponse {
+    // Authenticate with shared secret.
+    let expected = std::env::var("TAARN_EVENT_SECRET").unwrap_or_default();
+    if expected.is_empty() {
+        return (StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Event polling not configured" }))).into_response();
+    }
+    let bearer = headers.get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+    let auth_ok: bool = bearer.map_or(false, |b|
+        subtle::ConstantTimeEq::ct_eq(b.as_bytes(), expected.as_bytes()).into()
+    );
+    if !auth_ok {
+        return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or missing authorization" }))).into_response();
+    }
+
+    let since_ms = q.since_ms.unwrap_or_else(|| now_ms() as i64 - 5 * 60 * 1000);
+    let limit = q.limit.unwrap_or(100).min(500);
+
+    // Gather install events.
+    let installs: Vec<(i64, String, String, String, bool, bool)> = sqlx::query_as(
+        "SELECT EXTRACT(EPOCH FROM ts)::bigint * 1000, os, arch, version, nvidia, upgrade
+         FROM installs WHERE ts > to_timestamp($1::float8 / 1000.0) ORDER BY ts LIMIT $2"
+    ).bind(since_ms).bind(limit).fetch_all(&state.pool).await.unwrap_or_default();
+
+    // Gather pairing events (nodes paired since cursor).
+    let pairings: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT wk_id, paired_at FROM nodes WHERE paired_at > $1 ORDER BY paired_at LIMIT $2"
+    ).bind(since_ms).bind(limit).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let mut events: Vec<serde_json::Value> = Vec::new();
+
+    for (ts, os, arch, version, nvidia, upgrade) in &installs {
+        let kind = if *upgrade { "install_upgrade" } else { "install_complete" };
+        events.push(serde_json::json!({
+            "type": kind, "ts": ts,
+            "payload": { "os": os, "arch": arch, "version": version, "nvidia": nvidia }
+        }));
+    }
+    for (node_id, paired_at) in &pairings {
+        events.push(serde_json::json!({
+            "type": "node_paired", "ts": paired_at,
+            "payload": { "node_id": node_id }
+        }));
+    }
+
+    // Sort all events by timestamp.
+    events.sort_by_key(|e| e["ts"].as_i64().unwrap_or(0));
+
+    Json(serde_json::json!({
+        "events": events,
+        "cursor_ms": events.last().and_then(|e| e["ts"].as_i64()).unwrap_or(since_ms),
+    })).into_response()
+}
+
 /// POST /api/telemetry
 async fn handle_telemetry(
     State(state): State<AppState>,
@@ -5756,6 +5829,7 @@ async fn main() {
         .route("/api/agent/version",       get(handle_agent_version))
         .route("/api/telemetry",           post(handle_telemetry))
         .route("/api/telemetry/install",   post(handle_install_telemetry))
+        .route("/api/events/poll",         get(handle_event_poll))
         .route("/api/v1/keys",           post(handle_v1_create_key))
         .route("/api/v1/keys",           get(handle_v1_list_keys))
         .route("/api/v1/keys/:key_id",   delete(handle_v1_delete_key))
