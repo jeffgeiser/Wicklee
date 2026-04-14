@@ -4604,7 +4604,7 @@ async fn node_offline_alert_task(state: AppState) {
             let tier: String = sqlx::query_scalar::<_, String>(
                 "SELECT subscription_tier FROM users WHERE id = $1"
             ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
-            if !is_team_or_above(&tier) { continue; }
+            if !is_pro_or_above(&tier) { continue; }
 
             let rules: Vec<(String, String, String)> = sqlx::query_as(
                 "SELECT ar.id, nc.channel_type, nc.config_json::text
@@ -4670,7 +4670,7 @@ async fn node_offline_alert_task(state: AppState) {
             let tier: String = sqlx::query_scalar::<_, String>(
                 "SELECT subscription_tier FROM users WHERE id = $1"
             ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
-            if !is_team_or_above(&tier) { continue; }
+            if !is_pro_or_above(&tier) { continue; }
 
             let _ = sqlx::query("UPDATE alert_events SET resolved_at = $1 WHERE node_id = $2 AND resolved_at IS NULL")
                 .bind(now as i64).bind(node_id).execute(&state.pool).await;
