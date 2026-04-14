@@ -81,6 +81,12 @@ Base URL: `https://wicklee.dev/api/v1`
 - `DELETE /api/v1/keys/{id}` — Revoke API key
 - `GET /metrics` — Prometheus scrape endpoint (Team+, X-API-Key auth)
 
+## Multi-Model Monitoring
+
+When 2+ models are loaded in Ollama, the `active_models` array is included in the SSE/WS payload with per-model: tok/s, VRAM, avg TTFT, avg latency, request count, size, quantization.
+Requires proxy for per-model tok/s and latency. Without proxy, VRAM and model identity still tracked via /api/ps.
+Singular fields (ollama_active_model, ollama_tokens_per_second) report most-recently-active model for backwards compat.
+
 ## Key Metrics
 
 - `inference_state`: "live" | "idle-spd" | "busy" | "idle"

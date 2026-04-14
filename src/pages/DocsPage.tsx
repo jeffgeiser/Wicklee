@@ -105,6 +105,7 @@ const NAV = [
   { id: 'wes',         label: 'WES Score' },
   { id: 'states',      label: 'Node States' },
   { id: 'latency',     label: 'Latency & TTFT' },
+  { id: 'multi-model', label: 'Multi-Model' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'alerts',      label: 'Alerts & Notifications' },
   { id: 'event-feeds', label: 'Event Feeds' },
@@ -856,6 +857,91 @@ WES Version:     2
                 </table>
               </div>
             </div>
+          </Section>
+
+          {/* ── Multi-Model Monitoring ── */}
+          <Section
+            id="multi-model"
+            icon={<BarChart2 className="w-5 h-5" />}
+            accent="border-cyan-500/20"
+            title="Multi-Model Monitoring"
+          >
+            <p>
+              Most inference deployments run multiple models concurrently — a coding model, a chat model, an embedding model. Every other monitoring tool treats your GPU as a single workload. Wicklee tracks each model independently.
+            </p>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">How it works</p>
+              <p className="text-sm text-gray-400 leading-relaxed">
+                When the optional proxy is enabled, Wicklee intercepts every request flowing to Ollama and extracts per-request metrics from the response stream — model name, tokens generated, time to first token, end-to-end latency. These are accumulated per model, not globally. The harvester also reads Ollama's <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">/api/ps</code> endpoint every 2 seconds to detect all loaded models and their individual VRAM allocations.
+              </p>
+              <p className="text-sm text-gray-400 leading-relaxed mt-2">
+                When two or more models are loaded simultaneously, the dashboard shows a per-model breakdown with independent tok/s, VRAM usage, average TTFT, average latency, and request count for each model. The primary model (used for WES and headline metrics) is automatically selected as the most-recently-active model — the one that last completed a request.
+              </p>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">What you see per model</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                    <th className="pb-2 pr-4">Metric</th>
+                    <th className="pb-2 pr-4">Source</th>
+                    <th className="pb-2">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">tok/s</td>
+                    <td className="py-2 pr-4 text-gray-400">Proxy done packet</td>
+                    <td className="py-2 text-gray-500">Last completed request's eval_count / eval_duration per model</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">VRAM</td>
+                    <td className="py-2 pr-4 text-gray-400">Ollama /api/ps</td>
+                    <td className="py-2 text-gray-500">size_vram per loaded model — shows exactly how much GPU memory each model occupies</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Avg TTFT</td>
+                    <td className="py-2 pr-4 text-gray-400">Proxy done packet</td>
+                    <td className="py-2 text-gray-500">Rolling average prompt_eval_duration per model</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Avg Latency</td>
+                    <td className="py-2 pr-4 text-gray-400">Proxy done packet</td>
+                    <td className="py-2 text-gray-500">Rolling average total_duration per model</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Request Count</td>
+                    <td className="py-2 pr-4 text-gray-400">Proxy done packet</td>
+                    <td className="py-2 text-gray-500">Total completed requests per model since agent start</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Size / Quantization</td>
+                    <td className="py-2 pr-4 text-gray-400">Ollama /api/ps</td>
+                    <td className="py-2 text-gray-500">Model file size and quantization level (e.g. Q4_K_M)</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">Without the proxy</p>
+              <p className="text-sm text-gray-400 leading-relaxed">
+                When the proxy is disabled, Wicklee still detects all loaded models and their VRAM via <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">/api/ps</code>, but tok/s and latency come from the 30-second synthetic probe which targets a single model. Enable the proxy for full per-model production metrics.
+              </p>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">API access</p>
+              <p className="text-sm text-gray-400 leading-relaxed">
+                The <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">active_models</code> array is included in the SSE payload, WebSocket stream, and fleet telemetry when two or more models are loaded. Single-model deployments omit the field entirely — zero overhead. The existing <code className="text-gray-300 font-mono text-xs">ollama_active_model</code> and <code className="text-gray-300 font-mono text-xs">ollama_tokens_per_second</code> fields continue to report the primary (most active) model for backwards compatibility.
+              </p>
+            </div>
+
+            <NoteBox>
+              Historical per-model analysis is already available regardless of proxy status. The <strong className="text-white">Cost by Model</strong> table and <strong className="text-white">Model Comparison</strong> endpoints aggregate from DuckDB inference traces, which have always stored per-request model attribution. Multi-model live monitoring extends this to real-time.
+            </NoteBox>
           </Section>
 
           {/* ── Pattern Intelligence ── */}

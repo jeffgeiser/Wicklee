@@ -85,6 +85,20 @@ TTFT (Time to First Token) resolution priority:
 
 ---
 
+## Multi-Model Monitoring
+
+Most inference deployments run multiple models concurrently. Wicklee tracks each model independently when the optional proxy is enabled.
+
+**Per-model metrics:** tok/s, VRAM allocation, average TTFT, average latency, request count, model size, and quantization level — all tracked independently for each loaded model.
+
+**How it works:** The proxy intercepts every request and extracts per-request metrics from Ollama's done packet, accumulating statistics per model name. The harvester reads all loaded models from `/api/ps` every 2 seconds and merges VRAM data with proxy-derived performance stats.
+
+**Wire format:** When 2+ models are loaded, the `active_models` array is included in the SSE/WebSocket payload. Single-model deployments omit the field (zero overhead). Existing singular fields (`ollama_active_model`, `ollama_tokens_per_second`) report the most-recently-active model for backwards compatibility.
+
+**Without the proxy:** Wicklee still detects all loaded models and their VRAM via `/api/ps`, but tok/s and latency come from the single-model probe. Enable the proxy for full per-model production metrics.
+
+---
+
 ## 18 Observation Patterns + 5 Fleet Alerts
 
 ### Agent-Evaluated (17 patterns, 10-min DuckDB buffer, every 10s)
