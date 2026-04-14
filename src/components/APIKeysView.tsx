@@ -6,7 +6,7 @@ import type { ApiKey, CreateApiKeyResponse } from '../types';
 // ── Cloud URL (mirrors App.tsx pattern) ──────────────────────────────────────
 const CLOUD_URL = (() => {
   const v = import.meta.env.VITE_CLOUD_URL ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  if (!v) return 'https://wicklee.dev';
   return v.startsWith('http') ? v : `https://${v}`;
 })();
 

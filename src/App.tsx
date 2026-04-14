@@ -123,7 +123,7 @@ const isLocalHost = window.location.hostname === 'localhost' || window.location.
 // crossing origins (eliminates CORS, hides the backend URL from the client).
 const CLOUD_URL = (() => {
   const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
+  if (!v) return 'https://wicklee.dev';
   if (v === '/') return '';   // same-origin proxy mode — nginx handles routing
   return v.startsWith('http') ? v : `https://${v}`;
 })();
