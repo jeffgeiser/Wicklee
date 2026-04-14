@@ -177,7 +177,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
 
               {/* Manage Account + Sign out — cloud build only (ClerkProvider present) */}
               {!IS_AGENT && !isLocalHost && (
-                <Suspense fallback={null}>
+                <Suspense fallback={
+                  <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50 space-y-0.5">
+                    <div className="px-3 py-2 h-9" />
+                    <div className="px-3 py-2 h-9" />
+                  </div>
+                }>
                   <LazyClerkAccountActions
                     onClose={() => setIsAvatarMenuOpen(false)}
                     onNavigateSettings={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
