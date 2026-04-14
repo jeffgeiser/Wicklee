@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, CloudLightning, AlertCircle, CheckCircle2, Copy, Check, ArrowRight, Terminal, Monitor } from 'lucide-react';
+import { X, CloudLightning, AlertCircle, CheckCircle2, Copy, Check, ArrowRight, Terminal } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
 
 interface AddNodeModalProps {
@@ -32,28 +32,6 @@ const CopyBtn: React.FC<{ text: string }> = ({ text }) => {
     </button>
   );
 };
-
-// ── Step indicator (1 · 2 · 3) ────────────────────────────────────────────────
-const StepDots: React.FC<{ current: number }> = ({ current }) => (
-  <div className="flex items-center justify-center gap-2 mb-7">
-    {[1, 2, 3].map((n, i) => (
-      <React.Fragment key={n}>
-        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-          n === current
-            ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
-            : n < current
-            ? 'bg-indigo-900/50 text-indigo-500 ring-1 ring-indigo-800'
-            : 'bg-gray-800 text-gray-600'
-        }`}>
-          {n < current ? '✓' : n}
-        </div>
-        {i < 2 && (
-          <div className={`h-px w-8 transition-colors ${n < current ? 'bg-indigo-700/60' : 'bg-gray-800'}`} />
-        )}
-      </React.Fragment>
-    ))}
-  </div>
-);
 
 // ── Code row: comment + copyable command ──────────────────────────────────────
 const CmdRow: React.FC<{ cmd: string; comment?: string }> = ({ cmd, comment }) => (
@@ -182,94 +160,85 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
             </button>
           </div>
 
-          {/* Step indicator */}
-          <StepDots current={step} />
-
-          {/* ── Step 1 — Install the agent ──────────────────────────────────── */}
+          {/* ── Step 0 — Choice: have code or need setup ────────────────── */}
           {step === 1 && (
             <div className="space-y-4">
-              <div className="flex items-center gap-2 mb-3">
+              <p className="text-sm text-gray-400">
+                Connect a node running the Wicklee agent to your fleet dashboard.
+              </p>
+
+              {/* Option A: I have a code */}
+              <button
+                type="button"
+                onClick={() => setStep(3)}
+                className="w-full text-left p-4 bg-blue-600/10 border border-blue-500/30 rounded-2xl hover:bg-blue-600/15 hover:border-blue-500/40 transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <CloudLightning className="w-5 h-5 text-blue-400 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-white">I have a pairing code</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      The agent is already running and I have the 6-digit code from my local dashboard.
+                    </p>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-gray-600 group-hover:text-blue-400 transition-colors shrink-0" />
+                </div>
+              </button>
+
+              {/* Option B: Need setup help */}
+              <button
+                type="button"
+                onClick={() => setStep(2)}
+                className="w-full text-left p-4 bg-gray-800/40 border border-gray-700/50 rounded-2xl hover:bg-gray-800/60 hover:border-gray-700 transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <Terminal className="w-5 h-5 text-gray-400 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-white">I need to set up the agent first</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Walk me through installing and starting the agent on a new machine.
+                    </p>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors shrink-0" />
+                </div>
+              </button>
+            </div>
+          )}
+
+          {/* ── Step 2 — Setup guide (install + get code) ──────────────────── */}
+          {step === 2 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 mb-1">
                 <Terminal className="w-4 h-4 text-indigo-400 shrink-0" />
-                <h3 className="text-sm font-semibold text-white">Install the agent</h3>
+                <h3 className="text-sm font-semibold text-white">Agent Setup</h3>
               </div>
 
               {/* Install command */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
                 <CmdRow
-                  comment="# Run this on the machine you want to monitor"
+                  comment="# 1. Install the agent on the machine you want to monitor"
                   cmd="curl -fsSL https://wicklee.dev/install.sh | bash"
                 />
               </div>
 
-              {/* Start options */}
+              {/* Start as service */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+                <CmdRow
+                  comment="# 2. Start as a service (recommended — auto-starts on boot)"
+                  cmd="sudo wicklee --install-service"
+                />
+              </div>
+
+              {/* Get the code */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-                  Start the agent
+                  3. Get your pairing code
                 </p>
-
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide">Recommended</span>
-                    <span className="text-[10px] text-gray-600">— auto-starts on every boot</span>
-                  </div>
-                  <CmdRow cmd="sudo wicklee --install-service" />
-                </div>
-
-                <div className="border-t border-zinc-800 pt-3 space-y-1">
-                  <p className="text-[10px] text-gray-600 mb-1">Or run manually (exits when terminal closes):</p>
-                  <CmdRow cmd="sudo wicklee" />
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20 mt-2"
-              >
-                Next
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* ── Step 2 — Get your pairing code ──────────────────────────────── */}
-          {step === 2 && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Monitor className="w-4 h-4 text-indigo-400 shrink-0" />
-                <h3 className="text-sm font-semibold text-white">Get your pairing code</h3>
-              </div>
-
-              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-5">
-                {/* Sub-step 1 */}
-                <div className="flex items-start gap-3">
-                  <span className="w-5 h-5 rounded-full bg-indigo-900/60 border border-indigo-700/50 text-[10px] font-bold text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">1</span>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-200">Open the dashboard on that machine</p>
-                    <p className="text-xs text-gray-500 mt-1 mb-2">
-                      In a browser on the machine running the agent:
-                    </p>
-                    <div className="flex items-center gap-1.5">
-                      <code className="text-sm font-mono text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-1 rounded-lg">
-                        http://localhost:7700
-                      </code>
-                      <CopyBtn text="http://localhost:7700" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t border-zinc-800" />
-
-                {/* Sub-step 2 */}
-                <div className="flex items-start gap-3">
-                  <span className="w-5 h-5 rounded-full bg-indigo-900/60 border border-indigo-700/50 text-[10px] font-bold text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">2</span>
-                  <div>
-                    <p className="text-sm font-medium text-gray-200">Find your 6-digit pairing code</p>
-                    <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-                      The dashboard displays your pairing code. You'll enter it in the next step to link this node to your fleet.
-                    </p>
-                  </div>
-                </div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Open{' '}
+                  <code className="text-indigo-400 font-mono bg-indigo-500/10 px-1.5 py-0.5 rounded">localhost:7700</code>
+                  {' '}on that machine. Click <strong className="text-white">Connect to Fleet</strong> to generate a 6-digit code.
+                </p>
               </div>
 
               <div className="flex gap-3">
@@ -285,7 +254,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                   onClick={() => setStep(3)}
                   className="flex-[2] py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
                 >
-                  Next
+                  I have my code
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
@@ -343,7 +312,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                 <div className="flex gap-3">
                   <button
                     type="button"
-                    onClick={() => setStep(2)}
+                    onClick={() => setStep(1)}
                     className="flex-1 py-3 border border-gray-800 hover:border-gray-700 text-gray-400 hover:text-white font-medium rounded-2xl transition-all text-sm"
                   >
                     ← Back
