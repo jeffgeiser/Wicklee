@@ -464,6 +464,18 @@ impl Store {
             ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS penalty_avg          DOUBLE;
             ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS nvidia_gpu_temp_c    INTEGER;
             ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS vllm_cache_usage_perc DOUBLE;
+
+            -- Model catalog: cached HuggingFace GGUF model metadata for fit scoring.
+            -- 24h TTL, refreshed on demand or by background task.
+            CREATE TABLE IF NOT EXISTS model_catalog (
+                model_id    TEXT    NOT NULL,
+                filename    TEXT    NOT NULL,
+                quant_level TEXT    NOT NULL,
+                file_size   BIGINT  NOT NULL,
+                downloads   BIGINT  NOT NULL DEFAULT 0,
+                fetched_at  BIGINT  NOT NULL,
+                PRIMARY KEY (model_id, filename)
+            );
         ")
     }
 
@@ -1479,6 +1491,74 @@ impl Store {
             "total_gap_minutes": (total_gap_ms as f64 / 60_000.0 * 10.0).round() / 10.0,
             "hours_queried": hours,
         }))
+    }
+
+    // ── Model Catalog (HuggingFace GGUF cache) ─────────────────────────────
+
+    /// Write a batch of catalog entries (replaces existing for the same model_id).
+    pub fn write_catalog(&self, entries: &[(String, String, String, u64, u64, i64)]) -> Result<(), duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+        for (model_id, filename, quant_level, file_size, downloads, fetched_at) in entries {
+            conn.execute(
+                "INSERT OR REPLACE INTO model_catalog (model_id, filename, quant_level, file_size, downloads, fetched_at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                duckdb::params![model_id, filename, quant_level, file_size, downloads, fetched_at],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Check if the catalog is fresh (any entry fetched within TTL).
+    pub fn catalog_is_fresh(&self, ttl_hours: i64) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let cutoff = now - ttl_hours * 3600 * 1000;
+        let conn = self.0.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM model_catalog WHERE fetched_at > ?",
+            duckdb::params![cutoff],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        count > 0
+    }
+
+    /// Read all catalog entries grouped by model_id.
+    pub fn query_catalog(&self, search: Option<&str>, limit: i64) -> Result<Vec<(String, u64, Vec<(String, String, u64)>)>, duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+        let sql = if search.is_some() {
+            "SELECT model_id, filename, quant_level, file_size, downloads
+             FROM model_catalog WHERE LOWER(model_id) LIKE '%' || LOWER(?) || '%'
+             ORDER BY downloads DESC"
+        } else {
+            "SELECT model_id, filename, quant_level, file_size, downloads
+             FROM model_catalog ORDER BY downloads DESC"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let mut rows = if let Some(s) = search {
+            stmt.query(duckdb::params![s])?
+        } else {
+            stmt.query([])?
+        };
+
+        let mut models: Vec<(String, u64, Vec<(String, String, u64)>)> = Vec::new();
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        while let Some(row) = rows.next()? {
+            let model_id: String = row.get(0)?;
+            let filename: String = row.get(1)?;
+            let quant: String = row.get(2)?;
+            let file_size: u64 = row.get::<_, i64>(3)? as u64;
+            let downloads: u64 = row.get::<_, i64>(4)? as u64;
+
+            if let Some(&idx) = seen.get(&model_id) {
+                models[idx].2.push((filename, quant, file_size));
+            } else {
+                seen.insert(model_id.clone(), models.len());
+                models.push((model_id, downloads, vec![(filename, quant, file_size)]));
+            }
+        }
+        models.truncate(limit as usize);
+        Ok(models)
     }
 
     /// Export a unified audit log joining events, traces, and dismissals.

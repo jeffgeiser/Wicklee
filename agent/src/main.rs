@@ -124,6 +124,150 @@ pub(crate) struct ModelLiveMetrics {
     pub(crate) wes: Option<f32>,
 }
 
+// ── Model Discovery & Hardware Fit ────────────────────────────────────────────
+
+/// A GGUF model variant from the HuggingFace catalog.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct CatalogVariant {
+    pub(crate) filename: String,
+    pub(crate) quant_level: String,
+    pub(crate) file_size_bytes: u64,
+}
+
+/// A model entry from the HuggingFace GGUF catalog.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct CatalogModel {
+    pub(crate) model_id: String,
+    pub(crate) downloads: u64,
+    pub(crate) variants: Vec<CatalogVariant>,
+}
+
+/// Hardware profile for fit scoring — either live or simulated.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct HardwareProfile {
+    pub(crate) vram_mb: u64,
+    pub(crate) chip_name: Option<String>,
+    pub(crate) power_budget_w: f32,
+    pub(crate) thermal_state: String,
+}
+
+/// Result of scoring a single model variant against hardware.
+#[derive(Serialize, Clone, Debug)]
+pub(crate) struct FitResult {
+    pub(crate) model_id: String,
+    pub(crate) quant_level: String,
+    pub(crate) file_size_mb: u64,
+    pub(crate) vram_required_mb: u64,
+    pub(crate) vram_available_mb: u64,
+    pub(crate) vram_headroom_pct: f32,
+    pub(crate) fit_score: u8,
+    pub(crate) fit_label: String,
+    pub(crate) estimated_wes: Option<f32>,
+    pub(crate) recommendation: String,
+}
+
+/// VRAM overhead estimate: model file size + ~10% for context/KV cache at default context.
+fn estimate_vram_mb(file_size_bytes: u64) -> u64 {
+    let base_mb = file_size_bytes / (1024 * 1024);
+    base_mb + (base_mb / 10).max(256) // file size + 10% or at least 256 MB for context
+}
+
+/// Pure function: score a model variant against a hardware profile.
+/// Returns 0-100 fit score with human-readable label and recommendation.
+fn score_fit(
+    model_id: &str,
+    variant: &CatalogVariant,
+    hw: &HardwareProfile,
+    historical_wes: Option<f32>,
+) -> FitResult {
+    let vram_required = estimate_vram_mb(variant.file_size_bytes);
+    let vram_available = hw.vram_mb;
+    let headroom_pct = if vram_available > 0 {
+        ((vram_available as f32 - vram_required as f32) / vram_available as f32 * 100.0).max(-100.0)
+    } else { -100.0 };
+
+    // ── VRAM headroom (40 points) ─────────────────────────────────────────
+    let vram_score = if headroom_pct >= 50.0 { 40 }
+        else if headroom_pct >= 30.0 { 35 }
+        else if headroom_pct >= 15.0 { 28 }
+        else if headroom_pct >= 5.0 { 20 }
+        else if headroom_pct >= 0.0 { 10 }
+        else { 0u8 }; // won't fit
+
+    // ── Thermal margin (20 points) ────────────────────────────────────────
+    let thermal_score: u8 = match hw.thermal_state.as_str() {
+        "Normal" => 20,
+        "Fair" => 10,
+        "Serious" => 5,
+        _ => 0,
+    };
+
+    // ── Historical WES (20 points) ────────────────────────────────────────
+    let wes_score: u8 = match historical_wes {
+        Some(w) if w > 10.0 => 20,
+        Some(w) if w > 3.0 => 15,
+        Some(w) if w > 1.0 => 10,
+        Some(_) => 5,
+        None => 10, // neutral — no data
+    };
+
+    // ── Power efficiency (20 points) ──────────────────────────────────────
+    // Larger models draw more power. Score based on whether the model's VRAM
+    // footprint suggests reasonable power consumption for this hardware.
+    let power_score: u8 = if hw.power_budget_w <= 0.1 { 10 } else {
+        let watts_per_gb = hw.power_budget_w / (vram_available as f32 / 1024.0).max(1.0);
+        let model_gb = vram_required as f32 / 1024.0;
+        let projected_watts = watts_per_gb * model_gb;
+        if projected_watts < hw.power_budget_w * 0.5 { 20 }
+        else if projected_watts < hw.power_budget_w * 0.75 { 15 }
+        else if projected_watts < hw.power_budget_w { 10 }
+        else { 5 }
+    };
+
+    let total = vram_score + thermal_score + wes_score + power_score;
+
+    let (label, recommendation) = if vram_required > vram_available {
+        ("Won't Fit".to_string(), format!(
+            "Requires {}G VRAM, you have {}G. Try a smaller quantization or a lower parameter model.",
+            vram_required / 1024, vram_available / 1024
+        ))
+    } else if total >= 80 {
+        ("Excellent".to_string(), "Runs comfortably with headroom for context scaling.".into())
+    } else if total >= 60 {
+        ("Good".to_string(), "Fits well. Monitor VRAM under long-context workloads.".into())
+    } else if total >= 40 {
+        ("Tight".to_string(), "Will run but may thermal throttle under sustained load. Consider a lower quantization.".into())
+    } else {
+        ("Marginal".to_string(), "Barely fits. Expect swap pressure and reduced throughput.".into())
+    };
+
+    FitResult {
+        model_id: model_id.to_string(),
+        quant_level: variant.quant_level.clone(),
+        file_size_mb: variant.file_size_bytes / (1024 * 1024),
+        vram_required_mb: vram_required,
+        vram_available_mb: vram_available,
+        vram_headroom_pct: (headroom_pct * 10.0).round() / 10.0,
+        fit_score: total,
+        fit_label: label,
+        estimated_wes: historical_wes,
+        recommendation,
+    }
+}
+
+/// Extract quant level from a GGUF filename (e.g. "llama-2-7b.Q4_K_M.gguf" → "Q4_K_M").
+fn parse_quant_from_filename(filename: &str) -> Option<String> {
+    // Common patterns: .Q4_K_M.gguf, .IQ4_XS.gguf, .F16.gguf, .BF16.gguf
+    let stem = filename.strip_suffix(".gguf")?;
+    let last_dot = stem.rfind('.')?;
+    let quant = &stem[last_dot + 1..];
+    if quant.starts_with('Q') || quant.starts_with("IQ") || quant.starts_with('F') || quant.starts_with("BF") {
+        Some(quant.to_string())
+    } else {
+        None
+    }
+}
+
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
@@ -4618,6 +4762,142 @@ async fn handle_model_switches(
     }
 }
 
+/// Fetch GGUF model catalog from HuggingFace and cache to DuckDB.
+/// Called on first /api/model-candidates request if cache is stale, and by a 24h background task.
+#[cfg(not(target_env = "musl"))]
+async fn refresh_model_catalog(store: store::Store) {
+    let url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=50";
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => { eprintln!("[model-discovery] HF fetch failed: {e}"); return; }
+    };
+    let models: Vec<serde_json::Value> = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => { eprintln!("[model-discovery] HF parse failed: {e}"); return; }
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let mut entries: Vec<(String, String, String, u64, u64, i64)> = Vec::new();
+
+    for model in &models {
+        let model_id = model["id"].as_str().unwrap_or("").to_string();
+        let downloads = model["downloads"].as_u64().unwrap_or(0);
+        if let Some(siblings) = model["siblings"].as_array() {
+            for sib in siblings {
+                let filename = sib["rfilename"].as_str().unwrap_or("");
+                if !filename.ends_with(".gguf") { continue; }
+                let file_size = sib["size"].as_u64()
+                    .or_else(|| sib["lfs"].as_object().and_then(|l| l["size"].as_u64()))
+                    .unwrap_or(0);
+                if file_size == 0 { continue; }
+                let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
+                entries.push((model_id.clone(), filename.to_string(), quant, file_size, downloads, now));
+            }
+        }
+    }
+
+    let count = entries.len();
+    if let Err(e) = tokio::task::spawn_blocking(move || store.write_catalog(&entries)).await.unwrap_or(Err(duckdb::Error::InvalidQuery)) {
+        eprintln!("[model-discovery] cache write failed: {e}");
+    } else {
+        println!("[model-discovery] cached {count} GGUF variants from HuggingFace");
+    }
+}
+
+/// GET /api/model-candidates — discover GGUF models that fit this hardware.
+/// Query params: ?search=llama&limit=20
+#[cfg(not(target_env = "musl"))]
+async fn handle_model_candidates(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    axum::extract::Extension(apple_m): axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
+    axum::extract::Extension(nvidia_m): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
+    axum::extract::Extension(wes_m): axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
+) -> impl IntoResponse {
+    let search = params.get("search").map(|s| s.as_str());
+    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(50);
+
+    // Refresh catalog if stale (>24h)
+    if !store.catalog_is_fresh(24) {
+        let st = store.clone();
+        refresh_model_catalog(st).await;
+    }
+
+    // Build hardware profile from live metrics
+    let apple = apple_m.lock().map(|g| g.clone()).unwrap_or_default();
+    let nvidia = nvidia_m.lock().map(|g| g.clone()).unwrap_or_default();
+    let wes = wes_m.lock().map(|g| g.clone()).unwrap_or_default();
+
+    let vram_mb = nvidia.nvidia_vram_total_mb.unwrap_or(0)
+        .max(apple.gpu_wired_limit_mb.unwrap_or(0));
+    let power_w = apple.soc_power_w
+        .or(nvidia.nvidia_power_draw_w)
+        .unwrap_or(0.0);
+    // Derive thermal state from penalty: <1.1 = Normal, <1.3 = Fair, <1.8 = Serious, else Critical
+    let penalty = wes.penalty_avg.unwrap_or(1.0);
+    let thermal = if penalty < 1.1 { "Normal" } else if penalty < 1.3 { "Fair" } else if penalty < 1.8 { "Serious" } else { "Critical" };
+    let chip = apple.gpu_name.clone()
+        .or(nvidia.nvidia_gpu_name.clone());
+
+    let hw = HardwareProfile {
+        vram_mb,
+        chip_name: chip.clone(),
+        power_budget_w: power_w,
+        thermal_state: thermal.to_string(),
+    };
+
+    // Read catalog and score
+    let st = store.clone();
+    let search_owned = search.map(|s| s.to_string());
+    let catalog = tokio::task::spawn_blocking(move || {
+        st.query_catalog(search_owned.as_deref(), limit)
+    }).await.unwrap_or(Ok(Vec::new())).unwrap_or_default();
+
+    let mut models: Vec<serde_json::Value> = Vec::new();
+    for (model_id, downloads, variants) in &catalog {
+        let mut scored_variants: Vec<serde_json::Value> = Vec::new();
+        for (filename, quant, file_size) in variants {
+            let cv = CatalogVariant {
+                filename: filename.clone(),
+                quant_level: quant.clone(),
+                file_size_bytes: *file_size,
+            };
+            let fit = score_fit(model_id, &cv, &hw, None);
+            scored_variants.push(serde_json::json!({
+                "quant": fit.quant_level,
+                "file_size_mb": fit.file_size_mb,
+                "vram_required_mb": fit.vram_required_mb,
+                "fit_score": fit.fit_score,
+                "fit_label": fit.fit_label,
+                "estimated_wes": fit.estimated_wes,
+                "vram_headroom_pct": fit.vram_headroom_pct,
+                "recommendation": fit.recommendation,
+            }));
+        }
+        // Sort variants by fit_score descending
+        scored_variants.sort_by(|a, b| b["fit_score"].as_u64().cmp(&a["fit_score"].as_u64()));
+        models.push(serde_json::json!({
+            "model_id": model_id,
+            "downloads": downloads,
+            "variants": scored_variants,
+        }));
+    }
+
+    Json(serde_json::json!({
+        "node_id": node_id_ext.0.as_str(),
+        "hardware": {
+            "vram_mb": vram_mb,
+            "chip": chip,
+            "power_budget_w": (power_w * 10.0).round() / 10.0,
+            "thermal_state": thermal,
+        },
+        "models": models,
+    })).into_response()
+}
+
 /// Returns the last 20 lifecycle events from the recent_events_log ring buffer,
 /// filtered to those within the last 5 minutes. Used by the frontend to seed
 /// the Live Activity feed on every fresh WS connect — catches the startup event
@@ -6195,6 +6475,7 @@ async fn main() {
              .route("/api/explain-slowdown",    get(handle_explain_slowdown))
              .route("/api/model-comparison",    get(handle_model_comparison))
              .route("/api/model-switches",     get(handle_model_switches))
+             .route("/api/model-candidates",   get(handle_model_candidates))
              .layer(axum::extract::Extension(st.clone()))
              .layer(axum::extract::Extension(Arc::clone(&observation_cache)))
         } else {
