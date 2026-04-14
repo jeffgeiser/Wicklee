@@ -16,6 +16,18 @@ export interface NodeAgent {
   restricted?: boolean;
 }
 
+/** Per-model live metrics for concurrent model tracking. */
+export interface ModelLiveMetrics {
+  model: string;
+  size_gb?: number | null;
+  quantization?: string | null;
+  vram_mb?: number | null;
+  tok_s?: number | null;
+  avg_ttft_ms?: number | null;
+  avg_latency_ms?: number | null;
+  request_count: number;
+}
+
 // Live telemetry payload — mirrors MetricsPayload in agent/src/main.rs
 export interface SentinelMetrics {
   node_id: string;
@@ -133,6 +145,10 @@ export interface SentinelMetrics {
   ollama_proxy_avg_latency_ms?: number | null;
   /** Total requests proxied since agent start. Null when proxy inactive. */
   ollama_proxy_request_count?: number | null;
+  /** Per-model live metrics when multiple models are loaded concurrently.
+   * Null/absent = single model (use singular ollama_* fields).
+   * Present when 2+ models are loaded in Ollama's /api/ps. */
+  active_models?: ModelLiveMetrics[] | null;
   /** Port the proxy listens on (e.g. 11434). Null/undefined when proxy is disabled. */
   proxy_listen_port?: number | null;
   /** Port the proxy forwards to (the real Ollama port, e.g. 11435). Null when disabled. */

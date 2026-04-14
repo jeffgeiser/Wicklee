@@ -314,89 +314,147 @@ pub(crate) fn start_ollama_harvester(
                     ..Default::default()
                 };
 
-                // Poll /api/ps for the loaded model and inference state.
+                // Poll /api/ps for ALL loaded models and inference state.
+                let mut ps_models: Vec<serde_json::Value> = Vec::new();
                 if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(first) = json["models"].as_array().and_then(|a| a.first()) {
-                            m.ollama_active_model = first["name"].as_str().map(|s| s.to_string());
-                            m.ollama_model_size_gb = first["size"].as_u64()
-                                .map(|b| b as f32 / 1_073_741_824.0);
-                            m.ollama_quantization = first["details"]["quantization_level"]
-                                .as_str().map(|s| s.to_string());
-
-                            // Fetch context_length + parameter_count from /api/show when model changes.
-                            let current_model = m.ollama_active_model.clone();
-                            if current_model != prev_model {
-                                prev_model = current_model.clone();
-                                if let Some(ref model_name) = current_model {
-                                    if let Ok(show_resp) = client.post(format!("{base}/api/show"))
-                                        .json(&serde_json::json!({ "name": model_name }))
-                                        .send().await
-                                    {
-                                        if let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
-                                            let mi = &show_json["model_info"];
-                                            cached_context_length = mi["general.context_length"].as_u64()
-                                                .or_else(|| mi["llama.context_length"].as_u64());
-                                            cached_parameter_count = mi["general.parameter_count"].as_u64()
-                                                .or_else(|| mi["llama.parameter_count"].as_u64());
-                                        }
-                                    }
-                                } else {
-                                    cached_context_length = None;
-                                    cached_parameter_count = None;
-                                }
-                            }
-                            m.ollama_context_length = cached_context_length;
-                            m.ollama_parameter_count = cached_parameter_count;
-
-                            // Detect inference activity via expires_at resets.
-                            // Ollama resets expires_at = now + keep_alive after each request
-                            // completes. When the string changes between polls, a request just
-                            // finished — mark inference active for the next 35 s.
-                            if let Some(exp_str) = first["expires_at"].as_str() {
-                                let exp_owned = exp_str.to_string();
-                                if prev_expires.as_deref() != Some(&exp_owned) {
-                                    last_infer_ts = Some(std::time::Instant::now());
-                                    // Use the extracted attribution function.
-                                    let result = attribute_expires_change(
-                                        probe_active_harvester.load(std::sync::atomic::Ordering::Acquire),
-                                        m.probe_caused_next_reset,
-                                    );
-                                    if result.consume_probe_flag {
-                                        m.probe_caused_next_reset = false;
-                                    }
-                                    if result.is_user_request {
-                                        m.last_user_request_ts = Some(std::time::Instant::now());
-                                    }
-                                }
-                                prev_expires = Some(exp_owned);
-                            }
+                        if let Some(arr) = json["models"].as_array() {
+                            ps_models = arr.clone();
                         }
                     }
                 }
 
-                // Inference-active signal: proxy takes priority; fall back to /api/ps timer.
+                // Read per-model proxy stats (if proxy active).
+                let proxy_model_stats: std::collections::HashMap<String, (f32, u64, u64, u64, std::time::Instant)> =
+                    if let Some(ref ps) = proxy_main {
+                        let map = ps.per_model.lock().unwrap();
+                        map.iter().map(|(k, v)| (k.clone(), (v.last_tps, v.ttft_sum_ns, v.latency_sum_ns, v.request_count, v.last_done))).collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    };
+
+                // Build per-model live metrics array.
+                let mut live_models: Vec<crate::ModelLiveMetrics> = Vec::new();
+                let mut most_recent_done: Option<(String, std::time::Instant)> = None;
+
+                for entry in &ps_models {
+                    let name = entry["name"].as_str().unwrap_or("").to_string();
+                    let size_gb = entry["size"].as_u64().map(|b| b as f32 / 1_073_741_824.0);
+                    let quant = entry["details"]["quantization_level"].as_str().map(|s| s.to_string());
+                    let vram_mb = entry["size_vram"].as_u64().map(|b| b / (1024 * 1024));
+
+                    let (tok_s, avg_ttft, avg_lat, req_count) = if let Some(&(tps, ttft_ns, lat_ns, cnt, _)) = proxy_model_stats.get(&name) {
+                        let ttft = if cnt > 0 { Some((ttft_ns as f64 / cnt as f64 / 1_000_000.0) as f32) } else { None };
+                        let lat  = if cnt > 0 { Some((lat_ns as f64 / cnt as f64 / 1_000_000.0) as f32) } else { None };
+                        (Some(tps), ttft, lat, cnt)
+                    } else {
+                        (None, None, None, 0)
+                    };
+
+                    live_models.push(crate::ModelLiveMetrics {
+                        model: name.clone(), size_gb, quantization: quant, vram_mb,
+                        tok_s, avg_ttft_ms: avg_ttft, avg_latency_ms: avg_lat, request_count: req_count,
+                    });
+
+                    // Track most-recently-active model for singular field backwards compat
+                    if let Some(&(_, _, _, _, done_ts)) = proxy_model_stats.get(&name) {
+                        if most_recent_done.as_ref().map_or(true, |(_, t)| done_ts > *t) {
+                            most_recent_done = Some((name.clone(), done_ts));
+                        }
+                    }
+                }
+
+                // Singular fields: use most-recently-active model (or first if no proxy stats).
+                let primary_model = most_recent_done.as_ref().map(|(n, _)| n.as_str())
+                    .or_else(|| ps_models.first().and_then(|m| m["name"].as_str()));
+                if let Some(pm) = primary_model {
+                    let pm_entry = ps_models.iter().find(|e| e["name"].as_str() == Some(pm));
+                    m.ollama_active_model = Some(pm.to_string());
+                    m.ollama_model_size_gb = pm_entry.and_then(|e| e["size"].as_u64()).map(|b| b as f32 / 1_073_741_824.0);
+                    m.ollama_quantization = pm_entry.and_then(|e| e["details"]["quantization_level"].as_str()).map(|s| s.to_string());
+                }
+
+                // Fetch context_length + parameter_count from /api/show when primary model changes.
+                let current_model = m.ollama_active_model.clone();
+                if current_model != prev_model {
+                    prev_model = current_model.clone();
+                    if let Some(ref model_name) = current_model {
+                        if let Ok(show_resp) = client.post(format!("{base}/api/show"))
+                            .json(&serde_json::json!({ "name": model_name }))
+                            .send().await
+                        {
+                            if let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
+                                let mi = &show_json["model_info"];
+                                cached_context_length = mi["general.context_length"].as_u64()
+                                    .or_else(|| mi["llama.context_length"].as_u64());
+                                cached_parameter_count = mi["general.parameter_count"].as_u64()
+                                    .or_else(|| mi["llama.parameter_count"].as_u64());
+                            }
+                        }
+                    } else {
+                        cached_context_length = None;
+                        cached_parameter_count = None;
+                    }
+                }
+                m.ollama_context_length = cached_context_length;
+                m.ollama_parameter_count = cached_parameter_count;
+
+                // Detect inference activity via expires_at resets (use first model — same as before).
+                if let Some(first) = ps_models.first() {
+                    if let Some(exp_str) = first["expires_at"].as_str() {
+                        let exp_owned = exp_str.to_string();
+                        if prev_expires.as_deref() != Some(&exp_owned) {
+                            last_infer_ts = Some(std::time::Instant::now());
+                            let result = attribute_expires_change(
+                                probe_active_harvester.load(std::sync::atomic::Ordering::Acquire),
+                                m.probe_caused_next_reset,
+                            );
+                            if result.consume_probe_flag {
+                                m.probe_caused_next_reset = false;
+                            }
+                            if result.is_user_request {
+                                m.last_user_request_ts = Some(std::time::Instant::now());
+                            }
+                        }
+                        prev_expires = Some(exp_owned);
+                    }
+                }
+
+                // Set active_models only when >1 model (no payload bloat for single model).
+                m.active_models = if live_models.len() > 1 { Some(live_models) } else { None };
+
+                // Inference-active signal + proxy aggregate stats.
                 if let Some(ref ps) = proxy_main {
                     let proxy_active = ps.inference_active.load(std::sync::atomic::Ordering::Relaxed);
                     let since_done   = ps.last_done_ts.lock().unwrap()
                         .map_or(false, |t| t.elapsed().as_secs() < 15);
                     m.ollama_inference_active = Some(proxy_active || since_done);
-                    m.ollama_tokens_per_second = *ps.exact_tps.lock().unwrap();
                     m.ollama_proxy_active = true;
 
-                    // Phase 4: compute proxy rolling averages
-                    let req_count = ps.request_count.load(std::sync::atomic::Ordering::Relaxed);
-                    if req_count > 0 {
-                        let ttft_sum = ps.ttft_sum_ns.load(std::sync::atomic::Ordering::Relaxed);
-                        let lat_sum  = ps.latency_sum_ns.load(std::sync::atomic::Ordering::Relaxed);
-                        m.ollama_proxy_avg_ttft_ms    = Some((ttft_sum as f64 / req_count as f64 / 1_000_000.0) as f32);
-                        m.ollama_proxy_avg_latency_ms = Some((lat_sum as f64 / req_count as f64 / 1_000_000.0) as f32);
-                        m.ollama_proxy_request_count  = Some(req_count);
+                    // Most-recently-active model's tok/s for singular field
+                    if let Some((ref name, _)) = most_recent_done {
+                        if let Some(&(tps, _, _, _, _)) = proxy_model_stats.get(name) {
+                            m.ollama_tokens_per_second = Some(tps);
+                        }
                     }
+
+                    // Aggregate across all models for singular proxy averages
+                    let total_reqs: u64 = proxy_model_stats.values().map(|&(_, _, _, cnt, _)| cnt).sum();
+                    if total_reqs > 0 {
+                        let total_ttft: u64 = proxy_model_stats.values().map(|&(_, t, _, _, _)| t).sum();
+                        let total_lat: u64 = proxy_model_stats.values().map(|&(_, _, l, _, _)| l).sum();
+                        m.ollama_proxy_avg_ttft_ms    = Some((total_ttft as f64 / total_reqs as f64 / 1_000_000.0) as f32);
+                        m.ollama_proxy_avg_latency_ms = Some((total_lat as f64 / total_reqs as f64 / 1_000_000.0) as f32);
+                        m.ollama_proxy_request_count  = Some(total_reqs);
+                    }
+
+                    // Cleanup: remove proxy stats for models no longer loaded in Ollama
+                    let loaded_names: std::collections::HashSet<String> = ps_models.iter()
+                        .filter_map(|e| e["name"].as_str().map(|s| s.to_string())).collect();
+                    let mut map = ps.per_model.lock().unwrap();
+                    map.retain(|k, _| loaded_names.contains(k));
                 } else {
-                    // 15 s matches the Tier 2 attribution window in compute_inference_state.
-                    // inference_state is now the SSOT for live detection; this window is
-                    // belt-and-suspenders for frontend fallback on pre-v0.5.4 agents only.
+                    // No proxy — fall back to /api/ps timer for inference detection.
                     m.ollama_inference_active =
                         Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 15));
                 }

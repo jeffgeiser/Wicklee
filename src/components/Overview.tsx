@@ -837,6 +837,25 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             {m.clock_throttle_pct != null && <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%"
               tooltip="Percentage of clock speed reduction from maximum. 0% = running at full speed. > 15% during active inference with Normal thermal state suggests a power cap or driver limit, not heat (Pattern K)." />}
           </div>
+
+          {/* Multi-model breakdown (shown when 2+ models loaded) */}
+          {m.active_models && m.active_models.length > 1 && (
+            <div className="mt-3 pt-3 border-t border-gray-800/40">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+                Active Models ({m.active_models.length})
+              </p>
+              <div className="space-y-1">
+                {m.active_models.map(am => (
+                  <div key={am.model} className="flex items-center gap-3 text-xs">
+                    <span className="text-gray-300 font-mono truncate min-w-0 flex-1">{am.model}</span>
+                    {am.tok_s != null && <span className="text-emerald-400 font-mono tabular-nums whitespace-nowrap">{am.tok_s.toFixed(1)} tok/s</span>}
+                    {am.vram_mb != null && <span className="text-gray-500 font-mono tabular-nums whitespace-nowrap">{(am.vram_mb / 1024).toFixed(1)}G</span>}
+                    {am.request_count > 0 && <span className="text-gray-600 tabular-nums whitespace-nowrap">{am.request_count} req</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       );
     })()}
@@ -2513,7 +2532,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         </div>
 
         {isLocalMode ? (
-          // ── Diagnostic Rail: live hardware metrics at 1 Hz ──────────────────
+          <div>
+          {/* ── Diagnostic Rail: live hardware metrics at 1 Hz ────────────── */}
           <DiagnosticRail
             sentinel={sentinel}
             transport={transport}
@@ -2521,6 +2541,31 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               ? (peakTpsMap[sentinel.node_id] ?? localPeakTpsRef.current ?? undefined)
               : undefined}
           />
+          {/* ── Multi-Model Panel (shown when 2+ models loaded) ──────────── */}
+          {sentinel?.active_models && sentinel.active_models.length > 1 && (
+            <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800/60">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-2">
+                Active Models ({sentinel.active_models.length})
+              </p>
+              <div className="space-y-1.5">
+                {sentinel.active_models.map(am => (
+                  <div key={am.model} className="flex items-center gap-3 text-xs">
+                    <span className="text-gray-300 font-mono truncate min-w-0 flex-1">{am.model}</span>
+                    {am.tok_s != null && (
+                      <span className="text-emerald-400 font-mono tabular-nums whitespace-nowrap">{am.tok_s.toFixed(1)} tok/s</span>
+                    )}
+                    {am.vram_mb != null && (
+                      <span className="text-gray-500 font-mono tabular-nums whitespace-nowrap">{(am.vram_mb / 1024).toFixed(1)}G</span>
+                    )}
+                    {am.request_count > 0 && (
+                      <span className="text-gray-600 tabular-nums whitespace-nowrap">{am.request_count} req</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          </div>
         ) : (
           // ── Fleet Status table ───────────────────────────────────────────────
           nodeRows.length > 0 ? (

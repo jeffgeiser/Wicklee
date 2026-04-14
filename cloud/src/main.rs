@@ -29,6 +29,19 @@ use tokio::sync::mpsc;
 // The SSE stream serves `entry.metrics` verbatim; the fleet frontend depends on
 // receiving every field the agent sends.
 
+/// Per-model live metrics — mirrors agent's ModelLiveMetrics.
+#[derive(Deserialize, Serialize, Clone, Default, Debug)]
+struct CloudModelLiveMetrics {
+    model: String,
+    #[serde(default)] size_gb: Option<f32>,
+    #[serde(default)] quantization: Option<String>,
+    #[serde(default)] vram_mb: Option<u64>,
+    #[serde(default)] tok_s: Option<f32>,
+    #[serde(default)] avg_ttft_ms: Option<f32>,
+    #[serde(default)] avg_latency_ms: Option<f32>,
+    #[serde(default)] request_count: u64,
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 struct MetricsPayload {
     node_id:                        String,
@@ -94,6 +107,9 @@ struct MetricsPayload {
     ollama_proxy_avg_latency_ms: Option<f32>,
     #[serde(default)]
     ollama_proxy_request_count: Option<u64>,
+    /// Per-model live metrics when multiple models are loaded concurrently.
+    #[serde(default)]
+    active_models: Option<Vec<CloudModelLiveMetrics>>,
     #[serde(default)]
     proxy_listen_port: Option<u16>,
     #[serde(default)]

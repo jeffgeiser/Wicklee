@@ -3,8 +3,18 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
+
+/// Per-model proxy statistics accumulated from done packets.
+pub(crate) struct ModelStats {
+    pub(crate) last_tps:        f32,
+    pub(crate) ttft_sum_ns:     u64,
+    pub(crate) latency_sum_ns:  u64,
+    pub(crate) request_count:   u64,
+    pub(crate) last_done:       std::time::Instant,
+}
 
 /// Shared state between the proxy Axum app and the OllamaMetrics writer task.
 pub(crate) struct ProxyState {
@@ -15,20 +25,14 @@ pub(crate) struct ProxyState {
     pub(crate) inference_active: std::sync::atomic::AtomicBool,
     /// Timestamp of last completed request (done packet received).
     pub(crate) last_done_ts:   Mutex<Option<std::time::Instant>>,
-    /// Exact tok/s from the most recent done packet.
-    pub(crate) exact_tps:      Mutex<Option<f32>>,
     /// Node ID for trace attribution.
     pub(crate) node_id: String,
     /// Channel sender for inference traces — writes to DuckDB via a consumer task.
     #[cfg(not(target_env = "musl"))]
     pub(crate) trace_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::store::TraceRow>>,
-    // ── Proxy aggregate accumulators (Phase 4) ──────────────────────────────
-    /// Sum of prompt_eval_duration (nanoseconds) across all done packets.
-    pub(crate) ttft_sum_ns:      std::sync::atomic::AtomicU64,
-    /// Sum of total_duration (nanoseconds) across all done packets.
-    pub(crate) latency_sum_ns:   std::sync::atomic::AtomicU64,
-    /// Total done packets received since agent start.
-    pub(crate) request_count:    std::sync::atomic::AtomicU64,
+    /// Per-model proxy statistics keyed by model name (e.g. "llama3:8b").
+    /// Updated on each done packet. Read by the harvester once per second.
+    pub(crate) per_model: Mutex<HashMap<String, ModelStats>>,
 }
 
 /// Timeout for individual upstream chunks — if no data arrives for this long,
@@ -130,28 +134,38 @@ pub(crate) async fn proxy_ollama_streaming(
                                 for line in text.lines() {
                                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                                         if v["done"].as_bool() == Some(true) {
-                                            if let (Some(ec), Some(ed)) = (
-                                                v["eval_count"].as_u64(),
-                                                v["eval_duration"].as_u64(),
-                                            ) {
-                                                let tps = ec as f64 / (ed as f64 / 1_000_000_000.0);
-                                                *proxy_state.exact_tps.lock().unwrap() = Some(tps as f32);
-                                                *proxy_state.last_done_ts.lock().unwrap() =
-                                                    Some(std::time::Instant::now());
-                                            }
-
-                                            // Capture per-request timing for inference traces.
                                             let total_dur    = v["total_duration"].as_u64().unwrap_or(0);
                                             let prompt_dur   = v["prompt_eval_duration"].as_u64().unwrap_or(0);
                                             let eval_dur     = v["eval_duration"].as_u64().unwrap_or(0);
                                             let eval_cnt     = v["eval_count"].as_u64().unwrap_or(0);
+
+                                            let tps = if eval_cnt > 0 && eval_dur > 0 {
+                                                (eval_cnt as f64 / (eval_dur as f64 / 1_000_000_000.0)) as f32
+                                            } else { 0.0 };
+
+                                            let now = std::time::Instant::now();
+                                            *proxy_state.last_done_ts.lock().unwrap() = Some(now);
+
+                                            // Per-model accumulator update
+                                            {
+                                                let mut map = proxy_state.per_model.lock().unwrap();
+                                                let entry = map.entry(model.clone()).or_insert(ModelStats {
+                                                    last_tps: 0.0, ttft_sum_ns: 0, latency_sum_ns: 0,
+                                                    request_count: 0, last_done: now,
+                                                });
+                                                entry.last_tps = tps;
+                                                entry.ttft_sum_ns += prompt_dur;
+                                                entry.latency_sum_ns += total_dur;
+                                                entry.request_count += 1;
+                                                entry.last_done = now;
+                                            }
+
+                                            // Per-request inference trace → DuckDB
                                             let latency_ms   = (total_dur / 1_000_000) as i64;
                                             let ttft_ms      = (prompt_dur / 1_000_000) as i64;
                                             let tpot_ms      = if eval_cnt > 0 {
                                                 (eval_dur as f64 / eval_cnt as f64) / 1_000_000.0
-                                            } else {
-                                                0.0
-                                            };
+                                            } else { 0.0 };
 
                                             #[cfg(not(target_env = "musl"))]
                                             if let Some(ref tx) = proxy_state.trace_tx {
@@ -168,11 +182,6 @@ pub(crate) async fn proxy_ollama_streaming(
                                                     eval_duration_ns: Some(eval_dur as i64),
                                                 });
                                             }
-
-                                            // Phase 4: accumulate for rolling averages
-                                            proxy_state.ttft_sum_ns.fetch_add(prompt_dur, std::sync::atomic::Ordering::Relaxed);
-                                            proxy_state.latency_sum_ns.fetch_add(total_dur, std::sync::atomic::Ordering::Relaxed);
-                                            proxy_state.request_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                         }
                                     }
                                 }

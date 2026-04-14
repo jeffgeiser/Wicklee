@@ -99,6 +99,27 @@ impl JsonRpcResponse {
     }
 }
 
+/// Per-model live metrics for concurrent model tracking.
+/// Populated from `/api/ps` + proxy per-model accumulators.
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub(crate) struct ModelLiveMetrics {
+    pub(crate) model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) size_gb: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) quantization: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) vram_mb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tok_s: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) avg_ttft_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) avg_latency_ms: Option<f32>,
+    #[serde(default)]
+    pub(crate) request_count: u64,
+}
+
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
@@ -134,6 +155,10 @@ pub(crate) struct OllamaMetrics {
     pub(crate) ollama_proxy_avg_latency_ms: Option<f32>,
     /// Total requests proxied since agent start.
     pub(crate) ollama_proxy_request_count: Option<u64>,
+    /// Per-model live metrics when multiple models are loaded concurrently.
+    /// Only populated when >1 model is loaded (omitted for single model to keep payload lean).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) active_models: Option<Vec<ModelLiveMetrics>>,
     /// Set to `Some(Instant::now())` when probe_ollama_tps() begins.
     #[serde(skip)]
     pub(crate) last_probe_start: Option<std::time::Instant>,
@@ -379,6 +404,9 @@ struct MetricsPayload {
     ollama_proxy_avg_latency_ms: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_proxy_request_count: Option<u64>,
+    /// Per-model live metrics when multiple models are loaded concurrently.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_models: Option<Vec<ModelLiveMetrics>>,
     /// Port the proxy listens on (e.g. 11434). None when proxy is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     proxy_listen_port: Option<u16>,
@@ -2507,6 +2535,7 @@ fn start_metrics_broadcaster(
                 ollama_proxy_avg_ttft_ms:    ollama.ollama_proxy_avg_ttft_ms,
                 ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
                 ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
+                active_models:               ollama.active_models.clone(),
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -5167,6 +5196,7 @@ async fn handle_metrics(
                 ollama_proxy_avg_ttft_ms:    ollama.ollama_proxy_avg_ttft_ms,
                 ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
                 ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
+                active_models:               ollama.active_models.clone(),
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -5647,13 +5677,10 @@ async fn main() {
                                         .unwrap_or_default(),
                     inference_active: std::sync::atomic::AtomicBool::new(false),
                     last_done_ts:     Mutex::new(None),
-                    exact_tps:        Mutex::new(None),
                     node_id:          config.node_id.clone(),
                     #[cfg(not(target_env = "musl"))]
                     trace_tx:         Some(trace_tx.clone()),
-                    ttft_sum_ns:      std::sync::atomic::AtomicU64::new(0),
-                    latency_sum_ns:   std::sync::atomic::AtomicU64::new(0),
-                    request_count:    std::sync::atomic::AtomicU64::new(0),
+                    per_model:        Mutex::new(std::collections::HashMap::new()),
                 });
                 let ps_clone = Arc::clone(&ps);
                 let proxy_app = axum::Router::new()
