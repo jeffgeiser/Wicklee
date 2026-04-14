@@ -715,6 +715,19 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("installs migration failed");
 
+    // Model catalog — cached HuggingFace GGUF metadata for model discovery.
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS model_catalog (
+            model_id    TEXT    NOT NULL,
+            filename    TEXT    NOT NULL,
+            quant_level TEXT    NOT NULL,
+            file_size   BIGINT  NOT NULL,
+            downloads   BIGINT  NOT NULL DEFAULT 0,
+            fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (model_id, filename)
+        )
+    ").execute(pool).await.expect("model_catalog migration failed");
+
     // ── TimescaleDB policies ────────────────────────────────────────────────
     // Retention: metrics_raw 2 days, node_events 30 days
     // These are idempotent — TimescaleDB ignores if already set.
@@ -3666,6 +3679,302 @@ async fn run_rollup(pool: &sqlx::PgPool) {
     println!("[rollup] complete");
 }
 
+// ── Model Discovery (Cloud) ──────────────────────────────────────────────────
+
+/// Refresh the HuggingFace GGUF model catalog into Postgres.
+async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
+    let url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=50";
+    let resp = match tokio::task::spawn_blocking(move || {
+        ureq::get(url).call()
+    }).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => { eprintln!("[model-catalog] HF fetch failed: {e}"); return; }
+        Err(e) => { eprintln!("[model-catalog] task join failed: {e}"); return; }
+    };
+    let body: String = match resp.into_string() {
+        Ok(b) => b,
+        Err(e) => { eprintln!("[model-catalog] HF read failed: {e}"); return; }
+    };
+    let models: Vec<serde_json::Value> = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("[model-catalog] HF parse failed: {e}"); return; }
+    };
+
+    let mut count = 0usize;
+    for model in &models {
+        let model_id = model["id"].as_str().unwrap_or("");
+        let downloads = model["downloads"].as_i64().unwrap_or(0);
+        if let Some(siblings) = model["siblings"].as_array() {
+            for sib in siblings {
+                let filename = sib["rfilename"].as_str().unwrap_or("");
+                if !filename.ends_with(".gguf") { continue; }
+                let file_size = sib["size"].as_i64()
+                    .or_else(|| sib["lfs"].as_object().and_then(|l| l["size"].as_i64()))
+                    .unwrap_or(0);
+                if file_size == 0 { continue; }
+                // Extract quant level from filename
+                let quant = filename.strip_suffix(".gguf")
+                    .and_then(|s| s.rfind('.').map(|i| &s[i+1..]))
+                    .filter(|q| q.starts_with('Q') || q.starts_with("IQ") || q.starts_with('F') || q.starts_with("BF"))
+                    .unwrap_or("unknown");
+
+                let _ = sqlx::query(
+                    "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (model_id, filename) DO UPDATE SET
+                       file_size = EXCLUDED.file_size, downloads = EXCLUDED.downloads, fetched_at = NOW()"
+                ).bind(model_id).bind(filename).bind(quant).bind(file_size).bind(downloads)
+                .execute(pool).await;
+                count += 1;
+            }
+        }
+    }
+    println!("[model-catalog] cached {count} GGUF variants from HuggingFace");
+}
+
+/// Hardware simulation profiles for Pro tier "what if I had a 4090?" feature.
+fn hardware_profile(name: &str) -> Option<(u64, f32)> {
+    // (vram_mb, typical_power_w)
+    match name {
+        "m4"               => Some((16_384, 12.0)),
+        "m4_pro_24gb"      => Some((24_576, 18.0)),
+        "m4_max_36gb"      => Some((36_864, 25.0)),
+        "m4_max_64gb"      => Some((65_536, 35.0)),
+        "m4_ultra_128gb"   => Some((131_072, 60.0)),
+        "nvidia_4060"      => Some((8_192, 115.0)),
+        "nvidia_4070"      => Some((12_288, 200.0)),
+        "nvidia_4080"      => Some((16_384, 320.0)),
+        "nvidia_4090"      => Some((24_576, 450.0)),
+        "nvidia_a100_40gb" => Some((40_960, 300.0)),
+        "nvidia_a100_80gb" => Some((81_920, 300.0)),
+        "nvidia_h100"      => Some((81_920, 700.0)),
+        _ => None,
+    }
+}
+
+/// Compute fit score (mirrors agent logic).
+fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, power_w: f32, thermal: &str) -> (u8, String) {
+    let vram_required = (file_size_bytes as u64 / (1024 * 1024)) + ((file_size_bytes as u64 / (1024 * 1024)) / 10).max(256);
+    let headroom_pct = if vram_mb > 0 {
+        ((vram_mb as f32 - vram_required as f32) / vram_mb as f32 * 100.0).max(-100.0)
+    } else { -100.0 };
+
+    let vram_score: u8 = if headroom_pct >= 50.0 { 40 }
+        else if headroom_pct >= 30.0 { 35 } else if headroom_pct >= 15.0 { 28 }
+        else if headroom_pct >= 5.0 { 20 } else if headroom_pct >= 0.0 { 10 } else { 0 };
+    let thermal_score: u8 = match thermal { "Normal" => 20, "Fair" => 10, "Serious" => 5, _ => 0 };
+    let wes_score: u8 = 10; // neutral — no historical data for simulation
+    let power_score: u8 = if power_w <= 0.1 { 10 } else {
+        let watts_per_gb = power_w / (vram_mb as f32 / 1024.0).max(1.0);
+        let projected = watts_per_gb * (vram_required as f32 / 1024.0);
+        if projected < power_w * 0.5 { 20 } else if projected < power_w * 0.75 { 15 }
+        else if projected < power_w { 10 } else { 5 }
+    };
+    let total = vram_score + thermal_score + wes_score + power_score;
+    let label = if vram_required > vram_mb { "Won't Fit".into() }
+        else if total >= 80 { "Excellent".into() } else if total >= 60 { "Good".into() }
+        else if total >= 40 { "Tight".into() } else { "Marginal".into() };
+    (total, label)
+}
+
+/// GET /api/v1/models/discover — model discovery for Pro/Team tiers.
+/// Query params:
+///   ?search=llama — filter by model name
+///   ?limit=20 — max results
+///   ?simulate_hw=nvidia_4090 — Pro: simulate against hardware profile
+///   ?simulate_vram_mb=24576&simulate_power_w=350 — Pro: custom simulation
+///   ?fleet=true&model_id=X — Team: which fleet nodes can run this model?
+async fn handle_v1_models_discover(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let raw_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
+    };
+    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+        Some(r) => r,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
+    };
+
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+
+    // ── Fleet matching (Team+) ────────────────────────────────────────────
+    if params.get("fleet").map(|v| v == "true").unwrap_or(false) {
+        if !is_team_or_above(&tier) {
+            return (StatusCode::PAYMENT_REQUIRED,
+                Json(serde_json::json!({ "error": "Fleet model matching requires Team tier" }))).into_response();
+        }
+        let model_id = params.get("model_id").cloned().unwrap_or_default();
+        if model_id.is_empty() {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "model_id required for fleet matching" }))).into_response();
+        }
+        // Get model variants from catalog
+        let variants: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT quant_level, file_size FROM model_catalog WHERE model_id = $1 ORDER BY file_size"
+        ).bind(&model_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+        if variants.is_empty() {
+            return Json(serde_json::json!({ "error": "Model not found in catalog", "model_id": model_id })).into_response();
+        }
+
+        // Score each fleet node against the smallest fitting variant
+        let node_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT wk_id FROM nodes WHERE user_id = $1"
+        ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+        let metrics_map = state.metrics.read().unwrap();
+        let now = now_ms();
+        let mut node_scores: Vec<serde_json::Value> = Vec::new();
+
+        for node_id in &node_ids {
+            let entry = match metrics_map.get(node_id) {
+                Some(e) if now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS => e,
+                _ => continue,
+            };
+            let m = match &entry.metrics { Some(m) => m, None => continue };
+            let vram = m.nvidia_vram_total_mb.unwrap_or(0).max(m.gpu_wired_limit_mb.unwrap_or(0));
+            let power = m.apple_soc_power_w.or(m.nvidia_power_draw_w).unwrap_or(0.0);
+            let thermal = m.thermal_state.as_deref().unwrap_or("Normal");
+
+            // Find the best-fitting variant for this node
+            let mut best_score = 0u8;
+            let mut best_quant = String::new();
+            let mut best_label = String::new();
+            for (quant, file_size) in &variants {
+                let (score, label) = cloud_fit_score(*file_size, vram, power, thermal);
+                if score > best_score {
+                    best_score = score;
+                    best_quant = quant.clone();
+                    best_label = label;
+                }
+            }
+
+            node_scores.push(serde_json::json!({
+                "node_id": node_id,
+                "hostname": m.hostname,
+                "vram_mb": vram,
+                "best_quant": best_quant,
+                "fit_score": best_score,
+                "fit_label": best_label,
+            }));
+        }
+        node_scores.sort_by(|a, b| b["fit_score"].as_u64().cmp(&a["fit_score"].as_u64()));
+
+        return Json(serde_json::json!({
+            "model_id": model_id,
+            "variant_count": variants.len(),
+            "nodes": node_scores,
+        })).into_response();
+    }
+
+    // ── Simulation (Pro+) or catalog browse ───────────────────────────────
+    let simulate_hw = params.get("simulate_hw").cloned();
+    let custom_vram: Option<u64> = params.get("simulate_vram_mb").and_then(|v| v.parse().ok());
+    let custom_power: Option<f32> = params.get("simulate_power_w").and_then(|v| v.parse().ok());
+
+    let (sim_vram, sim_power, sim_label) = if let Some(ref hw_name) = simulate_hw {
+        if !is_pro_or_above(&tier) {
+            return (StatusCode::PAYMENT_REQUIRED,
+                Json(serde_json::json!({ "error": "Hardware simulation requires Pro tier" }))).into_response();
+        }
+        match hardware_profile(hw_name) {
+            Some((v, p)) => (v, p, Some(hw_name.clone())),
+            None => return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Unknown hardware profile", "available": [
+                    "m4", "m4_pro_24gb", "m4_max_36gb", "m4_max_64gb", "m4_ultra_128gb",
+                    "nvidia_4060", "nvidia_4070", "nvidia_4080", "nvidia_4090",
+                    "nvidia_a100_40gb", "nvidia_a100_80gb", "nvidia_h100"
+                ] }))).into_response(),
+        }
+    } else if custom_vram.is_some() || custom_power.is_some() {
+        if !is_pro_or_above(&tier) {
+            return (StatusCode::PAYMENT_REQUIRED,
+                Json(serde_json::json!({ "error": "Hardware simulation requires Pro tier" }))).into_response();
+        }
+        (custom_vram.unwrap_or(16_384), custom_power.unwrap_or(20.0), Some("custom".into()))
+    } else {
+        (0, 0.0, None) // No simulation — just return catalog
+    };
+
+    let search = params.get("search").cloned();
+    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(50);
+
+    // Query catalog
+    let search_clause = if search.is_some() {
+        "AND LOWER(model_id) LIKE '%' || LOWER($2) || '%'"
+    } else { "" };
+    let sql = format!(
+        "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
+         WHERE TRUE {search_clause} ORDER BY downloads DESC LIMIT $1"
+    );
+
+    let rows: Vec<(String, String, String, i64, i64)> = if let Some(ref s) = search {
+        sqlx::query_as(&sql).bind(limit).bind(s).fetch_all(&state.pool).await.unwrap_or_default()
+    } else {
+        let sql_no_search = format!(
+            "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog ORDER BY downloads DESC LIMIT $1"
+        );
+        sqlx::query_as(&sql_no_search).bind(limit).fetch_all(&state.pool).await.unwrap_or_default()
+    };
+
+    // Group by model_id and score
+    let mut models: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for (model_id, _filename, quant, file_size, downloads) in &rows {
+        let (vram, power) = if sim_label.is_some() {
+            (sim_vram, sim_power)
+        } else {
+            (16_384u64, 20.0f32) // Default: 16GB / 20W (generic Apple Silicon)
+        };
+        let (score, label) = cloud_fit_score(*file_size, vram, power, "Normal");
+        let vram_required = (*file_size as u64 / (1024 * 1024)) + ((*file_size as u64 / (1024 * 1024)) / 10).max(256);
+
+        let variant = serde_json::json!({
+            "quant": quant,
+            "file_size_mb": *file_size / (1024 * 1024),
+            "vram_required_mb": vram_required,
+            "fit_score": score,
+            "fit_label": label,
+        });
+
+        if let Some(&idx) = seen.get(model_id) {
+            models[idx]["variants"].as_array_mut().unwrap().push(variant);
+        } else {
+            seen.insert(model_id.clone(), models.len());
+            models.push(serde_json::json!({
+                "model_id": model_id,
+                "downloads": downloads,
+                "variants": [variant],
+            }));
+        }
+    }
+
+    // Sort variants within each model by fit_score desc
+    for m in &mut models {
+        if let Some(arr) = m["variants"].as_array_mut() {
+            arr.sort_by(|a, b| b["fit_score"].as_u64().cmp(&a["fit_score"].as_u64()));
+        }
+    }
+
+    let mut response = serde_json::json!({ "models": models });
+    if let Some(ref label) = sim_label {
+        response["simulation"] = serde_json::json!({
+            "hardware": label,
+            "vram_mb": sim_vram,
+            "power_w": sim_power,
+        });
+    }
+    Json(response).into_response()
+}
+
 /// Nightly maintenance: prune old data, VACUUM ANALYZE.
 /// On TimescaleDB, retention policies handle metrics_raw/node_events/metrics_5min
 /// automatically. These DELETEs are a fallback for stock Postgres without TimescaleDB.
@@ -3695,7 +4004,10 @@ async fn run_nightly_maintenance(pool: &sqlx::PgPool) {
     let _ = sqlx::query("ANALYZE node_events").execute(pool).await;
     let _ = sqlx::query("ANALYZE fleet_observations").execute(pool).await;
 
-    println!("[nightly] maintenance complete — pruned + ANALYZE");
+    // Refresh HuggingFace GGUF model catalog (24h cycle).
+    refresh_cloud_model_catalog(pool).await;
+
+    println!("[nightly] maintenance complete — pruned + ANALYZE + catalog refresh");
 }
 
 async fn rollup_task(pool: sqlx::PgPool) {
@@ -6025,6 +6337,7 @@ async fn main() {
         .route("/api/v1/nodes/:id",      get(handle_v1_node))
         .route("/api/v1/route/best",     get(handle_v1_route_best))
         .route("/api/v1/insights/latest", get(handle_v1_insights_latest))
+        .route("/api/v1/models/discover", get(handle_v1_models_discover))
         .route("/mcp",                      post(handle_cloud_mcp))
         .route("/mcp/manifest",             get(handle_cloud_mcp_manifest))
         .route("/metrics",                  get(handle_prometheus_metrics))

@@ -65,6 +65,7 @@ import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 
 // Tier 2 cards (cont.)
 import SiliconFitAudit from './insights/tier2/SiliconFitAudit';
+import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
 
 // Gate & layout components
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
@@ -2208,6 +2209,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   }
                 />
               )}
+
+              {/* Model Discovery — GGUF models scored against local hardware */}
+              {isLocalHost && <ModelDiscoveryCard isLocalHost={isLocalHost} />}
 
               {/* Localhost: Performance History from DuckDB (1h window) */}
               {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}
