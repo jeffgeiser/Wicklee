@@ -43,9 +43,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
     { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
     { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },
-    { id: DashboardTab.SCAFFOLDING,  icon: Terminal,   label: 'Scaffolding',     show: currentUser.isPro && permissions.canViewScaffolding },
-    { id: DashboardTab.AI_PROVIDERS, icon: Key,        label: 'AI Key Vault',    show: currentUser.isPro && !isLocalMode },
-    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: currentUser.isPro && permissions.canManageTeam && !isLocalMode },
+    // Scaffolding and AI Key Vault hidden — placeholder tabs, not shipped.
+    // Team Management hidden — Team tier is "Coming Soon".
+    { id: DashboardTab.SCAFFOLDING,  icon: Terminal,   label: 'Scaffolding',     show: false },
+    { id: DashboardTab.AI_PROVIDERS, icon: Key,        label: 'AI Key Vault',    show: false },
+    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: false },
   ];
 
   return (
