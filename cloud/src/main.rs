@@ -1457,10 +1457,13 @@ async fn handle_v1_node(
     }
 }
 
-/// GET /api/v1/route/best
+/// GET /api/v1/route/best?model=qwen2.5:7b — routing recommendation.
+/// Optional `model` param filters to nodes that have that model loaded and uses
+/// per-model metrics (tok/s, WES) when available via active_models array.
 async fn handle_v1_route_best(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let raw_key = match extract_api_key(&headers) {
         Some(k) => k,
@@ -1473,6 +1476,8 @@ async fn handle_v1_route_best(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+
+    let model_filter = params.get("model").cloned();
 
     let node_ids: Vec<String> = sqlx::query_scalar(
         "SELECT wk_id FROM nodes WHERE user_id = $1"
@@ -1490,7 +1495,23 @@ async fn handle_v1_route_best(
     let candidates: Vec<NodeScore> = node_ids.into_iter().filter_map(|node_id| {
         let entry = metrics_map.get(&node_id)?;
         if now.saturating_sub(entry.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; }
-        let m     = entry.metrics.as_ref()?;
+        let m = entry.metrics.as_ref()?;
+
+        // Per-model routing: when model param is specified, check if node has it loaded
+        if let Some(ref target_model) = model_filter {
+            // Check active_models array first (multi-model)
+            if let Some(ref models) = m.active_models {
+                if let Some(am) = models.iter().find(|am| &am.model == target_model) {
+                    return Some(NodeScore { node_id, tok_s: am.tok_s, wes: am.wes });
+                }
+                return None; // Node doesn't have this model loaded
+            }
+            // Fallback to singular active model
+            if m.ollama_active_model.as_deref() != Some(target_model) {
+                return None;
+            }
+        }
+
         let tok_s = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
         let wes   = wes_for_payload(m);
         Some(NodeScore { node_id, tok_s, wes })

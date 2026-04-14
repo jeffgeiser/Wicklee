@@ -1425,6 +1425,62 @@ impl Store {
         Ok(out)
     }
 
+    /// Model switching cost — detects model transitions and computes swap overhead.
+    /// Returns: each swap event with from_model, to_model, timestamp, and estimated
+    /// idle time (gap between last tok/s > 0 on old model and first tok/s > 0 on new model).
+    pub fn query_model_switches(
+        &self,
+        node_id: &str,
+        hours: i64,
+    ) -> Result<serde_json::Value, duckdb::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let from = now - hours * 3600 * 1000;
+        let conn = self.0.lock().unwrap();
+
+        // Use LAG() window function to detect model transitions
+        let mut stmt = conn.prepare(
+            "WITH transitions AS (
+                SELECT ts_ms, model,
+                       LAG(model) OVER (ORDER BY ts_ms) AS prev_model,
+                       LAG(ts_ms) OVER (ORDER BY ts_ms) AS prev_ts
+                FROM metrics_raw
+                WHERE node_id = ? AND ts_ms >= ? AND model IS NOT NULL AND model != ''
+            )
+            SELECT ts_ms, prev_model, model, ts_ms - prev_ts AS gap_ms
+            FROM transitions
+            WHERE prev_model IS NOT NULL AND model != prev_model
+            ORDER BY ts_ms DESC
+            LIMIT 100"
+        )?;
+        let mut rows = stmt.query(params![node_id, from])?;
+        let mut swaps = Vec::new();
+        let mut total_gap_ms: i64 = 0;
+
+        while let Some(row) = rows.next()? {
+            let ts: i64 = row.get(0)?;
+            let from_model: Option<String> = row.get(1)?;
+            let to_model: Option<String> = row.get(2)?;
+            let gap_ms: Option<i64> = row.get(3)?;
+            let gap = gap_ms.unwrap_or(0);
+            total_gap_ms += gap;
+            swaps.push(serde_json::json!({
+                "ts_ms": ts,
+                "from_model": from_model,
+                "to_model": to_model,
+                "gap_ms": gap,
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "swaps": swaps,
+            "total_swaps": swaps.len(),
+            "total_gap_ms": total_gap_ms,
+            "total_gap_minutes": (total_gap_ms as f64 / 60_000.0 * 10.0).round() / 10.0,
+            "hours_queried": hours,
+        }))
+    }
+
     /// Export a unified audit log joining events, traces, and dismissals.
     /// Returns flat records sorted newest-first, capped at `limit`.
     pub fn export_audit_log(

@@ -4601,6 +4601,23 @@ async fn handle_model_comparison(
     }
 }
 
+/// GET /api/model-switches?hours=24 — model swap frequency and overhead.
+#[cfg(not(target_env = "musl"))]
+async fn handle_model_switches(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> impl IntoResponse {
+    let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(24).min(720);
+    let node_id = node_id_ext.0.as_str().to_owned();
+    let result = tokio::task::spawn_blocking(move || store.query_model_switches(&node_id, hours)).await;
+    match result {
+        Ok(Ok(data)) => Json(data).into_response(),
+        Ok(Err(e)) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
 /// Returns the last 20 lifecycle events from the recent_events_log ring buffer,
 /// filtered to those within the last 5 minutes. Used by the frontend to seed
 /// the Live Activity feed on every fresh WS connect — catches the startup event
@@ -6177,6 +6194,7 @@ async fn main() {
              .route("/api/cost-by-model",       get(handle_cost_by_model))
              .route("/api/explain-slowdown",    get(handle_explain_slowdown))
              .route("/api/model-comparison",    get(handle_model_comparison))
+             .route("/api/model-switches",     get(handle_model_switches))
              .layer(axum::extract::Extension(st.clone()))
              .layer(axum::extract::Extension(Arc::clone(&observation_cache)))
         } else {
