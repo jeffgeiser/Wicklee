@@ -354,6 +354,7 @@ pub(crate) fn start_ollama_harvester(
                     live_models.push(crate::ModelLiveMetrics {
                         model: name.clone(), size_gb, quantization: quant, vram_mb,
                         tok_s, avg_ttft_ms: avg_ttft, avg_latency_ms: avg_lat, request_count: req_count,
+                        wes: None, // Computed in broadcast loop with power + thermal data
                     });
 
                     // Track most-recently-active model for singular field backwards compat

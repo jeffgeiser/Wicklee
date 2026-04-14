@@ -40,6 +40,7 @@ struct CloudModelLiveMetrics {
     #[serde(default)] avg_ttft_ms: Option<f32>,
     #[serde(default)] avg_latency_ms: Option<f32>,
     #[serde(default)] request_count: u64,
+    #[serde(default)] wes: Option<f32>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]

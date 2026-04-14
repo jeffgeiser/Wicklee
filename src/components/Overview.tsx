@@ -839,23 +839,55 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
           </div>
 
           {/* Multi-model breakdown (shown when 2+ models loaded) */}
-          {m.active_models && m.active_models.length > 1 && (
+          {m.active_models && m.active_models.length > 1 && (() => {
+            const totalVramBudget = m.nvidia_vram_total_mb ?? m.gpu_wired_limit_mb ?? 0;
+            const usedVram = m.active_models!.reduce((s, am) => s + (am.vram_mb ?? 0), 0);
+            const VRAM_COLORS = ['bg-cyan-500', 'bg-indigo-500', 'bg-amber-500', 'bg-emerald-500', 'bg-rose-500', 'bg-violet-500'];
+            return (
             <div className="mt-3 pt-3 border-t border-gray-800/40">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
-                Active Models ({m.active_models.length})
+                Active Models ({m.active_models!.length})
               </p>
               <div className="space-y-1">
-                {m.active_models.map(am => (
+                {m.active_models!.map(am => (
                   <div key={am.model} className="flex items-center gap-3 text-xs">
                     <span className="text-gray-300 font-mono truncate min-w-0 flex-1">{am.model}</span>
                     {am.tok_s != null && <span className="text-emerald-400 font-mono tabular-nums whitespace-nowrap">{am.tok_s.toFixed(1)} tok/s</span>}
+                    {am.wes != null && <span className={`font-mono tabular-nums whitespace-nowrap ${wesColorClass(am.wes)}`}>{am.wes.toFixed(1)} WES</span>}
                     {am.vram_mb != null && <span className="text-gray-500 font-mono tabular-nums whitespace-nowrap">{(am.vram_mb / 1024).toFixed(1)}G</span>}
                     {am.request_count > 0 && <span className="text-gray-600 tabular-nums whitespace-nowrap">{am.request_count} req</span>}
                   </div>
                 ))}
               </div>
+              {/* VRAM Budget Bar */}
+              {totalVramBudget > 0 && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
+                    <span>VRAM Budget</span>
+                    <span className="font-mono tabular-nums">{(usedVram / 1024).toFixed(1)}G / {(totalVramBudget / 1024).toFixed(0)}G ({totalVramBudget > 0 ? Math.round(usedVram / totalVramBudget * 100) : 0}%)</span>
+                  </div>
+                  <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden flex">
+                    {m.active_models!.map((am, i) => {
+                      const pct = am.vram_mb ? (am.vram_mb / totalVramBudget * 100) : 0;
+                      return pct > 0 ? (
+                        <div key={am.model} className={`${VRAM_COLORS[i % VRAM_COLORS.length]} opacity-80`} style={{ width: `${pct}%` }}
+                          title={`${am.model}: ${(am.vram_mb! / 1024).toFixed(1)}G (${Math.round(pct)}%)`} />
+                      ) : null;
+                    })}
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                    {m.active_models!.map((am, i) => (
+                      <div key={am.model} className="flex items-center gap-1.5 text-[10px] text-gray-500">
+                        <div className={`w-2 h-2 rounded-sm ${VRAM_COLORS[i % VRAM_COLORS.length]} opacity-80`} />
+                        <span className="font-mono truncate">{am.model.split(':')[0]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+            );
+          })()}
         </div>
       );
     })()}
@@ -2542,29 +2574,55 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               : undefined}
           />
           {/* ── Multi-Model Panel (shown when 2+ models loaded) ──────────── */}
-          {sentinel?.active_models && sentinel.active_models.length > 1 && (
+          {sentinel?.active_models && sentinel.active_models.length > 1 && (() => {
+            const s = sentinel!;
+            const totalVramBudget = s.nvidia_vram_total_mb ?? s.gpu_wired_limit_mb ?? 0;
+            const usedVram = s.active_models!.reduce((sum, am) => sum + (am.vram_mb ?? 0), 0);
+            const VRAM_COLORS = ['bg-cyan-500', 'bg-indigo-500', 'bg-amber-500', 'bg-emerald-500', 'bg-rose-500', 'bg-violet-500'];
+            return (
             <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800/60">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-2">
-                Active Models ({sentinel.active_models.length})
+                Active Models ({s.active_models!.length})
               </p>
               <div className="space-y-1.5">
-                {sentinel.active_models.map(am => (
+                {s.active_models!.map(am => (
                   <div key={am.model} className="flex items-center gap-3 text-xs">
                     <span className="text-gray-300 font-mono truncate min-w-0 flex-1">{am.model}</span>
-                    {am.tok_s != null && (
-                      <span className="text-emerald-400 font-mono tabular-nums whitespace-nowrap">{am.tok_s.toFixed(1)} tok/s</span>
-                    )}
-                    {am.vram_mb != null && (
-                      <span className="text-gray-500 font-mono tabular-nums whitespace-nowrap">{(am.vram_mb / 1024).toFixed(1)}G</span>
-                    )}
-                    {am.request_count > 0 && (
-                      <span className="text-gray-600 tabular-nums whitespace-nowrap">{am.request_count} req</span>
-                    )}
+                    {am.tok_s != null && <span className="text-emerald-400 font-mono tabular-nums whitespace-nowrap">{am.tok_s.toFixed(1)} tok/s</span>}
+                    {am.wes != null && <span className={`font-mono tabular-nums whitespace-nowrap ${wesColorClass(am.wes)}`}>{am.wes.toFixed(1)} WES</span>}
+                    {am.vram_mb != null && <span className="text-gray-500 font-mono tabular-nums whitespace-nowrap">{(am.vram_mb / 1024).toFixed(1)}G</span>}
+                    {am.request_count > 0 && <span className="text-gray-600 tabular-nums whitespace-nowrap">{am.request_count} req</span>}
                   </div>
                 ))}
               </div>
+              {totalVramBudget > 0 && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
+                    <span>VRAM Budget</span>
+                    <span className="font-mono tabular-nums">{(usedVram / 1024).toFixed(1)}G / {(totalVramBudget / 1024).toFixed(0)}G ({totalVramBudget > 0 ? Math.round(usedVram / totalVramBudget * 100) : 0}%)</span>
+                  </div>
+                  <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden flex">
+                    {s.active_models!.map((am, i) => {
+                      const pct = am.vram_mb ? (am.vram_mb / totalVramBudget * 100) : 0;
+                      return pct > 0 ? (
+                        <div key={am.model} className={`${VRAM_COLORS[i % VRAM_COLORS.length]} opacity-80`} style={{ width: `${pct}%` }}
+                          title={`${am.model}: ${(am.vram_mb! / 1024).toFixed(1)}G (${Math.round(pct)}%)`} />
+                      ) : null;
+                    })}
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                    {s.active_models!.map((am, i) => (
+                      <div key={am.model} className="flex items-center gap-1.5 text-[10px] text-gray-500">
+                        <div className={`w-2 h-2 rounded-sm ${VRAM_COLORS[i % VRAM_COLORS.length]} opacity-80`} />
+                        <span className="font-mono truncate">{am.model.split(':')[0]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+            );
+          })()}
           </div>
         ) : (
           // ── Fleet Status table ───────────────────────────────────────────────

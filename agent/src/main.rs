@@ -118,6 +118,10 @@ pub(crate) struct ModelLiveMetrics {
     pub(crate) avg_latency_ms: Option<f32>,
     #[serde(default)]
     pub(crate) request_count: u64,
+    /// Per-model WES: tok/s ÷ (proportional_watts × thermal_penalty).
+    /// Proportional watts estimated from VRAM share of total GPU memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) wes: Option<f32>,
 }
 
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
@@ -2535,7 +2539,28 @@ fn start_metrics_broadcaster(
                 ollama_proxy_avg_ttft_ms:    ollama.ollama_proxy_avg_ttft_ms,
                 ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
                 ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
-                active_models:               ollama.active_models.clone(),
+                active_models: {
+                    // Enrich per-model metrics with WES using power + thermal data.
+                    let total_power = apple.soc_power_w
+                        .or(nvidia.nvidia_power_draw_w)
+                        .or(rapl_power);
+                    let penalty = wes.penalty_avg.unwrap_or(1.0);
+                    let total_vram: u64 = ollama.active_models.as_ref()
+                        .map(|v| v.iter().filter_map(|m| m.vram_mb).sum()).unwrap_or(0);
+                    ollama.active_models.as_ref().map(|models| {
+                        models.iter().map(|m| {
+                            let mut enriched = m.clone();
+                            if let (Some(tps), Some(pw), Some(vram)) = (m.tok_s, total_power, m.vram_mb) {
+                                if total_vram > 0 && pw > 0.1 && tps > 0.0 {
+                                    let share = vram as f32 / total_vram as f32;
+                                    let model_watts = pw * share;
+                                    enriched.wes = Some(tps / (model_watts * penalty));
+                                }
+                            }
+                            enriched
+                        }).collect()
+                    })
+                },
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -5196,7 +5221,28 @@ async fn handle_metrics(
                 ollama_proxy_avg_ttft_ms:    ollama.ollama_proxy_avg_ttft_ms,
                 ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
                 ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
-                active_models:               ollama.active_models.clone(),
+                active_models: {
+                    // Enrich per-model metrics with WES using power + thermal data.
+                    let total_power = apple.soc_power_w
+                        .or(nvidia.nvidia_power_draw_w)
+                        .or(rapl_power);
+                    let penalty = wes.penalty_avg.unwrap_or(1.0);
+                    let total_vram: u64 = ollama.active_models.as_ref()
+                        .map(|v| v.iter().filter_map(|m| m.vram_mb).sum()).unwrap_or(0);
+                    ollama.active_models.as_ref().map(|models| {
+                        models.iter().map(|m| {
+                            let mut enriched = m.clone();
+                            if let (Some(tps), Some(pw), Some(vram)) = (m.tok_s, total_power, m.vram_mb) {
+                                if total_vram > 0 && pw > 0.1 && tps > 0.0 {
+                                    let share = vram as f32 / total_vram as f32;
+                                    let model_watts = pw * share;
+                                    enriched.wes = Some(tps / (model_watts * penalty));
+                                }
+                            }
+                            enriched
+                        }).collect()
+                    })
+                },
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),

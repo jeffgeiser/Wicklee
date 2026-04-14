@@ -26,6 +26,8 @@ export interface ModelLiveMetrics {
   avg_ttft_ms?: number | null;
   avg_latency_ms?: number | null;
   request_count: number;
+  /** Per-model WES: tok/s ÷ (proportional_watts × thermal_penalty). */
+  wes?: number | null;
 }
 
 // Live telemetry payload — mirrors MetricsPayload in agent/src/main.rs
