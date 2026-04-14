@@ -77,6 +77,12 @@ Model switching cost — detects model transitions and reports swap frequency an
 { "swaps": [{ "ts_ms": 1774621630223, "from_model": "llama3.1:70b", "to_model": "phi3:mini", "gap_ms": 3200 }], "total_swaps": 14, "total_gap_ms": 480000, "total_gap_minutes": 8.0, "hours_queried": 24 }
 ```
 
+### GET /api/model-candidates?search=llama&limit=20
+Model discovery — GGUF models from HuggingFace scored against local hardware. Cached to DuckDB (24h TTL).
+```json
+{ "node_id": "WK-1EFC", "hardware": { "vram_mb": 16384, "chip": "Apple M4 Pro", "power_budget_w": 18.2, "thermal_state": "Normal" }, "models": [{ "model_id": "bartowski/Llama-3.1-8B-GGUF", "downloads": 245000, "variants": [{ "quant": "Q4_K_M", "file_size_mb": 4920, "vram_required_mb": 5200, "fit_score": 92, "fit_label": "Excellent", "vram_headroom_pct": 68.3 }] }] }
+```
+
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
 ```json
@@ -193,12 +199,22 @@ Single node deep dive with full MetricsPayload.
 
 ### GET /api/v1/route/best
 Routing recommendation. Returns two candidates: latency (highest tok/s) and efficiency (highest WES).
+Optional `?model=qwen2.5:7b` filters to nodes with the target model loaded and uses per-model WES.
 ```json
 {
   "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
   "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
   "default":    "efficiency"
 }
+```
+
+### GET /api/v1/models/discover
+Model discovery with tiered access:
+- **Browse** (all tiers): `?search=llama&limit=20` — catalog search with fit scores
+- **Simulate** (Pro+): `?simulate_hw=nvidia_4090` — score models against hardware you don't own. Profiles: m4, m4_pro_24gb, m4_max_36gb, m4_max_64gb, m4_ultra_128gb, nvidia_4060, nvidia_4070, nvidia_4080, nvidia_4090, nvidia_a100_40gb, nvidia_a100_80gb, nvidia_h100. Custom: `?simulate_vram_mb=24576&simulate_power_w=350`
+- **Fleet match** (Team+): `?fleet=true&model_id=bartowski/Llama-3.1-70B-GGUF` — which fleet nodes can run this model?
+```json
+{ "models": [{ "model_id": "bartowski/Llama-3.1-8B-GGUF", "downloads": 245000, "variants": [{ "quant": "Q4_K_M", "file_size_mb": 4920, "vram_required_mb": 5200, "fit_score": 92, "fit_label": "Excellent" }] }], "simulation": { "hardware": "nvidia_4090", "vram_mb": 24576, "power_w": 450.0 } }
 ```
 
 ### GET /api/v1/insights/latest

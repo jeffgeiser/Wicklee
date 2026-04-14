@@ -32,6 +32,8 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `GET /api/cost-by-model?hours=24` — Cost attribution per model (daily breakdown)
 - `GET /api/explain-slowdown?ts_ms=N` — Root cause analysis for slow inference requests
 - `GET /api/model-comparison?hours=168` — Side-by-side model efficiency (WES, tok/s, watts, cost)
+- `GET /api/model-switches?hours=24` — Model switching cost (swap frequency, idle gap)
+- `GET /api/model-candidates?search=llama&limit=20` — Model discovery: GGUF models from HuggingFace scored against local hardware
 - `GET /api/history?node_id=WK-XXXX` — DuckDB metric history (1h buffer)
 - `GET /api/traces` — Proxy inference traces
 - `GET /api/events/history` — Node event log
@@ -74,7 +76,8 @@ Base URL: `https://wicklee.dev/api/v1`
 - `GET /api/v1/fleet` — All nodes with full MetricsPayload
 - `GET /api/v1/fleet/wes` — WES scores ranked
 - `GET /api/v1/nodes/{id}` — Single node deep dive
-- `GET /api/v1/route/best` — Routing recommendation (latency or efficiency)
+- `GET /api/v1/route/best` — Routing recommendation (latency or efficiency). `?model=qwen2.5:7b` for per-model routing
+- `GET /api/v1/models/discover` — Model discovery: browse (`?search=`), simulate (`?simulate_hw=nvidia_4090`, Pro+), fleet match (`?fleet=true&model_id=X`, Team+)
 - `GET /api/v1/insights/latest` — Fleet intelligence snapshot (Team+)
 - `POST /api/v1/keys` — Create API key
 - `GET /api/v1/keys` — List API keys

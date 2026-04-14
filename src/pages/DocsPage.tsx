@@ -1404,6 +1404,14 @@ WES Version:     2
                     <Td>Model comparison — side-by-side WES, tok/s, watts, TTFT, cost for every model that has run on this node</Td>
                   </tr>
                   <tr>
+                    <Td mono>GET /api/model-switches?hours=24</Td>
+                    <Td>Model switching cost — swap frequency, idle gap per transition, total overhead minutes</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/model-candidates?search=llama</Td>
+                    <Td>Model discovery — GGUF models from HuggingFace scored against local hardware (fit score, VRAM headroom, recommendation)</Td>
+                  </tr>
+                  <tr>
                     <Td mono>GET /api/history?node_id=WK-XXXX</Td>
                     <Td>DuckDB metric history — 1h of raw samples (tok/s, GPU util, power, memory pressure, swap)</Td>
                   </tr>
@@ -1506,7 +1514,11 @@ curl https://wicklee.dev/api/v1/fleet \\
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/route/best</Td>
-                    <Td>Routing recommendation — returns two candidates: <code className="text-gray-400 text-xs">latency</code> (highest tok/s) and <code className="text-gray-400 text-xs">efficiency</code> (highest WES). Default: efficiency. Only online nodes considered.</Td>
+                    <Td>Routing recommendation — returns two candidates: <code className="text-gray-400 text-xs">latency</code> (highest tok/s) and <code className="text-gray-400 text-xs">efficiency</code> (highest WES). Optional <code className="text-gray-400 text-xs">?model=qwen2.5:7b</code> for per-model routing. Default: efficiency.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/v1/models/discover</Td>
+                    <Td>Model discovery — browse (<code className="text-gray-400 text-xs">?search=</code>), hardware simulation (<code className="text-gray-400 text-xs">?simulate_hw=nvidia_4090</code>, Pro+), fleet matching (<code className="text-gray-400 text-xs">?fleet=true&amp;model_id=X</code>, Team+)</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/insights/latest</Td>

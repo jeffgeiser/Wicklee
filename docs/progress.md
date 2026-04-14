@@ -6,7 +6,7 @@
 
 ---
 
-## April 13, 2026 — v0.7.14: Multi-Model Monitoring, Install Telemetry, Billing Pipeline
+## April 13-14, 2026 — v0.7.14: Multi-Model Monitoring, Model Discovery, Install Telemetry, Billing Pipeline
 
 ### Multi-Model Concurrent Tracking
 - **Per-model proxy accumulators** — `ProxyState` now uses `Mutex<HashMap<String, ModelStats>>` instead of global atomics. Each model's tok/s, TTFT, latency, and request count tracked independently.
@@ -19,6 +19,17 @@
 - **Frontend** — multi-model panel on localhost diagnostic rail + fleet expanded detail rows. Shows per-model tok/s, WES (color-coded), VRAM, and request count.
 - **Landing page** — "Every model. Tracked independently." section with 6-card feature grid.
 - **Docs** — new Multi-Model Monitoring section in DocsPage, docs.md, and llms.txt.
+
+### Model Discovery & Hardware Fit Score
+- **HuggingFace GGUF catalog** — agent fetches top 50 GGUF repos by downloads, parses `siblings[]` for `.gguf` files, extracts quant level from filename. Cached to DuckDB `model_catalog` table with 24h TTL.
+- **Fit score algorithm** — pure function scoring model variants against hardware: VRAM headroom (40pts) + thermal margin (20pts) + historical WES (20pts) + power efficiency (20pts). Labels: Excellent/Good/Tight/Won't Fit.
+- **`GET /api/model-candidates`** — localhost endpoint, all tiers. Returns scored models with per-variant fit score, VRAM headroom %, and human-readable recommendation. Includes live hardware profile.
+- **Cloud `GET /api/v1/models/discover`** — three modes:
+  - Browse: catalog search with fit scores (all tiers)
+  - Simulate: `?simulate_hw=nvidia_4090` — 12 predefined profiles M4 through H100, or custom VRAM/power (Pro+)
+  - Fleet match: `?fleet=true&model_id=X` — which fleet nodes can run this model, scored per node (Team+)
+- **Frontend: ModelDiscoveryCard** — expandable card in AI Insights tab with search, hardware summary, color-coded fit scores, per-variant quant breakdown, and recommendations.
+- **Landing page** — "Every model. Tracked independently." section with 6-card feature grid.
 
 ### Install Telemetry & Event Pipeline
 - `POST /api/telemetry/install` — anonymous install ping from `install.sh` (OS, arch, version, nvidia, upgrade). Persisted to `installs` Postgres table. No auth, no PII.

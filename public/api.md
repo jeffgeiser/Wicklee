@@ -16,6 +16,7 @@ Auth: None required.
 | GET | /api/explain-slowdown?ts_ms=N | Slowdown explainer — root cause analysis for a slow request |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for every model that has run |
 | GET | /api/model-switches?hours=24 | Model switching cost — swap frequency, idle gap per transition |
+| GET | /api/model-candidates?search=llama&limit=20 | Model discovery — GGUF models from HuggingFace scored against local hardware |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
 | GET | /api/events/recent | Recent in-memory events |
@@ -134,7 +135,8 @@ Auth: `X-API-Key: wk_live_...` header.
 | GET | /api/v1/fleet | All nodes with full MetricsPayload | All |
 | GET | /api/v1/fleet/wes | WES scores ranked | All |
 | GET | /api/v1/nodes/{id} | Single node deep dive | All |
-| GET | /api/v1/route/best | Routing recommendation (latency or efficiency) | All |
+| GET | /api/v1/route/best | Routing recommendation (latency or efficiency). Optional `?model=` for per-model routing | All |
+| GET | /api/v1/models/discover | Model discovery — browse catalog, `?simulate_hw=` (Pro+), `?fleet=true` (Team+) | Tiered |
 | GET | /api/v1/insights/latest | Fleet intelligence snapshot | Team+ |
 | POST | /api/v1/keys | Create API key | All |
 | GET | /api/v1/keys | List API keys | All |

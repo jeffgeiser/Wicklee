@@ -107,7 +107,26 @@ Most inference deployments run multiple models concurrently. Wicklee tracks each
 
 ---
 
-## 18 Observation Patterns + 5 Fleet Alerts
+## Model Discovery & Hardware Fit
+
+"Is this model right for this hardware?" Wicklee fetches the top GGUF models from HuggingFace and scores each quantization variant against your hardware.
+
+**Fit score (0-100):** VRAM headroom (40pts) + thermal margin (20pts) + historical WES (20pts) + power efficiency (20pts). Labels: Excellent (80+), Good (60-79), Tight (40-59), Won't Fit (<40).
+
+### Localhost (Community — all tiers)
+`GET /api/model-candidates?search=llama&limit=20` — returns models scored against local hardware. HuggingFace catalog cached to DuckDB with 24h TTL. Works offline after first cache fill.
+
+### Cloud (Pro — hardware simulation)
+`GET /api/v1/models/discover?simulate_hw=nvidia_4090` — "What if I had a 4090?" Score models against 12 predefined hardware profiles (M4 through H100) or custom `?simulate_vram_mb=&simulate_power_w=` params.
+
+Available profiles: `m4`, `m4_pro_24gb`, `m4_max_36gb`, `m4_max_64gb`, `m4_ultra_128gb`, `nvidia_4060`, `nvidia_4070`, `nvidia_4080`, `nvidia_4090`, `nvidia_a100_40gb`, `nvidia_a100_80gb`, `nvidia_h100`
+
+### Cloud (Team — fleet matching)
+`GET /api/v1/models/discover?fleet=true&model_id=bartowski/Llama-3.1-70B-GGUF` — "Which of my fleet nodes can run this model?" Returns each node scored with best quantization variant.
+
+---
+
+## 18 Observation Patterns + 6 Fleet Alerts
 
 ### Agent-Evaluated (17 patterns, 10-min DuckDB buffer, every 10s)
 
@@ -118,8 +137,8 @@ Most inference deployments run multiple models concurrently. Wicklee tracks each
 ### Cloud-Evaluated (1 pattern)
 `fleet_load_imbalance` — node WES > 20% below best healthy peer (Pro)
 
-### Fleet Alerts (5, all tiers, cloud, 60s cadence)
-`zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`
+### Fleet Alerts (6, all tiers, cloud, 60s cadence)
+`zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`, `fleet_load_imbalance`
 
 ---
 
