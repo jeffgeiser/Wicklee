@@ -193,26 +193,46 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
             <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Node events will appear here</p>
           </div>
         ) : (
-          events.map(ev => {
-            const { icon, label, cls } = eventMeta(ev);
-            return (
-              <div
-                key={ev.id}
-                className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-              >
-                {icon}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="font-telin text-xs font-bold text-gray-900 dark:text-gray-200 truncate">
-                      {ev.hostname ?? ev.nodeId}
-                    </span>
-                    <span className={`text-xs font-medium ${cls}`}>{label}</span>
+          (() => {
+            // Collapse consecutive events with the same (nodeId, type) into a single entry with a count badge.
+            const collapsed: { ev: FleetEvent; count: number; firstTs: number; lastTs: number }[] = [];
+            for (const ev of events) {
+              const prev = collapsed[collapsed.length - 1];
+              if (prev && prev.ev.nodeId === ev.nodeId && prev.ev.type === ev.type) {
+                prev.count++;
+                prev.firstTs = Math.min(prev.firstTs, ev.ts);
+              } else {
+                collapsed.push({ ev, count: 1, firstTs: ev.ts, lastTs: ev.ts });
+              }
+            }
+            return collapsed.map(({ ev, count, firstTs }) => {
+              const { icon, label, cls } = eventMeta(ev);
+              return (
+                <div
+                  key={ev.id}
+                  className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                >
+                  {icon}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className="font-telin text-xs font-bold text-gray-900 dark:text-gray-200 truncate">
+                        {ev.hostname ?? ev.nodeId}
+                      </span>
+                      <span className={`text-xs font-medium ${cls}`}>{label}</span>
+                      {count > 1 && (
+                        <span className="text-[9px] font-bold text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded-full tabular-nums">
+                          ×{count}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-400 font-telin mt-0.5">
+                      {count > 1 ? `${fmtAgo(firstTs)} – ${fmtAgo(ev.ts)}` : fmtAgo(ev.ts)}
+                    </p>
                   </div>
-                  <p className="text-[10px] text-gray-400 font-telin mt-0.5">{fmtAgo(ev.ts)}</p>
                 </div>
-              </div>
-            );
-          })
+              );
+            });
+          })()
         )}
       </div>
 
