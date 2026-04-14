@@ -637,10 +637,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             value={settings.fleet.wesDisplay}
             onChange={v => updateFleet({ wesDisplay: v as 'auto' | 'fixed' })}
           />
-          <div>
-            <p className="text-xs font-semibold text-gray-400 mb-1.5">Theme</p>
-            <span className="text-xs text-gray-500 bg-gray-800 px-3 py-1.5 rounded-lg inline-block">Dark Mode — Hardware-Centric Dark</span>
-          </div>
         </div>
       </Section>
 
