@@ -1155,176 +1155,118 @@ const DiagnosticRail: React.FC<{
 
   const cpu = utilCls(cpuPct);
 
+  // ── Collect all metrics into a flat array, then split evenly across 2 columns ──
+  const items: React.ReactNode[] = [];
+
+  // CPU
+  items.push(<RailRow key="cpu" label="CPU Usage" value={`${cpuPct.toFixed(1)}%`} pct={cpuPct} textCls={cpu.text} barCls={cpu.bar} />);
+
+  // GPU
+  if (gpuPct != null) {
+    const g = utilCls(gpuPct);
+    items.push(<RailRow key="gpu" label="GPU Utilization" value={`${gpuPct.toFixed(1)}%`} pct={gpuPct} textCls={g.text} barCls={g.bar} />);
+  }
+
+  // Tok/s
+  if (hasTps) {
+    if (isInferring) {
+      items.push(<RailRow key="tps" label="Tok/s" value={tps != null ? (isEstimated ? `~${tps.toFixed(1)}` : tps.toFixed(1)) : '—'} textCls="text-green-400" barCls="bg-green-400" badge="live" badgeCls="text-green-500" />);
+    } else if (isBusy) {
+      items.push(<RailRow key="tps" label="Tok/s" value={tps != null ? tps.toFixed(1) : '—'} textCls="text-amber-500" barCls="bg-amber-500" badge="busy" badgeCls="text-amber-500" />);
+    } else if (isIdleSpeed) {
+      items.push(<RailRow key="tps" label="Tok/s" value={tps?.toFixed(1) ?? '—'} textCls="text-gray-400 dark:text-gray-500" barCls="bg-gray-500" badge="idle-spd" badgeCls="text-gray-600" />);
+    } else {
+      items.push(<RailRow key="tps" label="Tok/s" value="—" textCls="text-gray-600" barCls="bg-gray-800" />);
+    }
+  }
+
+  // Memory Pressure
+  if (memPct != null) {
+    const m = utilCls(memPct);
+    items.push(<RailRow key="mem" label="Memory Pressure" value={`${memPct.toFixed(1)}%`} pct={memPct} textCls={m.text} barCls={m.bar} />);
+  }
+
+  // Board Power
+  if (hasPow) {
+    items.push(<RailRow key="pow" label="Board Power" value={`${powerW.toFixed(1)} W`} textCls="text-amber-400" barCls="bg-amber-400" />);
+  }
+
+  // TTFT
+  {
+    const ttft = s.vllm_avg_ttft_ms ?? s.ollama_proxy_avg_ttft_ms ?? s.ollama_ttft_ms ?? null;
+    if (ttft != null) {
+      const cls = ttft < 100 ? 'text-emerald-400' : ttft < 500 ? 'text-yellow-400' : 'text-red-400';
+      const src = s.vllm_avg_ttft_ms != null ? 'vllm' : s.ollama_proxy_avg_ttft_ms != null ? 'proxy' : 'probe';
+      items.push(<RailRow key="ttft" label="TTFT" value={ttft < 1000 ? `${Math.round(ttft)}ms` : `${(ttft / 1000).toFixed(1)}s`} textCls={cls} barCls="bg-transparent" badge={src} badgeCls="text-gray-600" tooltip="Time To First Token — latency from request to first generated token." />);
+    }
+  }
+
+  // Thermal
+  if (s.thermal_state != null) {
+    const state = s.thermal_state;
+    const cls = state === 'Critical' ? 'text-red-400' : state === 'Serious' ? 'text-red-400' : state === 'Fair' ? 'text-amber-400' : 'text-green-400';
+    const penalty = s.penalty_avg != null && s.penalty_avg > 1.0 ? `${s.penalty_avg.toFixed(2)}×` : undefined;
+    items.push(<RailRow key="therm" label="Thermal" value={state} textCls={cls} barCls="bg-transparent" badge={penalty} badgeCls={state === 'Normal' ? 'text-gray-600' : cls} />);
+  }
+
+  // E2E Latency
+  {
+    const lat = s.vllm_avg_e2e_latency_ms ?? s.ollama_proxy_avg_latency_ms ?? null;
+    if (lat != null) {
+      const cls = lat < 500 ? 'text-emerald-400' : lat < 2000 ? 'text-yellow-400' : 'text-red-400';
+      items.push(<RailRow key="lat" label="E2E Latency" value={lat < 1000 ? `${Math.round(lat)}ms` : `${(lat / 1000).toFixed(1)}s`} textCls={cls} barCls="bg-transparent" tooltip="Average end-to-end request latency." />);
+    }
+  }
+
+  // Swap Write
+  if (s.swap_write_mb_s != null) {
+    const raw = swapBuf.push(s.swap_write_mb_s, tsMs) ?? s.swap_write_mb_s;
+    const pct = Math.min((raw / 500) * 100, 100);
+    const cls = raw > 10 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-green-400', bar: 'bg-green-400' };
+    items.push(<RailRow key="swap" label="Swap Write" value={`${raw.toFixed(1)} MB/s`} pct={pct > 0 ? pct : undefined} textCls={cls.text} barCls={cls.bar} />);
+  }
+
+  // Load Duration (Ollama)
+  if (s.ollama_load_duration_ms != null) {
+    items.push(<RailRow key="load" label="Load Duration" value={s.ollama_load_duration_ms < 1000 ? `${Math.round(s.ollama_load_duration_ms)}ms` : `${(s.ollama_load_duration_ms / 1000).toFixed(1)}s`} textCls={s.ollama_load_duration_ms < 500 ? 'text-emerald-400' : s.ollama_load_duration_ms < 2000 ? 'text-yellow-400' : 'text-red-400'} barCls="bg-transparent" tooltip="Time Ollama spent loading the model into memory." />);
+  }
+
+  // Prefill Speed (Ollama)
+  if (s.ollama_prompt_eval_tps != null) {
+    items.push(<RailRow key="prefill" label="Prefill Speed" value={`${s.ollama_prompt_eval_tps.toFixed(1)} tok/s`} textCls="text-blue-400" barCls="bg-transparent" tooltip="Prompt processing speed." />);
+  }
+
+  // Clock Throttle
+  if (s.clock_throttle_pct != null) {
+    const pct = Math.min(s.clock_throttle_pct, 100);
+    const cls = pct > 50 ? { text: 'text-red-400', bar: 'bg-red-400' } : pct > 20 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-gray-400', bar: 'bg-gray-500' };
+    items.push(<RailRow key="clk" label="Clk Throttle" value={`${pct.toFixed(0)}%`} pct={pct} textCls={cls.text} barCls={cls.bar} />);
+  }
+
+  // vLLM Queue Depth
+  if (s.vllm_running && s.vllm_requests_waiting != null && s.vllm_requests_waiting > 0) {
+    items.push(<RailRow key="queue" label="Queue Depth" value={`${s.vllm_requests_waiting}`} textCls={s.vllm_requests_waiting > 10 ? 'text-red-400' : s.vllm_requests_waiting > 3 ? 'text-amber-400' : 'text-green-400'} barCls="bg-transparent" badge="waiting" badgeCls="text-gray-600" />);
+  }
+
+  // vLLM KV Cache
+  if (s.vllm_running && s.vllm_cache_usage_perc != null) {
+    items.push(<RailRow key="kv" label="KV Cache" value={`${s.vllm_cache_usage_perc.toFixed(1)}%`} pct={s.vllm_cache_usage_perc} textCls={s.vllm_cache_usage_perc > 90 ? 'text-red-400' : s.vllm_cache_usage_perc > 70 ? 'text-amber-400' : 'text-green-400'} barCls={s.vllm_cache_usage_perc > 90 ? 'bg-red-400' : s.vllm_cache_usage_perc > 70 ? 'bg-amber-400' : 'bg-green-400'} />);
+  }
+
+  // vLLM Running
+  if (s.vllm_running && s.vllm_requests_running != null && s.vllm_requests_running > 0) {
+    items.push(<RailRow key="running" label="Running" value={`${s.vllm_requests_running} req`} textCls="text-green-400" barCls="bg-transparent" />);
+  }
+
+  // Split items evenly across two columns
+  const mid = Math.ceil(items.length / 2);
+  const col1 = items.slice(0, mid);
+  const col2 = items.slice(mid);
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-      {/* ── Column 1: Core hardware ── */}
-      <div>
-      <RailRow label="CPU Usage" value={`${cpuPct.toFixed(1)}%`} pct={cpuPct} textCls={cpu.text} barCls={cpu.bar} />
-      {gpuPct != null && (() => {
-        const g = utilCls(gpuPct);
-        return <RailRow label="GPU Utilization" value={`${gpuPct.toFixed(1)}%`} pct={gpuPct} textCls={g.text} barCls={g.bar} />;
-      })()}
-      {memPct != null && (() => {
-        const m = utilCls(memPct);
-        return <RailRow label="Memory Pressure" value={`${memPct.toFixed(1)}%`} pct={memPct} textCls={m.text} barCls={m.bar} />;
-      })()}
-      {hasPow && (
-        <RailRow label="Board Power" value={`${powerW.toFixed(1)} W`} textCls="text-amber-400" barCls="bg-amber-400" />
-      )}
-      {s.thermal_state != null && (() => {
-        const state = s.thermal_state;
-        const cls = state === 'Critical' ? 'text-red-400'
-                  : state === 'Serious'  ? 'text-red-400'
-                  : state === 'Fair'     ? 'text-amber-400'
-                  :                        'text-green-400';
-        const penalty = s.penalty_avg != null && s.penalty_avg > 1.0
-          ? `${s.penalty_avg.toFixed(2)}×`
-          : undefined;
-        return (
-          <RailRow
-            label="Thermal"
-            value={state}
-            textCls={cls}
-            barCls="bg-transparent"
-            badge={penalty}
-            badgeCls={state === 'Normal' ? 'text-gray-600' : cls}
-          />
-        );
-      })()}
-      {s.swap_write_mb_s != null && (() => {
-        const raw = swapBuf.push(s.swap_write_mb_s, tsMs) ?? s.swap_write_mb_s;
-        const pct = Math.min((raw / 500) * 100, 100);
-        const cls = raw > 10 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-green-400', bar: 'bg-green-400' };
-        return <RailRow label="Swap Write" value={`${raw.toFixed(1)} MB/s`} pct={pct > 0 ? pct : undefined} textCls={cls.text} barCls={cls.bar} />;
-      })()}
-      {s.clock_throttle_pct != null && (() => {
-        const pct = Math.min(s.clock_throttle_pct, 100);
-        const cls = pct > 50 ? { text: 'text-red-400', bar: 'bg-red-400' } : pct > 20 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-gray-400', bar: 'bg-gray-500' };
-        return <RailRow label="Clk Throttle" value={`${pct.toFixed(0)}%`} pct={pct} textCls={cls.text} barCls={cls.bar} />;
-      })()}
-      </div>
-      {/* ── Column 2: Inference + Latency ── */}
-      <div>
-      {/* TOK/S — three-state: LIVE (green ~), IDLE-SPD (muted baseline), BUSY (amber last-probe) */}
-      {hasTps && (
-        isInferring ? (
-          <RailRow
-            label="Tok/s"
-            value={tps != null ? (isEstimated ? `~${tps.toFixed(1)}` : tps.toFixed(1)) : '—'}
-            textCls="text-green-400"
-            barCls="bg-green-400"
-            badge="live"
-            badgeCls="text-green-500"
-          />
-        ) : isBusy ? (
-          <RailRow
-            label="Tok/s"
-            value={tps != null ? tps.toFixed(1) : '—'}
-            textCls="text-amber-500"
-            barCls="bg-amber-500"
-            badge="busy"
-            badgeCls="text-amber-500"
-          />
-        ) : isIdleSpeed ? (
-          <RailRow
-            label="Tok/s"
-            value={tps?.toFixed(1) ?? '—'}
-            textCls="text-gray-400 dark:text-gray-500"
-            barCls="bg-gray-500"
-            badge="idle-spd"
-            badgeCls="text-gray-600"
-          />
-        ) : (
-          <RailRow label="Tok/s" value="—" textCls="text-gray-600" barCls="bg-gray-800" />
-        )
-      )}
-      {/* TTFT — best available: vLLM > proxy > Ollama probe */}
-      {(() => {
-        const ttft = s.vllm_avg_ttft_ms ?? s.ollama_proxy_avg_ttft_ms ?? s.ollama_ttft_ms ?? null;
-        if (ttft == null) return null;
-        const cls = ttft < 100 ? 'text-emerald-400' : ttft < 500 ? 'text-yellow-400' : 'text-red-400';
-        const src = s.vllm_avg_ttft_ms != null ? 'vllm' : s.ollama_proxy_avg_ttft_ms != null ? 'proxy' : 'probe';
-        return (
-          <RailRow
-            label="TTFT"
-            value={ttft < 1000 ? `${Math.round(ttft)}ms` : `${(ttft / 1000).toFixed(1)}s`}
-            textCls={cls}
-            barCls="bg-transparent"
-            badge={src}
-            badgeCls="text-gray-600"
-            tooltip="Time To First Token — latency from request to first generated token. vLLM: real production histogram. Proxy: rolling average from done packets. Probe: synthetic 20-token baseline every ~30s."
-          />
-        );
-      })()}
-      {/* E2E Latency — vLLM or proxy only */}
-      {(() => {
-        const lat = s.vllm_avg_e2e_latency_ms ?? s.ollama_proxy_avg_latency_ms ?? null;
-        if (lat == null) return null;
-        const cls = lat < 500 ? 'text-emerald-400' : lat < 2000 ? 'text-yellow-400' : 'text-red-400';
-        return (
-          <RailRow
-            label="E2E Latency"
-            value={lat < 1000 ? `${Math.round(lat)}ms` : `${(lat / 1000).toFixed(1)}s`}
-            textCls={cls}
-            barCls="bg-transparent"
-            tooltip="Average end-to-end request latency — total time from request arrival to last token. Includes queue wait, prefill, and generation. Real production data from vLLM histogram or proxy done packets."
-          />
-        );
-      })()}
-      {/* vLLM Queue Depth — only when vLLM is active */}
-      {s.vllm_running && s.vllm_requests_waiting != null && s.vllm_requests_waiting > 0 && (
-        <RailRow
-          label="Queue Depth"
-          value={`${s.vllm_requests_waiting}`}
-          textCls={s.vllm_requests_waiting > 10 ? 'text-red-400' : s.vllm_requests_waiting > 3 ? 'text-amber-400' : 'text-green-400'}
-          barCls="bg-transparent"
-          badge="waiting"
-          badgeCls="text-gray-600"
-          tooltip="Requests waiting in vLLM's scheduler queue. 0 = no backlog. > 5 sustained triggers Pattern R (Queue Saturation). Consider reducing max_num_seqs or routing overflow to another node."
-        />
-      )}
-      {/* Load Duration — Ollama only */}
-      {s.ollama_load_duration_ms != null && (
-        <RailRow
-          label="Load Duration"
-          value={s.ollama_load_duration_ms < 1000 ? `${Math.round(s.ollama_load_duration_ms)}ms` : `${(s.ollama_load_duration_ms / 1000).toFixed(1)}s`}
-          textCls={s.ollama_load_duration_ms < 500 ? 'text-emerald-400' : s.ollama_load_duration_ms < 2000 ? 'text-yellow-400' : 'text-red-400'}
-          barCls="bg-transparent"
-          tooltip="Time Ollama spent loading the model into memory on the last probe request. High values (> 1s) indicate cold starts or model swaps. Near-zero once the model is warm in memory."
-        />
-      )}
-      {/* Prefill Speed — Ollama only */}
-      {s.ollama_prompt_eval_tps != null && (
-        <RailRow
-          label="Prefill Speed"
-          value={`${s.ollama_prompt_eval_tps.toFixed(1)} tok/s`}
-          textCls="text-blue-400"
-          barCls="bg-transparent"
-          tooltip="Prompt processing speed — how fast Ollama evaluates the input prompt before generating output. Measured from the 20-token probe's prompt_eval_duration. Higher is better; depends on prompt length and model size."
-        />
-      )}
-      {/* KV Cache — vLLM only */}
-      {s.vllm_running && s.vllm_cache_usage_perc != null && (
-        <RailRow
-          label="KV Cache"
-          value={`${s.vllm_cache_usage_perc.toFixed(1)}%`}
-          pct={s.vllm_cache_usage_perc}
-          textCls={s.vllm_cache_usage_perc > 90 ? 'text-red-400' : s.vllm_cache_usage_perc > 70 ? 'text-amber-400' : 'text-green-400'}
-          barCls={s.vllm_cache_usage_perc > 90 ? 'bg-red-400' : s.vllm_cache_usage_perc > 70 ? 'bg-amber-400' : 'bg-green-400'}
-          tooltip="vLLM KV cache utilization — GPU memory reserved for attention key-value pairs. > 70% = moderate pressure. > 90% = Pattern M fires (scheduler can't admit new sequences)."
-        />
-      )}
-      {/* Requests Running — vLLM only, when active */}
-      {s.vllm_running && s.vllm_requests_running != null && s.vllm_requests_running > 0 && (
-        <RailRow
-          label="Running"
-          value={`${s.vllm_requests_running} req`}
-          textCls="text-green-400"
-          barCls="bg-transparent"
-          tooltip="Active requests being processed by vLLM right now. Each running request consumes KV cache and GPU compute."
-        />
-      )}
-      </div>
+      <div>{col1}</div>
+      <div>{col2}</div>
     </div>
   );
 };
