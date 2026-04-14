@@ -4,11 +4,16 @@ import { useAuth } from '@clerk/clerk-react';
 import type { ApiKey, CreateApiKeyResponse } from '../types';
 
 // ── Cloud URL (mirrors App.tsx pattern) ──────────────────────────────────────
+// For API calls — may be empty string in same-origin proxy mode.
 const CLOUD_URL = (() => {
   const v = import.meta.env.VITE_CLOUD_URL ?? '';
   if (!v) return 'https://wicklee.dev';
+  if (v === '/') return '';
   return v.startsWith('http') ? v : `https://${v}`;
 })();
+
+// For display in the Quick Reference — always the public URL.
+const DISPLAY_URL = 'https://wicklee.dev';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -263,7 +268,7 @@ const APIKeysView: React.FC = () => {
 
   // ── curl snippet ───────────────────────────────────────────────────────────
 
-  const curlSnippet = `curl ${CLOUD_URL}/api/v1/fleet \\\n  -H "X-API-Key: wk_live_YOUR_KEY_HERE"`;
+  const curlSnippet = `curl ${DISPLAY_URL}/api/v1/fleet \\\n  -H "X-API-Key: wk_live_YOUR_KEY_HERE"`;
 
   const handleCopySnippet = () => {
     navigator.clipboard.writeText(curlSnippet);
@@ -413,8 +418,8 @@ const APIKeysView: React.FC = () => {
                 <div>
                   <p className="text-[10px] text-gray-600 mb-1">Base URL</p>
                   <div className="flex items-center gap-2 bg-gray-950 rounded-lg px-3 py-2">
-                    <code className="font-mono text-xs text-gray-300 flex-1 truncate">{CLOUD_URL}</code>
-                    <CopyButton text={CLOUD_URL} className="text-gray-600 hover:text-gray-400" />
+                    <code className="font-mono text-xs text-gray-300 flex-1 truncate">{DISPLAY_URL}</code>
+                    <CopyButton text={DISPLAY_URL} className="text-gray-600 hover:text-gray-400" />
                   </div>
                 </div>
                 <div>
@@ -457,7 +462,7 @@ const APIKeysView: React.FC = () => {
             <h4 className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-2">Example</h4>
             <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex items-start justify-between gap-4">
               <pre className="font-mono text-xs text-gray-300 leading-relaxed overflow-x-auto flex-1 whitespace-pre">
-{`curl ${CLOUD_URL}/api/v1/fleet \\
+{`curl ${DISPLAY_URL}/api/v1/fleet \\
   -H "X-API-Key: wk_live_YOUR_KEY_HERE"`}
               </pre>
               <button
