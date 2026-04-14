@@ -83,9 +83,12 @@ Base URL: `https://wicklee.dev/api/v1`
 
 ## Multi-Model Monitoring
 
-When 2+ models are loaded in Ollama, the `active_models` array is included in the SSE/WS payload with per-model: tok/s, VRAM, avg TTFT, avg latency, request count, size, quantization.
+When 2+ models are loaded in Ollama, the `active_models` array is included in the SSE/WS payload with per-model: tok/s, WES, VRAM, avg TTFT, avg latency, request count, size, quantization.
+Per-model WES uses proportional VRAM share for power attribution: `model_tok_s / (total_watts * vram_share * thermal_penalty)`.
 Requires proxy for per-model tok/s and latency. Without proxy, VRAM and model identity still tracked via /api/ps.
 Singular fields (ollama_active_model, ollama_tokens_per_second) report most-recently-active model for backwards compat.
+- `GET /api/model-switches?hours=24` — model swap frequency and idle overhead
+- `GET /api/v1/route/best?model=qwen2.5:7b` — per-model routing: filters to nodes with the target model loaded, uses per-model WES
 
 ## Key Metrics
 

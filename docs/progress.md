@@ -6,6 +6,41 @@
 
 ---
 
+## April 13, 2026 — v0.7.14: Multi-Model Monitoring, Install Telemetry, Billing Pipeline
+
+### Multi-Model Concurrent Tracking
+- **Per-model proxy accumulators** — `ProxyState` now uses `Mutex<HashMap<String, ModelStats>>` instead of global atomics. Each model's tok/s, TTFT, latency, and request count tracked independently.
+- **Harvester reads all models** — `/api/ps` iteration replaces `.first()`. Merges proxy per-model stats with Ollama VRAM/size/quantization data. Stale entries cleaned up when models are unloaded.
+- **`active_models` on MetricsPayload** — new array field (three-way sync: agent, cloud, frontend). Only emitted when 2+ models loaded. Singular fields preserved for backwards compat (populated from most-recently-active model).
+- **Per-model WES** — `tok/s ÷ (proportional_watts × thermal_penalty)` using VRAM share for power attribution. Computed in broadcast loop where power + thermal data are available.
+- **VRAM budget visualization** — color-coded stacked bar showing each model's GPU memory allocation vs total budget (Apple unified memory or NVIDIA VRAM). Legend with model names.
+- **Model switching cost** — `GET /api/model-switches?hours=24` detects model transitions via DuckDB `LAG()` window function. Returns each swap with from/to model, timestamp, and idle gap. Summary: total swaps + total gap minutes.
+- **Per-model routing** — `GET /api/v1/route/best?model=qwen2.5:7b` filters to nodes with the target model loaded, uses per-model tok/s and WES from `active_models` array.
+- **Frontend** — multi-model panel on localhost diagnostic rail + fleet expanded detail rows. Shows per-model tok/s, WES (color-coded), VRAM, and request count.
+- **Landing page** — "Every model. Tracked independently." section with 6-card feature grid.
+- **Docs** — new Multi-Model Monitoring section in DocsPage, docs.md, and llms.txt.
+
+### Install Telemetry & Event Pipeline
+- `POST /api/telemetry/install` — anonymous install ping from `install.sh` (OS, arch, version, nvidia, upgrade). Persisted to `installs` Postgres table. No auth, no PII.
+- `install.sh` updated with fire-and-forget curl (backgrounded, non-blocking, silent on failure).
+- `GET /api/events/poll?since_ms=N` — authenticated event polling endpoint for Taarn consumption. Returns install, pairing, and subscription events since cursor. Bearer auth via `TAARN_EVENT_SECRET`.
+- Taarn webhook forwarder (`forward_to_taarn`) — fire-and-forget POST to `TAARN_WEBHOOK_URL` on install, pairing, subscription activate/cancel. Silently skipped when env vars unset.
+
+### Billing Pipeline — End-to-End
+- **Clerk tier sync** — Paddle webhook now calls Clerk Backend API (`PATCH /v1/users/{clerk_id}/metadata`) to set `publicMetadata.tier` after every subscription change. Frontend reads tier from Clerk; the missing bridge between Paddle and the UI.
+- **Profile badge** — Sidebar avatar menu reads `currentUser.tier` via `TIER_BADGE` instead of hardcoded "Free Plan".
+- **Email alerts** — Resend API integration with branded HTML template (dark theme, structured card layout, human-readable pattern names). Domain verified at `wicklee.dev`.
+- **Slack alerts** — verified working end-to-end via test channel.
+- **Pricing page refinements** — Community: "Unlimited nodes locally · 3 synced to fleet". Pro: "Slack or Email Alerts (1 channel)". Team: "Coming Soon" (disabled). Enterprise: positioning preamble.
+
+### Documentation Accuracy
+- WebSocket cadence corrected from 10 Hz → 1 Hz across 9 files (was stale from pre-v0.5.22 throttle)
+- New "Data Flow & Transport" section in DocsPage documenting all 6 telemetry paths with ASCII diagram
+- Cloud MCP tool count updated from 6 → 8 (added `get_inference_profile`, `explain_slowdown`)
+- Fleet alerts updated from 5 → 6 (added `fleet_load_imbalance`)
+
+---
+
 ## April 11, 2026 — v0.7.13: Five-Tier Pricing, Business Tier
 
 ### Five-Tier Pricing Revision

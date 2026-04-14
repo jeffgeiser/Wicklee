@@ -97,6 +97,14 @@ Most inference deployments run multiple models concurrently. Wicklee tracks each
 
 **Without the proxy:** Wicklee still detects all loaded models and their VRAM via `/api/ps`, but tok/s and latency come from the single-model probe. Enable the proxy for full per-model production metrics.
 
+**Per-model WES:** Each model gets its own efficiency score using proportional VRAM share for power attribution: `model_tok_s / (total_watts * vram_share * thermal_penalty)`. Answers "which model is most efficient on my hardware?" with live data.
+
+**VRAM budget:** Stacked bar visualization showing each model's GPU memory allocation vs total budget. See exactly how your VRAM is divided across concurrent models.
+
+**Model switching cost:** `GET /api/model-switches?hours=24` detects model transitions and reports swap frequency, idle gap per swap, and total overhead minutes. Helps quantify the cost of agent-driven model rotation.
+
+**Per-model routing:** `GET /api/v1/route/best?model=qwen2.5:7b` filters to nodes that have the target model loaded and uses per-model WES for routing decisions. Enables model-aware fleet routing for agent runtimes.
+
 ---
 
 ## 18 Observation Patterns + 5 Fleet Alerts

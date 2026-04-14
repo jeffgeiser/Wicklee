@@ -15,6 +15,7 @@ Auth: None required.
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Slowdown explainer — root cause analysis for a slow request |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for every model that has run |
+| GET | /api/model-switches?hours=24 | Model switching cost — swap frequency, idle gap per transition |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
 | GET | /api/events/recent | Recent in-memory events |

@@ -71,6 +71,12 @@ Side-by-side efficiency data for every model that has run on this node. Answers 
 { "node_id": "WK-XXXX", "range_hours": 168, "models": [{ "model": "llama3.1:70b-q4", "hours_active": 18.3, "avg_tok_s": 22.5, "avg_watts": 12.1, "wes": 1.86, "avg_ttft_ms": 245, "cost_per_hour": 0.0015, "total_cost": 0.027 }, { "model": "phi3:mini", "hours_active": 42.0, "avg_tok_s": 85.1, "avg_watts": 3.1, "wes": 27.5, "avg_ttft_ms": 34, "cost_per_hour": 0.0004, "total_cost": 0.017 }] }
 ```
 
+### GET /api/model-switches?hours=24
+Model switching cost — detects model transitions and reports swap frequency and idle overhead.
+```json
+{ "swaps": [{ "ts_ms": 1774621630223, "from_model": "llama3.1:70b", "to_model": "phi3:mini", "gap_ms": 3200 }], "total_swaps": 14, "total_gap_ms": 480000, "total_gap_minutes": 8.0, "hours_queried": 24 }
+```
+
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
 ```json
