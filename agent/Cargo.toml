@@ -1,6 +1,6 @@
 [package]
 name = "wicklee-agent"
-version = "0.7.12"
+version = "0.7.14"
 edition = "2024"
 
 [dependencies]
