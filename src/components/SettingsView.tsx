@@ -927,8 +927,11 @@ const AlertsSection: React.FC<{
           <Lock size={20} className="text-gray-600" />
           <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet connection required</p>
           <p className="text-xs text-gray-500 max-w-xs">
-            Alerts are delivered via the cloud backend. Connect this node to a fleet to configure notification channels and rules.
+            Alerts are configured and delivered via the cloud dashboard at <strong className="text-gray-400">wicklee.dev</strong>. Connect this node to your fleet, then set up notification channels and alert rules from the cloud Settings tab.
           </p>
+          <span className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border text-indigo-400 bg-indigo-500/10 border-indigo-500/20 mt-1">
+            Pro feature
+          </span>
         </div>
       </Section>
     );
