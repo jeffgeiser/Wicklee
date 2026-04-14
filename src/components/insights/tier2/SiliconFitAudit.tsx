@@ -97,10 +97,14 @@ const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, no
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const node = selectedNodeId ? nodes.find(n => n.node_id === selectedNodeId) ?? defaultNode : defaultNode;
 
-  const activeModel = node.ollama_active_model ?? node.vllm_model_name ?? null;
+  // Build list of models to analyze — prefer active_models when available
+  const multiModels = node.active_models && node.active_models.length > 0
+    ? node.active_models
+    : null;
+  const primaryModel = node.ollama_active_model ?? node.vllm_model_name ?? null;
 
   // ── Empty state ─────────────────────────────────────────────────────────
-  if (!activeModel) {
+  if (!primaryModel && !multiModels) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
         <div className="flex items-center gap-2">
@@ -116,41 +120,30 @@ const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, no
     );
   }
 
-  // ── Data derivation ─────────────────────────────────────────────────────
-  const rawQuant   = node.ollama_quantization ?? parseQuantFromName(activeModel);
-  const quantLabel = rawQuant?.toUpperCase() ?? null;
-  const family     = quantLabel ? quantFamily(quantLabel) : 'Unknown';
-
-  const tps      = node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null;
-  const rawWatts = getNodePowerW(node);
-  // Subtract idle system power so WES reflects inference-attributable efficiency.
-  const watts    = rawWatts != null && systemIdleW > 0
-    ? Math.max(rawWatts - systemIdleW, 0.1)
-    : rawWatts;
-  const w1k   = tps != null && watts != null && tps > 0 ? (watts / tps) * 1_000 : null;
-  const wes   = tps != null && watts != null && tps > 0 && watts > 0
-    ? computeWES(tps, watts, node.thermal_state)
-    : null;
-
-  const fit    = computeFit(wes);
-  const fitCfg = FIT_CONFIG[fit];
-
-  // VRAM savings: estimate FP16 size, compute delta
-  const modelSizeGb   = node.ollama_model_size_gb ?? null;
-  const ratio         = quantCompressionRatio(family);
-  const fp16Estimate  = modelSizeGb != null && ratio > 0 && ratio < 1.0
-    ? modelSizeGb / ratio
-    : null;
-  const vramSavedGb   = fp16Estimate != null && modelSizeGb != null
-    ? fp16Estimate - modelSizeGb
-    : null;
-
-  // Model name display
-  const [modelBase, modelTag] = activeModel.includes(':')
-    ? activeModel.split(':', 2)
-    : [activeModel, null];
-
   const chipName = node.chip_name ?? node.gpu_name ?? 'this chip';
+  const rawWatts = getNodePowerW(node);
+  const adjWatts = rawWatts != null && systemIdleW > 0 ? Math.max(rawWatts - systemIdleW, 0.1) : rawWatts;
+
+  // Helper: derive fit data for a single model entry
+  const deriveModelFit = (modelName: string, tps: number | null, modelWes: number | null, quantRaw: string | null, sizeGb: number | null) => {
+    const quant = quantRaw?.toUpperCase() ?? parseQuantFromName(modelName)?.toUpperCase() ?? null;
+    const family = quant ? quantFamily(quant) : 'Unknown';
+    const w1k = tps != null && adjWatts != null && tps > 0 ? (adjWatts / tps) * 1_000 : null;
+    const wes = modelWes ?? (tps != null && adjWatts != null && tps > 0 && adjWatts > 0 ? computeWES(tps, adjWatts, node.thermal_state) : null);
+    const fit = computeFit(wes);
+    const ratio = quantCompressionRatio(family);
+    const fp16Est = sizeGb != null && ratio > 0 && ratio < 1.0 ? sizeGb / ratio : null;
+    const vramSaved = fp16Est != null && sizeGb != null ? fp16Est - sizeGb : null;
+    const [base, tag] = modelName.includes(':') ? modelName.split(':', 2) : [modelName, null as string | null];
+    return { modelName, base, tag, quant, family, tps, w1k, wes, fit, fitCfg: FIT_CONFIG[fit], vramSaved };
+  };
+
+  // Build entries — one per loaded model
+  const entries = multiModels
+    ? multiModels.map(am => deriveModelFit(am.model, am.tok_s ?? null, am.wes ?? null, am.quantization ?? null, am.size_gb ?? null))
+    : primaryModel
+      ? [deriveModelFit(primaryModel, node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null, null, node.ollama_quantization ?? null, node.ollama_model_size_gb ?? null)]
+      : [];
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
@@ -160,26 +153,13 @@ const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, no
         <div className="flex items-center gap-2 min-w-0">
           <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate">
-            Silicon Fit Audit
+            Silicon Fit Audit{entries.length > 1 ? ` · ${entries.length} Models` : ''}
           </span>
         </div>
         <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded border text-green-400 bg-green-500/10 border-green-500/25 shrink-0 flex items-center gap-1">
           <Activity className="w-2.5 h-2.5 animate-pulse" />
           Live
         </span>
-      </div>
-
-      {/* Model name + quant badge */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="font-mono text-xs text-gray-200">
-          {modelBase}
-          {modelTag && <span className="text-gray-500">:{modelTag}</span>}
-        </span>
-        {quantLabel && (
-          <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400">
-            {quantLabel}
-          </span>
-        )}
       </div>
 
       {/* Node Picker — segmented pill buttons */}
@@ -204,52 +184,65 @@ const SiliconFitAudit: React.FC<SiliconFitAuditProps> = ({ node: defaultNode, no
         </div>
       )}
 
-      {/* Fit Status */}
-      <div className="flex items-center gap-2">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${fitCfg.dotColor} ${fit === 'poor' ? 'animate-pulse' : ''}`} />
-        <span className={`text-xs font-semibold ${fitCfg.color}`}>{fitCfg.label}</span>
-      </div>
+      {/* Per-model fit cards */}
+      {entries.map((e, i) => (
+        <div key={e.modelName} className={entries.length > 1 && i > 0 ? 'pt-3 border-t border-gray-800/50' : ''}>
+          {/* Model name + quant badge + fit status */}
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${e.fitCfg.dotColor} ${e.fit === 'poor' ? 'animate-pulse' : ''}`} />
+            <span className="font-mono text-xs text-gray-200">
+              {e.base}
+              {e.tag && <span className="text-gray-500">:{e.tag}</span>}
+            </span>
+            {e.quant && (
+              <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400">
+                {e.quant}
+              </span>
+            )}
+            <span className={`text-[10px] font-semibold ${e.fitCfg.color} ml-auto`}>{e.fitCfg.label}</span>
+          </div>
 
-      {/* Metrics row — W/1K TKN primary, WES + tok/s secondary */}
-      <div className="grid grid-cols-3 gap-2">
-        {/* W/1K TKN — primary efficiency metric */}
-        <div>
-          <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">W/1K Tkn</p>
-          <p className="font-telin text-sm text-gray-200">
-            {w1k != null ? `${w1k.toFixed(1)}W` : <span className="text-gray-600">—</span>}
-          </p>
-        </div>
-        {/* TOK/S */}
-        <div>
-          <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">Tok/s</p>
-          <p className="font-telin text-sm text-gray-200">
-            {tps != null ? tps.toFixed(1) : <span className="text-gray-600">—</span>}
-          </p>
-        </div>
-        {/* WES — sub-label */}
-        <div>
-          <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">WES</p>
-          <p className={`font-telin text-sm ${wes != null
-            ? wes >= 100 ? 'text-green-400' : wes >= 10 ? 'text-amber-400' : 'text-red-400'
-            : 'text-gray-600'
-          }`}>
-            {wes != null ? wes.toFixed(1) : '—'}
-          </p>
-        </div>
-      </div>
+          {/* Metrics row */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">W/1K Tkn</p>
+              <p className="font-telin text-sm text-gray-200">
+                {e.w1k != null ? `${e.w1k.toFixed(1)}W` : <span className="text-gray-600">—</span>}
+              </p>
+            </div>
+            <div>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">Tok/s</p>
+              <p className="font-telin text-sm text-gray-200">
+                {e.tps != null ? e.tps.toFixed(1) : <span className="text-gray-600">—</span>}
+              </p>
+            </div>
+            <div>
+              <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">WES</p>
+              <p className={`font-telin text-sm ${e.wes != null
+                ? e.wes >= 100 ? 'text-green-400' : e.wes >= 10 ? 'text-amber-400' : 'text-red-400'
+                : 'text-gray-600'
+              }`}>
+                {e.wes != null ? e.wes.toFixed(1) : '—'}
+              </p>
+            </div>
+          </div>
 
-      {/* VRAM Savings — plain English */}
-      {vramSavedGb != null && vramSavedGb > 0 && (
-        <p className="text-[11px] text-gray-400 leading-snug">
-          Saving <span className="text-cyan-400 font-semibold">{vramSavedGb.toFixed(1)} GB</span> VRAM via {quantLabel ?? 'quantization'} on {chipName}.
-          {family === 'Q4' && ' Minimal intelligence loss for instruction-following and chat.'}
-          {family === 'Q5' && ' Near-lossless quality with significant memory savings.'}
-          {family === 'Q8' && ' Near-lossless — consider Q4_K_M to free ~50% more VRAM.'}
-        </p>
-      )}
+          {/* VRAM Savings — plain English */}
+          {e.vramSaved != null && e.vramSaved > 0 && (
+            <p className="text-[11px] text-gray-400 leading-snug mt-1.5">
+              Saving <span className="text-cyan-400 font-semibold">{e.vramSaved.toFixed(1)} GB</span> VRAM via {e.quant ?? 'quantization'} on {chipName}.
+              {e.family === 'Q4' && ' Minimal intelligence loss for instruction-following and chat.'}
+              {e.family === 'Q5' && ' Near-lossless quality with significant memory savings.'}
+              {e.family === 'Q8' && ' Near-lossless — consider Q4_K_M to free ~50% more VRAM.'}
+            </p>
+          )}
 
-      {/* Fit context */}
-      <p className="text-[10px] text-gray-600 leading-relaxed">{fitCfg.context}</p>
+          {/* Fit context (only on single model or last entry to avoid repetition) */}
+          {(entries.length === 1 || i === entries.length - 1) && (
+            <p className="text-[10px] text-gray-600 leading-relaxed mt-1">{e.fitCfg.context}</p>
+          )}
+        </div>
+      ))}
 
     </div>
   );

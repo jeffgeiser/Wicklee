@@ -2113,33 +2113,50 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     {(() => {
                       const n = effectiveNodes[0];
                       if (!n) return <p className="text-xs text-gray-700">Waiting for telemetry…</p>;
-                      const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
                       const watts = getNodePowerW(n);
                       const idleW = getNodeSettings(n.node_id).systemIdleW;
                       const adjW  = watts != null && idleW > 0 ? Math.max(watts - idleW, 0.1) : watts;
-                      const wes   = tps != null && adjW != null && tps > 0 && adjW > 0
-                        ? computeWES(tps, adjW, n.thermal_state) : null;
-                      const w1k   = tps != null && adjW != null && tps > 0 ? (adjW / tps) * 1_000 : null;
-                      const model = n.ollama_active_model ?? n.vllm_model_name ?? null;
+
+                      // Build model list: prefer active_models, fall back to singular
+                      const models = n.active_models && n.active_models.length > 0
+                        ? n.active_models.map(am => ({
+                            name: am.model,
+                            tps: am.tok_s ?? null,
+                            wes: am.wes ?? (am.tok_s != null && adjW != null && am.tok_s > 0 && adjW > 0 ? computeWES(am.tok_s, adjW, n.thermal_state) : null),
+                            w1k: am.tok_s != null && adjW != null && am.tok_s > 0 ? (adjW / am.tok_s) * 1_000 : null,
+                          }))
+                        : (() => {
+                            const tps = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
+                            const model = n.ollama_active_model ?? n.vllm_model_name ?? null;
+                            const wes = tps != null && adjW != null && tps > 0 && adjW > 0 ? computeWES(tps, adjW, n.thermal_state) : null;
+                            const w1k = tps != null && adjW != null && tps > 0 ? (adjW / tps) * 1_000 : null;
+                            return model ? [{ name: model, tps, wes, w1k }] : [];
+                          })();
+
                       return (
                         <div className="space-y-3">
-                          {model && <p className="text-xs font-telin text-gray-300 truncate">{model}</p>}
-                          <div className="grid grid-cols-3 gap-2">
-                            <div>
-                              <p className="text-[9px] text-gray-600 uppercase tracking-widest">tok/s</p>
-                              <p className="text-sm font-bold font-telin text-cyan-400">{tps != null ? tps.toFixed(1) : '—'}</p>
+                          {models.map((m, i) => (
+                            <div key={m.name} className={i > 0 ? 'pt-2 border-t border-gray-800/40' : ''}>
+                              <p className="text-xs font-telin text-gray-300 truncate mb-1">{m.name}</p>
+                              <div className="grid grid-cols-3 gap-2">
+                                <div>
+                                  <p className="text-[9px] text-gray-600 uppercase tracking-widest">tok/s</p>
+                                  <p className="text-sm font-bold font-telin text-cyan-400">{m.tps != null ? m.tps.toFixed(1) : '—'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-600 uppercase tracking-widest">WES</p>
+                                  <p className={`text-sm font-bold font-telin ${m.wes != null && m.wes > 10 ? 'text-emerald-400' : m.wes != null && m.wes >= 3 ? 'text-green-300' : m.wes != null && m.wes >= 1 ? 'text-yellow-400' : m.wes != null ? 'text-red-400' : 'text-gray-600'}`}>
+                                    {m.wes != null ? (m.wes >= 100 ? m.wes.toFixed(0) : m.wes.toFixed(1)) : '—'}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-600 uppercase tracking-widest">W/1K</p>
+                                  <p className="text-sm font-bold font-telin text-gray-300">{m.w1k != null ? m.w1k.toFixed(1) : '—'}</p>
+                                </div>
+                              </div>
                             </div>
-                            <div>
-                              <p className="text-[9px] text-gray-600 uppercase tracking-widest">WES</p>
-                              <p className={`text-sm font-bold font-telin ${wes != null && wes > 10 ? 'text-emerald-400' : wes != null && wes >= 3 ? 'text-green-300' : wes != null && wes >= 1 ? 'text-yellow-400' : wes != null ? 'text-red-400' : 'text-gray-600'}`}>
-                                {wes != null ? (wes >= 100 ? wes.toFixed(0) : wes.toFixed(1)) : '—'}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-[9px] text-gray-600 uppercase tracking-widest">W/1K</p>
-                              <p className="text-sm font-bold font-telin text-gray-300">{w1k != null ? w1k.toFixed(1) : '—'}</p>
-                            </div>
-                          </div>
+                          ))}
+                          {models.length === 0 && <p className="text-xs text-gray-700">No model loaded</p>}
                           {idleW > 0 && (
                             <p className="text-[9px] text-gray-600">
                               Idle offset applied: {idleW}W subtracted from {watts?.toFixed(1)}W accelerator power

@@ -284,17 +284,40 @@ const DetailBand: React.FC<{
           Diagnostics
         </p>
 
-        {/* Resident Model — the model currently loaded in memory */}
+        {/* Resident Models — all models currently loaded in memory */}
         {(() => {
-          const model = m?.ollama_active_model ?? m?.vllm_model_name ?? m?.llamacpp_model_name ?? null;
           const runtime = m?.vllm_running ? 'vLLM' : m?.ollama_running ? 'Ollama' : m?.llamacpp_model_name ? 'llama.cpp' : null;
-          return model ? (
+          const multiModels = m?.active_models && m.active_models.length > 0 ? m.active_models : null;
+          const primaryModel = m?.ollama_active_model ?? m?.vllm_model_name ?? m?.llamacpp_model_name ?? null;
+
+          if (multiModels) {
+            return (
+              <div className="space-y-1">
+                <p className="text-[10px] text-gray-400 leading-tight">Resident Models ({multiModels.length})</p>
+                {multiModels.map(am => (
+                  <div key={am.model} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-500/5 border border-indigo-500/15">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-telin text-indigo-300 truncate">
+                        {am.model}{runtime ? <span className="text-gray-500 ml-1.5">· {runtime}</span> : null}
+                      </p>
+                    </div>
+                    {am.vram_mb != null && am.vram_mb > 0 && (
+                      <span className="text-[10px] text-gray-500 font-mono tabular-nums">{(am.vram_mb / 1024).toFixed(1)}G</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          }
+
+          return primaryModel ? (
             <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-500/5 border border-indigo-500/15">
               <div className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
               <div className="min-w-0">
                 <p className="text-[10px] text-gray-400 leading-tight">Resident Model</p>
                 <p className="text-xs font-telin text-indigo-300 truncate">
-                  {model}{runtime ? <span className="text-gray-500 ml-1.5">· {runtime}</span> : null}
+                  {primaryModel}{runtime ? <span className="text-gray-500 ml-1.5">· {runtime}</span> : null}
                 </p>
               </div>
             </div>
@@ -681,7 +704,11 @@ const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metric
     {
       label: 'Ollama',
       ok: m == null ? null : m.ollama_running === true,
-      detail: m?.ollama_running ? `Connected · ${m.ollama_active_model ?? 'idle'}` : 'Not detected',
+      detail: m?.ollama_running
+        ? m.active_models && m.active_models.length > 1
+          ? `Connected · ${m.active_models.length} models loaded`
+          : `Connected · ${m.ollama_active_model ?? 'idle'}`
+        : 'Not detected',
     },
     {
       label: 'vLLM',
