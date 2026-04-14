@@ -393,6 +393,38 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
       </section>
 
+      {/* Multi-Model Intelligence Section */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
+        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+          <p className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4 text-center">Multi-Model</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Every model. Tracked independently.</h2>
+          <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
+            Your agents use multiple models — a coding model, a chat model, an embedding model. Every other monitoring tool collapses them into one GPU metric. Wicklee tracks each model's performance, cost, and resource consumption independently.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl mx-auto mb-8">
+            {[
+              { label: 'Per-Model tok/s', desc: 'Independent throughput measurement for each loaded model from real production requests.' },
+              { label: 'Per-Model VRAM', desc: 'Exact GPU memory allocation per model — see how your VRAM budget is divided across concurrent models.' },
+              { label: 'Per-Model TTFT', desc: 'Time to first token tracked independently — find which model is slowing your agent pipeline.' },
+              { label: 'Per-Model Cost', desc: 'Daily electricity cost per model based on actual power draw at your local rate.' },
+              { label: 'Model Comparison', desc: 'Side-by-side WES, tok/s, watts, TTFT, and cost for every model that has run on your hardware.' },
+              { label: 'Automatic Detection', desc: 'No configuration. Wicklee reads all loaded models from Ollama and tracks them as they come and go.' },
+            ].map((t) => (
+              <div key={t.label} className="p-4 bg-gray-800/40 border border-gray-700/50 rounded-xl">
+                <p className="text-sm font-semibold text-white mb-1">{t.label}</p>
+                <p className="text-[11px] text-gray-500 leading-relaxed">{t.desc}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-start gap-3 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl max-w-3xl mx-auto">
+            <Cpu className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-cyan-300/80">
+              With the optional proxy enabled, every request is attributed to its model automatically. Without the proxy, Wicklee still tracks all loaded models and their VRAM — full per-model analytics require the proxy for production request metrics.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Built for Agents & LLMs Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
