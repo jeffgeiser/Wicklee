@@ -211,11 +211,14 @@ const APIKeysView: React.FC = () => {
       const headers = await authHeaders();
       if (!headers) { setFetchError('Not authenticated'); setLoading(false); return; }
       const r = await fetch(`${CLOUD_URL}/api/v1/keys`, { headers });
-      if (!r.ok) throw new Error(`${r.status}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setKeys(data.keys ?? []);
-    } catch {
-      setFetchError('Could not load keys. Make sure you are signed in.');
+    } catch (err: any) {
+      console.error('[api-keys] fetch failed:', err);
+      setFetchError(err?.message?.includes('401') ? 'Session expired. Sign out and sign back in.'
+        : err?.message?.includes('403') ? 'API key management requires a fleet account.'
+        : 'Could not load API keys. Check your connection and try refreshing.');
     }
     setLoading(false);
   }, [authHeaders]);
