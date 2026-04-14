@@ -2826,14 +2826,12 @@ async fn handle_pair_generate(
             let mut state = ps.lock().unwrap();
             state.cloud_session_token = Some(token.clone());
             state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
-            save_config(&WickleeConfig {
-                node_id: state.node_id.clone(),
-                fleet_url: Some(fleet_url),
-                session_token: Some(token),
-                ollama_proxy: None,
-                runtime_ports: None,
-                bind_address: None,
-            });
+            // Merge pairing fields into existing config — preserve proxy, ports, bind settings.
+            let mut cfg = load_or_create_config();
+            cfg.node_id = state.node_id.clone();
+            cfg.fleet_url = Some(fleet_url);
+            cfg.session_token = Some(token);
+            save_config(&cfg);
         }
     });
     Json(response)
@@ -2855,14 +2853,11 @@ async fn handle_pair_claim(
     };
     if valid {
         let fleet_url = "https://wicklee.dev".to_string();
-        save_config(&WickleeConfig {
-            node_id: state.node_id.clone(),
-            fleet_url: Some(fleet_url.clone()),
-            session_token: state.cloud_session_token.clone(),
-            ollama_proxy: None,
-            runtime_ports: None,
-            bind_address: None,
-        });
+        let mut cfg = load_or_create_config();
+        cfg.node_id = state.node_id.clone();
+        cfg.fleet_url = Some(fleet_url.clone());
+        cfg.session_token = state.cloud_session_token.clone();
+        save_config(&cfg);
         state.status = PairingStatus::Connected { fleet_url };
     }
     Json(pairing_response(&state))
@@ -2874,7 +2869,12 @@ async fn handle_pair_disconnect(
     let mut state = pairing_state.lock().unwrap();
     state.status              = PairingStatus::Unpaired;
     state.cloud_session_token = None;
-    save_config(&WickleeConfig { node_id: state.node_id.clone(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None });
+    // Merge — clear pairing fields but preserve proxy, ports, bind settings.
+    let mut cfg = load_or_create_config();
+    cfg.node_id = state.node_id.clone();
+    cfg.fleet_url = None;
+    cfg.session_token = None;
+    save_config(&cfg);
     Json(pairing_response(&state))
 }
 
@@ -5966,14 +5966,11 @@ async fn main() {
                 let mut state = pairing_state.lock().unwrap();
                 state.cloud_session_token = Some(token.clone());
                 state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
-                save_config(&WickleeConfig {
-                    node_id: state.node_id.clone(),
-                    fleet_url: Some(fleet_url),
-                    session_token: Some(token),
-                    ollama_proxy: config.ollama_proxy.clone(),
-                    runtime_ports: config.runtime_ports.clone(),
-                    bind_address: config.bind_address.clone(),
-                });
+                let mut cfg = load_or_create_config();
+                cfg.node_id = state.node_id.clone();
+                cfg.fleet_url = Some(fleet_url);
+                cfg.session_token = Some(token);
+                save_config(&cfg);
             }
             None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
         }
