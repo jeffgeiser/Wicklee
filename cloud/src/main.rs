@@ -3683,15 +3683,14 @@ async fn run_rollup(pool: &sqlx::PgPool) {
 
 /// Refresh the HuggingFace GGUF model catalog into Postgres.
 async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
-    let url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=50";
-    let resp = match tokio::task::spawn_blocking(move || {
-        ureq::get(url).call()
-    }).await {
+    // Step 1: List top GGUF repos by downloads
+    let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=30";
+    let list_resp = match tokio::task::spawn_blocking(move || ureq::get(list_url).call()).await {
         Ok(Ok(r)) => r,
-        Ok(Err(e)) => { eprintln!("[model-catalog] HF fetch failed: {e}"); return; }
+        Ok(Err(e)) => { eprintln!("[model-catalog] HF list failed: {e}"); return; }
         Err(e) => { eprintln!("[model-catalog] task join failed: {e}"); return; }
     };
-    let body: String = match resp.into_string() {
+    let body: String = match list_resp.into_string() {
         Ok(b) => b,
         Err(e) => { eprintln!("[model-catalog] HF read failed: {e}"); return; }
     };
@@ -3700,36 +3699,50 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
         Err(e) => { eprintln!("[model-catalog] HF parse failed: {e}"); return; }
     };
 
+    // Step 2: For each repo, fetch /tree/main for actual file sizes
     let mut count = 0usize;
     for model in &models {
-        let model_id = model["id"].as_str().unwrap_or("");
+        let model_id = model["id"].as_str().unwrap_or("").to_string();
+        if model_id.is_empty() { continue; }
         let downloads = model["downloads"].as_i64().unwrap_or(0);
-        if let Some(siblings) = model["siblings"].as_array() {
-            for sib in siblings {
-                let filename = sib["rfilename"].as_str().unwrap_or("");
-                if !filename.ends_with(".gguf") { continue; }
-                let file_size = sib["size"].as_i64()
-                    .or_else(|| sib["lfs"].as_object().and_then(|l| l["size"].as_i64()))
-                    .unwrap_or(0);
-                if file_size == 0 { continue; }
-                // Extract quant level from filename
-                let quant = filename.strip_suffix(".gguf")
-                    .and_then(|s| s.rfind('.').map(|i| &s[i+1..]))
-                    .filter(|q| q.starts_with('Q') || q.starts_with("IQ") || q.starts_with('F') || q.starts_with("BF"))
-                    .unwrap_or("unknown");
 
-                let _ = sqlx::query(
-                    "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads)
-                     VALUES ($1, $2, $3, $4, $5)
-                     ON CONFLICT (model_id, filename) DO UPDATE SET
-                       file_size = EXCLUDED.file_size, downloads = EXCLUDED.downloads, fetched_at = NOW()"
-                ).bind(model_id).bind(filename).bind(quant).bind(file_size).bind(downloads)
-                .execute(pool).await;
-                count += 1;
-            }
+        let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
+        let tree_resp = match tokio::task::spawn_blocking(move || ureq::get(&tree_url).call()).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => { eprintln!("[model-catalog] tree fetch failed for {model_id}: {e}"); continue; }
+            Err(_) => continue,
+        };
+        let tree_body: String = match tree_resp.into_string() {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let files: Vec<serde_json::Value> = match serde_json::from_str(&tree_body) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        for file in &files {
+            let path = file["path"].as_str().unwrap_or("");
+            if !path.ends_with(".gguf") { continue; }
+            let file_size = file["size"].as_i64().unwrap_or(0);
+            if file_size == 0 { continue; }
+            let filename = path.rsplit('/').next().unwrap_or(path);
+            let quant = filename.strip_suffix(".gguf")
+                .and_then(|s| s.rfind('.').map(|i| &s[i+1..]))
+                .filter(|q| q.starts_with('Q') || q.starts_with("IQ") || q.starts_with('F') || q.starts_with("BF"))
+                .unwrap_or("unknown");
+
+            let _ = sqlx::query(
+                "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (model_id, filename) DO UPDATE SET
+                   file_size = EXCLUDED.file_size, downloads = EXCLUDED.downloads, fetched_at = NOW()"
+            ).bind(&model_id).bind(filename).bind(quant).bind(file_size).bind(downloads)
+            .execute(pool).await;
+            count += 1;
         }
     }
-    println!("[model-catalog] cached {count} GGUF variants from HuggingFace");
+    println!("[model-catalog] cached {count} GGUF variants from {} repos", models.len());
 }
 
 /// Hardware simulation profiles for Pro tier "what if I had a 4090?" feature.

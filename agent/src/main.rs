@@ -4766,11 +4766,12 @@ async fn handle_model_switches(
 /// Called on first /api/model-candidates request if cache is stale, and by a 24h background task.
 #[cfg(not(target_env = "musl"))]
 async fn refresh_model_catalog(store: store::Store) {
-    let url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=50";
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
-    let resp = match client.get(url).send().await {
+    // Step 1: List top GGUF repos by downloads
+    let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=30";
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build().unwrap_or_default();
+    let resp = match client.get(list_url).send().await {
         Ok(r) => r,
-        Err(e) => { eprintln!("[model-discovery] HF fetch failed: {e}"); return; }
+        Err(e) => { eprintln!("[model-discovery] HF list failed: {e}"); return; }
     };
     let models: Vec<serde_json::Value> = match resp.json().await {
         Ok(v) => v,
@@ -4781,20 +4782,31 @@ async fn refresh_model_catalog(store: store::Store) {
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
     let mut entries: Vec<(String, String, String, u64, u64, i64)> = Vec::new();
 
+    // Step 2: For each repo, fetch /tree/main to get file sizes (siblings don't include sizes)
     for model in &models {
-        let model_id = model["id"].as_str().unwrap_or("").to_string();
+        let model_id = model["id"].as_str().unwrap_or("");
+        if model_id.is_empty() { continue; }
         let downloads = model["downloads"].as_u64().unwrap_or(0);
-        if let Some(siblings) = model["siblings"].as_array() {
-            for sib in siblings {
-                let filename = sib["rfilename"].as_str().unwrap_or("");
-                if !filename.ends_with(".gguf") { continue; }
-                let file_size = sib["size"].as_u64()
-                    .or_else(|| sib["lfs"].as_object().and_then(|l| l["size"].as_u64()))
-                    .unwrap_or(0);
-                if file_size == 0 { continue; }
-                let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
-                entries.push((model_id.clone(), filename.to_string(), quant, file_size, downloads, now));
-            }
+
+        let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
+        let tree_resp = match client.get(&tree_url).send().await {
+            Ok(r) => r,
+            Err(e) => { eprintln!("[model-discovery] tree fetch failed for {model_id}: {e}"); continue; }
+        };
+        let files: Vec<serde_json::Value> = match tree_resp.json().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        for file in &files {
+            let path = file["path"].as_str().unwrap_or("");
+            if !path.ends_with(".gguf") { continue; }
+            let file_size = file["size"].as_u64().unwrap_or(0);
+            if file_size == 0 { continue; }
+            // Use just the filename (strip subdirectory paths like "BF16/...")
+            let filename = path.rsplit('/').next().unwrap_or(path);
+            let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
+            entries.push((model_id.to_string(), filename.to_string(), quant, file_size, downloads, now));
         }
     }
 
@@ -4802,7 +4814,7 @@ async fn refresh_model_catalog(store: store::Store) {
     if let Err(e) = tokio::task::spawn_blocking(move || store.write_catalog(&entries)).await.unwrap_or(Err(duckdb::Error::InvalidQuery)) {
         eprintln!("[model-discovery] cache write failed: {e}");
     } else {
-        println!("[model-discovery] cached {count} GGUF variants from HuggingFace");
+        println!("[model-discovery] cached {count} GGUF variants from {models_count} repos", models_count = models.len());
     }
 }
 
