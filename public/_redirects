@@ -1,0 +1,4 @@
+# Cloudflare Pages SPA fallback — serve index.html for all non-file routes.
+# Static assets (JS, CSS, images) are served directly; everything else
+# falls through to the React Router.
+/*  /index.html  200
