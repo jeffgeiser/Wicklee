@@ -1,7 +1,10 @@
 use crate::PairingState;
 use std::sync::{Arc, Mutex};
 
-pub(crate) const CLOUD_URL: &str = "https://wicklee.dev";
+/// Default cloud URL for telemetry push. Points directly to the Railway backend
+/// to avoid consuming Cloudflare Worker request quota on high-frequency pushes
+/// (3 nodes × 0.5 req/s = 43K requests/day). Override with WICKLEE_CLOUD_URL env var.
+pub(crate) const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.up.railway.app";
 
 /// Spawn a background task that forwards live telemetry to the cloud every 2 s.
 /// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
