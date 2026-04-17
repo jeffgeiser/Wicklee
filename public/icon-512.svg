@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Dark background matching dashboard #030712 -->
+  <rect width="512" height="512" rx="96" fill="#030712"/>
+
+  <!-- Subtle glow behind the beacon -->
+  <radialGradient id="glow" cx="256" cy="240" r="120" gradientUnits="userSpaceOnUse">
+    <stop offset="0%" stop-color="#34d399" stop-opacity="0.15"/>
+    <stop offset="100%" stop-color="#34d399" stop-opacity="0"/>
+  </radialGradient>
+  <circle cx="256" cy="240" r="120" fill="url(#glow)"/>
+
+  <!-- The Beacon — emerald dot -->
+  <circle cx="256" cy="240" r="32" fill="#34d399"/>
+
+  <!-- Outer ring — pulse indicator -->
+  <circle cx="256" cy="240" r="56" fill="none" stroke="#34d399" stroke-width="2" opacity="0.3"/>
+
+  <!-- Wordmark: wicklee -->
+  <text x="256" y="360" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-weight="700" font-size="64" letter-spacing="-1" fill="#ffffff">wicklee</text>
+</svg>
