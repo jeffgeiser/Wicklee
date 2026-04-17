@@ -2233,13 +2233,13 @@ async fn handle_telemetry(
                 });
             }
 
-            // Evaluate alert rules if user is Team+ tier.
+            // Evaluate alert rules if user is Pro+ tier.
             let tier: String = sqlx::query_scalar::<_, String>(
                 "SELECT subscription_tier FROM users WHERE id = $1"
             ).bind(&tenant_id).fetch_one(&pool).await
             .unwrap_or_else(|_| "community".to_string());
 
-            if is_team_or_above(&tier) {
+            if is_pro_or_above(&tier) {
                 if let Some(ref metrics_snapshot) = metrics_snap {
                     evaluate_alerts(&tenant_id, &nid, metrics_snapshot, &pool).await;
                 }
@@ -4601,10 +4601,14 @@ async fn node_offline_alert_task(state: AppState) {
 
         // Fire alerts for nodes that just went offline.
         for (user_id, node_id, elapsed) in &went_offline {
+            println!("[alerts] node_offline: {node_id} went offline (elapsed {elapsed}ms, user_id={user_id})");
             let tier: String = sqlx::query_scalar::<_, String>(
                 "SELECT subscription_tier FROM users WHERE id = $1"
             ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
-            if !is_pro_or_above(&tier) { continue; }
+            if !is_pro_or_above(&tier) {
+                println!("[alerts] node_offline: skipped — tier={tier} (requires Pro+)");
+                continue;
+            }
 
             let rules: Vec<(String, String, String)> = sqlx::query_as(
                 "SELECT ar.id, nc.channel_type, nc.config_json::text
@@ -4613,12 +4617,16 @@ async fn node_offline_alert_task(state: AppState) {
                  WHERE ar.user_id = $1 AND ar.event_type = 'node_offline' AND ar.enabled = 1
                    AND (ar.node_id IS NULL OR ar.node_id = $2)"
             ).bind(user_id).bind(node_id).fetch_all(&state.pool).await.unwrap_or_default();
+            println!("[alerts] node_offline: found {} matching rules for {node_id}", rules.len());
 
             for (rule_id, channel_type, config_json) in rules {
                 let open: Option<String> = sqlx::query_scalar(
                     "SELECT id FROM alert_events WHERE rule_id = $1 AND node_id = $2 AND resolved_at IS NULL LIMIT 1"
                 ).bind(&rule_id).bind(node_id).fetch_optional(&state.pool).await.ok().flatten();
-                if open.is_some() { continue; }
+                if open.is_some() {
+                    println!("[alerts] node_offline: skipped — open alert_event already exists for rule {rule_id}");
+                    continue;
+                }
 
                 let minutes = elapsed / 60_000;
                 let detail  = format!("Node has not reported telemetry in *{minutes} minutes*.");
