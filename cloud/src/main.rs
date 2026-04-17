@@ -4190,7 +4190,7 @@ fn slack_alert_blocks(node_id: &str, event_type: &str, detail: &str, resolved: b
         format!("{icon} {node_id} \u{2014} {color_word}")
     };
     serde_json::json!([
-        { "type": "header", "text": { "type": "plain_text", "text": title } },
+        { "type": "section", "text": { "type": "mrkdwn", "text": format!("*{title}*") } },
         { "type": "section", "text": { "type": "mrkdwn", "text": detail } },
         { "type": "context", "elements": [{ "type": "mrkdwn", "text": "Wicklee \u{00B7} <https://wicklee.dev|View Dashboard>" }] }
     ]).to_string()
