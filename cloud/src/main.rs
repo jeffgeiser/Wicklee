@@ -4680,6 +4680,23 @@ async fn node_offline_alert_task(state: AppState) {
             ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
             if !is_pro_or_above(&tier) { continue; }
 
+            // Deliver resolved notification to the same channels that fired the offline alert.
+            let open_rules: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT ae.rule_id, nc.channel_type, nc.config_json::text
+                 FROM alert_events ae
+                 JOIN alert_rules ar ON ar.id = ae.rule_id
+                 JOIN notification_channels nc ON nc.id = ar.channel_id
+                 WHERE ae.node_id = $1 AND ae.resolved_at IS NULL"
+            ).bind(node_id).fetch_all(&state.pool).await.unwrap_or_default();
+            for (_rule_id, channel_type, config_json) in open_rules {
+                let ct = channel_type.clone();
+                let cj = config_json.clone();
+                let ni = node_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    deliver_alert(&ct, &cj, &ni, "node_offline", "Node is back online — telemetry resumed.", true);
+                });
+            }
+
             let _ = sqlx::query("UPDATE alert_events SET resolved_at = $1 WHERE node_id = $2 AND resolved_at IS NULL")
                 .bind(now as i64).bind(node_id).execute(&state.pool).await;
 
