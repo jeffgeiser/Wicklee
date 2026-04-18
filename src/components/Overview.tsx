@@ -131,8 +131,8 @@ const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, value
     </div>
     <div>
       <p
-        className={`text-2xl font-bold font-telin leading-none ${valueCls ?? 'text-gray-900 dark:text-white'}`}
-        title={valueTitle}
+        className={`text-2xl font-bold font-telin leading-none truncate ${valueCls ?? 'text-gray-900 dark:text-white'}`}
+        title={valueTitle ?? (typeof value === 'string' ? value : undefined)}
       >
         {value}
       </p>
