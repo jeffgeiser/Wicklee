@@ -5469,6 +5469,7 @@ async fn handle_metrics(
     axum::extract::Extension(swap_metrics):          axum::extract::Extension<SwapMetrics>,
     axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
     axum::extract::Extension(proxy_ports):           axum::extract::Extension<ProxyPorts>,
+    axum::extract::Extension(config_node_id):        axum::extract::Extension<NodeId>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -5478,9 +5479,9 @@ async fn handle_metrics(
         let runtime_port_overrides = proxy_ports.runtime_overrides;
 
         let mut sys = System::new_all();
-        let node_id = System::host_name()
-            .unwrap_or_else(|| "wicklee-sentinel-01".to_string());
+        let node_id = config_node_id.0.as_str().to_owned();
 
+        let hostname = System::host_name().unwrap_or_else(|| node_id.clone());
         let linux_chip_name = read_linux_chip_name();
 
         sys.refresh_all();
@@ -5517,7 +5518,7 @@ async fn handle_metrics(
 
             let payload = MetricsPayload {
                 node_id:             node_id.clone(),
-                hostname:            node_id.clone(),
+                hostname:            hostname.clone(),
                 gpu_name:            nvidia.nvidia_gpu_name.clone().or(apple.gpu_name.clone()),
                 chip_name:           linux_chip_name.clone(),
                 cpu_usage_percent:   sys.global_cpu_info().cpu_usage(),
