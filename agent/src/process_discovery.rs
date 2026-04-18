@@ -171,6 +171,15 @@ pub const RUNTIME_SPECS: &[RuntimeSpec] = &[
         port_arg:        "--port",
         default_port:    8080,
     },
+    // LM Studio — popular macOS GUI for local inference (llama.cpp backend).
+    // Exposes OpenAI-compatible API on port 1234 by default.
+    RuntimeSpec {
+        name:            "lmstudio",
+        exact_binary:    &["LM Studio", "lms"],
+        cmdline_markers: &["LM Studio", "lmstudio", "lms server"],
+        port_arg:        "--port",
+        default_port:    1234,
+    },
     // SGLang — emerging vLLM alternative with Prometheus metrics
     RuntimeSpec {
         name:            "sglang",
