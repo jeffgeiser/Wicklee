@@ -187,11 +187,14 @@ fn score_fit(
     } else { -100.0 };
 
     // ── VRAM headroom (40 points) ─────────────────────────────────────────
-    let vram_score = if headroom_pct >= 50.0 { 40 }
-        else if headroom_pct >= 30.0 { 35 }
-        else if headroom_pct >= 15.0 { 28 }
-        else if headroom_pct >= 5.0 { 20 }
-        else if headroom_pct >= 0.0 { 10 }
+    // Tighter curve: reserve top score for 75%+ headroom, create more spread.
+    let vram_score = if headroom_pct >= 75.0 { 40 }
+        else if headroom_pct >= 60.0 { 36 }
+        else if headroom_pct >= 45.0 { 32 }
+        else if headroom_pct >= 30.0 { 26 }
+        else if headroom_pct >= 15.0 { 20 }
+        else if headroom_pct >= 5.0 { 12 }
+        else if headroom_pct >= 0.0 { 6 }
         else { 0u8 }; // won't fit
 
     // ── Thermal margin (20 points) ────────────────────────────────────────
@@ -212,17 +215,15 @@ fn score_fit(
     };
 
     // ── Power efficiency (20 points) ──────────────────────────────────────
-    // Larger models draw more power. Score based on whether the model's VRAM
-    // footprint suggests reasonable power consumption for this hardware.
-    let power_score: u8 = if hw.power_budget_w <= 0.1 { 10 } else {
-        let watts_per_gb = hw.power_budget_w / (vram_available as f32 / 1024.0).max(1.0);
-        let model_gb = vram_required as f32 / 1024.0;
-        let projected_watts = watts_per_gb * model_gb;
-        if projected_watts < hw.power_budget_w * 0.5 { 20 }
-        else if projected_watts < hw.power_budget_w * 0.75 { 15 }
-        else if projected_watts < hw.power_budget_w { 10 }
-        else { 5 }
-    };
+    // Score based on what fraction of total VRAM the model consumes —
+    // larger models relative to hardware capacity get penalized.
+    let vram_fraction = vram_required as f32 / vram_available.max(1) as f32;
+    let power_score: u8 = if vram_fraction < 0.2 { 20 }
+        else if vram_fraction < 0.35 { 16 }
+        else if vram_fraction < 0.5 { 12 }
+        else if vram_fraction < 0.7 { 8 }
+        else if vram_fraction < 0.9 { 5 }
+        else { 2 };
 
     let total = vram_score + thermal_score + wes_score + power_score;
 
@@ -255,17 +256,37 @@ fn score_fit(
     }
 }
 
-/// Extract quant level from a GGUF filename (e.g. "llama-2-7b.Q4_K_M.gguf" → "Q4_K_M").
+/// Extract quant level from a GGUF filename.
+/// Handles both dot-separated ("llama-2-7b.Q4_K_M.gguf") and
+/// dash-separated ("gemma-4-26B-A4B-it-Q8_0.gguf", "model-UD-IQ3_S.gguf") patterns.
 fn parse_quant_from_filename(filename: &str) -> Option<String> {
-    // Common patterns: .Q4_K_M.gguf, .IQ4_XS.gguf, .F16.gguf, .BF16.gguf
     let stem = filename.strip_suffix(".gguf")?;
-    let last_dot = stem.rfind('.')?;
-    let quant = &stem[last_dot + 1..];
-    if quant.starts_with('Q') || quant.starts_with("IQ") || quant.starts_with('F') || quant.starts_with("BF") {
-        Some(quant.to_string())
-    } else {
-        None
+
+    // Strategy: scan all segments (split by '.' and '-') for a token that looks like a quant level.
+    // Check dot-separated segments first (higher priority), then dash-separated.
+    let is_quant = |s: &str| -> bool {
+        s.starts_with('Q') || s.starts_with("IQ") || s.starts_with('F') || s.starts_with("BF") || s.starts_with("MXFP")
+    };
+
+    // Try dot-separated: model.Q4_K_M
+    for seg in stem.rsplit('.') {
+        if is_quant(seg) { return Some(seg.to_string()); }
     }
+
+    // Try dash-separated: model-Q4_K_M or model-UD-IQ3_S
+    // Walk from the end to find the quant token — may be preceded by "UD-" prefix
+    let parts: Vec<&str> = stem.rsplit('-').collect();
+    for (i, seg) in parts.iter().enumerate() {
+        if is_quant(seg) {
+            // Check if preceded by "UD" (ultra-dense) prefix: "UD-IQ3_S" → "UD-IQ3_S"
+            if i + 1 < parts.len() && parts[i + 1] == "UD" {
+                return Some(format!("UD-{seg}"));
+            }
+            return Some(seg.to_string());
+        }
+    }
+
+    None
 }
 
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.

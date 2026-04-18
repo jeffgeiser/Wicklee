@@ -111,7 +111,16 @@ Most inference deployments run multiple models concurrently. Wicklee tracks each
 
 "Is this model right for this hardware?" Wicklee fetches the top GGUF models from HuggingFace and scores each quantization variant against your hardware.
 
-**Fit score (0-100):** VRAM headroom (40pts) + thermal margin (20pts) + historical WES (20pts) + power efficiency (20pts). Labels: Excellent (80+), Good (60-79), Tight (40-59), Won't Fit (<40).
+**Fit score (0-100):** Four weighted components:
+
+| Component | Max Points | What it measures |
+|---|---|---|
+| VRAM headroom | 40 | Free VRAM after loading — tighter curve rewards models that leave room for context scaling |
+| Thermal margin | 20 | Current thermal state: Normal=20, Fair=10, Serious=5, Critical=0 |
+| Historical WES | 20 | WES from similar models you've run (10 if no data — neutral) |
+| Power efficiency | 20 | Model VRAM as fraction of total — larger models relative to hardware are penalized |
+
+**Labels:** Excellent (80+), Good (60-79), Tight (40-59), Won't Fit (<40).
 
 ### Localhost (Community — all tiers)
 `GET /api/model-candidates?search=llama&limit=20` — returns models scored against local hardware. HuggingFace catalog cached to DuckDB with 24h TTL. Works offline after first cache fill.

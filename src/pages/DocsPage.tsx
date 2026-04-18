@@ -106,6 +106,7 @@ const NAV = [
   { id: 'states',      label: 'Node States' },
   { id: 'latency',     label: 'Latency & TTFT' },
   { id: 'multi-model', label: 'Multi-Model' },
+  { id: 'model-discovery', label: 'Model Discovery' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'alerts',      label: 'Alerts & Notifications' },
   { id: 'event-feeds', label: 'Event Feeds' },
@@ -941,6 +942,109 @@ WES Version:     2
 
             <NoteBox>
               Historical per-model analysis is already available regardless of proxy status. The <strong className="text-white">Cost by Model</strong> table and <strong className="text-white">Model Comparison</strong> endpoints aggregate from DuckDB inference traces, which have always stored per-request model attribution. Multi-model live monitoring extends this to real-time.
+            </NoteBox>
+          </Section>
+
+          {/* ── Model Discovery ── */}
+          <Section
+            id="model-discovery"
+            icon={<Zap className="w-5 h-5" />}
+            accent="border-cyan-500/20"
+            title="Model Discovery & Hardware Fit"
+          >
+            <p>
+              Wicklee fetches the top GGUF models from HuggingFace and scores each quantization variant against your hardware. The fit score answers "will this model run well on my machine?" before you download anything.
+            </p>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">Fit Score (0–100)</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                    <th className="pb-2 pr-4">Component</th>
+                    <th className="pb-2 pr-4">Max</th>
+                    <th className="pb-2">What it measures</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">VRAM Headroom</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">40</td>
+                    <td className="py-2 text-gray-500">Free VRAM after loading — tighter curve rewards models that leave room for context window scaling</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Thermal Margin</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">20</td>
+                    <td className="py-2 text-gray-500">Current thermal state: Normal (20), Fair (10), Serious (5), Critical (0)</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Historical WES</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">20</td>
+                    <td className="py-2 text-gray-500">WES from similar models you've run. Neutral (10) if no data — the score improves as you run more models</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Power Efficiency</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">20</td>
+                    <td className="py-2 text-gray-500">Model VRAM as fraction of total GPU memory — larger models relative to your hardware are penalized</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">Score Labels</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                  <p className="font-bold text-emerald-400">80–100</p>
+                  <p className="text-gray-500">Excellent</p>
+                </div>
+                <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/20">
+                  <p className="font-bold text-green-300">60–79</p>
+                  <p className="text-gray-500">Good</p>
+                </div>
+                <div className="p-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                  <p className="font-bold text-yellow-400">40–59</p>
+                  <p className="text-gray-500">Tight</p>
+                </div>
+                <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                  <p className="font-bold text-red-400">&lt; 40</p>
+                  <p className="text-gray-500">Won't Fit</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-3">Tiered access</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                    <th className="pb-2 pr-4">Tier</th>
+                    <th className="pb-2 pr-4">Feature</th>
+                    <th className="pb-2">Endpoint</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Community</td>
+                    <td className="py-2 pr-4 text-gray-400">Local discovery — what fits on this machine</td>
+                    <td className="py-2 text-gray-500 font-mono">GET /api/model-candidates</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Pro</td>
+                    <td className="py-2 pr-4 text-gray-400">Hardware simulation — "what if I had a 4090?"</td>
+                    <td className="py-2 text-gray-500 font-mono">GET /api/v1/models/discover?simulate_hw=</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Team</td>
+                    <td className="py-2 pr-4 text-gray-400">Fleet matching — which nodes can run this model?</td>
+                    <td className="py-2 text-gray-500 font-mono">GET /api/v1/models/discover?fleet=true</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <NoteBox>
+              The HuggingFace catalog is cached locally in DuckDB with a 24-hour TTL. The first request triggers a background fetch; subsequent requests are instant. No HuggingFace API key required.
             </NoteBox>
           </Section>
 
