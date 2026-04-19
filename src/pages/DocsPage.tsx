@@ -1223,7 +1223,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-orange-400">pcie_lane_degradation</code></Td>
-                    <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only</Td>
+                    <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only, no root required. Not available on virtualised GPUs.</Td>
                     <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d PCIE</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>

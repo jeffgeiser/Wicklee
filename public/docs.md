@@ -221,6 +221,8 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 **Pro (8):** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `pcie_lane_degradation`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`
 
+> **`pcie_lane_degradation`** — fires when the negotiated PCIe link width (e.g. x8) is below the card's rated maximum (e.g. x16), indicating a wrong-slot installation or failed lane. Detected via NVML `current_pcie_link_width` / `max_pcie_link_width` — **NVIDIA only, no root required**. Returns no data on virtualised GPUs (cloud instances, VMs) where PCIe info is unavailable.
+
 ### Cloud-Evaluated (1 pattern)
 `fleet_load_imbalance` — node WES > 20% below best healthy peer (Pro)
 
