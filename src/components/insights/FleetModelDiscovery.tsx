@@ -248,8 +248,24 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     }
   }, [getToken]);
 
-  // Load trending on mount
-  useEffect(() => { fetchModels(); }, [fetchModels]);
+  // Load trending on mount — retry up to 5× with 600ms backoff to handle
+  // Clerk JWT not yet resolved when component first mounts.
+  useEffect(() => {
+    let cancelled = false;
+    let attempt = 0;
+    const tryFetch = async () => {
+      if (cancelled) return;
+      const token = await getToken();
+      if (token) {
+        fetchModels();
+      } else if (attempt < 5) {
+        attempt++;
+        setTimeout(tryFetch, 600);
+      }
+    };
+    tryFetch();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleChange = (val: string) => {
     setPending(val);
