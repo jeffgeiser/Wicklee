@@ -91,6 +91,60 @@ const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, clas
   );
 };
 
+// ── Variant table (extracted to allow useState) ───────────────────────────────
+
+function quantLabel(v: VariantResult): string {
+  if (v.quant && v.quant !== 'unknown') return v.quant;
+  // Fall back to last segment of filename (e.g. "Q4_K_M" from "model-Q4_K_M.gguf")
+  const stem = v.filename.replace(/\.gguf$/i, '');
+  return stem.split(/[-.]/).pop() ?? stem;
+}
+
+const VariantTable: React.FC<{ variants: VariantResult[] }> = ({ variants }) => {
+  const [showAll, setShowAll] = useState(false);
+  const fitting  = variants.filter(v => v.fit_score >= 40);
+  const wontFit  = variants.filter(v => v.fit_score < 40);
+  const displayed = showAll ? variants : fitting;
+
+  return (
+    <>
+      <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 mt-1">
+        Quantization variants{fitting.length < variants.length ? ` · ${fitting.length} fit` : ''}
+      </div>
+      <div className="space-y-0">
+        {displayed.map(v => {
+          const vc = fitColors(v.fit_score);
+          return (
+            <div key={v.filename} className="flex items-center gap-2 py-1.5 border-t border-gray-800/20 first:border-t-0">
+              <div className={`w-1.5 h-1.5 rounded-full ${vc.dot} shrink-0`} />
+              <span className="text-[11px] text-gray-400 font-mono shrink-0 max-w-[80px] truncate" title={v.filename}>
+                {quantLabel(v)}
+              </span>
+              <span className={`text-[10px] font-medium px-1.5 py-px rounded ${vc.badge} border shrink-0`}>
+                {v.fit_label}
+              </span>
+              <span className="text-[11px] text-gray-500 font-mono tabular-nums shrink-0">
+                {(v.file_size_mb / 1024).toFixed(1)} GB
+              </span>
+              <span className="text-[10px] text-gray-600 truncate flex-1">
+                {v.vram_headroom_pct >= 0 ? `${v.vram_headroom_pct.toFixed(0)}% headroom` : 'over budget'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {wontFit.length > 0 && (
+        <button
+          onClick={() => setShowAll(s => !s)}
+          className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors mt-1"
+        >
+          {showAll ? '↑ Hide' : `+ ${wontFit.length} that won't fit on your hardware`}
+        </button>
+      )}
+    </>
+  );
+};
+
 // ── Model row ─────────────────────────────────────────────────────────────────
 
 const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
@@ -159,29 +213,7 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
           </div>
 
           {/* Variant table */}
-          <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 mt-1">
-            Quantization variants
-          </div>
-          <div className="space-y-0">
-            {model.variants.map(v => {
-              const vc = fitColors(v.fit_score);
-              return (
-                <div key={v.quant} className="flex items-center gap-2 py-1.5 border-t border-gray-800/20 first:border-t-0">
-                  <div className={`w-1.5 h-1.5 rounded-full ${vc.dot} shrink-0`} />
-                  <span className="text-[11px] text-gray-400 font-mono w-20 shrink-0">{v.quant}</span>
-                  <span className={`text-[10px] font-medium px-1.5 py-px rounded ${vc.badge} border shrink-0`}>
-                    {v.fit_label}
-                  </span>
-                  <span className="text-[11px] text-gray-500 font-mono tabular-nums shrink-0">
-                    {(v.file_size_mb / 1024).toFixed(1)} GB
-                  </span>
-                  <span className="text-[10px] text-gray-600 truncate flex-1">
-                    {v.vram_headroom_pct >= 0 ? `${v.vram_headroom_pct.toFixed(0)}% headroom` : 'over budget'}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          <VariantTable variants={model.variants} />
 
           {/* Pull command for best variant */}
           {best.pull_cmd && (
