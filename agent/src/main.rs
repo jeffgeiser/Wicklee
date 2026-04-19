@@ -265,12 +265,13 @@ fn parse_quant_from_filename(filename: &str) -> Option<String> {
     // Strategy: scan all segments (split by '.' and '-') for a token that looks like a quant level.
     // Check dot-separated segments first (higher priority), then dash-separated.
     let is_quant = |s: &str| -> bool {
-        s.starts_with('Q') || s.starts_with("IQ") || s.starts_with('F') || s.starts_with("BF") || s.starts_with("MXFP")
+        let u = s.to_ascii_uppercase();
+        u.starts_with('Q') || u.starts_with("IQ") || u.starts_with('F') || u.starts_with("BF") || u.starts_with("MXFP")
     };
 
     // Try dot-separated: model.Q4_K_M
     for seg in stem.rsplit('.') {
-        if is_quant(seg) { return Some(seg.to_string()); }
+        if is_quant(seg) { return Some(seg.to_ascii_uppercase()); }
     }
 
     // Try dash-separated: model-Q4_K_M or model-UD-IQ3_S
@@ -279,10 +280,11 @@ fn parse_quant_from_filename(filename: &str) -> Option<String> {
     for (i, seg) in parts.iter().enumerate() {
         if is_quant(seg) {
             // Check if preceded by "UD" (ultra-dense) prefix: "UD-IQ3_S" → "UD-IQ3_S"
-            if i + 1 < parts.len() && parts[i + 1] == "UD" {
-                return Some(format!("UD-{seg}"));
+            let q = seg.to_ascii_uppercase();
+            if i + 1 < parts.len() && parts[i + 1].to_ascii_uppercase() == "UD" {
+                return Some(format!("UD-{q}"));
             }
-            return Some(seg.to_string());
+            return Some(q);
         }
     }
 

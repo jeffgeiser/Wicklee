@@ -3796,17 +3796,21 @@ fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, power_w: f32, thermal: &s
 /// Parse a quant level from a GGUF filename (mirrors agent-side logic).
 fn parse_gguf_quant(filename: &str) -> String {
     let stem = filename.strip_suffix(".gguf").unwrap_or(filename);
-    let is_quant = |s: &str| s.starts_with('Q') || s.starts_with("IQ") || s.starts_with('F') || s.starts_with("BF");
+    let is_quant = |s: &str| {
+        let u = s.to_ascii_uppercase();
+        u.starts_with('Q') || u.starts_with("IQ") || u.starts_with('F') || u.starts_with("BF") || u.starts_with("MXFP")
+    };
     for seg in stem.rsplit('.') {
-        if is_quant(seg) { return seg.to_string(); }
+        if is_quant(seg) { return seg.to_ascii_uppercase(); }
     }
     let parts: Vec<&str> = stem.rsplit('-').collect();
     for (i, seg) in parts.iter().enumerate() {
         if is_quant(seg) {
-            if i + 1 < parts.len() && parts[i + 1] == "UD" {
-                return format!("UD-{seg}");
+            let q = seg.to_ascii_uppercase();
+            if i + 1 < parts.len() && parts[i + 1].to_ascii_uppercase() == "UD" {
+                return format!("UD-{q}");
             }
-            return seg.to_string();
+            return q;
         }
     }
     "unknown".to_string()

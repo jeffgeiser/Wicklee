@@ -121,9 +121,11 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
         </span>
 
         {/* Best quant */}
-        <span className="text-[10px] text-gray-500 font-mono shrink-0 hidden sm:inline">
-          {best.quant}
-        </span>
+        {best.quant && best.quant !== 'unknown' && (
+          <span className="text-[10px] text-gray-500 font-mono shrink-0 hidden sm:inline">
+            {best.quant}
+          </span>
+        )}
 
         {/* Size */}
         <span className="text-[10px] text-gray-600 tabular-nums shrink-0 hidden sm:inline">
