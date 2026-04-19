@@ -123,6 +123,22 @@ export interface SentinelMetrics {
   ollama_active_model?:      string | null;
   ollama_model_size_gb?:     number | null;
   ollama_quantization?:      string | null;
+  /** Context window size in tokens from /api/show (e.g. 8192, 131072). */
+  ollama_context_length?:    number | null;
+  /** Total parameter count from /api/show (e.g. 7_000_000_000 for 7B). */
+  ollama_parameter_count?:   number | null;
+  /** Transformer layer count (llama.block_count). Required for KV cache math. */
+  ollama_num_layers?:        number | null;
+  /**
+   * KV attention heads (llama.attention.head_count_kv).
+   * On GQA models (Llama 3, Mistral, Phi) this is much less than num_heads —
+   * KV cache size scales with kv_heads, not total heads.
+   */
+  ollama_kv_heads?:          number | null;
+  /** Total attention heads (llama.attention.head_count). Used to derive head_dim. */
+  ollama_num_heads?:         number | null;
+  /** Model embedding dimension (llama.embedding_length). head_dim = embedding_dim / num_heads. */
+  ollama_embedding_dim?:     number | null;
   /** Sampled tok/s from 20-token /api/generate probe every 30s. Null until first probe completes. */
   ollama_tokens_per_second?: number | null;
   /** Prefill speed from probe: prompt_eval_count / prompt_eval_duration (tok/s). */

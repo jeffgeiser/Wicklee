@@ -262,6 +262,11 @@ pub(crate) fn start_ollama_harvester(
             // Cached /api/show data — refreshed only when model changes.
             let mut cached_context_length:  Option<u64> = None;
             let mut cached_parameter_count: Option<u64> = None;
+            // Architecture fields from /api/show — needed for KV cache math.
+            let mut cached_num_layers:      Option<u64> = None;
+            let mut cached_kv_heads:        Option<u64> = None;
+            let mut cached_num_heads:       Option<u64> = None;
+            let mut cached_embedding_dim:   Option<u64> = None;
             let mut last_infer_ts: Option<std::time::Instant> = None;
 
             // ── Inner poll loop — runs while Ollama is present ───────────────
@@ -311,6 +316,10 @@ pub(crate) fn start_ollama_harvester(
                     // Carry forward /api/show-derived fields (refreshed on model change)
                     ollama_context_length:    prev_state.ollama_context_length,
                     ollama_parameter_count:   prev_state.ollama_parameter_count,
+                    ollama_num_layers:        prev_state.ollama_num_layers,
+                    ollama_kv_heads:          prev_state.ollama_kv_heads,
+                    ollama_num_heads:         prev_state.ollama_num_heads,
+                    ollama_embedding_dim:     prev_state.ollama_embedding_dim,
                     ..Default::default()
                 };
 
@@ -390,6 +399,16 @@ pub(crate) fn start_ollama_harvester(
                                     .or_else(|| mi["llama.context_length"].as_u64());
                                 cached_parameter_count = mi["general.parameter_count"].as_u64()
                                     .or_else(|| mi["llama.parameter_count"].as_u64());
+                                // Architecture fields for KV cache estimation.
+                                // llama.block_count = transformer layer count.
+                                // llama.attention.head_count_kv = KV heads (< total heads on GQA models).
+                                // llama.attention.head_count = total attention heads.
+                                // llama.embedding_length = model embedding dimension.
+                                // head_dim = embedding_length / head_count (derived on the frontend).
+                                cached_num_layers    = mi["llama.block_count"].as_u64();
+                                cached_kv_heads      = mi["llama.attention.head_count_kv"].as_u64();
+                                cached_num_heads     = mi["llama.attention.head_count"].as_u64();
+                                cached_embedding_dim = mi["llama.embedding_length"].as_u64();
                             }
                         }
                     } else {
@@ -399,6 +418,10 @@ pub(crate) fn start_ollama_harvester(
                 }
                 m.ollama_context_length = cached_context_length;
                 m.ollama_parameter_count = cached_parameter_count;
+                m.ollama_num_layers    = cached_num_layers;
+                m.ollama_kv_heads      = cached_kv_heads;
+                m.ollama_num_heads     = cached_num_heads;
+                m.ollama_embedding_dim = cached_embedding_dim;
 
                 // Detect inference activity via expires_at resets (use first model — same as before).
                 if let Some(first) = ps_models.first() {

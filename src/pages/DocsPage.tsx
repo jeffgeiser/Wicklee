@@ -953,11 +953,12 @@ WES Version:     2
             title="Model Discovery & Hardware Fit"
           >
             <p>
-              Wicklee fetches the top GGUF models from HuggingFace and scores each quantization variant against your hardware. The fit score answers "will this model run well on my machine?" before you download anything.
+              Wicklee fetches GGUF models from HuggingFace and scores each quantization variant against your hardware. The fit score answers "will this model run well on my machine?" before you download anything. On the cloud dashboard, every online fleet node is scored simultaneously so you can see which nodes are the best match for any given model.
             </p>
 
             <div className="mt-4">
-              <p className="font-semibold text-white mb-3">Fit Score (0–100)</p>
+              <p className="font-semibold text-white mb-1">Fit Score (0–100)</p>
+              <p className="text-xs text-gray-500 mb-3">Four weighted components. Score labels: <span className="text-emerald-400">Excellent</span> (80+), <span className="text-green-400">Good</span> (60–79), <span className="text-yellow-400">Tight</span> (40–59), <span className="text-red-400">Won't Fit</span> (&lt;40).</p>
               <table className="w-full">
                 <thead>
                   <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
@@ -968,9 +969,9 @@ WES Version:     2
                 </thead>
                 <tbody className="text-xs divide-y divide-gray-800/50">
                   <tr>
-                    <td className="py-2 pr-4 text-gray-300">VRAM Headroom</td>
+                    <td className="py-2 pr-4 text-gray-300">VRAM / RAM Headroom</td>
                     <td className="py-2 pr-4 text-gray-400 font-mono">40</td>
-                    <td className="py-2 text-gray-500">Free VRAM after loading — tighter curve rewards models that leave room for context window scaling</td>
+                    <td className="py-2 text-gray-500">Free memory after loading — rewards models with room for KV cache growth. NVIDIA nodes use VRAM; Apple Silicon and CPU-only nodes use 75% of system RAM.</td>
                   </tr>
                   <tr>
                     <td className="py-2 pr-4 text-gray-300">Thermal Margin</td>
@@ -980,37 +981,29 @@ WES Version:     2
                   <tr>
                     <td className="py-2 pr-4 text-gray-300">Historical WES</td>
                     <td className="py-2 pr-4 text-gray-400 font-mono">20</td>
-                    <td className="py-2 text-gray-500">WES from similar models you've run. Neutral (10) if no data — the score improves as you run more models</td>
+                    <td className="py-2 text-gray-500">Inference efficiency from similar models you've run. Neutral (10) if no data.</td>
                   </tr>
                   <tr>
                     <td className="py-2 pr-4 text-gray-300">Power Efficiency</td>
                     <td className="py-2 pr-4 text-gray-400 font-mono">20</td>
-                    <td className="py-2 text-gray-500">Model VRAM as fraction of total GPU memory — larger models relative to your hardware are penalized</td>
+                    <td className="py-2 text-gray-500">Model size as fraction of total memory — larger models relative to hardware are penalized.</td>
                   </tr>
                 </tbody>
               </table>
             </div>
 
             <div className="mt-4">
-              <p className="font-semibold text-white mb-3">Score Labels</p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                  <p className="font-bold text-emerald-400">80–100</p>
-                  <p className="text-gray-500">Excellent</p>
-                </div>
-                <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/20">
-                  <p className="font-bold text-green-300">60–79</p>
-                  <p className="text-gray-500">Good</p>
-                </div>
-                <div className="p-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
-                  <p className="font-bold text-yellow-400">40–59</p>
-                  <p className="text-gray-500">Tight</p>
-                </div>
-                <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20">
-                  <p className="font-bold text-red-400">&lt; 40</p>
-                  <p className="text-gray-500">Won't Fit</p>
-                </div>
+              <p className="font-semibold text-white mb-2">Search behavior</p>
+              <div className="text-xs text-gray-500 space-y-1">
+                <p><strong className="text-gray-300">No search term</strong> — returns cached top-20 GGUF repos by HuggingFace downloads (24h TTL). Works offline after first cache fill.</p>
+                <p><strong className="text-gray-300">With search term</strong> — queries HuggingFace live. Real search, not just filtering cached results. Each matching model is immediately scored against your hardware.</p>
               </div>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-2">Ollama pull command</p>
+              <p className="text-xs text-gray-500 mb-2">Every variant includes a ready-to-run command. Click the copy icon in the panel or pull the field from the API:</p>
+              <Code>{`"pull_cmd": "ollama pull hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"`}</Code>
             </div>
 
             <div className="mt-4">
@@ -1026,8 +1019,13 @@ WES Version:     2
                 <tbody className="text-xs divide-y divide-gray-800/50">
                   <tr>
                     <td className="py-2 pr-4 text-gray-300">Community</td>
-                    <td className="py-2 pr-4 text-gray-400">Local discovery — what fits on this machine</td>
+                    <td className="py-2 pr-4 text-gray-400">Local discovery — scored against this machine</td>
                     <td className="py-2 text-gray-500 font-mono">GET /api/model-candidates</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-gray-300">Community</td>
+                    <td className="py-2 pr-4 text-gray-400">Fleet discovery — scored against every online node</td>
+                    <td className="py-2 text-gray-500 font-mono">GET /api/fleet/model-candidates (JWT)</td>
                   </tr>
                   <tr>
                     <td className="py-2 pr-4 text-gray-300">Pro</td>
@@ -1042,9 +1040,71 @@ WES Version:     2
                 </tbody>
               </table>
             </div>
+          </Section>
+
+          {/* ── Model Fit Analysis ── */}
+          <Section
+            id="model-fit-analysis"
+            icon={<Cpu className="w-5 h-5" />}
+            accent="border-indigo-500/20"
+            title="Model Fit Analysis"
+          >
+            <p>
+              The <strong className="text-white">Model Fit Analysis</strong> tile (Intelligence and Performance tabs) analyzes the <em>currently loaded model</em> across three dimensions simultaneously. Discovery fit scoring tells you whether a model <em>will</em> run; Model Fit Analysis tells you how well it's running <em>right now</em>.
+            </p>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-2">Memory Fit</p>
+              <p className="text-xs text-gray-500 mb-3">Headroom remaining in the memory pool after the active model is loaded.</p>
+              <table className="w-full">
+                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800"><th className="pb-2 pr-4">Score</th><th className="pb-2">Condition</th></tr></thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr><td className="py-2 pr-4 text-emerald-400">Good</td><td className="py-2 text-gray-500">≥ 20% of pool free — comfortable room for context growth</td></tr>
+                  <tr><td className="py-2 pr-4 text-yellow-400">Fair</td><td className="py-2 text-gray-500">8–20% free — manageable, but monitor under long context</td></tr>
+                  <tr><td className="py-2 pr-4 text-red-400">Poor</td><td className="py-2 text-gray-500">&lt; 8% free — KV cache growth will force swapping</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-2">WES Efficiency</p>
+              <p className="text-xs text-gray-500 mb-2">WES = <code className="text-gray-400 font-mono text-xs">tok/s ÷ (watts × thermal_penalty)</code>. Measures how economically this model uses the hardware.</p>
+              <table className="w-full">
+                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800"><th className="pb-2 pr-4">Level</th><th className="pb-2 pr-4">WES</th><th className="pb-2">Meaning</th></tr></thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr><td className="py-2 pr-4 text-emerald-400">Excellent</td><td className="py-2 pr-4 text-gray-400 font-mono">&gt; 10</td><td className="py-2 text-gray-500">Exceptional throughput per watt</td></tr>
+                  <tr><td className="py-2 pr-4 text-green-400">Good</td><td className="py-2 pr-4 text-gray-400 font-mono">3–10</td><td className="py-2 text-gray-500">Solid efficiency for this hardware class</td></tr>
+                  <tr><td className="py-2 pr-4 text-yellow-400">Acceptable</td><td className="py-2 pr-4 text-gray-400 font-mono">1–3</td><td className="py-2 text-gray-500">Adequate — a different quantization may improve throughput per watt</td></tr>
+                  <tr><td className="py-2 pr-4 text-red-400">Low</td><td className="py-2 pr-4 text-gray-400 font-mono">&lt; 1</td><td className="py-2 text-gray-500">High energy cost per token — check thermal state</td></tr>
+                </tbody>
+              </table>
+              <p className="text-xs text-gray-600 mt-2">Thermal penalty: Fair thermal = 1.25×, Serious = 1.75×, Critical = 2×. A throttled node's WES drops even when tok/s looks stable.</p>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-2">Context Runway</p>
+              <p className="text-xs text-gray-500 mb-2">Projects KV cache growth against available headroom at standard milestones: 4k, 16k, 32k, 64k, 128k tokens.</p>
+              <p className="text-xs text-gray-500 mb-2"><strong className="text-gray-300">KV cache formula</strong> (FP16, Ollama default):</p>
+              <Code>{`bytes = 2 × layers × kv_heads × head_dim × ctx_tokens × 2`}</Code>
+              <p className="text-xs text-gray-500 mt-2">Uses <code className="text-gray-400 font-mono text-xs">kv_heads</code> (<code className="text-gray-400 font-mono text-xs">llama.attention.head_count_kv</code> from /api/show), <strong className="text-gray-300">not</strong> total attention heads. GQA models (Llama 3, Mistral, Phi) have 4–8× fewer KV heads than total heads — using the wrong value overpredicts KV cache size by that factor. When architecture fields are unavailable, runway is estimated from parameter count (shown with <code className="text-gray-400 font-mono text-xs">~</code>).</p>
+            </div>
+
+            <div className="mt-4">
+              <p className="font-semibold text-white mb-2">Quant Sweet Spot</p>
+              <table className="w-full">
+                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800"><th className="pb-2 pr-4">Kind</th><th className="pb-2">Meaning</th></tr></thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr><td className="py-2 pr-4 text-cyan-400 font-mono">sweet-spot</td><td className="py-2 text-gray-500">Q4–Q6 — optimal balance of quality, speed, and memory</td></tr>
+                  <tr><td className="py-2 pr-4 text-green-400 font-mono">lossless</td><td className="py-2 text-gray-500">Q8 with headroom — minimal quality loss vs FP16. Note: Q8 is ~40% slower than Q4 on memory-bandwidth-bound hardware</td></tr>
+                  <tr><td className="py-2 pr-4 text-yellow-400 font-mono">upgrade</td><td className="py-2 text-gray-500">Q2–Q3 with room available — consider moving up for quality recovery</td></tr>
+                  <tr><td className="py-2 pr-4 text-orange-400 font-mono">downgrade</td><td className="py-2 text-gray-500">Q8+ tight on headroom — reduce size to free room for context</td></tr>
+                </tbody>
+              </table>
+              <p className="text-xs text-gray-600 mt-2">Speed estimates anchor to observed tok/s: <code className="text-gray-400 font-mono text-xs">new_tps ≈ observed_tps × (current_gb / new_gb)</code></p>
+            </div>
 
             <NoteBox>
-              The HuggingFace catalog is cached locally in DuckDB with a 24-hour TTL. The first request triggers a background fetch; subsequent requests are instant. No HuggingFace API key required.
+              Model Fit Analysis requires a model to be loaded. The MCP tool <code className="text-gray-400 font-mono text-xs">get_model_fit</code> returns all four dimensions plus a plain-English <code className="text-gray-400 font-mono text-xs">summary</code> field, making it easy to answer "can I run this model safely?" from an AI agent.
             </NoteBox>
           </Section>
 
@@ -1765,6 +1825,7 @@ curl https://wicklee.dev/api/v1/fleet \\
                   <tr className="border-b border-gray-800"><Td>get_active_models</Td><Td>Running models across Ollama, vLLM, llama.cpp</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_observations</Td><Td>Server-side pattern evaluation — 17 agent-evaluated observations</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_metrics_history</Td><Td>1-hour rolling telemetry buffer from DuckDB</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_model_fit</Td><Td>Memory Fit, WES Efficiency, Context Runway, and Quant Sweet Spot for the currently loaded model</Td></tr>
                 </tbody>
               </table>
             </div>
@@ -1877,7 +1938,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             </p>
 
             <div>
-              <p className="font-semibold text-white mb-2">Cloud MCP Tools (8)</p>
+              <p className="font-semibold text-white mb-2">Cloud MCP Tools (9)</p>
               <table className="w-full text-xs">
                 <thead><tr className="border-b border-gray-800"><Th>Tool</Th><Th>Description</Th></tr></thead>
                 <tbody>
@@ -1889,6 +1950,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
                   <tr className="border-b border-gray-800"><Td>get_fleet_observations</Td><Td>Active and resolved observations across the fleet (tier-filtered)</Td></tr>
                   <tr className="border-b border-gray-800"><Td>get_inference_profile</Td><Td>Correlated profiler snapshot — TTFT, KV cache, thermal, power</Td></tr>
                   <tr className="border-b border-gray-800"><Td>explain_slowdown</Td><Td>Hardware context for root cause analysis of slow requests</Td></tr>
+                  <tr className="border-b border-gray-800"><Td>get_fleet_model_fit</Td><Td>Score a HuggingFace GGUF model against every online fleet node — Memory Fit, WES Efficiency, Context Runway, Quant Sweet Spot per node</Td></tr>
                 </tbody>
               </table>
             </div>

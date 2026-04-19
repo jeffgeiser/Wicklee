@@ -9,7 +9,7 @@ import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
 import type { FleetObservation } from '../hooks/useFleetObservations';
-import SiliconFitAudit from './insights/tier2/SiliconFitAudit';
+import ModelFitAnalysis from './insights/tier2/ModelFitAnalysis';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
@@ -17,8 +17,6 @@ import { useLocalEvents } from '../hooks/useLocalEvents';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed, { eventMeta, fmtAgo as fmtEventAgo } from './EventFeed';
 import MetricTooltip from './MetricTooltip';
-import HexHive from './shared/HexHive';
-import type { HexHiveRow } from './shared/HexHive';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -2751,28 +2749,36 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
       {/* ── Fleet Intelligence (cloud) / Fleet Preview CTA (agent) ──────────── */}
       {isLocalMode ? (
-        // ── Fleet Preview CTA — only show when not yet paired with Fleet View
-        pairingInfo?.status !== 'connected' && (
-          <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold text-gray-200">
-                Monitor from anywhere
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Pair this node with Fleet View to monitor it remotely and see all your machines in one dashboard.
-              </p>
+        // ── Cockpit Intelligence — Fleet Preview CTA + Silicon Fit Audit
+        <div className="space-y-4">
+          {pairingInfo?.status !== 'connected' && (
+            <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-gray-200">
+                  Monitor from anywhere
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Pair this node with Fleet View to monitor it remotely and see all your machines in one dashboard.
+                </p>
+              </div>
+              <a
+                href="https://wicklee.dev"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 flex items-center gap-2 px-4 py-2 border border-indigo-500/40 hover:border-indigo-500/70 text-indigo-400 hover:text-indigo-300 text-sm font-semibold rounded-xl transition-all"
+              >
+                Open Fleet Dashboard
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
             </div>
-            <a
-              href="https://wicklee.dev"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="shrink-0 flex items-center gap-2 px-4 py-2 border border-indigo-500/40 hover:border-indigo-500/70 text-indigo-400 hover:text-indigo-300 text-sm font-semibold rounded-xl transition-all"
-            >
-              Open Fleet Dashboard
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          </div>
-        )
+          )}
+          {sentinel && (
+            <ModelFitAnalysis
+              node={sentinel}
+              nodes={[sentinel]}
+            />
+          )}
+        </div>
       ) : (
       // ── Fleet Intelligence — Mission Control (cloud only)
       //    Layout: KPI Hero Row → Analysis Mid-Grid → Audit Footer
@@ -2986,24 +2992,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           )}
         </div>
 
-        {/* ═══ Row 3 — Inference Density + Silicon Fit Audit ═══════════════════ */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="bg-slate-900/50 border border-gray-700/40 rounded-xl flex flex-col">
-            <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none px-4 pt-4">
-              Inference Density
-            </p>
-            <HexHive rows={nodeRows} />
-            <p className="text-[9px] text-gray-600 px-4 pb-3 leading-tight">
-              Amber pulse = active · gray = idle · red = throttling
-            </p>
-          </div>
-          {effectiveMetrics.length > 0 && (
-            <SiliconFitAudit
-              node={effectiveMetrics[0]}
-              nodes={effectiveMetrics}
-            />
-          )}
-        </div>
+        {/* ═══ Row 3 — Model Fit Analysis (full width, fleet table) ═══════════ */}
+        {effectiveMetrics.length > 0 && (
+          <ModelFitAnalysis
+            node={effectiveMetrics[0]}
+            nodes={effectiveMetrics}
+            fleetView={effectiveMetrics.length > 1}
+          />
+        )}
 
         {/* ═══ Row 4 — Idle Fleet Cost (conditional) ══════════════════════════ */}
         {(() => {

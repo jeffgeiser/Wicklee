@@ -385,6 +385,9 @@ struct AppState {
     /// Channel to the event writer task.  Persists Live Activity events
     /// for the fleet event history endpoint.
     events_tx:        mpsc::Sender<EventRow>,
+    /// In-memory cache for HuggingFace GGUF search results.
+    /// Key: search term ("" = trending). Value: (cached_at_ms, JSON result array).
+    hf_cache:         Arc<tokio::sync::Mutex<HashMap<String, (u64, serde_json::Value)>>>,
 }
 
 // ── PG bootstrap ──────────────────────────────────────────────────────────────
@@ -3790,6 +3793,239 @@ fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, power_w: f32, thermal: &s
     (total, label)
 }
 
+/// Parse a quant level from a GGUF filename (mirrors agent-side logic).
+fn parse_gguf_quant(filename: &str) -> String {
+    let stem = filename.strip_suffix(".gguf").unwrap_or(filename);
+    let is_quant = |s: &str| s.starts_with('Q') || s.starts_with("IQ") || s.starts_with('F') || s.starts_with("BF");
+    for seg in stem.rsplit('.') {
+        if is_quant(seg) { return seg.to_string(); }
+    }
+    let parts: Vec<&str> = stem.rsplit('-').collect();
+    for (i, seg) in parts.iter().enumerate() {
+        if is_quant(seg) {
+            if i + 1 < parts.len() && parts[i + 1] == "UD" {
+                return format!("UD-{seg}");
+            }
+            return seg.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+/// GET /api/fleet/model-candidates — JWT-authenticated fleet model discovery.
+fn valid_hf_model_id_cloud(id: &str) -> bool {
+    if id.is_empty() || id.len() > 200 { return false; }
+    let mut parts = id.splitn(2, '/');
+    let (Some(owner), Some(name)) = (parts.next(), parts.next()) else { return false; };
+    let safe = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+    safe(owner) && safe(name)
+}
+
+fn pct_encode_query_cloud(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => { out.push('%'); out.push_str(&format!("{b:02X}")); }
+        }
+    }
+    out
+}
+
+static HF_LAST_FETCH_CLOUD: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// Fetches GGUF models from HuggingFace and scores each against every online fleet node.
+/// When search is provided: queries HF live (1h cache). Without search: trending top-20 (24h cache).
+async fn handle_fleet_model_candidates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(uid) => uid,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response(),
+    };
+    let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
+        .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let search = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
+    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(40);
+    let cache_key = search.clone().unwrap_or_default();
+    let cache_ttl_ms: u64 = if search.is_some() { 3_600_000 } else { 86_400_000 };
+
+    // Check in-memory cache
+    let cached: Option<Vec<(String, u64, Vec<(String, String, u64)>)>> = {
+        let guard = state.hf_cache.lock().await;
+        guard.get(&cache_key).and_then(|(ts, v)| {
+            if now_ms().saturating_sub(*ts) < cache_ttl_ms { Some(v.clone()) } else { None }
+        }).map(|v| {
+            v.as_array().unwrap_or(&vec![]).iter().filter_map(|m| {
+                let model_id  = m["model_id"].as_str()?.to_string();
+                let downloads = m["downloads"].as_u64().unwrap_or(0);
+                let variants: Vec<(String, String, u64)> = m["variants"].as_array()
+                    .unwrap_or(&vec![]).iter().filter_map(|vv| {
+                        Some((vv["filename"].as_str()?.to_string(),
+                              vv["quant"].as_str()?.to_string(),
+                              vv["file_size"].as_u64()?))
+                    }).collect();
+                Some((model_id, downloads, variants))
+            }).collect()
+        })
+    };
+
+    let hf_models: Vec<(String, u64, Vec<(String, String, u64)>)> = if let Some(hit) = cached {
+        hit
+    } else {
+        // Fetch from HuggingFace via ureq (sync → spawn_blocking)
+        let search_clone = search.clone();
+        let results = tokio::task::spawn_blocking(move || -> Vec<(String, u64, Vec<(String, String, u64)>)> {
+            // Rate-limit: at most 1 HF fetch per second to avoid IP bans.
+            let delay = {
+                let mut guard = HF_LAST_FETCH_CLOUD.lock().unwrap();
+                let now = std::time::Instant::now();
+                let d = guard.map(|t| {
+                    let since = now.saturating_duration_since(t);
+                    if since < std::time::Duration::from_secs(1) { std::time::Duration::from_secs(1) - since }
+                    else { std::time::Duration::ZERO }
+                }).unwrap_or(std::time::Duration::ZERO);
+                *guard = Some(now + d);
+                d
+            };
+            if !delay.is_zero() { std::thread::sleep(delay); }
+
+            let mut url = format!(
+                "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit={limit}&full=true"
+            );
+            if let Some(ref t) = search_clone {
+                url.push_str(&format!("&search={}", pct_encode_query_cloud(t)));
+            }
+
+            const MAX_BYTES: u64 = 10_000_000;
+            let call = match ureq::get(&url).timeout(std::time::Duration::from_secs(30)).call() {
+                Ok(r) => r,
+                Err(e) => { eprintln!("[fleet-discovery] HF fetch failed: {e}"); return Vec::new(); }
+            };
+            if call.header("content-length").and_then(|v| v.parse::<u64>().ok()).map(|n| n > MAX_BYTES).unwrap_or(false) {
+                eprintln!("[fleet-discovery] HF response too large, skipping");
+                return Vec::new();
+            }
+            let hf_resp: Vec<serde_json::Value> = call.into_json().unwrap_or_default();
+
+            let mut out = Vec::new();
+            for m in &hf_resp {
+                let model_id = m["id"].as_str().unwrap_or("").to_string();
+                if !valid_hf_model_id_cloud(&model_id) { continue; }
+                let downloads = m["downloads"].as_u64().unwrap_or(0);
+                let mut variants: Vec<(String, String, u64)> = Vec::new();
+                if let Some(siblings) = m["siblings"].as_array() {
+                    for sib in siblings {
+                        let fname = sib["rfilename"].as_str().unwrap_or("");
+                        if !fname.ends_with(".gguf") { continue; }
+                        let size = sib["size"].as_u64().unwrap_or(0);
+                        if size == 0 { continue; }
+                        let filename = fname.rsplit('/').next().unwrap_or(fname);
+                        let quant = parse_gguf_quant(filename);
+                        variants.push((filename.to_string(), quant, size));
+                    }
+                }
+                if !variants.is_empty() { out.push((model_id, downloads, variants)); }
+            }
+            out
+        }).await.unwrap_or_default();
+
+        // Store in cache as JSON
+        let cache_json: serde_json::Value = results.iter().map(|(mid, dl, vars)| {
+            serde_json::json!({
+                "model_id": mid, "downloads": dl,
+                "variants": vars.iter().map(|(f, q, s)| serde_json::json!({"filename": f, "quant": q, "file_size": s})).collect::<Vec<_>>()
+            })
+        }).collect::<Vec<_>>().into();
+        state.hf_cache.lock().await.insert(cache_key, (now_ms(), cache_json));
+
+        results
+    };
+
+    // Snapshot online fleet node hardware
+    let now = now_ms();
+    struct NodeHw { node_id: String, hostname: Option<String>, mem_mb: u64, power_w: f32, thermal: String }
+    let node_hw: Vec<NodeHw> = {
+        let snap = state.metrics.read().unwrap();
+        node_ids.iter().filter_map(|nid| {
+            let e = snap.get(nid)?;
+            if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; }
+            let m = e.metrics.as_ref()?;
+            let vram      = m.nvidia_vram_total_mb.unwrap_or(0).max(m.gpu_wired_limit_mb.unwrap_or(0));
+            let mem_mb    = if vram == 0 { m.total_memory_mb * 3 / 4 } else { vram };
+            let power_w   = m.apple_soc_power_w.or(m.nvidia_power_draw_w).unwrap_or(0.0);
+            let thermal   = m.thermal_state.clone().unwrap_or_else(|| "Normal".into());
+            Some(NodeHw { node_id: nid.clone(), hostname: m.hostname.clone(), mem_mb, power_w, thermal })
+        }).collect()
+    };
+    let online_count = node_hw.len();
+
+    // Score each model × each node
+    let mut models: Vec<serde_json::Value> = Vec::new();
+    for (model_id, downloads, variants) in &hf_models {
+        if !valid_hf_model_id_cloud(model_id) { continue; }
+        let mut node_fits: Vec<serde_json::Value> = Vec::new();
+        let mut fleet_best_score = 0u8;
+
+        for hw in &node_hw {
+            let mut best_score = 0u8;
+            let mut best_label = "Won't Fit".to_string();
+            let mut best_quant = String::new();
+            let mut best_file_mb = 0u64;
+
+            for (_filename, quant, file_size) in variants {
+                let (score, label) = cloud_fit_score(*file_size as i64, hw.mem_mb, hw.power_w, &hw.thermal);
+                if score > best_score {
+                    best_score = score;
+                    best_label = label;
+                    best_quant = quant.clone();
+                    best_file_mb = file_size / (1024 * 1024);
+                }
+            }
+
+            if best_score > fleet_best_score { fleet_best_score = best_score; }
+
+            node_fits.push(serde_json::json!({
+                "node_id":      hw.node_id,
+                "hostname":     hw.hostname,
+                "mem_budget_gb": (hw.mem_mb as f64 / 1024.0 * 10.0).round() / 10.0,
+                "thermal":      hw.thermal,
+                "fit_score":    best_score,
+                "fit_label":    best_label,
+                "best_quant":   best_quant,
+                "file_size_mb": best_file_mb,
+                "pull_cmd":     format!("ollama pull hf.co/{model_id}:{best_quant}"),
+            }));
+        }
+
+        node_fits.sort_by(|a, b| b["fit_score"].as_u64().cmp(&a["fit_score"].as_u64()));
+
+        models.push(serde_json::json!({
+            "model_id":         model_id,
+            "downloads":        downloads,
+            "fleet_best_score": fleet_best_score,
+            "nodes":            node_fits,
+        }));
+    }
+
+    models.sort_by(|a, b| b["fleet_best_score"].as_u64().cmp(&a["fleet_best_score"].as_u64()));
+
+    Json(serde_json::json!({
+        "is_live_search": search.is_some(),
+        "online_nodes":   online_count,
+        "models":         models,
+    })).into_response()
+}
+
 /// GET /api/v1/models/discover — model discovery for Pro/Team tiers.
 /// Query params:
 ///   ?search=llama — filter by model name
@@ -5965,6 +6201,7 @@ async fn handle_cloud_mcp(
             { "name": "get_fleet_observations", "description": "Active and resolved observations across the fleet.",           "inputSchema": { "type": "object", "properties": { "state": { "type": "string", "enum": ["open","all"], "default": "open" } } } },
             { "name": "get_inference_profile",  "description": "Correlated inference timeline: TTFT, tok/s, KV cache, queue depth, thermal, power on one time axis. Chrome DevTools for inference.", "inputSchema": { "type": "object", "properties": { "node_id": { "type": "string" }, "minutes": { "type": "integer", "default": 60 } }, "required": ["node_id"] } },
             { "name": "explain_slowdown",       "description": "Root cause analysis for a slow inference request. Correlates TTFT spike with KV cache, thermal, queue, swap to explain why.", "inputSchema": { "type": "object", "properties": { "node_id": { "type": "string" }, "ts_ms": { "type": "integer", "description": "Timestamp of the slow request in Unix milliseconds" } }, "required": ["node_id", "ts_ms"] } },
+            { "name": "get_fleet_model_fit",    "description": "Analyzes model fit across all fleet nodes — Memory Fit (is there safe VRAM/RAM headroom?), Efficiency (WES score), and Quant Recommendation. Returns per-node fit scores and a fleet-level summary answering 'which nodes are running their models well?'", "inputSchema": { "type": "object", "properties": {} } },
         ] })),
 
         "tools/call" => {
@@ -6112,6 +6349,114 @@ async fn handle_cloud_mcp(
                         "note": "For full root-cause analysis with per-request trace correlation, query the agent directly: GET http://<node>:7700/api/explain-slowdown?ts_ms=N",
                     }))
                 }
+                "get_fleet_model_fit" => {
+                    let map = &metrics_snapshot;
+                    let mut node_fits: Vec<serde_json::Value> = Vec::new();
+                    let mut good_count = 0usize;
+                    let mut poor_count = 0usize;
+
+                    for nid in &node_ids {
+                        let e = match map.get(nid) { Some(e) => e, None => continue };
+                        let online = now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS;
+                        if !online { continue; }
+                        let m = match e.metrics.as_ref() { Some(m) => m, None => continue };
+
+                        let model_name = m.ollama_active_model.as_deref()
+                            .or(m.vllm_model_name.as_deref())
+                            .or(m.llamacpp_model_name.as_deref());
+                        if model_name.is_none() { continue; }
+
+                        let model_gb = m.ollama_model_size_gb.map(|v| v as f64);
+                        let quant    = m.ollama_quantization.as_deref().unwrap_or("").to_string();
+                        let tps      = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
+
+                        // Memory pool: VRAM for NVIDIA, RAM otherwise
+                        let (pool_label, pool_total_gb, pool_avail_gb) = if let (Some(vt), Some(vu)) = (m.nvidia_vram_total_mb, m.nvidia_vram_used_mb) {
+                            let t = vt as f64 / 1024.0;
+                            let a = (vt.saturating_sub(vu)) as f64 / 1024.0;
+                            ("VRAM", t, a)
+                        } else {
+                            let t = m.total_memory_mb as f64 / 1024.0;
+                            let a = m.available_memory_mb as f64 / 1024.0;
+                            ("RAM", t, a)
+                        };
+
+                        // Memory Fit
+                        let (mem_score, mem_reason) = match model_gb {
+                            Some(mgb) => {
+                                let pct = if pool_total_gb > 0.0 { pool_avail_gb / pool_total_gb * 100.0 } else { 0.0 };
+                                if pct >= 20.0 {
+                                    good_count += 1;
+                                    ("good", format!("{mgb:.1} GB model, {pool_avail_gb:.1} GB {pool_label} headroom ({pct:.0}%)"))
+                                } else if pct >= 8.0 {
+                                    ("fair", format!("{mgb:.1} GB model, {pool_avail_gb:.1} GB {pool_label} headroom ({pct:.0}%) — tight under long context"))
+                                } else {
+                                    poor_count += 1;
+                                    ("poor", format!("{mgb:.1} GB model, only {pool_avail_gb:.1} GB {pool_label} headroom ({pct:.0}%) — KV cache will swap"))
+                                }
+                            }
+                            None => ("unknown", "Model size unavailable".into()),
+                        };
+
+                        // Efficiency (WES)
+                        let power_w = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w).map(|w| w as f64);
+                        let penalty = m.penalty_avg.map(|p| p as f64).unwrap_or(1.0).max(0.01);
+                        let (wes_val, wes_level) = match (tps, power_w) {
+                            (Some(t), Some(w)) if w > 0.0 => {
+                                let v = t as f64 / (w * penalty);
+                                let level = if v > 10.0 { "excellent" } else if v > 3.0 { "good" } else if v > 1.0 { "acceptable" } else { "low" };
+                                (Some(v), level)
+                            }
+                            _ => (None, "unknown"),
+                        };
+
+                        // Quant Recommendation (same logic as agent)
+                        let bits: Option<u32> = if quant.starts_with('F') || quant.starts_with('f') {
+                            if quant.contains("16") { Some(16) } else if quant.contains("32") { Some(32) } else { None }
+                        } else {
+                            quant.chars().skip_while(|c| !c.is_ascii_digit()).next().and_then(|c| c.to_digit(10))
+                        };
+                        let quant_kind = match bits {
+                            Some(b) if b >= 8 => if pool_avail_gb < model_gb.unwrap_or(0.0) * 0.25 { "downgrade" } else { "lossless" },
+                            Some(b) if b <= 3 => if pool_avail_gb > model_gb.unwrap_or(0.0) * (4.0 / b as f64) * 0.3 { "upgrade" } else { "sweet-spot" },
+                            Some(4) | Some(5) | Some(6) => "sweet-spot",
+                            _ => "none",
+                        };
+
+                        node_fits.push(serde_json::json!({
+                            "node_id": nid,
+                            "hostname": m.hostname,
+                            "model": model_name,
+                            "quant": quant,
+                            "model_gb": model_gb,
+                            "memory_pool": pool_label,
+                            "pool_available_gb": pool_avail_gb,
+                            "memory_fit": mem_score,
+                            "memory_reason": mem_reason,
+                            "wes": wes_val.map(|v| (v * 100.0).round() / 100.0),
+                            "efficiency": wes_level,
+                            "quant_recommendation": quant_kind,
+                        }));
+                    }
+
+                    let total = node_fits.len();
+                    let fleet_summary = if total == 0 {
+                        "No nodes have models loaded.".to_string()
+                    } else if poor_count == 0 && good_count == total {
+                        format!("All {total} active node(s) have comfortable memory headroom.")
+                    } else if poor_count > 0 {
+                        format!("{poor_count} of {total} node(s) are memory-constrained — KV cache may swap under long context. {good_count} node(s) are comfortable.")
+                    } else {
+                        { let fair = total - good_count; format!("{good_count} of {total} node(s) have good memory fit; {fair} are fair.") }
+                    };
+
+                    mcp_tool(&req_id, serde_json::json!({
+                        "nodes": node_fits,
+                        "fleet_summary": fleet_summary,
+                        "note": "Context Runway requires architecture fields from /api/show — available via the agent's get_model_fit tool on each node."
+                    }))
+                }
+
                 _ => mcp_err(&req_id, -32602, "Unknown tool"),
             }
         }
@@ -6289,6 +6634,7 @@ async fn main() {
         auth_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         metrics_tx,
         events_tx,
+        hf_cache:         Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
 
     // Spawn background tasks.
@@ -6343,6 +6689,7 @@ async fn main() {
         .route("/api/fleet/duty",                 get(handle_fleet_duty))
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
         .route("/api/fleet/export",               get(handle_fleet_export))
+        .route("/api/fleet/model-candidates",     get(handle_fleet_model_candidates))
         .route("/api/fleet/observations",            get(handle_fleet_observations).post(handle_submit_observation))
         .route("/api/fleet/observations/:id/acknowledge", post(handle_acknowledge_observation))
         .route("/api/fleet/observations/:id/resolve",     post(handle_resolve_observation))

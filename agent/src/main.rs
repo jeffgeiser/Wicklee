@@ -301,6 +301,18 @@ pub(crate) struct OllamaMetrics {
     pub(crate) ollama_context_length:    Option<u64>,
     /// Parameter count from /api/show model_info (e.g. 7_000_000_000 for 7B).
     pub(crate) ollama_parameter_count:   Option<u64>,
+    /// Number of transformer layers (llama.block_count). Used for KV cache math.
+    pub(crate) ollama_num_layers:        Option<u64>,
+    /// Number of KV attention heads (llama.attention.head_count_kv).
+    /// For GQA models this is < num_heads; for MHA it equals num_heads.
+    /// KV cache scales with kv_heads, not total heads — critical for GQA accuracy.
+    pub(crate) ollama_kv_heads:          Option<u64>,
+    /// Total attention heads (llama.attention.head_count).
+    /// Used with embedding_dim to derive head_dim = embedding_dim / num_heads.
+    pub(crate) ollama_num_heads:         Option<u64>,
+    /// Model embedding dimension (llama.embedding_length).
+    /// head_dim = embedding_dim / num_heads (integer, typically 64, 128, or 256).
+    pub(crate) ollama_embedding_dim:     Option<u64>,
     /// Sustained tok/s: eval_rate from Ollama /api/generate probe every 30s.
     /// Reflects actual node throughput under current thermal/load conditions.
     pub(crate) ollama_tokens_per_second: Option<f32>,
@@ -590,6 +602,27 @@ struct MetricsPayload {
     /// the probe fires a real Ollama request which would otherwise look like a user session.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_is_probing: Option<bool>,
+    // Ollama model architecture (from /api/show model_info — refreshed on model change)
+    /// Context window size in tokens (llama.context_length or general.context_length).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_context_length: Option<u64>,
+    /// Total parameter count (general.parameter_count or llama.parameter_count).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_parameter_count: Option<u64>,
+    /// Transformer layer count (llama.block_count). Required for KV cache estimation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_num_layers: Option<u64>,
+    /// KV attention heads (llama.attention.head_count_kv).
+    /// Less than num_heads on GQA models (Llama 3, Mistral, Phi) — KV cache scales with this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_kv_heads: Option<u64>,
+    /// Total attention heads (llama.attention.head_count). Used to derive head_dim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_num_heads: Option<u64>,
+    /// Model embedding dimension (llama.embedding_length).
+    /// head_dim = embedding_dim / num_heads (computed on the frontend).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_embedding_dim: Option<u64>,
     // vLLM runtime (null/false when vLLM not running)
     #[serde(default)]
     vllm_running:          bool,
@@ -2730,6 +2763,12 @@ fn start_metrics_broadcaster(
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
                 ollama_is_probing:        ollama_is_probing_flag,
+                ollama_context_length:    ollama.ollama_context_length,
+                ollama_parameter_count:   ollama.ollama_parameter_count,
+                ollama_num_layers:        ollama.ollama_num_layers,
+                ollama_kv_heads:          ollama.ollama_kv_heads,
+                ollama_num_heads:         ollama.ollama_num_heads,
+                ollama_embedding_dim:     ollama.ollama_embedding_dim,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second:  ollama.ollama_tokens_per_second,
                 ollama_prompt_eval_tps:    ollama.ollama_prompt_eval_tps,
@@ -4783,51 +4822,111 @@ async fn handle_model_switches(
     }
 }
 
+/// Fetch GGUF models from HuggingFace using `?full=true` to get file sizes in one call.
+// Validates HuggingFace model IDs against the expected `owner/name` format.
+// Blocks shell-injectable characters from appearing in constructed pull commands.
+fn valid_hf_model_id(id: &str) -> bool {
+    if id.is_empty() || id.len() > 200 { return false; }
+    let mut parts = id.splitn(2, '/');
+    let (Some(owner), Some(name), true) = (parts.next(), parts.next(), true) else { return false; };
+    let safe = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+    safe(owner) && safe(name)
+}
+
+// Percent-encodes a search term for use as a URL query parameter value.
+fn pct_encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => { out.push('%'); out.push_str(&format!("{b:02X}")); }
+        }
+    }
+    out
+}
+
+static HF_LAST_FETCH: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// Returns (model_id, downloads, variants: [(filename, quant_level, file_size_bytes)]).
+#[cfg(not(target_env = "musl"))]
+async fn fetch_hf_gguf(
+    search: Option<&str>,
+    limit: usize,
+) -> Vec<(String, u64, Vec<(String, String, u64)>)> {
+    // Rate-limit HF fetches to 1 per second to avoid server-side IP bans.
+    let delay = {
+        let mut guard = HF_LAST_FETCH.lock().unwrap();
+        let now = std::time::Instant::now();
+        let d = guard.map(|t| {
+            let since = now.saturating_duration_since(t);
+            if since < Duration::from_secs(1) { Duration::from_secs(1) - since } else { Duration::ZERO }
+        }).unwrap_or(Duration::ZERO);
+        *guard = Some(now + d);
+        d
+    };
+    if !delay.is_zero() { tokio::time::sleep(delay).await; }
+
+    let mut url = format!(
+        "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit={limit}&full=true"
+    );
+    if let Some(term) = search {
+        url.push_str(&format!("&search={}", pct_encode_query(term)));
+    }
+
+    const MAX_RESPONSE_BYTES: u64 = 10_000_000; // 10 MB guard
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => { eprintln!("[model-discovery] HF fetch failed: {e}"); return Vec::new(); }
+    };
+    if resp.content_length().map(|n| n > MAX_RESPONSE_BYTES).unwrap_or(false) {
+        eprintln!("[model-discovery] HF response too large, skipping");
+        return Vec::new();
+    }
+    let models: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
+
+    let mut results = Vec::new();
+    for model in &models {
+        let model_id  = model["id"].as_str().unwrap_or("");
+        if !valid_hf_model_id(model_id) { continue; }
+        let downloads = model["downloads"].as_u64().unwrap_or(0);
+        let mut variants: Vec<(String, String, u64)> = Vec::new();
+
+        if let Some(siblings) = model["siblings"].as_array() {
+            for sib in siblings {
+                let fname = sib["rfilename"].as_str().unwrap_or("");
+                if !fname.ends_with(".gguf") { continue; }
+                let size = sib["size"].as_u64().unwrap_or(0);
+                if size == 0 { continue; }
+                let filename = fname.rsplit('/').next().unwrap_or(fname);
+                let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
+                variants.push((filename.to_string(), quant, size));
+            }
+        }
+
+        if !variants.is_empty() {
+            results.push((model_id.to_string(), downloads, variants));
+        }
+    }
+    results
+}
+
 /// Fetch GGUF model catalog from HuggingFace and cache to DuckDB.
 /// Called on first /api/model-candidates request if cache is stale, and by a 24h background task.
 #[cfg(not(target_env = "musl"))]
 async fn refresh_model_catalog(store: store::Store) {
-    // Step 1: List top GGUF repos by downloads
-    let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=30";
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build().unwrap_or_default();
-    let resp = match client.get(list_url).send().await {
-        Ok(r) => r,
-        Err(e) => { eprintln!("[model-discovery] HF list failed: {e}"); return; }
-    };
-    let models: Vec<serde_json::Value> = match resp.json().await {
-        Ok(v) => v,
-        Err(e) => { eprintln!("[model-discovery] HF parse failed: {e}"); return; }
-    };
+    let models = fetch_hf_gguf(None, 30).await;
+    if models.is_empty() { return; }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
     let mut entries: Vec<(String, String, String, u64, u64, i64)> = Vec::new();
+    let models_count = models.len();
 
-    // Step 2: For each repo, fetch /tree/main to get file sizes (siblings don't include sizes)
-    for model in &models {
-        let model_id = model["id"].as_str().unwrap_or("");
-        if model_id.is_empty() { continue; }
-        let downloads = model["downloads"].as_u64().unwrap_or(0);
-
-        let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
-        let tree_resp = match client.get(&tree_url).send().await {
-            Ok(r) => r,
-            Err(e) => { eprintln!("[model-discovery] tree fetch failed for {model_id}: {e}"); continue; }
-        };
-        let files: Vec<serde_json::Value> = match tree_resp.json().await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        for file in &files {
-            let path = file["path"].as_str().unwrap_or("");
-            if !path.ends_with(".gguf") { continue; }
-            let file_size = file["size"].as_u64().unwrap_or(0);
-            if file_size == 0 { continue; }
-            // Use just the filename (strip subdirectory paths like "BF16/...")
-            let filename = path.rsplit('/').next().unwrap_or(path);
-            let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
-            entries.push((model_id.to_string(), filename.to_string(), quant, file_size, downloads, now));
+    for (model_id, downloads, variants) in &models {
+        for (filename, quant, file_size) in variants {
+            entries.push((model_id.clone(), filename.clone(), quant.clone(), *file_size, *downloads, now));
         }
     }
 
@@ -4835,12 +4934,14 @@ async fn refresh_model_catalog(store: store::Store) {
     if let Err(e) = tokio::task::spawn_blocking(move || store.write_catalog(&entries)).await.unwrap_or(Err(duckdb::Error::InvalidQuery)) {
         eprintln!("[model-discovery] cache write failed: {e}");
     } else {
-        println!("[model-discovery] cached {count} GGUF variants from {models_count} repos", models_count = models.len());
+        println!("[model-discovery] cached {count} GGUF variants from {models_count} repos");
     }
 }
 
 /// GET /api/model-candidates — discover GGUF models that fit this hardware.
 /// Query params: ?search=llama&limit=20
+/// When search is provided, fetches live from HuggingFace (bypasses cache).
+/// When no search, returns cached trending top-30 (refreshed every 24h).
 #[cfg(not(target_env = "musl"))]
 async fn handle_model_candidates(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -4850,30 +4951,30 @@ async fn handle_model_candidates(
     axum::extract::Extension(nvidia_m): axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
     axum::extract::Extension(wes_m): axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
 ) -> impl IntoResponse {
-    let search = params.get("search").map(|s| s.as_str());
-    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(50);
-
-    // Refresh catalog if stale (>24h)
-    if !store.catalog_is_fresh(24) {
-        let st = store.clone();
-        refresh_model_catalog(st).await;
-    }
+    let search = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
+    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(50);
 
     // Build hardware profile from live metrics
     let apple = apple_m.lock().map(|g| g.clone()).unwrap_or_default();
     let nvidia = nvidia_m.lock().map(|g| g.clone()).unwrap_or_default();
-    let wes = wes_m.lock().map(|g| g.clone()).unwrap_or_default();
+    let wes   = wes_m.lock().map(|g| g.clone()).unwrap_or_default();
 
-    let vram_mb = nvidia.nvidia_vram_total_mb.unwrap_or(0)
+    let gpu_vram = nvidia.nvidia_vram_total_mb.unwrap_or(0)
         .max(apple.gpu_wired_limit_mb.unwrap_or(0));
-    let power_w = apple.soc_power_w
-        .or(nvidia.nvidia_power_draw_w)
-        .unwrap_or(0.0);
-    // Derive thermal state from penalty: <1.1 = Normal, <1.3 = Fair, <1.8 = Serious, else Critical
-    let penalty = wes.penalty_avg.unwrap_or(1.0);
-    let thermal = if penalty < 1.1 { "Normal" } else if penalty < 1.3 { "Fair" } else if penalty < 1.8 { "Serious" } else { "Critical" };
-    let chip = apple.gpu_name.clone()
-        .or(nvidia.nvidia_gpu_name.clone());
+
+    // Fallback for CPU-only nodes: use 75% of system RAM as the model budget
+    let vram_mb = if gpu_vram == 0 {
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_memory();
+        (sys.total_memory() / 1024 / 1024) * 3 / 4
+    } else {
+        gpu_vram
+    };
+
+    let power_w = apple.soc_power_w.or(nvidia.nvidia_power_draw_w).unwrap_or(0.0);
+    let penalty  = wes.penalty_avg.unwrap_or(1.0);
+    let thermal  = if penalty < 1.1 { "Normal" } else if penalty < 1.3 { "Fair" } else if penalty < 1.8 { "Serious" } else { "Critical" };
+    let chip     = apple.gpu_name.clone().or(nvidia.nvidia_gpu_name.clone());
 
     let hw = HardwareProfile {
         vram_mb,
@@ -4882,15 +4983,25 @@ async fn handle_model_candidates(
         thermal_state: thermal.to_string(),
     };
 
-    // Read catalog and score
-    let st = store.clone();
-    let search_owned = search.map(|s| s.to_string());
-    let catalog = tokio::task::spawn_blocking(move || {
-        st.query_catalog(search_owned.as_deref(), limit)
-    }).await.unwrap_or(Ok(Vec::new())).unwrap_or_default();
+    // Fetch catalog: live HF search when a term is present, cached trending otherwise
+    let catalog: Vec<(String, u64, Vec<(String, String, u64)>)> = if let Some(ref term) = search {
+        // Live search — always fresh from HF
+        fetch_hf_gguf(Some(term), limit).await
+    } else {
+        // Trending — use DuckDB cache, refresh if stale
+        if !store.catalog_is_fresh(24) {
+            let st = store.clone();
+            refresh_model_catalog(st).await;
+        }
+        let st = store.clone();
+        let lim = limit as i64;
+        tokio::task::spawn_blocking(move || st.query_catalog(None, lim))
+            .await.unwrap_or(Ok(Vec::new())).unwrap_or_default()
+    };
 
     let mut models: Vec<serde_json::Value> = Vec::new();
     for (model_id, downloads, variants) in &catalog {
+        if !valid_hf_model_id(model_id) { continue; }
         let mut scored_variants: Vec<serde_json::Value> = Vec::new();
         for (filename, quant, file_size) in variants {
             let cv = CatalogVariant {
@@ -4898,19 +5009,22 @@ async fn handle_model_candidates(
                 quant_level: quant.clone(),
                 file_size_bytes: *file_size,
             };
-            let fit = score_fit(model_id, &cv, &hw, None);
+            let fit = score_fit(model_id, &cv, &hw, wes.penalty_avg.map(|_| 0f32)); // neutral WES without live inference data
+            // Construct the Ollama HF pull command: `ollama pull hf.co/<model_id>:<quant>`
+            let pull_cmd = format!("ollama pull hf.co/{model_id}:{quant}");
             scored_variants.push(serde_json::json!({
-                "quant": fit.quant_level,
-                "file_size_mb": fit.file_size_mb,
+                "quant":            fit.quant_level,
+                "filename":         filename,
+                "file_size_mb":     fit.file_size_mb,
                 "vram_required_mb": fit.vram_required_mb,
-                "fit_score": fit.fit_score,
-                "fit_label": fit.fit_label,
-                "estimated_wes": fit.estimated_wes,
-                "vram_headroom_pct": fit.vram_headroom_pct,
-                "recommendation": fit.recommendation,
+                "fit_score":        fit.fit_score,
+                "fit_label":        fit.fit_label,
+                "estimated_wes":    fit.estimated_wes,
+                "vram_headroom_pct":fit.vram_headroom_pct,
+                "recommendation":   fit.recommendation,
+                "pull_cmd":         pull_cmd,
             }));
         }
-        // Sort variants by fit_score descending
         scored_variants.sort_by(|a, b| b["fit_score"].as_u64().cmp(&a["fit_score"].as_u64()));
         models.push(serde_json::json!({
             "model_id": model_id,
@@ -4920,10 +5034,11 @@ async fn handle_model_candidates(
     }
 
     Json(serde_json::json!({
-        "node_id": node_id_ext.0.as_str(),
+        "node_id":  node_id_ext.0.as_str(),
+        "is_live_search": search.is_some(),
         "hardware": {
-            "vram_mb": vram_mb,
-            "chip": chip,
+            "vram_mb":       vram_mb,
+            "chip":          chip,
             "power_budget_w": (power_w * 10.0).round() / 10.0,
             "thermal_state": thermal,
         },
@@ -5001,6 +5116,11 @@ fn mcp_tools_list() -> serde_json::Value {
                     }
                 }
             }
+        },
+        {
+            "name": "get_model_fit",
+            "description": "Analyzes how well the currently loaded model fits this node across three dimensions: Memory Fit (does it leave safe headroom?), Efficiency (WES score — tok/s per watt after thermal penalty), and Context Runway (how far the KV cache can grow before VRAM runs out). Returns structured scores and a plain-English summary suitable for answering 'can I run this model safely on this node?'",
+            "inputSchema": { "type": "object", "properties": {} }
         }
     ])
 }
@@ -5238,6 +5358,10 @@ async fn handle_mcp(
                             "quantization": ollama.ollama_quantization,
                             "context_length": ollama.ollama_context_length,
                             "parameter_count": ollama.ollama_parameter_count,
+                            "num_layers": ollama.ollama_num_layers,
+                            "kv_heads": ollama.ollama_kv_heads,
+                            "num_heads": ollama.ollama_num_heads,
+                            "embedding_dim": ollama.ollama_embedding_dim,
                         }));
                     }
                     if vllm.vllm_running {
@@ -5299,6 +5423,329 @@ async fn handle_mcp(
                             "content": [{ "type": "text", "text": "Metrics history unavailable — DuckDB may still be initializing." }]
                         }))),
                     }
+                }
+
+                "get_model_fit" => {
+                    let ollama   = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let nvidia   = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let apple    = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+                    let wes      = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
+
+                    let mut sys = sysinfo::System::new_all();
+                    sys.refresh_memory();
+                    let total_mb     = sys.total_memory() / 1024 / 1024;
+                    let available_mb = sys.available_memory() / 1024 / 1024;
+
+                    // ── Determine active model info ──────────────────────────
+                    let model_name = ollama.ollama_active_model.clone();
+                    let model_gb   = ollama.ollama_model_size_gb;
+                    let quant      = ollama.ollama_quantization.clone();
+                    let tps        = ollama.ollama_tokens_per_second;
+
+                    // ── Memory Fit ───────────────────────────────────────────
+                    // Headroom = available RAM (or VRAM for NVIDIA). Score on
+                    // how much room is left after the model is loaded.
+                    let (vram_total_gb, _vram_used_gb, vram_available_gb) = match (
+                        nvidia.nvidia_vram_total_mb, nvidia.nvidia_vram_used_mb
+                    ) {
+                        (Some(total), Some(used)) => {
+                            let t = total as f64 / 1024.0;
+                            let u = used  as f64 / 1024.0;
+                            (Some(t), Some(u), Some(t - u))
+                        }
+                        _ => (None, None, None),
+                    };
+
+                    // Prefer VRAM for NVIDIA nodes; fall back to system RAM
+                    let (memory_pool_label, pool_total_gb, pool_available_gb) = if let Some(avail) = vram_available_gb {
+                        ("VRAM", vram_total_gb.unwrap_or(0.0), avail)
+                    } else {
+                        let total = total_mb as f64 / 1024.0;
+                        let avail = available_mb as f64 / 1024.0;
+                        ("RAM", total, avail)
+                    };
+
+                    let (memory_score, memory_label, memory_reason) = match model_gb {
+                        Some(mgb) => {
+                            let mgb = mgb as f64;
+                            // Headroom after model = available that isn't consumed by the model
+                            let headroom_gb = pool_available_gb;
+                            let headroom_pct = if pool_total_gb > 0.0 {
+                                headroom_gb / pool_total_gb * 100.0
+                            } else { 0.0 };
+
+                            if headroom_pct >= 20.0 {
+                                ("good",
+                                 "Good",
+                                 format!("{mgb:.1} GB model leaves {headroom_gb:.1} GB headroom ({headroom_pct:.0}% of {memory_pool_label}) — comfortable."))
+                            } else if headroom_pct >= 8.0 {
+                                ("fair",
+                                 "Fair",
+                                 format!("{mgb:.1} GB model leaves {headroom_gb:.1} GB headroom ({headroom_pct:.0}% of {memory_pool_label}) — manageable but tight under long context."))
+                            } else {
+                                ("poor",
+                                 "Poor",
+                                 format!("{mgb:.1} GB model leaves only {headroom_gb:.1} GB headroom ({headroom_pct:.0}% of {memory_pool_label}) — KV cache growth will force swapping."))
+                            }
+                        }
+                        None => ("unknown", "Unknown", "No model loaded or model size unavailable.".into()),
+                    };
+
+                    // ── WES Efficiency ───────────────────────────────────────
+                    // WES = tok/s ÷ (watts × thermal_penalty)
+                    // Levels: excellent >10, good 3–10, acceptable 1–3, low <1
+                    let node_power_w: Option<f64> = apple.soc_power_w
+                        .map(|w| w as f64)
+                        .or_else(|| nvidia.nvidia_power_draw_w.map(|w| w as f64))
+                        .or_else(|| apple.cpu_power_w.map(|w| w as f64));
+
+                    let penalty = wes.penalty_avg.map(|p| p as f64).unwrap_or(1.0).max(0.01);
+
+                    let (wes_score, wes_level, wes_reason) = match (tps, node_power_w) {
+                        (Some(t), Some(w)) if w > 0.0 => {
+                            let wes_val = t as f64 / (w * penalty);
+                            let (level, _label) = if wes_val > 10.0 {
+                                ("excellent", "Excellent")
+                            } else if wes_val > 3.0 {
+                                ("good", "Good")
+                            } else if wes_val > 1.0 {
+                                ("acceptable", "Acceptable")
+                            } else {
+                                ("low", "Low")
+                            };
+                            let reason = if penalty > 1.05 {
+                                format!("{t:.1} tok/s at {w:.0} W with {:.0}% thermal penalty → WES {wes_val:.2}", (penalty - 1.0) * 100.0)
+                            } else {
+                                format!("{t:.1} tok/s at {w:.0} W → WES {wes_val:.2}")
+                            };
+                            (Some(wes_val), level, reason)
+                        }
+                        _ => (None, "unknown", "Inference not active — WES requires live tok/s and power readings.".into()),
+                    };
+
+                    // ── Context Runway ───────────────────────────────────────
+                    // KV cache bytes = 2 × layers × kv_heads × head_dim × ctx_tokens × 2 (FP16)
+                    let ctx_runway = (|| -> Option<serde_json::Value> {
+                        let headroom_gb = if memory_pool_label == "VRAM" {
+                            pool_available_gb
+                        } else {
+                            // Use available RAM but reserve 2 GB for OS
+                            (pool_available_gb - 2.0).max(0.0)
+                        };
+                        if headroom_gb <= 0.0 { return None; }
+
+                        // Try exact arch fields first
+                        let (layers, kv_heads, head_dim, max_ctx, is_exact) =
+                            if let (Some(l), Some(kv), Some(nh), Some(ed)) = (
+                                ollama.ollama_num_layers,
+                                ollama.ollama_kv_heads,
+                                ollama.ollama_num_heads,
+                                ollama.ollama_embedding_dim,
+                            ) {
+                                if nh == 0 { return None; }
+                                let hd = ed / nh;
+                                if hd == 0 { return None; }
+                                let mc = ollama.ollama_context_length.unwrap_or(8_192);
+                                (l, kv, hd, mc, true)
+                            } else if let Some(params) = ollama.ollama_parameter_count {
+                                // Fallback: estimate from parameter count
+                                let b = params as f64 / 1e9;
+                                let mc = ollama.ollama_context_length.unwrap_or(8_192);
+                                // [minB, maxB, layers, kv_heads, head_dim]
+                                let entry = if b < 2.0        { (22u64, 8u64, 64u64) }
+                                    else if b < 4.5  { (28, 8, 128) }
+                                    else if b < 9.0  { (32, 8, 128) }
+                                    else if b < 18.0 { (40, 8, 128) }
+                                    else if b < 40.0 { (48, 8, 128) }
+                                    else if b < 80.0 { (80, 8, 128) }
+                                    else             { (96, 8, 128) };
+                                (entry.0, entry.1, entry.2, mc, false)
+                            } else {
+                                return None;
+                            };
+
+                        let headroom_bytes = headroom_gb * 1024.0 * 1024.0 * 1024.0;
+                        let milestones = [4_096u64, 16_384, 32_768, 65_536, 131_072];
+                        let approx_prefix = if is_exact { "" } else { "~" };
+
+                        let mut points = Vec::new();
+                        let mut max_fits_ctx: Option<u64> = None;
+
+                        for &ctx in &milestones {
+                            if ctx > max_ctx { break; }
+                            // kv bytes = 2 × layers × kv_heads × head_dim × ctx × 2 (FP16)
+                            let kv_bytes = 2.0 * layers as f64 * kv_heads as f64 * head_dim as f64 * ctx as f64 * 2.0;
+                            let kv_gb    = kv_bytes / (1024.0_f64).powi(3);
+                            let fits     = kv_bytes <= headroom_bytes;
+                            if fits { max_fits_ctx = Some(ctx); }
+                            points.push(serde_json::json!({
+                                "ctx_tokens": ctx,
+                                "ctx_label": format!("{}k", ctx / 1024),
+                                "kv_gb": format!("{}{:.2}", approx_prefix, kv_gb),
+                                "fits": fits,
+                            }));
+                        }
+
+                        // Add model's own max_ctx if not a milestone
+                        if !milestones.contains(&max_ctx) {
+                            let kv_bytes = 2.0 * layers as f64 * kv_heads as f64 * head_dim as f64 * max_ctx as f64 * 2.0;
+                            let kv_gb    = kv_bytes / (1024.0_f64).powi(3);
+                            let fits     = kv_bytes <= headroom_bytes;
+                            if fits { max_fits_ctx = Some(max_ctx); }
+                            let label = if max_ctx >= 1_000_000 { format!("{}M", max_ctx / 1_000_000) }
+                                        else { format!("{}k", max_ctx / 1_000) };
+                            points.push(serde_json::json!({
+                                "ctx_tokens": max_ctx,
+                                "ctx_label": label,
+                                "kv_gb": format!("{}{:.2}", approx_prefix, kv_gb),
+                                "fits": fits,
+                            }));
+                        }
+
+                        let summary = match max_fits_ctx {
+                            None => {
+                                let smallest_kv = 2.0 * layers as f64 * kv_heads as f64 * head_dim as f64 * 4096.0 * 2.0 / (1024.0_f64).powi(3);
+                                format!("KV cache exceeds {headroom_gb:.1} GB headroom even at 4k context ({approx_prefix}{smallest_kv:.1} GB). Swapping likely.")
+                            }
+                            Some(mfc) if mfc >= max_ctx => {
+                                format!("Full {}{} context window fits within {headroom_gb:.1} GB headroom. No context pressure.", approx_prefix, if max_ctx >= 1000 { format!("{}k", max_ctx/1000) } else { max_ctx.to_string() })
+                            }
+                            Some(mfc) => {
+                                let label = if mfc >= 1000 { format!("{}k", mfc/1000) } else { mfc.to_string() };
+                                format!("Context runway reaches {approx_prefix}{label} before KV cache exceeds {headroom_gb:.1} GB headroom.")
+                            }
+                        };
+
+                        Some(serde_json::json!({
+                            "max_ctx_tokens": max_ctx,
+                            "headroom_gb": format!("{headroom_gb:.2}"),
+                            "is_exact_arch": is_exact,
+                            "milestones": points,
+                            "max_fits_ctx": max_fits_ctx,
+                            "summary": summary,
+                        }))
+                    })();
+
+                    // ── Quant Recommendation ─────────────────────────────────
+                    let quant_rec = (|| -> Option<serde_json::Value> {
+                        let mgb     = model_gb? as f64;
+                        let q       = quant.as_deref().unwrap_or("");
+                        let avail   = pool_available_gb;
+
+                        // Determine quant family by parsing bits from name
+                        // e.g. "Q4_K_M" → 4, "Q8_0" → 8, "F16" → 16
+                        let bits: Option<u32> = if q.starts_with('F') || q.starts_with('f') {
+                            if q.contains("16") { Some(16) } else if q.contains("32") { Some(32) } else { None }
+                        } else {
+                            q.chars().skip_while(|c| !c.is_ascii_digit()).next()
+                                .and_then(|c| c.to_digit(10))
+                        };
+
+                        let (kind, headline, detail) = match bits {
+                            Some(b) if b >= 8 => {
+                                // At Q8/F16 — check if lower quant would help
+                                let q4_size_est = mgb * 4.0 / (b as f64);
+                                if avail < mgb * 0.25 {
+                                    // Very tight — recommend downgrade
+                                    ("downgrade",
+                                     format!("Consider Q4_K_M — headroom too tight for {q}"),
+                                     format!("Q4_K_M would reduce model footprint from {mgb:.1} GB to ~{q4_size_est:.1} GB, freeing ~{:.1} GB.", mgb - q4_size_est))
+                                } else {
+                                    // Enough room — Q8 is fine, note the speed trade-off
+                                    ("lossless",
+                                     format!("{q} offers minimal quality loss over F16"),
+                                     format!("Memory fits. Note: Q8 is ~40% slower than Q4_K_M on memory-bandwidth-bound hardware. Acceptable if quality is the priority."))
+                                }
+                            }
+                            Some(b) if b <= 3 => {
+                                // Very low quant — suggest upgrade if room permits
+                                let q4_size_est = mgb * 4.0 / (b as f64);
+                                if avail > q4_size_est * 0.3 {
+                                    ("upgrade",
+                                     format!("Consider Q4_K_M — {q} may sacrifice too much quality"),
+                                     format!("Q4_K_M at ~{q4_size_est:.1} GB would likely fit with {avail:.1} GB available and recover significant quality."))
+                                } else {
+                                    ("sweet-spot",
+                                     format!("{q} is appropriate given memory constraints"),
+                                     format!("Only {avail:.1} GB available — {q} is the best fit despite quality trade-offs."))
+                                }
+                            }
+                            Some(4) | Some(5) | Some(6) => {
+                                // Q4–Q6: sweet spot for most hardware
+                                ("sweet-spot",
+                                 format!("{q} is in the sweet spot for this hardware"),
+                                 format!("Q4–Q6 models balance memory footprint, speed, and quality on memory-bandwidth-bound hardware. {mgb:.1} GB with {avail:.1} GB available."))
+                            }
+                            _ => {
+                                // Unknown quant format
+                                ("none",
+                                 "Quantization format not recognized".into(),
+                                 format!("Could not parse quant level from '{q}'. Check model details."))
+                            }
+                        };
+
+                        Some(serde_json::json!({
+                            "current_quant": q,
+                            "kind": kind,
+                            "headline": headline,
+                            "detail": detail,
+                        }))
+                    })();
+
+                    // ── Plain-English Summary ────────────────────────────────
+                    let model_label = model_name.as_deref().unwrap_or("No model loaded");
+                    let summary_parts: Vec<String> = {
+                        let mut parts = Vec::new();
+                        match memory_score {
+                            "good"  => parts.push(format!("Memory fit is good ({memory_reason}).")),
+                            "fair"  => parts.push(format!("Memory fit is fair — {memory_reason}")),
+                            "poor"  => parts.push(format!("Memory is tight — {memory_reason}")),
+                            _       => {}
+                        }
+                        match wes_level {
+                            "excellent" | "good" => parts.push(format!("Efficiency is {wes_level} ({wes_reason}).")),
+                            "acceptable"         => parts.push(format!("Efficiency is acceptable ({wes_reason}).")),
+                            "low"                => parts.push(format!("Efficiency is low — {wes_reason}")),
+                            _                    => {}
+                        }
+                        if let Some(ref r) = ctx_runway {
+                            if let Some(s) = r.get("summary").and_then(|v| v.as_str()) {
+                                parts.push(s.to_string());
+                            }
+                        }
+                        parts
+                    };
+                    let summary = if summary_parts.is_empty() {
+                        format!("No model is currently loaded on this node.")
+                    } else {
+                        format!("{model_label}: {}", summary_parts.join(" "))
+                    };
+
+                    let result = serde_json::json!({
+                        "model": model_name,
+                        "quant": quant,
+                        "model_size_gb": model_gb,
+                        "memory_pool": memory_pool_label,
+                        "pool_total_gb": pool_total_gb,
+                        "pool_available_gb": pool_available_gb,
+                        "memory_fit": {
+                            "score": memory_score,
+                            "label": memory_label,
+                            "reason": memory_reason,
+                        },
+                        "efficiency": {
+                            "wes": wes_score,
+                            "level": wes_level,
+                            "reason": wes_reason,
+                        },
+                        "context_runway": ctx_runway,
+                        "quant_recommendation": quant_rec,
+                        "summary": summary,
+                    });
+
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }]
+                    })))
                 }
 
                 _ => Json(JsonRpcResponse::error(id, -32601, format!("Unknown tool: {tool_name}"))),
@@ -5578,6 +6025,12 @@ async fn handle_metrics(
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
                 ollama_is_probing:        ollama_is_probing_flag,
+                ollama_context_length:    ollama.ollama_context_length,
+                ollama_parameter_count:   ollama.ollama_parameter_count,
+                ollama_num_layers:        ollama.ollama_num_layers,
+                ollama_kv_heads:          ollama.ollama_kv_heads,
+                ollama_num_heads:         ollama.ollama_num_heads,
+                ollama_embedding_dim:     ollama.ollama_embedding_dim,
                 ollama_quantization:      ollama.ollama_quantization,
                 ollama_tokens_per_second:  ollama.ollama_tokens_per_second,
                 ollama_prompt_eval_tps:    ollama.ollama_prompt_eval_tps,

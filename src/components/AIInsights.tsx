@@ -64,8 +64,9 @@ import ModelEvictionCard   from './insights/tier2/ModelEvictionCard';
 import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 
 // Tier 2 cards (cont.)
-import SiliconFitAudit from './insights/tier2/SiliconFitAudit';
+import ModelFitAnalysis from './insights/tier2/ModelFitAnalysis';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
+import FleetModelDiscovery from './insights/FleetModelDiscovery';
 
 // Gate & layout components
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
@@ -2197,9 +2198,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               </div>
 
-              {/* Silicon Fit Audit — live model/silicon efficiency analysis */}
+              {/* Model Fit Analysis — two-dimensional memory + efficiency fit */}
               {canViewInsight(10) && effectiveNodes.length > 0 ? (
-                <SiliconFitAudit
+                <ModelFitAnalysis
                   node={effectiveNodes[0]}
                   nodes={effectiveNodes}
                   onNavigateToPerformance={() => setActiveTab('performance')}
@@ -2229,6 +2230,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Model Discovery — GGUF models scored against local hardware */}
               {isLocalHost && <ModelDiscoveryCard isLocalHost={isLocalHost} />}
+
+              {/* Fleet Model Discovery — HF GGUF models scored against each fleet node (cloud only) */}
+              {!isLocalHost && getToken && (
+                <FleetModelDiscovery getToken={getToken} />
+              )}
 
               {/* Localhost: Performance History from DuckDB (1h window) */}
               {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}

@@ -1,85 +1,228 @@
 /**
- * ModelDiscoveryCard
+ * ModelDiscoveryCard — localhost model discovery panel.
  *
- * Expandable card that shows GGUF models from HuggingFace scored against
- * local hardware. Community tier: local discovery. Pro: hardware simulation.
- * Team: fleet matching.
+ * Fetches GGUF models from HuggingFace via the local agent's /api/model-candidates.
+ * When a search term is entered: queries HF live (bypasses cache).
+ * With no search: shows the cached trending top-20 by downloads.
  *
- * Fetches from /api/model-candidates on the local agent.
+ * Scored dimensions:
+ *   VRAM headroom (40 pts) · Thermal margin (20 pts) · WES proxy (20 pts) · Power fraction (20 pts)
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Search, ChevronDown, ChevronRight, Package, Cpu } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Cpu, Loader2 } from 'lucide-react';
 
 interface VariantResult {
-  quant: string;
-  file_size_mb: number;
-  vram_required_mb: number;
-  fit_score: number;
-  fit_label: string;
-  estimated_wes: number | null;
-  vram_headroom_pct: number;
-  recommendation: string;
+  quant:              string;
+  filename:           string;
+  file_size_mb:       number;
+  vram_required_mb:   number;
+  fit_score:          number;
+  fit_label:          string;
+  estimated_wes:      number | null;
+  vram_headroom_pct:  number;
+  recommendation:     string;
+  pull_cmd:           string;
 }
 
 interface ModelResult {
-  model_id: string;
+  model_id:  string;
   downloads: number;
-  variants: VariantResult[];
+  variants:  VariantResult[];
 }
 
 interface HardwareInfo {
-  vram_mb: number;
-  chip: string | null;
+  vram_mb:       number;
+  chip:          string | null;
   power_budget_w: number;
   thermal_state: string;
 }
 
 interface DiscoveryResponse {
-  node_id: string;
-  hardware: HardwareInfo;
-  models: ModelResult[];
+  node_id:        string;
+  is_live_search: boolean;
+  hardware:       HardwareInfo;
+  models:         ModelResult[];
 }
 
-function fitColor(score: number): string {
-  if (score >= 80) return 'text-emerald-400';
-  if (score >= 60) return 'text-green-300';
-  if (score >= 40) return 'text-yellow-400';
-  return 'text-red-400';
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fitColors(score: number): { dot: string; badge: string; text: string } {
+  if (score >= 80) return { dot: 'bg-emerald-500', badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20', text: 'text-emerald-400' };
+  if (score >= 60) return { dot: 'bg-green-500',   badge: 'bg-green-500/15 text-green-400 border-green-500/20',       text: 'text-green-400' };
+  if (score >= 40) return { dot: 'bg-yellow-500',  badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20',    text: 'text-yellow-400' };
+  if (score > 0)   return { dot: 'bg-orange-500',  badge: 'bg-orange-500/15 text-orange-400 border-orange-500/20',    text: 'text-orange-400' };
+  return             { dot: 'bg-red-500',    badge: 'bg-red-500/15 text-red-400 border-red-500/20',          text: 'text-red-400' };
 }
 
-function fitBg(score: number): string {
-  if (score >= 80) return 'bg-emerald-500';
-  if (score >= 60) return 'bg-green-500';
-  if (score >= 40) return 'bg-yellow-500';
-  return 'bg-red-500';
-}
-
-function fmtDownloads(n: number): string {
+function fmtDl(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}K`;
   return `${n}`;
 }
 
+function shortModelName(model_id: string): string {
+  return model_id.split('/').pop() ?? model_id;
+}
+
+function hfUrl(model_id: string): string {
+  return `https://huggingface.co/${model_id}`;
+}
+
+// ── Copy button ───────────────────────────────────────────────────────────────
+
+const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, className = '' }) => {
+  const [copied, setCopied] = useState(false);
+  const handle = () => {
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <button
+      onClick={handle}
+      title="Copy command"
+      className={`p-1 rounded transition-colors hover:bg-gray-700/60 ${className}`}
+    >
+      {copied
+        ? <Check className="w-3 h-3 text-emerald-400" />
+        : <Copy className="w-3 h-3 text-gray-500 hover:text-gray-300" />}
+    </button>
+  );
+};
+
+// ── Model row ─────────────────────────────────────────────────────────────────
+
+const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
+  const [open, setOpen] = useState(false);
+  const best = model.variants[0];
+  if (!best) return null;
+  const colors = fitColors(best.fit_score);
+
+  return (
+    <div className="border border-gray-800/60 rounded-xl overflow-hidden">
+      {/* Summary row */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-800/20 transition-colors text-left"
+      >
+        <div className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
+
+        <span className="text-xs text-gray-300 font-mono truncate flex-1 min-w-0">
+          {shortModelName(model.model_id)}
+        </span>
+
+        {/* Best-fit badge — label first */}
+        <span
+          title={`Fit score ${best.fit_score}/100 · Excellent ≥80 · Good ≥60 · Tight ≥40 · Won't Fit <40`}
+          className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${colors.badge} shrink-0 whitespace-nowrap cursor-default`}
+        >
+          {best.fit_label}
+        </span>
+
+        {/* Best quant */}
+        <span className="text-[10px] text-gray-500 font-mono shrink-0 hidden sm:inline">
+          {best.quant}
+        </span>
+
+        {/* Size */}
+        <span className="text-[10px] text-gray-600 tabular-nums shrink-0 hidden sm:inline">
+          {(best.file_size_mb / 1024).toFixed(1)} GB
+        </span>
+
+        {/* Downloads */}
+        <span className="text-[10px] text-gray-700 tabular-nums shrink-0">
+          {fmtDl(model.downloads)}↓
+        </span>
+
+        {open
+          ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
+          : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
+      </button>
+
+      {/* Expanded: all variants + pull command */}
+      {open && (
+        <div className="px-3 pb-3 border-t border-gray-800/40 space-y-2">
+          {/* HF link */}
+          <div className="flex items-center gap-2 pt-2">
+            <a
+              href={hfUrl(model.model_id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[10px] text-cyan-500 hover:text-cyan-400 transition-colors"
+            >
+              <ExternalLink className="w-2.5 h-2.5" />
+              {model.model_id}
+            </a>
+          </div>
+
+          {/* Variant table */}
+          <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 mt-1">
+            Quantization variants
+          </div>
+          <div className="space-y-0">
+            {model.variants.map(v => {
+              const vc = fitColors(v.fit_score);
+              return (
+                <div key={v.quant} className="flex items-center gap-2 py-1.5 border-t border-gray-800/20 first:border-t-0">
+                  <div className={`w-1.5 h-1.5 rounded-full ${vc.dot} shrink-0`} />
+                  <span className="text-[11px] text-gray-400 font-mono w-20 shrink-0">{v.quant}</span>
+                  <span className={`text-[10px] font-medium px-1.5 py-px rounded ${vc.badge} border shrink-0`}>
+                    {v.fit_label}
+                  </span>
+                  <span className="text-[11px] text-gray-500 font-mono tabular-nums shrink-0">
+                    {(v.file_size_mb / 1024).toFixed(1)} GB
+                  </span>
+                  <span className="text-[10px] text-gray-600 truncate flex-1">
+                    {v.vram_headroom_pct >= 0 ? `${v.vram_headroom_pct.toFixed(0)}% headroom` : 'over budget'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Pull command for best variant */}
+          {best.pull_cmd && (
+            <div className="mt-2 space-y-1">
+              <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
+                Ollama pull command
+              </div>
+              <div className="flex items-center gap-1.5 bg-gray-950/60 border border-gray-800/60 rounded-lg px-2.5 py-1.5">
+                <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">
+                  {best.pull_cmd}
+                </code>
+                <CopyButton text={best.pull_cmd} />
+              </div>
+              <p className="text-[10px] text-gray-600 leading-relaxed">
+                {best.recommendation}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost = true }) => {
-  const [expanded, setExpanded] = useState(false);
-  const [search, setSearch] = useState('');
-  const [data, setData] = useState<DiscoveryResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [expandedModel, setExpandedModel] = useState<string | null>(null);
+  const [search, setSearch]         = useState('');
+  const [pendingSearch, setPending] = useState('');
+  const [data, setData]             = useState<DiscoveryResponse | null>(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+  const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchModels = useCallback(async (query?: string) => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
+      const params = new URLSearchParams({ limit: '20' });
       if (query) params.set('search', query);
-      params.set('limit', '20');
       const resp = await fetch(`/api/model-candidates?${params}`);
       if (!resp.ok) throw new Error(`${resp.status}`);
-      const json = await resp.json();
-      setData(json);
+      setData(await resp.json());
     } catch (e: any) {
       setError(e.message ?? 'Failed to load');
     } finally {
@@ -87,176 +230,123 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
     }
   }, []);
 
-  // Fetch on first expand
+  // Load trending on mount
   useEffect(() => {
-    if (expanded && !data && !loading) {
-      fetchModels();
-    }
-  }, [expanded, data, loading, fetchModels]);
+    if (isLocalHost) fetchModels();
+  }, [isLocalHost, fetchModels]);
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    fetchModels(search || undefined);
+  // Debounced live search
+  const handleSearchChange = (val: string) => {
+    setPending(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setSearch(val);
+      fetchModels(val || undefined);
+    }, 600);
   };
 
-  // Count models that fit (best variant score >= 60)
-  const fittingCount = data?.models.filter(m =>
-    m.variants.some(v => v.fit_score >= 60)
-  ).length ?? 0;
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setSearch(pendingSearch);
+    fetchModels(pendingSearch || undefined);
+  };
 
-  if (!isLocalHost) return null; // Cloud version is Step 5-7
+  if (!isLocalHost) return null;
+
+  const fittingCount = data?.models.filter(m => m.variants.some(v => v.fit_score >= 60)).length ?? 0;
+  const hw = data?.hardware;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-      {/* Collapsed header */}
-      <button
-        onClick={() => setExpanded(v => !v)}
-        className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-gray-800/30 transition-colors"
-      >
-        <div className="flex items-center gap-2.5">
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
           <Package className="w-4 h-4 text-cyan-400" />
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
             Model Discovery
           </span>
-          {data && !expanded && (
-            <span className="text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full font-medium">
-              {fittingCount} model{fittingCount !== 1 ? 's' : ''} fit your hardware
+          {data && !loading && (
+            <span
+              title="Models scoring ≥60 — VRAM headroom (40 pts) · thermal margin (20 pts) · WES history (20 pts) · power efficiency (20 pts)"
+              className="text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/15 font-medium cursor-default"
+            >
+              {fittingCount} fit your hardware
             </span>
           )}
         </div>
-        {expanded
-          ? <ChevronDown className="w-3.5 h-3.5 text-gray-600" />
-          : <ChevronRight className="w-3.5 h-3.5 text-gray-600" />
-        }
-      </button>
+        {/* Hardware context pill */}
+        {hw && (
+          <div className="flex items-center gap-2 text-[10px] text-gray-600">
+            <Cpu className="w-3 h-3" />
+            <span>{hw.chip ?? 'Unknown chip'}</span>
+            <span>·</span>
+            <span>{hw.vram_mb >= 1024 ? `${(hw.vram_mb / 1024).toFixed(0)} GB` : `${hw.vram_mb} MB`}</span>
+            <span>·</span>
+            <span className={hw.thermal_state === 'Normal' ? 'text-emerald-500' : 'text-yellow-500'}>
+              {hw.thermal_state}
+            </span>
+          </div>
+        )}
+      </div>
 
-      {/* Expanded body */}
-      {expanded && (
-        <div className="px-4 pb-4 space-y-3 border-t border-gray-800/60">
+      {/* Search */}
+      <form onSubmit={handleSearchSubmit} className="flex gap-2">
+        <div className="flex-1 relative">
+          {loading
+            ? <Loader2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-cyan-500 animate-spin" />
+            : <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-600" />
+          }
+          <input
+            type="text"
+            value={pendingSearch}
+            onChange={e => handleSearchChange(e.target.value)}
+            placeholder="Search HuggingFace GGUF (e.g. llama, qwen, phi)…"
+            className="w-full pl-8 pr-3 py-2 bg-gray-800/60 border border-gray-700/50 rounded-lg text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-cyan-500/40"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="px-3 py-2 bg-gray-800 border border-gray-700/50 rounded-lg text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors disabled:opacity-40"
+        >
+          Search
+        </button>
+      </form>
 
-          {/* Hardware summary */}
-          {data?.hardware && (
-            <div className="flex items-center gap-4 py-2 text-[10px] text-gray-500">
-              <div className="flex items-center gap-1.5">
-                <Cpu className="w-3 h-3 text-gray-600" />
-                <span>{data.hardware.chip ?? 'Unknown'}</span>
-              </div>
-              <span>{data.hardware.vram_mb >= 1024 ? `${(data.hardware.vram_mb / 1024).toFixed(0)}G VRAM` : `${data.hardware.vram_mb}MB`}</span>
-              <span>{data.hardware.power_budget_w > 0 ? `${data.hardware.power_budget_w}W` : ''}</span>
-              <span className={data.hardware.thermal_state === 'Normal' ? 'text-emerald-500' : 'text-yellow-500'}>
-                {data.hardware.thermal_state}
-              </span>
-            </div>
-          )}
+      {/* Source label */}
+      <div className="text-[10px] text-gray-700">
+        {data?.is_live_search
+          ? `Live HuggingFace search · ${data.models.length} model${data.models.length !== 1 ? 's' : ''} scored against your hardware`
+          : `Trending GGUF models by downloads · scored against your hardware`}
+      </div>
 
-          {/* Search */}
-          <form onSubmit={handleSearch} className="flex gap-2">
-            <div className="flex-1 relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-600" />
-              <input
-                type="text"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search models (e.g. llama, qwen, phi)..."
-                className="w-full pl-8 pr-3 py-2 bg-gray-800/60 border border-gray-700/50 rounded-lg text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-cyan-500/30"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-3 py-2 bg-gray-800 border border-gray-700/50 rounded-lg text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors disabled:opacity-40"
-            >
-              {loading ? '...' : 'Search'}
-            </button>
-          </form>
+      {/* Error */}
+      {error && (
+        <p className="text-xs text-red-400 py-1">Failed to load: {error}</p>
+      )}
 
-          {/* Error */}
-          {error && (
-            <p className="text-xs text-red-400">Failed to load models: {error}</p>
-          )}
+      {/* Empty */}
+      {data && data.models.length === 0 && !loading && (
+        <p className="text-xs text-gray-600 py-6 text-center">
+          No GGUF models found for "{search}". Try a different search term.
+        </p>
+      )}
 
-          {/* Results */}
-          {data && data.models.length === 0 && !loading && (
-            <p className="text-xs text-gray-600 py-4 text-center">No GGUF models found. Try a different search term.</p>
-          )}
+      {/* Initial loading skeleton */}
+      {loading && !data && (
+        <div className="flex items-center justify-center py-10 gap-2 text-xs text-gray-600">
+          <Loader2 className="w-4 h-4 animate-spin text-cyan-500/60" />
+          {search ? 'Searching HuggingFace…' : 'Loading trending models…'}
+        </div>
+      )}
 
-          {data && data.models.length > 0 && (
-            <div className="space-y-1">
-              {data.models.map(model => {
-                const bestVariant = model.variants[0]; // already sorted by fit_score desc
-                const isExpanded = expandedModel === model.model_id;
-                return (
-                  <div key={model.model_id} className="border border-gray-800/60 rounded-lg overflow-hidden">
-                    {/* Model row */}
-                    <button
-                      onClick={() => setExpandedModel(isExpanded ? null : model.model_id)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-800/20 transition-colors"
-                    >
-                      {/* Fit score dot */}
-                      <div className={`w-2 h-2 rounded-full ${fitBg(bestVariant?.fit_score ?? 0)} shrink-0`} />
-
-                      {/* Model name */}
-                      <span className="text-xs text-gray-300 font-mono truncate flex-1 text-left">
-                        {model.model_id.split('/').pop() ?? model.model_id}
-                      </span>
-
-                      {/* Best fit badge */}
-                      {bestVariant && (
-                        <span className={`text-[10px] font-mono tabular-nums ${fitColor(bestVariant.fit_score)}`}>
-                          {bestVariant.fit_score}/100
-                        </span>
-                      )}
-
-                      {/* Downloads */}
-                      <span className="text-[10px] text-gray-600 tabular-nums whitespace-nowrap">
-                        {fmtDownloads(model.downloads)}
-                      </span>
-
-                      {isExpanded
-                        ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
-                        : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />
-                      }
-                    </button>
-
-                    {/* Expanded: all variants */}
-                    {isExpanded && (
-                      <div className="px-3 pb-3 space-y-1.5">
-                        <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 pt-1">
-                          Quantization Variants
-                        </div>
-                        {model.variants.map(v => (
-                          <div key={v.quant} className="flex items-center gap-2 text-[11px] py-1 border-t border-gray-800/30">
-                            <div className={`w-1.5 h-1.5 rounded-full ${fitBg(v.fit_score)} shrink-0`} />
-                            <span className="text-gray-400 font-mono w-16 shrink-0">{v.quant}</span>
-                            <span className={`font-mono tabular-nums ${fitColor(v.fit_score)} w-10 shrink-0`}>{v.fit_score}</span>
-                            <span className="text-gray-500 font-mono tabular-nums w-12 shrink-0">{(v.file_size_mb / 1024).toFixed(1)}G</span>
-                            <span className="text-gray-600 truncate flex-1">{v.fit_label}</span>
-                            <span className="text-gray-700 tabular-nums whitespace-nowrap">
-                              {v.vram_headroom_pct >= 0 ? `${v.vram_headroom_pct.toFixed(0)}% free` : 'Over budget'}
-                            </span>
-                          </div>
-                        ))}
-                        {/* Recommendation from best variant */}
-                        {bestVariant && (
-                          <p className="text-[10px] text-gray-500 mt-1 leading-relaxed italic">
-                            {bestVariant.recommendation}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Loading state */}
-          {loading && !data && (
-            <div className="flex items-center justify-center py-8 gap-2 text-xs text-gray-600">
-              <div className="w-3 h-3 border border-gray-600 border-t-cyan-400 rounded-full animate-spin" />
-              Fetching models from HuggingFace...
-            </div>
-          )}
+      {/* Results */}
+      {data && data.models.length > 0 && (
+        <div className="space-y-1">
+          {data.models.map(model => (
+            <ModelRow key={model.model_id} model={model} />
+          ))}
         </div>
       )}
     </div>

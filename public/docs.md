@@ -109,29 +109,107 @@ Most inference deployments run multiple models concurrently. Wicklee tracks each
 
 ## Model Discovery & Hardware Fit
 
-"Is this model right for this hardware?" Wicklee fetches the top GGUF models from HuggingFace and scores each quantization variant against your hardware.
+"Is this model right for this hardware?" Wicklee fetches GGUF models from HuggingFace and scores each quantization variant against your hardware — before you download anything.
 
-**Fit score (0-100):** Four weighted components:
+### Discovery Fit Score (0–100)
 
-| Component | Max Points | What it measures |
+| Component | Max | What it measures |
 |---|---|---|
-| VRAM headroom | 40 | Free VRAM after loading — tighter curve rewards models that leave room for context scaling |
-| Thermal margin | 20 | Current thermal state: Normal=20, Fair=10, Serious=5, Critical=0 |
-| Historical WES | 20 | WES from similar models you've run (10 if no data — neutral) |
-| Power efficiency | 20 | Model VRAM as fraction of total — larger models relative to hardware are penalized |
+| VRAM headroom | 40 | Free VRAM/RAM after loading — rewards models that leave room for KV cache growth |
+| Thermal margin | 20 | Current thermal state: Normal (20), Fair (10), Serious (5), Critical (0) |
+| Historical WES | 20 | Inference efficiency from similar models; neutral (10) if no data |
+| Power efficiency | 20 | Model size as fraction of total memory — larger models relative to hardware are penalized |
 
-**Labels:** Excellent (80+), Good (60-79), Tight (40-59), Won't Fit (<40).
+**Labels:** Excellent (80+), Good (60–79), Tight (40–59), Won't Fit (<40).
 
-### Localhost (Community — all tiers)
-`GET /api/model-candidates?search=llama&limit=20` — returns models scored against local hardware. HuggingFace catalog cached to DuckDB with 24h TTL. Works offline after first cache fill.
+**Memory pool:** NVIDIA nodes use VRAM; Apple Silicon and CPU-only nodes use system RAM (75% budget to leave headroom for the OS).
 
-### Cloud (Pro — hardware simulation)
-`GET /api/v1/models/discover?simulate_hw=nvidia_4090` — "What if I had a 4090?" Score models against 12 predefined hardware profiles (M4 through H100) or custom `?simulate_vram_mb=&simulate_power_w=` params.
+### Search behavior
 
-Available profiles: `m4`, `m4_pro_24gb`, `m4_max_36gb`, `m4_max_64gb`, `m4_ultra_128gb`, `nvidia_4060`, `nvidia_4070`, `nvidia_4080`, `nvidia_4090`, `nvidia_a100_40gb`, `nvidia_a100_80gb`, `nvidia_h100`
+- **No search term:** returns cached top-20 GGUF repos by HuggingFace downloads (24h TTL). Works offline after first cache fill.
+- **With search term:** queries HuggingFace live — real search, not just filtering cached results. Scored in real time against your hardware.
 
-### Cloud (Team — fleet matching)
-`GET /api/v1/models/discover?fleet=true&model_id=bartowski/Llama-3.1-70B-GGUF` — "Which of my fleet nodes can run this model?" Returns each node scored with best quantization variant.
+### Ollama pull command
+
+Every variant in the response includes a ready-to-run pull command:
+```
+"pull_cmd": "ollama pull hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"
+```
+The Model Discovery panel shows a copy button; the raw command is also in the API response.
+
+### Tiered access
+
+| Tier | Feature | Endpoint |
+|------|---------|----------|
+| Community | Local discovery — scored against this machine | `GET /api/model-candidates` |
+| Community | Fleet discovery — scored against every online node | `GET /api/fleet/model-candidates` (JWT) |
+| Pro | Hardware simulation — "what if I had a 4090?" | `GET /api/v1/models/discover?simulate_hw=nvidia_4090` |
+| Team | Fleet matching — which nodes can run this model? | `GET /api/v1/models/discover?fleet=true&model_id=` |
+
+Available simulation profiles: `m4`, `m4_pro_24gb`, `m4_max_36gb`, `m4_max_64gb`, `m4_ultra_128gb`, `nvidia_4060`, `nvidia_4070`, `nvidia_4080`, `nvidia_4090`, `nvidia_a100_40gb`, `nvidia_a100_80gb`, `nvidia_h100`
+
+---
+
+## Model Fit Analysis
+
+The **Model Fit Analysis** tile (Intelligence and Performance tabs) analyzes the *currently loaded model* across three dimensions.
+
+### Memory Fit
+
+Headroom remaining after the active model is loaded:
+
+| Score | Headroom |
+|-------|---------|
+| Good  | ≥ 20% of pool free |
+| Fair  | 8–20% free — monitor under long context |
+| Poor  | < 8% free — KV cache growth will force swapping |
+
+### WES Efficiency
+
+WES = `tok/s ÷ (watts × thermal_penalty)`:
+
+| Level | WES | Meaning |
+|-------|-----|---------|
+| Excellent | > 10 | Exceptional throughput per watt |
+| Good | 3–10 | Solid efficiency for this hardware class |
+| Acceptable | 1–3 | Adequate — try a different quantization |
+| Low | < 1 | High energy cost per token; check thermal state |
+
+Thermal penalty amplifies WES loss: Fair = 1.25×, Serious = 1.75×, Critical = 2×.
+
+### Context Runway
+
+Projects KV cache growth against available headroom at standard context milestones (4k, 16k, 32k, 64k, 128k).
+
+**KV cache formula (FP16, Ollama default):**
+```
+bytes = 2 × layers × kv_heads × head_dim × ctx_tokens × 2
+```
+
+Uses `kv_heads` (`llama.attention.head_count_kv` from `/api/show`), **not** total attention heads. GQA models (Llama 3, Mistral, Phi) have 4–8× fewer KV heads than total heads — using the wrong value overpredicts KV cache size by the same factor. When architecture fields are unavailable, runway is estimated from parameter count (±30%, shown with `~`).
+
+### Quant Sweet Spot
+
+| Kind | Condition | Recommendation |
+|------|-----------|----------------|
+| `sweet-spot` | Q4–Q6 | Optimal balance of quality, speed, and memory |
+| `lossless` | Q8 with headroom | Minimal quality loss vs FP16; note ~40% slower than Q4 on memory-bandwidth-bound hardware |
+| `upgrade` | Q2–Q3, room available | Move up for quality recovery |
+| `downgrade` | Q8+ tight on headroom | Reduce size to free room for context |
+
+Speed estimates: `new_tps ≈ observed_tps × (current_gb / new_gb)`.
+
+### MCP tool: `get_model_fit`
+
+The agent exposes `get_model_fit` for AI agents to query fit analysis programmatically:
+
+```bash
+curl -X POST http://localhost:7700/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_model_fit"},"id":1}'
+```
+
+Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, and a plain-English `summary` field.
 
 ---
 
@@ -284,6 +362,7 @@ The agent exposes a local MCP (Model Context Protocol) server for AI agents. Ava
 | get_active_models | Running models with context_length, parameter_count, quantization, tok/s |
 | get_observations | 17 patterns with routing_hint per observation + node-level aggregate |
 | get_metrics_history | 1-hour rolling telemetry buffer from DuckDB |
+| get_model_fit | Three-dimensional fit analysis for the current model: Memory Fit, WES Efficiency, Context Runway, Quant Sweet Spot, and a plain-English summary |
 
 ### Resources
 
@@ -400,6 +479,7 @@ Fleet-aggregated MCP at `POST wicklee.dev/mcp`. Clerk JWT auth. 8 tools + 2 reso
 | get_fleet_observations | Active/resolved observations across the fleet (tier-filtered) |
 | get_inference_profile | Correlated profiler snapshot for a node (TTFT, KV cache, thermal, power) |
 | explain_slowdown | Hardware context for root cause analysis of slow requests |
+| get_fleet_model_fit | Memory Fit + WES Efficiency + Quant Recommendation scored for every online fleet node |
 
 **Resources:**
 
