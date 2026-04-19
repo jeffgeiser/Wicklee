@@ -1634,6 +1634,7 @@ fn parse_vmstat_pressure(text: &str) -> Option<f32> {
     let mut inactive:    u64 = 0;
     let mut speculative: u64 = 0;
     let mut wired:       u64 = 0;
+    let mut compressor:  u64 = 0; // physical RAM consumed by the macOS memory compressor
     let mut found_any = false;
 
     for line in text.lines() {
@@ -1643,16 +1644,19 @@ fn parse_vmstat_pressure(text: &str) -> Option<f32> {
             let rest = line.strip_prefix(prefix)?;
             rest.trim().trim_end_matches('.').trim().parse().ok()
         };
-        if      let Some(v) = parse_val("Pages free:")        { free = v;        found_any = true; }
-        else if let Some(v) = parse_val("Pages active:")      { active = v;      found_any = true; }
-        else if let Some(v) = parse_val("Pages inactive:")    { inactive = v;    found_any = true; }
-        else if let Some(v) = parse_val("Pages speculative:") { speculative = v; found_any = true; }
-        else if let Some(v) = parse_val("Pages wired down:")  { wired = v;       found_any = true; }
+        if      let Some(v) = parse_val("Pages free:")                    { free = v;        found_any = true; }
+        else if let Some(v) = parse_val("Pages active:")                  { active = v;      found_any = true; }
+        else if let Some(v) = parse_val("Pages inactive:")                { inactive = v;    found_any = true; }
+        else if let Some(v) = parse_val("Pages speculative:")             { speculative = v; found_any = true; }
+        else if let Some(v) = parse_val("Pages wired down:")              { wired = v;       found_any = true; }
+        else if let Some(v) = parse_val("Pages occupied by compressor:")  { compressor = v;  found_any = true; }
     }
 
     if !found_any { return None; }
-    let in_use = wired + active;
-    let total  = free + active + inactive + speculative + wired;
+    // Include compressor pages in both numerator and denominator — on M-series Macs under
+    // memory pressure the compressor can consume 1–2 GB, and omitting it understates pressure.
+    let in_use = wired + active + compressor;
+    let total  = free + active + inactive + speculative + wired + compressor;
     if total == 0 { return None; }
     Some((in_use as f32 / total as f32) * 100.0)
 }
@@ -3698,7 +3702,7 @@ fn evaluate_local_observations(
                              background processes, and VRAM allocation.{eta_note}",
                         ),
                         resolution_steps: vec![
-                            format!("Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/health | jq .wes_score\""),
+                            format!("Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/metrics | jq .wes_score\""),
                             "Reduce OLLAMA_NUM_PARALLEL to 1 to slow the WES decline".into(),
                             "Check if background processes (backups, builds) started recently".into(),
                             "If WES drops below 5 within 5 min, treat as Pattern A — enact physical cooling".into(),
@@ -3761,7 +3765,7 @@ fn evaluate_local_observations(
                                 "Check loaded models: `ollama ps` — note memory footprint of each".into(),
                                 "Unload the largest model: `ollama stop <model-name>`".into(),
                                 "Close memory-heavy background processes: browsers, IDEs, Docker".into(),
-                                "Verify pressure decreasing: `curl http://localhost:7700/api/health | jq .memory_pressure_percent`".into(),
+                                "Verify pressure decreasing: `curl http://localhost:7700/api/metrics | jq .memory_pressure_percent`".into(),
                                 "Prevent recurrence: set OLLAMA_MAX_LOADED_MODELS=1".into(),
                             ],
                             action_id:        "evict_idle_models",
@@ -3928,7 +3932,7 @@ fn evaluate_local_observations(
                                                this node. On Linux, set the CPU governor to `performance`. \
                                                On Apple Silicon, ensure AC power with Performance mode enabled.".into(),
                             resolution_steps: vec![
-                                format!("Verify throttle: `curl http://localhost:7700/api/health | jq .clock_throttle_pct`"),
+                                format!("Verify throttle: `curl http://localhost:7700/api/metrics | jq .clock_throttle_pct`"),
                                 "Linux CPU governor: `sudo cpupower frequency-set -g performance`".into(),
                                 "NVIDIA: `nvidia-smi -q -d CLOCK | grep -A4 'Clocks Throttle'`".into(),
                                 "Apple Silicon: System Settings → Battery → Options → disable 'Limit CPU speed'".into(),
@@ -4079,7 +4083,7 @@ fn evaluate_local_observations(
                                        Q2_K). If using vLLM, tune --max-num-batched-tokens to the \
                                        GPU-saturating sweet spot.".into(),
                     resolution_steps: vec![
-                        format!("Check GPU util: `curl http://localhost:7700/api/health | jq '{{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}}'`"),
+                        format!("Check GPU util: `curl http://localhost:7700/api/metrics | jq '{{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}}'`"),
                         "Set all layers to GPU: OLLAMA_NUM_GPU=99 ollama serve".into(),
                         "Switch to Q4_K_M: `ollama pull <model>:q4_K_M` — fully GPU-offloads vs Q2_K".into(),
                         "For vLLM: raise --max-num-seqs to create batches that saturate GPU SIMD lanes".into(),
@@ -4190,7 +4194,7 @@ fn evaluate_local_observations(
                                          recover throughput.",
                                     ),
                                     resolution_steps: vec![
-                                        format!("Confirm bottleneck: `curl http://localhost:7700/api/health | jq '{{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}}'`"),
+                                        format!("Confirm bottleneck: `curl http://localhost:7700/api/metrics | jq '{{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}}'`"),
                                         "Switch to lower quantization to halve bandwidth demand: `ollama pull <model>:q4_K_M`".into(),
                                         "If already on Q4, try Q3_K_M or Q2_K — quality trade-off worth the bandwidth recovery".into(),
                                         "Reduce context window size — longer contexts increase KV cache weight streaming".into(),
@@ -4299,7 +4303,7 @@ fn evaluate_local_observations(
                                                    If using a MoE model (e.g. Mixtral), ensure all experts \
                                                    are VRAM-resident.".into(),
                                 resolution_steps: vec![
-                                    "Check penalty: `curl http://localhost:7700/api/health | jq .penalty_avg` — confirm consistently > 1.30".into(),
+                                    "Check penalty: `curl http://localhost:7700/api/metrics | jq .penalty_avg` — confirm consistently > 1.30".into(),
                                     "Reduce context window: lower max_tokens or num_ctx to 2048–4096 in your application".into(),
                                     "Increase batch slightly: OLLAMA_NUM_PARALLEL=2 (more concurrent reqs fill GPU pipeline bubbles)".into(),
                                     "MoE models (Mixtral, Qwen-MoE): verify all expert weights are VRAM-resident with `ollama ps`".into(),
@@ -4364,11 +4368,11 @@ fn evaluate_local_observations(
                                        If demand is sustained, scale horizontally or switch \
                                        to a smaller model/quantization.".into(),
                     resolution_steps: vec![
-                        "Check KV cache: `curl http://localhost:7700/api/health | jq .vllm_cache_usage_perc`".into(),
+                        "Check KV cache: `curl http://localhost:7700/api/metrics | jq .vllm_cache_usage_perc`".into(),
                         "Reduce concurrent sequences: restart vLLM with --max-num-seqs 4 (default is often 256)".into(),
                         "Lower batched tokens: --max-num-batched-tokens 2048 reduces per-batch KV footprint".into(),
                         "Long contexts: --max-model-len to cap per-sequence KV allocation".into(),
-                        "Monitor: `watch -n 5 \"curl -s http://localhost:7700/api/health | jq .vllm_cache_usage_perc\"`".into(),
+                        "Monitor: `watch -n 5 \"curl -s http://localhost:7700/api/metrics | jq .vllm_cache_usage_perc\"`".into(),
                     ],
                     action_id:        "reduce_batch_size",
                     confidence:       obs_confidence(ratio),
@@ -4456,7 +4460,7 @@ fn evaluate_local_observations(
                         "vLLM queue: `curl http://localhost:18010/metrics | grep vllm:num_requests_waiting`".into(),
                         "vLLM KV cache: `curl http://localhost:18010/metrics | grep vllm:gpu_cache_usage_perc`".into(),
                         "Reduce concurrent load: lower `--max-num-seqs` in vLLM launch args".into(),
-                        "Check memory pressure: `curl http://localhost:7700/api/health | jq .mem_pressure_pct`".into(),
+                        "Check memory pressure: `curl http://localhost:7700/api/metrics | jq .memory_pressure_percent`".into(),
                     ],
                     action_id:        "check_inference_latency",
                     confidence:       obs_confidence(ratio),
@@ -4526,8 +4530,8 @@ fn evaluate_local_observations(
                          caused this latency increase. Monitor over the next few minutes for recovery.".into()
                     },
                     resolution_steps: vec![
-                        "Check thermal state: `curl http://localhost:7700/api/health | jq .thermal_state`".into(),
-                        "Check swap: `curl http://localhost:7700/api/health | jq .swap_write_mb_s`".into(),
+                        "Check thermal state: `curl http://localhost:7700/api/metrics | jq .thermal_state`".into(),
+                        "Check swap: `curl http://localhost:7700/api/metrics | jq .swap_write_mb_s`".into(),
                         "vLLM preemption metric: `curl http://localhost:18010/metrics | grep vllm:num_preemptions`".into(),
                         "Ollama running requests: `curl http://localhost:11434/api/ps`".into(),
                     ],
