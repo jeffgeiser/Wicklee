@@ -35,6 +35,7 @@ interface FleetModel {
 interface FleetDiscoveryResponse {
   is_live_search: boolean;
   online_nodes:   number;
+  hf_reachable:   boolean;
   models:         FleetModel[];
 }
 
@@ -347,6 +348,17 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
+      {/* HuggingFace unreachable warning */}
+      {data && data.hf_reachable === false && !loading && (
+        <div className="flex items-start gap-2 py-3 px-3 bg-orange-500/5 border border-orange-500/15 rounded-lg text-xs text-orange-400/80">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
+          <div>
+            <span className="font-medium">HuggingFace is unreachable from the cloud server.</span>
+            <span className="text-gray-600 ml-1">This can happen due to a temporary network issue or rate limiting. Try searching manually or check back in a minute.</span>
+          </div>
+        </div>
+      )}
+
       {/* Error */}
       {error && (
         <p className="text-xs text-red-400 py-1">Failed to load: {error}</p>
@@ -360,10 +372,10 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* Empty */}
-      {data && data.models.length === 0 && !loading && (
+      {/* Empty — only show "no results" when HF was actually reachable */}
+      {data && data.models.length === 0 && !loading && data.hf_reachable !== false && (
         <p className="text-xs text-gray-600 py-6 text-center">
-          No GGUF models found. Try a different search term.
+          No GGUF models found{pendingSearch ? ` for "${pendingSearch}"` : ''}. Try a different search term.
         </p>
       )}
 

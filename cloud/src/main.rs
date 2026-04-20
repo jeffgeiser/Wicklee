@@ -3883,12 +3883,12 @@ async fn handle_fleet_model_candidates(
         })
     };
 
-    let hf_models: Vec<(String, u64, Vec<(String, String, u64)>)> = if let Some(hit) = cached {
-        hit
+    let (hf_models, hf_reachable): (Vec<(String, u64, Vec<(String, String, u64)>)>, bool) = if let Some(hit) = cached {
+        (hit, true)
     } else {
         // Fetch from HuggingFace via ureq (sync → spawn_blocking)
         let search_clone = search.clone();
-        let results = tokio::task::spawn_blocking(move || -> Vec<(String, u64, Vec<(String, String, u64)>)> {
+        let (results, reached) = tokio::task::spawn_blocking(move || -> (Vec<(String, u64, Vec<(String, String, u64)>)>, bool) {
             // Rate-limit: at most 1 HF fetch per second to avoid IP bans.
             let delay = {
                 let mut guard = HF_LAST_FETCH_CLOUD.lock().unwrap();
@@ -3913,13 +3913,22 @@ async fn handle_fleet_model_candidates(
             const MAX_BYTES: u64 = 10_000_000;
             let call = match ureq::get(&url).timeout(std::time::Duration::from_secs(30)).call() {
                 Ok(r) => r,
-                Err(e) => { eprintln!("[fleet-discovery] HF fetch failed: {e}"); return Vec::new(); }
+                Err(e) => {
+                    eprintln!("[fleet-discovery] HF fetch failed: {e}");
+                    return (Vec::new(), false);
+                }
             };
             if call.header("content-length").and_then(|v| v.parse::<u64>().ok()).map(|n| n > MAX_BYTES).unwrap_or(false) {
                 eprintln!("[fleet-discovery] HF response too large, skipping");
-                return Vec::new();
+                return (Vec::new(), false);
             }
-            let hf_resp: Vec<serde_json::Value> = call.into_json().unwrap_or_default();
+            let hf_resp: Vec<serde_json::Value> = match call.into_json() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("[fleet-discovery] HF JSON parse failed: {e}");
+                    return (Vec::new(), false);
+                }
+            };
 
             let mut out = Vec::new();
             for m in &hf_resp {
@@ -3940,19 +3949,21 @@ async fn handle_fleet_model_candidates(
                 }
                 if !variants.is_empty() { out.push((model_id, downloads, variants)); }
             }
-            out
-        }).await.unwrap_or_default();
+            (out, true)
+        }).await.unwrap_or((Vec::new(), false));
 
-        // Store in cache as JSON
-        let cache_json: serde_json::Value = results.iter().map(|(mid, dl, vars)| {
-            serde_json::json!({
-                "model_id": mid, "downloads": dl,
-                "variants": vars.iter().map(|(f, q, s)| serde_json::json!({"filename": f, "quant": q, "file_size": s})).collect::<Vec<_>>()
-            })
-        }).collect::<Vec<_>>().into();
-        state.hf_cache.lock().await.insert(cache_key, (now_ms(), cache_json));
+        // Only cache successful HF fetches — never cache an empty error response.
+        if reached {
+            let cache_json: serde_json::Value = results.iter().map(|(mid, dl, vars)| {
+                serde_json::json!({
+                    "model_id": mid, "downloads": dl,
+                    "variants": vars.iter().map(|(f, q, s)| serde_json::json!({"filename": f, "quant": q, "file_size": s})).collect::<Vec<_>>()
+                })
+            }).collect::<Vec<_>>().into();
+            state.hf_cache.lock().await.insert(cache_key, (now_ms(), cache_json));
+        }
 
-        results
+        (results, reached)
     };
 
     // Snapshot online fleet node hardware
@@ -4026,6 +4037,7 @@ async fn handle_fleet_model_candidates(
     Json(serde_json::json!({
         "is_live_search": search.is_some(),
         "online_nodes":   online_count,
+        "hf_reachable":   hf_reachable,
         "models":         models,
     })).into_response()
 }
