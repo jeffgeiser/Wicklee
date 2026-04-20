@@ -3877,17 +3877,23 @@ async fn handle_fleet_model_candidates(
     // Query the Postgres model_catalog (populated by refresh_cloud_model_catalog at startup
     // + 3 AM nightly). This uses the correct HF tree API that includes actual file sizes —
     // unlike the old ?full=true approach which never included the size field in siblings.
+    //
+    // IMPORTANT: LIMIT is applied to variant *rows*, not model count. A single popular model
+    // (e.g. Llama 3.2) can have 20+ quant variants, consuming the entire limit. We fetch
+    // limit * 30 rows then cap at `limit` distinct models after grouping, ensuring we always
+    // surface the requested number of models regardless of variant count.
+    let row_limit: i32 = limit.saturating_mul(30).min(1200);
     let rows: Vec<(String, String, String, i64, i64)> = if let Some(ref s) = search {
         sqlx::query_as(
             "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
              WHERE LOWER(model_id) LIKE '%' || LOWER($2) || '%'
              ORDER BY downloads DESC LIMIT $1"
-        ).bind(limit).bind(s).fetch_all(&state.pool).await.unwrap_or_default()
+        ).bind(row_limit).bind(s).fetch_all(&state.pool).await.unwrap_or_default()
     } else {
         sqlx::query_as(
             "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
              ORDER BY downloads DESC LIMIT $1"
-        ).bind(limit).fetch_all(&state.pool).await.unwrap_or_default()
+        ).bind(row_limit).fetch_all(&state.pool).await.unwrap_or_default()
     };
 
     // Group flat rows by model_id → variants list
@@ -3911,12 +3917,13 @@ async fn handle_fleet_model_candidates(
     };
     eprintln!("[fleet-discovery] {hf_debug}");
 
-    // Build hf_models sorted by downloads descending
+    // Build hf_models sorted by downloads descending, capped at `limit` distinct models.
     let mut hf_models: Vec<(String, u64, Vec<(String, String, u64)>)> = model_map
         .into_iter()
         .map(|(id, (dl, vars))| (id, dl, vars))
         .collect();
     hf_models.sort_by(|a, b| b.1.cmp(&a.1));
+    hf_models.truncate(limit as usize);
 
     // Snapshot online fleet node hardware
     let now = now_ms();

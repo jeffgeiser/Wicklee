@@ -1629,104 +1629,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 ))}
               </div>
 
-              {/* ── Server-side Fleet Observations (Phase 4B — cloud only) ───
-                  Essential Four alert observations from the cloud evaluator task.
-                  Rendered as red (critical) / amber (warning) severity cards
-                  with context, acknowledge button, and cross-nav to Observability. */}
-              {!isLocalHost && serverObservations.length > 0 && (
-                <div className="space-y-2">
-                  <SectionHeader>Fleet Alerts</SectionHeader>
-                  {serverObservations
-                    .filter(o => showResolved || o.state === 'open')
-                    .map(obs => {
-                      const isCritical = obs.severity === 'critical';
-                      const isOpen     = obs.state === 'open';
-                      const isAcked    = obs.state === 'acknowledged';
-                      const nodeHost   = effectiveNodes.find(n => n.node_id === obs.node_id)?.hostname ?? obs.node_id;
-                      let ctx: Record<string, unknown> = {};
-                      try { if (obs.context_json) ctx = JSON.parse(obs.context_json); } catch {}
-
-                      return (
-                        <div
-                          key={obs.id}
-                          className={`rounded-2xl border p-4 transition-all ${
-                            !isOpen
-                              ? 'border-gray-800/40 bg-gray-900/30 opacity-60'
-                              : isCritical
-                              ? 'border-red-500/30 bg-red-500/5'
-                              : 'border-amber-500/30 bg-amber-500/5'
-                          }`}
-                        >
-                          {/* Header */}
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${
-                              !isOpen ? 'bg-gray-600' : isCritical ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
-                            }`} />
-                            <span className={`text-[9px] font-bold uppercase tracking-widest ${
-                              !isOpen ? 'text-gray-500' : isCritical ? 'text-red-400/80' : 'text-amber-400/80'
-                            }`}>
-                              {obs.severity}
-                            </span>
-                            <span className="ml-auto text-[9px] text-gray-600 font-mono">
-                              {nodeHost}
-                            </span>
-                            {!isOpen && (
-                              <span className="text-[9px] text-green-500/70 flex items-center gap-1">
-                                <CheckCircle className="w-3 h-3" />
-                                {isAcked ? 'Acknowledged' : 'Resolved'}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Title + Detail */}
-                          <p className={`text-sm font-semibold ${isOpen ? 'text-gray-200' : 'text-gray-500'}`}>
-                            {obs.title}
-                          </p>
-                          <p className={`text-xs mt-1 leading-relaxed ${isOpen ? 'text-gray-400' : 'text-gray-600'}`}>
-                            {obs.detail}
-                          </p>
-
-                          {/* Context chips */}
-                          {Object.keys(ctx).length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mt-2">
-                              {Object.entries(ctx).filter(([, v]) => v != null).slice(0, 4).map(([k, v]) => (
-                                <span key={k} className="text-[9px] px-1.5 py-0.5 rounded bg-gray-800/80 text-gray-500 font-mono">
-                                  {k.replace(/_/g, ' ')}: {String(v)}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* Action row */}
-                          <div className="flex items-center gap-3 mt-3">
-                            {isOpen && (
-                              <button
-                                onClick={() => acknowledgeObs(obs.id)}
-                                className="text-[10px] text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-1"
-                              >
-                                <CheckCircle className="w-3 h-3" />
-                                Acknowledge
-                              </button>
-                            )}
-                            {onNavigateToObservability && (
-                              <button
-                                onClick={() => onNavigateToObservability({ nodeId: obs.node_id, centerMs: obs.fired_at_ms })}
-                                className="text-[10px] text-indigo-400/60 hover:text-indigo-400 transition-colors flex items-center gap-1"
-                              >
-                                <Activity className="w-3 h-3" />
-                                View in Timeline →
-                              </button>
-                            )}
-                            <span className="ml-auto text-[9px] text-gray-700 font-mono">
-                              {new Date(obs.fired_at_ms).toLocaleTimeString()}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              )}
-
               {/* ── Agent Observations (localhost only) ─────────────────────────────
                   Server-evaluated by the Rust agent against the local DuckDB buffer.
                   Covers patterns A/B/C/F/H/J/K/L/N/P/Q/R. These take precedence over
@@ -1890,6 +1792,104 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </div>
                 );
               })()}
+
+              {/* ── Server-side Fleet Alerts (Phase 4B — cloud only) ─────────
+                  Cloud evaluator observations (wes_cliff, agent_version_mismatch,
+                  fleet_load_imbalance, etc.) rendered with acknowledge button and
+                  Observability cross-nav. Shown below pattern observations. */}
+              {!isLocalHost && serverObservations.length > 0 && (
+                <div className="space-y-2">
+                  <SectionHeader>Fleet Alerts</SectionHeader>
+                  {serverObservations
+                    .filter(o => showResolved || o.state === 'open')
+                    .map(obs => {
+                      const isCritical = obs.severity === 'critical';
+                      const isOpen     = obs.state === 'open';
+                      const isAcked    = obs.state === 'acknowledged';
+                      const nodeHost   = effectiveNodes.find(n => n.node_id === obs.node_id)?.hostname ?? obs.node_id;
+                      let ctx: Record<string, unknown> = {};
+                      try { if (obs.context_json) ctx = JSON.parse(obs.context_json); } catch {}
+
+                      return (
+                        <div
+                          key={obs.id}
+                          className={`rounded-2xl border p-4 transition-all ${
+                            !isOpen
+                              ? 'border-gray-800/40 bg-gray-900/30 opacity-60'
+                              : isCritical
+                              ? 'border-red-500/30 bg-red-500/5'
+                              : 'border-amber-500/30 bg-amber-500/5'
+                          }`}
+                        >
+                          {/* Header */}
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${
+                              !isOpen ? 'bg-gray-600' : isCritical ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
+                            }`} />
+                            <span className={`text-[9px] font-bold uppercase tracking-widest ${
+                              !isOpen ? 'text-gray-500' : isCritical ? 'text-red-400/80' : 'text-amber-400/80'
+                            }`}>
+                              {obs.severity}
+                            </span>
+                            <span className="ml-auto text-[9px] text-gray-600 font-mono">
+                              {nodeHost}
+                            </span>
+                            {!isOpen && (
+                              <span className="text-[9px] text-green-500/70 flex items-center gap-1">
+                                <CheckCircle className="w-3 h-3" />
+                                {isAcked ? 'Acknowledged' : 'Resolved'}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Title + Detail */}
+                          <p className={`text-sm font-semibold ${isOpen ? 'text-gray-200' : 'text-gray-500'}`}>
+                            {obs.title}
+                          </p>
+                          <p className={`text-xs mt-1 leading-relaxed ${isOpen ? 'text-gray-400' : 'text-gray-600'}`}>
+                            {obs.detail}
+                          </p>
+
+                          {/* Context chips */}
+                          {Object.keys(ctx).length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {Object.entries(ctx).filter(([, v]) => v != null).slice(0, 4).map(([k, v]) => (
+                                <span key={k} className="text-[9px] px-1.5 py-0.5 rounded bg-gray-800/80 text-gray-500 font-mono">
+                                  {k.replace(/_/g, ' ')}: {String(v)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Action row */}
+                          <div className="flex items-center gap-3 mt-3">
+                            {isOpen && (
+                              <button
+                                onClick={() => acknowledgeObs(obs.id)}
+                                className="text-[10px] text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-1"
+                              >
+                                <CheckCircle className="w-3 h-3" />
+                                Acknowledge
+                              </button>
+                            )}
+                            {onNavigateToObservability && (
+                              <button
+                                onClick={() => onNavigateToObservability({ nodeId: obs.node_id, centerMs: obs.fired_at_ms })}
+                                className="text-[10px] text-indigo-400/60 hover:text-indigo-400 transition-colors flex items-center gap-1"
+                              >
+                                <Activity className="w-3 h-3" />
+                                View in Timeline →
+                              </button>
+                            )}
+                            <span className="ml-auto text-[9px] text-gray-700 font-mono">
+                              {new Date(obs.fired_at_ms).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
 
               {/* Model Fit — responsive mini tiles (1–4 cols depending on count) */}
               <div>
