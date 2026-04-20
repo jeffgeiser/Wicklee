@@ -1,19 +1,19 @@
 /**
  * ModelEvictionCard — Tier 2 Insight (Community+)
  *
- * Condition (simplified proxy until /api/ps inactivity tracking is added):
- *   ollama_running === true
- *   AND ollama_active_model != null
- *   AND no tok/s activity observed for ≥ 5 minutes this session
+ * Fires when an Ollama model has been idle (inference_state !== 'live') for
+ * ≥ 3 minutes.  Uses real inference-state transitions tracked in AIInsights,
+ * not session-relative tok/s timestamps — so it fires correctly even when the
+ * page was just opened on an already-idle node.
  *
- * `lastActiveTsMs` is tracked in AIInsights.tsx — updated whenever tok/s > 0
- * is seen in an SSE frame.
+ * Props:
+ *   idleSinceMs  — timestamp (ms) when the node last entered idle state.
+ *                  Pass null when the node is actively inferring (card hides).
  *
- * Dismissable per session.
+ * Note: eviction is Ollama-specific.  vLLM and llama.cpp servers hold models
+ * in memory permanently, so this card is gated on ollama_active_model.
  *
- * Keep Warm button:
- *   canKeepWarm=true  → fires a silent 1-token Ollama ping; shows loading → "kept warm" state
- *   canKeepWarm=false → button disabled with lock icon (higher tier required)
+ * Keep Warm button fires a silent 1-token ping to reset Ollama's keep_alive.
  */
 
 import React, { useState } from 'react';
@@ -36,11 +36,13 @@ const SUCCESS_DURATION_MS = 3_000;
 
 interface Props {
   node:            SentinelMetrics;
-  lastActiveTsMs:  number;
+  /**
+   * Timestamp (ms) when this node's inference_state last transitioned to idle.
+   * null = node is actively inferring → card will not render.
+   */
+  idleSinceMs:     number | null;
   showNodeHeader?: boolean;
-  /** When true, the Keep Warm button fires a silent Ollama ping. All tiers. */
   canKeepWarm?:    boolean;
-  /** Called after Keep Warm fires successfully. */
   onKeepWarm?:     () => void;
 }
 
@@ -48,30 +50,31 @@ interface Props {
 
 const ModelEvictionCard: React.FC<Props> = ({
   node,
-  lastActiveTsMs,
+  idleSinceMs,
   showNodeHeader = false,
   canKeepWarm    = true,
   onKeepWarm,
 }) => {
   const [keepWarmState, setKeepWarmState] = useState<'idle' | 'loading' | 'success'>('idle');
 
+  // Must have an Ollama model loaded and be in idle state
   if (!node.ollama_running || !node.ollama_active_model) return null;
+  if (idleSinceMs == null) return null;
 
-  const inactiveMs      = Date.now() - lastActiveTsMs;
-  const remainingMs     = Math.max(0, KEEP_ALIVE_MS - inactiveMs);
-  const remainingMin    = Math.ceil(remainingMs / 60_000);
+  const inactiveMs   = Date.now() - idleSinceMs;
+  const remainingMs  = Math.max(0, KEEP_ALIVE_MS - inactiveMs);
+  const remainingMin = Math.ceil(remainingMs / 60_000);
 
   // Only show when inactive for at least 3 minutes
   if (inactiveMs < WARN_AFTER_MS) return null;
 
   const activeModel  = node.ollama_active_model;
-  const titleSuffix  = showNodeHeader ? ` · ${node.node_id}` : '';
+  const titleSuffix  = showNodeHeader ? ` · ${node.hostname ?? node.node_id}` : '';
 
   const handleKeepWarm = async () => {
     if (keepWarmState !== 'idle') return;
     setKeepWarmState('loading');
     try {
-      // Silent 1-token ping — resets Ollama's keep_alive timer without a real prompt.
       await fetch('http://localhost:11434/api/generate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -83,7 +86,7 @@ const ModelEvictionCard: React.FC<Props> = ({
         }),
       });
     } catch {
-      // Ping failure is non-fatal — still show success (model might still be warm)
+      // Ping failure is non-fatal — still show success
     }
     setKeepWarmState('success');
     onKeepWarm?.();
@@ -105,10 +108,10 @@ const ModelEvictionCard: React.FC<Props> = ({
           <span className="font-mono text-gray-200 text-xs">{activeModel}</span>
           <span className="text-gray-500">·</span>
           <span className="text-gray-400">
-            unloads in{' '}
-            <span className="font-telin text-amber-400">
-              ~{remainingMin} {remainingMin === 1 ? 'minute' : 'minutes'}
-            </span>
+            {remainingMs > 0
+              ? <>unloads in <span className="font-telin text-amber-400">~{remainingMin} {remainingMin === 1 ? 'minute' : 'minutes'}</span></>
+              : <span className="text-red-400">eviction may have occurred</span>
+            }
           </span>
         </div>
 

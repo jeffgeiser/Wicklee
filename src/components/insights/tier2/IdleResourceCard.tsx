@@ -1,15 +1,18 @@
 /**
  * IdleResourceCard — Tier 2 Insight
  *
- * Condition:
- *   - Session uptime ≥ 1 hour (from first SSE message received)
- *   - No tok/s activity observed at any point this session
+ * Two fire paths, both backed by historical data:
  *
- * `sessionStartMs` = timestamp of first SSE frame (passed from AIInsights).
- * `hadAnyActivity` = set to true when tok/s > 0 was ever seen (passed from AIInsights).
+ *   Cloud path  (dutyPct provided):
+ *     Fires when a node's 24h inference duty cycle is below IDLE_DUTY_THRESHOLD (5%).
+ *     Uses data from /api/fleet/duty — historical DuckDB aggregates, not session time.
  *
- * Idle cost uses the per-node kWhRate and PUE from getNodeSettings().
- * Dismissable per session.
+ *   Localhost path  (idleSinceMs provided):
+ *     Fires when inference_state has been non-live for ≥ 60 continuous minutes.
+ *     idleSinceMs is pre-seeded from /api/history on mount, so it fires immediately
+ *     for nodes that were idle before the page loaded.
+ *
+ * Idle cost formula:  watts × PUE × (kwhRate / 1000)  per hour.
  */
 
 import React from 'react';
@@ -17,20 +20,25 @@ import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
 import { getNodePowerW } from '../../../utils/power';
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const ONE_HOUR_MS         = 60 * 60 * 1_000;
+/** Nodes with 24h duty below this threshold trigger the card (cloud path). */
+const IDLE_DUTY_THRESHOLD = 5; // percent
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const ONE_HOUR_MS = 60 * 60 * 1_000;
-
-/** Watts to display for idle cost calculation. */
-function idleWatts(node: SentinelMetrics): number | null {
-  return getNodePowerW(node);
-}
-
-/** Format duration as "Xh Ym". */
 function formatDuration(ms: number): string {
   const hours   = Math.floor(ms / ONE_HOUR_MS);
   const minutes = Math.floor((ms % ONE_HOUR_MS) / 60_000);
+  if (hours === 0) return `${minutes}m`;
   return `${hours}h ${minutes}m`;
+}
+
+function costPerHr(node: SentinelMetrics, kwhRate: number, pue: number): string | null {
+  const watts = getNodePowerW(node);
+  if (watts == null) return null;
+  return (watts * pue * (kwhRate / 1000)).toFixed(3);
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -38,11 +46,15 @@ function formatDuration(ms: number): string {
 interface Props {
   node:            SentinelMetrics;
   /**
-   * Timestamp of the last tok/s > 0 observation for this node.
-   * Initialised to session-start time (or node-first-seen time for fleet nodes)
-   * so that a node that never infers counts as "idle since first seen".
+   * Cloud path: 24h inference duty cycle (0–100).
+   * When provided, fires when dutyPct < IDLE_DUTY_THRESHOLD.
    */
-  lastActiveTsMs:  number;
+  dutyPct?:        number | null;
+  /**
+   * Localhost path: timestamp (ms) when idle state began.
+   * When provided (and dutyPct is absent), fires when ≥ 60 min old.
+   */
+  idleSinceMs?:    number | null;
   kwhRate:         number;
   pue:             number;
   showNodeHeader?: boolean;
@@ -52,24 +64,58 @@ interface Props {
 
 const IdleResourceCard: React.FC<Props> = ({
   node,
-  lastActiveTsMs,
+  dutyPct,
+  idleSinceMs,
   kwhRate,
   pue,
   showNodeHeader = false,
 }) => {
-  // Guard: must have had no inference activity for ≥ 60 continuous minutes.
-  // Fires even if the node was active earlier — the clock resets on each tok/s > 0.
-  const idleMs = Date.now() - lastActiveTsMs;
+  const titleSuffix = showNodeHeader ? ` · ${node.hostname ?? node.node_id}` : '';
+  const costStr     = costPerHr(node, kwhRate, pue);
+
+  // ── Cloud path (duty-based) ──────────────────────────────────────────────
+  if (dutyPct != null) {
+    if (dutyPct >= IDLE_DUTY_THRESHOLD) return null;
+
+    return (
+      <InsightCard
+        id="idle-resource"
+        nodeId={node.node_id}
+        tier={2}
+        severity="amber"
+        title={`Idle Resource Notice${titleSuffix}`}
+      >
+        <div className="px-5 py-4 space-y-3">
+          <p className="text-sm text-gray-400">
+            Only{' '}
+            <span className="font-telin text-gray-300">{dutyPct.toFixed(1)}%</span>
+            {' '}inference duty in the last 24 hours.
+          </p>
+
+          {costStr != null && (
+            <p className="text-sm text-gray-400">
+              Estimated idle cost:{' '}
+              <span className="font-telin text-amber-400">${costStr}/hr</span>
+              <span className="text-gray-600 text-xs ml-1">
+                at ${kwhRate}/kWh · PUE {pue}
+              </span>
+            </p>
+          )}
+
+          <div className="pt-1 border-t border-gray-800">
+            <p className="text-xs text-gray-500">
+              Consider suspending this node if inference is not needed.
+            </p>
+          </div>
+        </div>
+      </InsightCard>
+    );
+  }
+
+  // ── Localhost path (idle-since tracking) ─────────────────────────────────
+  if (idleSinceMs == null) return null;
+  const idleMs = Date.now() - idleSinceMs;
   if (idleMs < ONE_HOUR_MS) return null;
-
-  const watts        = idleWatts(node);
-  const titleSuffix  = showNodeHeader ? ` · ${node.node_id}` : '';
-  const duration     = formatDuration(idleMs);
-
-  // Idle cost per hour: watts × PUE × (kwhRate / 1000)
-  const costPerHr    = watts != null
-    ? (watts * pue * (kwhRate / 1000)).toFixed(3)
-    : null;
 
   return (
     <InsightCard
@@ -80,33 +126,26 @@ const IdleResourceCard: React.FC<Props> = ({
       title={`Idle Resource Notice${titleSuffix}`}
     >
       <div className="px-5 py-4 space-y-3">
-
-        {/* ── Duration line ────────────────────────────────────────────────── */}
         <p className="text-sm text-gray-400">
           No inference activity for{' '}
-          <span className="font-telin text-gray-300">{duration}</span>.
+          <span className="font-telin text-gray-300">{formatDuration(idleMs)}</span>.
         </p>
 
-        {/* ── Idle cost ────────────────────────────────────────────────────── */}
-        {costPerHr != null && (
-          <div className="flex items-center gap-2">
-            <p className="text-sm text-gray-400">
-              Estimated idle cost:{' '}
-              <span className="font-telin text-amber-400">${costPerHr}/hr</span>
-              <span className="text-gray-600 text-xs ml-1">
-                at ${kwhRate}/kWh · PUE {pue}
-              </span>
-            </p>
-          </div>
+        {costStr != null && (
+          <p className="text-sm text-gray-400">
+            Estimated idle cost:{' '}
+            <span className="font-telin text-amber-400">${costStr}/hr</span>
+            <span className="text-gray-600 text-xs ml-1">
+              at ${kwhRate}/kWh · PUE {pue}
+            </span>
+          </p>
         )}
 
-        {/* ── Recommendation ───────────────────────────────────────────────── */}
         <div className="pt-1 border-t border-gray-800">
           <p className="text-xs text-gray-500">
             Consider suspending this node if inference is not needed.
           </p>
         </div>
-
       </div>
     </InsightCard>
   );

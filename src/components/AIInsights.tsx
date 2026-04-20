@@ -33,6 +33,7 @@ import {
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
 import type { FleetObservation } from '../hooks/useFleetObservations';
+import { useFleetDuty } from '../hooks/useFleetDuty';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import EventFeed from './EventFeed';
 import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
@@ -808,12 +809,14 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const wattReadingsRef        = useRef<number[]>([]);
   const [sessionBaselineWatts, setSessionBaselineWatts] = useState<number | null>(null);
 
-  // Eviction tracking (Cockpit only)
-  const [lastActiveTsMs, setLastActiveTsMs] = useState<number>(() => Date.now());
-
-  // Idle tracking (Cockpit only)
-  const firstMessageTsRef = useRef<number | null>(null);
-  const hadActivityRef    = useRef<boolean>(false);
+  // ── Inference-state idle tracking (replaces session-relative tok/s timing) ──
+  // localIdleStartMs: when the local node's inference_state last became non-live.
+  // null = currently live (actively inferring).  Pre-seeded from /api/history on mount.
+  const [localIdleStartMs, setLocalIdleStartMs] = useState<number | null>(null);
+  const localInferenceStateRef  = useRef<string | null>(null);
+  const localIdlePreseededRef   = useRef(false);
+  const firstMessageTsRef       = useRef<number | null>(null);
+  const hadActivityRef          = useRef<boolean>(false);
   const [hadAnyActivity, setHadAnyActivity] = useState(false);
 
   // ── Alert log (session-scoped, Recent Activity panel) ─────────────────────
@@ -832,6 +835,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     state: 'all',
     skip: isLocalHost,
   });
+
+  // ── Fleet duty cycle (cloud only) — 24h historical inference duty per node ──
+  const fleetDuty = useFleetDuty(isLocalHost ? null : getToken ?? null);
 
   // ── Local agent observations (Patterns A/B/J/L — localhost only) ───────────
   const { observations: localAgentObs } = useLocalObservations(!isLocalHost);
@@ -906,10 +912,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const lastIdleDetailRef      = useRef<string | null>(null);
   const prevFitModelRef       = useRef<string | null>(null);
 
-  // ── Per-node activity tracking for Mission Control (fleet) ────────────────
-  // Mirrors the Cockpit's lastActiveTsMs / firstMessageTs / hadAnyActivity
-  // refs, but keyed by node_id so they work across an entire fleet.
-  const nodeLastActiveMsRef = useRef<Record<string, number>>({});
+  // ── Per-node inference-state idle tracking for fleet ─────────────────────
+  // nodeIdleStartMsRef[nodeId]: timestamp when this node last became idle.
+  // null = currently live.  Updated on every inference_state transition.
+  const nodeIdleStartMsRef  = useRef<Record<string, number | null>>({});
+  const nodePrevStateRef    = useRef<Record<string, string>>({});
+  // Keep legacy refs for any other consumers (node session start, had-activity)
   const nodeSessionStartRef = useRef<Record<string, number>>({});
   const nodeHadActivityRef  = useRef<Record<string, boolean>>({});
 
@@ -961,14 +969,23 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             }
           }
 
-          const toks = data.ollama_tokens_per_second ?? 0;
-          if (toks > 0) {
-            setLastActiveTsMs(Date.now());
+          // Track inference_state transitions for eviction / idle-resource cards.
+          const state = data.inference_state ?? 'idle';
+          const prev  = localInferenceStateRef.current;
+          if (state === 'live') {
+            setLocalIdleStartMs(null); // actively inferring — reset idle clock
             if (!hadActivityRef.current) {
               hadActivityRef.current = true;
               setHadAnyActivity(true);
             }
+          } else if (prev === 'live' || (prev === null && localIdlePreseededRef.current)) {
+            // Transitioned from live → idle (or first non-live frame after preseed)
+            setLocalIdleStartMs(ts => ts ?? Date.now());
+          } else if (prev === null && !localIdlePreseededRef.current) {
+            // First frame, preseed not yet done — set idle clock conservatively
+            setLocalIdleStartMs(ts => ts ?? Date.now());
           }
+          localInferenceStateRef.current = state;
         } catch { /* malformed frame */ }
       };
 
@@ -987,23 +1004,61 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     };
   }, []);
 
+  // ── Localhost: pre-seed idle start from DuckDB history ───────────────────
+  // Fetches the last hour of 1-min aggregates to find when inference was last
+  // active.  This lets eviction and idle-resource cards fire immediately on
+  // page load for nodes that were already idle before the app opened.
+  useEffect(() => {
+    if (!isLocalHost || localIdlePreseededRef.current) return;
+    const nodeId = localSentinel?.node_id;
+    if (!nodeId) return;
+    localIdlePreseededRef.current = true;
+
+    const from = Date.now() - 60 * 60 * 1_000;
+    fetch(`http://localhost:7700/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&resolution=1min`)
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { samples?: Array<{ ts_ms: number; tps?: number | null }> } | null) => {
+        if (!data?.samples?.length) return;
+        // Find the most recent sample with tps > 0
+        const activeSamples = data.samples.filter(s => (s.tps ?? 0) > 0);
+        if (activeSamples.length > 0) {
+          // Last active sample end time (+60s for 1min resolution) = idle start
+          const lastActiveTs = activeSamples[activeSamples.length - 1].ts_ms + 60_000;
+          setLocalIdleStartMs(prev => prev ?? lastActiveTs);
+        } else {
+          // No activity in the last hour — idle since oldest sample
+          setLocalIdleStartMs(prev => prev ?? data.samples![0].ts_ms);
+        }
+      })
+      .catch(() => {}); // non-fatal; SSE tracking fills in the gap
+  }, [isLocalHost, localSentinel?.node_id]);
+
   // ── Fleet activity tracking (Mission Control only) ────────────────────────
-  // On every SSE frame, update per-node session-start / last-active / had-activity
-  // refs so Section 2 cards can fire for fleet nodes, not just Cockpit.
+  // On every SSE frame, track inference_state transitions per node so eviction
+  // and idle-resource cards can fire based on actual idle duration.
   useEffect(() => {
     if (isLocalHost) return; // Cockpit tracks via the local SSE effect above
     const nowMs = Date.now();
     for (const [nodeId, nm] of Object.entries(allNodeMetrics)) {
-      // Initialize session start & last-active on first sight of a node
+      // Initialize session start on first sight of a node
       if (nodeSessionStartRef.current[nodeId] === undefined) {
         nodeSessionStartRef.current[nodeId] = nowMs;
-        nodeLastActiveMsRef.current[nodeId] = nowMs;
       }
-      const toks = (nm.ollama_tokens_per_second ?? 0) + (nm.vllm_tokens_per_sec ?? 0);
-      if (toks > 0) {
-        nodeLastActiveMsRef.current[nodeId] = nowMs;
-        nodeHadActivityRef.current[nodeId]  = true;
+      // Track inference_state transitions
+      const state = nm.inference_state ?? 'idle';
+      const prev  = nodePrevStateRef.current[nodeId];
+      if (state === 'live') {
+        nodeIdleStartMsRef.current[nodeId] = null; // actively inferring
+        nodeHadActivityRef.current[nodeId] = true;
+      } else {
+        // Non-live: start the idle clock on first idle observation or live→idle transition.
+        // Don't reset once started — preserves the original idle start time.
+        if (nodeIdleStartMsRef.current[nodeId] === undefined ||
+            (prev === 'live' && state !== 'live')) {
+          nodeIdleStartMsRef.current[nodeId] = nowMs;
+        }
       }
+      nodePrevStateRef.current[nodeId] = state;
     }
   }, [allNodeMetrics]);
 
@@ -1224,35 +1279,39 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const m = localSentinel; // convenience alias (Cockpit)
 
-  // Cockpit: single-node conditions from local SSE tracking
+  // Cockpit: single-node eviction — model loaded + idle for ≥ 3 min.
+  // localIdleStartMs is pre-seeded from /api/history so it reflects real idle
+  // duration, not just time-since-page-load.
   const tier2EvictionActive = isLocalHost &&
     m?.ollama_running === true &&
     m?.ollama_active_model != null &&
-    (now - lastActiveTsMs) >= (3 * 60 * 1_000); // warn at 3 min (card shows 2 min remaining)
+    localIdleStartMs != null &&
+    (now - localIdleStartMs) >= (3 * 60 * 1_000);
 
-  // Idle: no tok/s for ≥ 60 continuous minutes.
-  // lastActiveTsMs resets on each tok/s > 0 — fires even after earlier activity.
-  const tier2IdleActive  = isLocalHost && m != null && (now - lastActiveTsMs) >= 60 * 60 * 1_000;
+  // Cockpit: idle resource — no inference for ≥ 60 min (pre-seeded from history).
+  const tier2IdleActive = isLocalHost &&
+    m != null &&
+    localIdleStartMs != null &&
+    (now - localIdleStartMs) >= 60 * 60 * 1_000;
 
-  // Mission Control: per-node conditions from fleet tracking refs.
-  // ModelEviction proxy: no tok/s for ≥ 3 min with a model loaded.
-  // IdleResource: node online ≥ 1 hr with zero inference this session.
+  // Fleet eviction: Ollama model loaded + idle ≥ 3 min per inference_state tracking.
   const fleetEvictionNodes: SentinelMetrics[] = !isLocalHost
-    ? effectiveNodes.filter(n =>
-        n.ollama_running === true &&
-        n.ollama_active_model != null &&
-        nodeLastActiveMsRef.current[n.node_id] !== undefined &&
-        (now - nodeLastActiveMsRef.current[n.node_id]) >= 3 * 60 * 1_000
-      )
+    ? effectiveNodes.filter(n => {
+        if (!n.ollama_running || !n.ollama_active_model) return false;
+        const idleStart = nodeIdleStartMsRef.current[n.node_id];
+        if (idleStart == null) return false;
+        return (now - idleStart) >= 3 * 60 * 1_000;
+      })
     : [];
 
+  // Fleet idle resource: use 24h duty data from DuckDB (cloud path).
+  // Fires for nodes with < 5% inference duty in the last 24 hours.
   const fleetIdleNodes: SentinelMetrics[] = !isLocalHost
     ? effectiveNodes.filter(n => {
-        const watts      = getNodePowerW(n);
-        if (watts == null) return false;
-        const lastActive = nodeLastActiveMsRef.current[n.node_id];
-        if (!lastActive) return false;
-        return (now - lastActive) >= 60 * 60 * 1_000;
+        if (getNodePowerW(n) == null) return false;
+        const dutyEntry = fleetDuty?.nodes.find(d => d.node_id === n.node_id);
+        if (!dutyEntry || dutyEntry.duty_pct == null) return false;
+        return dutyEntry.duty_pct < 5;
       })
     : [];
 
@@ -1476,7 +1535,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         type:     'idle_resource_warning',
         nodeId:   m.node_id,
         hostname: m.hostname ?? m.node_id,
-        detail:   `Idle for ${Math.round((now - lastActiveTsMs) / 60000)}m`,
+        detail:   `Idle for ${Math.round((now - (localIdleStartMs ?? now)) / 60000)}m`,
       });
     }
     prevIdleActiveRef.current = tier2IdleActive;
@@ -1926,7 +1985,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 {isLocalHost ? (
                   tier2EvictionActive && m ? (
                     <div id="insight-model-eviction">
-                      <ModelEvictionCard node={m} lastActiveTsMs={lastActiveTsMs} canKeepWarm
+                      <ModelEvictionCard node={m} idleSinceMs={localIdleStartMs} canKeepWarm
                         onKeepWarm={() => emitFleetEvent({ id: `${Date.now()}-keepwarm`, ts: Date.now(), type: 'keep_warm_taken', nodeId: m.node_id, hostname: m.hostname ?? m.node_id, detail: m.ollama_active_model ?? 'active model' })} />
                     </div>
                   ) : (
@@ -1938,7 +1997,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   <div className="space-y-3">
                     {fleetEvictionNodes.map(n => (
                       <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
-                        <ModelEvictionCard node={n} lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now} showNodeHeader={fleetEvictionNodes.length > 1} canKeepWarm
+                        <ModelEvictionCard node={n} idleSinceMs={nodeIdleStartMsRef.current[n.node_id] ?? null} showNodeHeader={fleetEvictionNodes.length > 1} canKeepWarm
                           onKeepWarm={() => emitFleetEvent({ id: `${Date.now()}-keepwarm`, ts: Date.now(), type: 'keep_warm_taken', nodeId: n.node_id, hostname: n.hostname ?? n.node_id, detail: n.ollama_active_model ?? 'active model' })} />
                       </div>
                     ))}
@@ -1953,7 +2012,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   isLocalHost ? (
                     tier2IdleActive && m ? (
                       <div id="insight-idle-resource">
-                        <IdleResourceCard node={m} lastActiveTsMs={lastActiveTsMs} kwhRate={localSettings.kwhRate} pue={localSettings.pue} />
+                        <IdleResourceCard node={m} idleSinceMs={localIdleStartMs} kwhRate={localSettings.kwhRate} pue={localSettings.pue} />
                       </div>
                     ) : (
                       <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected"
@@ -1965,7 +2024,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                         const ns = getNodeSettings(n.node_id);
                         return (
                           <div key={n.node_id} id={`insight-idle-resource-${n.node_id}`}>
-                            <IdleResourceCard node={n} lastActiveTsMs={nodeLastActiveMsRef.current[n.node_id] ?? now} kwhRate={ns.kwhRate} pue={ns.pue} showNodeHeader={fleetIdleNodes.length > 1} />
+                            <IdleResourceCard node={n} dutyPct={fleetDuty?.nodes.find(d => d.node_id === n.node_id)?.duty_pct ?? null} kwhRate={ns.kwhRate} pue={ns.pue} showNodeHeader={fleetIdleNodes.length > 1} />
                           </div>
                         );
                       })}
