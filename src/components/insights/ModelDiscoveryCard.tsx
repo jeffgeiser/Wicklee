@@ -100,7 +100,7 @@ function quantLabel(v: VariantResult): string {
   return stem.split(/[-.]/).pop() ?? stem;
 }
 
-const VariantTable: React.FC<{ variants: VariantResult[] }> = ({ variants }) => {
+const VariantTable: React.FC<{ variants: VariantResult[]; modelId: string; pullCmd?: string }> = ({ variants, modelId, pullCmd }) => {
   const [showAll, setShowAll] = useState(false);
   const fitting  = variants.filter(v => v.fit_score >= 40);
   const wontFit  = variants.filter(v => v.fit_score < 40);
@@ -108,16 +108,30 @@ const VariantTable: React.FC<{ variants: VariantResult[] }> = ({ variants }) => 
 
   return (
     <>
-      <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 mt-1">
-        Quantization variants{fitting.length < variants.length ? ` · ${fitting.length} fit` : ''}
+      {/* Variants header + HF link on the same row */}
+      <div className="flex items-center justify-between mt-1">
+        <span className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
+          Quants{fitting.length < variants.length ? ` · ${fitting.length} fit` : ` · ${variants.length}`}
+        </span>
+        <a
+          href={hfUrl(modelId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-0.5 text-[10px] text-gray-600 hover:text-cyan-400 transition-colors"
+        >
+          <ExternalLink className="w-2.5 h-2.5" />
+          <span className="hidden sm:inline text-[9px]">HuggingFace</span>
+        </a>
       </div>
+
+      {/* Variant rows */}
       <div className="space-y-0">
         {displayed.map(v => {
           const vc = fitColors(v.fit_score);
           return (
-            <div key={v.filename} className="flex items-center gap-2 py-1.5 border-t border-gray-800/20 first:border-t-0">
+            <div key={v.filename} className="flex items-center gap-2 py-1 border-t border-gray-800/20 first:border-t-0">
               <div className={`w-1.5 h-1.5 rounded-full ${vc.dot} shrink-0`} />
-              <span className="text-[11px] text-gray-400 font-mono shrink-0 max-w-[80px] truncate" title={v.filename}>
+              <span className="text-[11px] text-gray-400 font-mono shrink-0 w-[72px] truncate" title={v.filename}>
                 {quantLabel(v)}
               </span>
               <span className={`text-[10px] font-medium px-1.5 py-px rounded ${vc.badge} border shrink-0`}>
@@ -133,13 +147,23 @@ const VariantTable: React.FC<{ variants: VariantResult[] }> = ({ variants }) => 
           );
         })}
       </div>
+
+      {/* Won't fit disclosure */}
       {wontFit.length > 0 && (
         <button
           onClick={() => setShowAll(s => !s)}
-          className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors mt-1"
+          className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors mt-0.5"
         >
-          {showAll ? '↑ Hide' : `+ ${wontFit.length} that won't fit on your hardware`}
+          {showAll ? '↑ Hide' : `+ ${wontFit.length} that won't fit`}
         </button>
+      )}
+
+      {/* Pull command — inline, no recommendation paragraph */}
+      {pullCmd && (
+        <div className="flex items-center gap-1 mt-1.5 bg-gray-950/60 border border-gray-800/60 rounded px-2 py-1">
+          <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">{pullCmd}</code>
+          <CopyButton text={pullCmd} />
+        </div>
       )}
     </>
   );
@@ -154,11 +178,11 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
   const colors = fitColors(best.fit_score);
 
   return (
-    <div className="border border-gray-800/60 rounded-xl overflow-hidden">
+    <div className="border border-gray-800/60 rounded-lg overflow-hidden">
       {/* Summary row */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-800/20 transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800/20 transition-colors text-left"
       >
         <div className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
 
@@ -196,42 +220,10 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
           : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
       </button>
 
-      {/* Expanded: all variants + pull command */}
+      {/* Expanded: variants + pull command, no separate HF link row */}
       {open && (
-        <div className="px-3 pb-3 border-t border-gray-800/40 space-y-2">
-          {/* HF link */}
-          <div className="flex items-center gap-2 pt-2">
-            <a
-              href={hfUrl(model.model_id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 text-[10px] text-cyan-500 hover:text-cyan-400 transition-colors"
-            >
-              <ExternalLink className="w-2.5 h-2.5" />
-              {model.model_id}
-            </a>
-          </div>
-
-          {/* Variant table */}
-          <VariantTable variants={model.variants} />
-
-          {/* Pull command for best variant */}
-          {best.pull_cmd && (
-            <div className="mt-2 space-y-1">
-              <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
-                Ollama pull command
-              </div>
-              <div className="flex items-center gap-1.5 bg-gray-950/60 border border-gray-800/60 rounded-lg px-2.5 py-1.5">
-                <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">
-                  {best.pull_cmd}
-                </code>
-                <CopyButton text={best.pull_cmd} />
-              </div>
-              <p className="text-[10px] text-gray-600 leading-relaxed">
-                {best.recommendation}
-              </p>
-            </div>
-          )}
+        <div className="px-3 pb-2 border-t border-gray-800/40">
+          <VariantTable variants={model.variants} modelId={model.model_id} pullCmd={best.pull_cmd || undefined} />
         </div>
       )}
     </div>
