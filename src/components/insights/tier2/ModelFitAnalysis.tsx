@@ -34,7 +34,7 @@
  *     reasoning, enabling AI agents to answer "can I run this model safely?"
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Cpu, Activity } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
 import { computeModelFitScore } from '../../../utils/modelFit';
@@ -43,6 +43,52 @@ import { computeWES, formatWES, wesColorClass } from '../../../utils/wes';
 import { getNodePowerW } from '../../../utils/power';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../../utils/kvCache';
 import { computeQuantRecommendation } from '../../../utils/quantSweet';
+
+// ── Styled hover tooltip ──────────────────────────────────────────────────────
+// Lightweight version of MetricTooltip — no metricId/link needed for labels.
+
+interface TipProps {
+  text: string;
+  children: React.ReactNode;
+  /** Where the panel opens relative to the trigger. Default: top. */
+  side?: 'top' | 'bottom';
+  width?: string;
+}
+
+const Tip: React.FC<TipProps> = ({ text, children, side = 'top', width = 'w-56' }) => {
+  const [visible, setVisible] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const show = () => {
+    if (!window.matchMedia('(hover: hover)').matches) return;
+    timer.current = setTimeout(() => setVisible(true), 350);
+  };
+  const hide = () => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    setVisible(false);
+  };
+
+  return (
+    <span className="relative inline-flex items-center" onMouseEnter={show} onMouseLeave={hide}>
+      {children}
+      {visible && (
+        <span
+          role="tooltip"
+          className={[
+            'absolute z-50 pointer-events-none',
+            width,
+            side === 'top' ? 'bottom-full left-0 mb-1.5' : 'top-full left-0 mt-1.5',
+            'bg-gray-900 border border-gray-700/50 rounded-xl',
+            'shadow-2xl shadow-black/50 px-3 py-2.5',
+            'text-[11px] text-gray-400 font-sans leading-relaxed whitespace-normal',
+          ].join(' ')}
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+};
 
 // ── Quantization helpers ───────────────────────────────────────────────────────
 
@@ -332,12 +378,15 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-            <span
-              className="text-[10px] font-semibold uppercase tracking-widest text-gray-500"
-              title="Two-dimensional fit scored per model: Memory (headroom vs model size after load) and Efficiency (WES: tok/s per watt, thermal penalty applied)."
+            <Tip
+              text="Two-dimensional fit scored per model: Memory (headroom vs model size after load) and Efficiency (WES: tok/s per watt, thermal penalty applied)."
+              side="bottom"
+              width="w-64"
             >
-              Model Fit Analysis
-            </span>
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                Model Fit Analysis
+              </span>
+            </Tip>
           </div>
           <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded border text-green-400 bg-green-500/10 border-green-500/25 flex items-center gap-1 shrink-0">
             <Activity className="w-2.5 h-2.5 animate-pulse" />
@@ -365,23 +414,27 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   <th className="text-left pb-1.5 font-semibold pr-4">Node</th>
                   <th className="text-left pb-1.5 font-semibold pr-4">Model</th>
                   <th className="text-left pb-1.5 font-semibold pr-4">Quant</th>
-                  <th
-                    className="text-left pb-1.5 font-semibold pr-4"
-                    title="Headroom after model load. Good >20% free, Fair 10–20%, Poor <10% or thermal Serious/Critical."
-                  >Memory</th>
-                  <th
-                    className="text-left pb-1.5 font-semibold pr-4"
-                    title="WES: tok/s ÷ (watts × thermal penalty). Excellent >10, Good 3–10, Acceptable 1–3, Low <1. Shows — when no inference has been measured yet."
-                  >Efficiency</th>
+                  <th className="text-left pb-1.5 font-semibold pr-4">
+                    <Tip text="Headroom after model load. Good >20% free, Fair 10–20%, Poor <10% or thermal Serious/Critical." side="bottom">
+                      Memory
+                    </Tip>
+                  </th>
+                  <th className="text-left pb-1.5 font-semibold pr-4">
+                    <Tip text="WES: tok/s ÷ (watts × thermal penalty). Excellent >10, Good 3–10, Acceptable 1–3, Low <1. Shows — when no inference has been measured yet." side="bottom">
+                      Efficiency
+                    </Tip>
+                  </th>
                   <th className="text-right pb-1.5 font-semibold pr-4">Tok/s</th>
-                  <th
-                    className="text-right pb-1.5 font-semibold pr-4"
-                    title="Watts per 1,000 tokens at current draw. Hardware-agnostic — lower is better."
-                  >W/1K Tkn</th>
-                  <th
-                    className="text-right pb-1.5 font-semibold"
-                    title="Largest context window where the KV cache fits within available memory headroom. KV cache = 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ~ = estimated. — = architecture data not available for this runtime."
-                  >Max Ctx</th>
+                  <th className="text-right pb-1.5 font-semibold pr-4">
+                    <Tip text="Watts per 1,000 tokens at current draw. Hardware-agnostic — lower is better." side="bottom">
+                      W/1K Tkn
+                    </Tip>
+                  </th>
+                  <th className="text-right pb-1.5 font-semibold">
+                    <Tip text="Largest context window where the KV cache fits in memory headroom. ~ = estimated from param count. — = no architecture data (vLLM nodes always show —)." side="bottom" width="w-64">
+                      Max Ctx
+                    </Tip>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/40">
@@ -516,7 +569,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
           <span
             className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate"
-            title="Two-dimensional fit: Memory (headroom after model load) and Efficiency (WES: tok/s per watt, thermal penalty applied). Both dimensions are needed — a model can fit in memory but still run inefficiently, or vice versa."
           >
             Model Fit Analysis{entries.length > 1 ? ` · ${entries.length} Models` : ''}
           </span>
@@ -585,19 +637,21 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 </p>
               </div>
               <div>
-                <p
-                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5"
-                  title="Watts per 1,000 tokens at current accelerator draw. Hardware-agnostic efficiency metric — lower is better. Computed as: (accelerator watts ÷ tok/s) × 1000."
-                >W/1K Tkn</p>
+                <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">
+                  <Tip text="Watts per 1,000 tokens at current accelerator draw. Hardware-agnostic efficiency metric — lower is better." side="bottom">
+                    W/1K Tkn
+                  </Tip>
+                </p>
                 <p className="font-telin text-sm text-gray-200">
                   {e.w1k != null ? `${e.w1k.toFixed(0)}W` : <span className="text-gray-600">—</span>}
                 </p>
               </div>
               <div>
-                <p
-                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5"
-                  title="Wicklee Efficiency Score: tok/s ÷ (watts × thermal penalty). The thermal penalty increases with throttling (Fair 1.25×, Serious 1.75×, Critical 2×), so a throttled node's WES drops even if tok/s looks stable."
-                >WES</p>
+                <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">
+                  <Tip text="Wicklee Efficiency Score: tok/s ÷ (watts × thermal penalty). The thermal penalty increases with throttling (Fair 1.25×, Serious 1.75×, Critical 2×), so a throttled node's WES drops even if tok/s looks stable." side="bottom">
+                    WES
+                  </Tip>
+                </p>
                 <p className={`font-telin text-sm ${wesColorClass(e.wes)}`}>
                   {e.wes != null ? formatWES(e.wes) : <span className="text-gray-600">—</span>}
                 </p>
@@ -614,11 +668,13 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               <div className="mb-2.5">
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-0.5">
-                    <p
-                      className="text-[9px] text-gray-600 uppercase tracking-widest"
-                      title={`${memFit.isNvidia ? 'Dedicated GPU VRAM (NVML)' : 'Unified memory (shared CPU + GPU)'}. Headroom is free space after all loaded models and system processes. Context windows and KV cache grow into this space during inference.`}
-                    >
-                      {memFit.isNvidia ? 'VRAM' : 'Memory'}
+                    <p className="text-[9px] text-gray-600 uppercase tracking-widest">
+                      <Tip
+                        text={`${memFit.isNvidia ? 'Dedicated GPU VRAM (NVML)' : 'Unified memory (shared CPU + GPU)'}. Headroom is free space after all loaded models and system processes. Context windows and KV cache grow into this space during inference.`}
+                        side="bottom"
+                      >
+                        {memFit.isNvidia ? 'VRAM' : 'Memory'}
+                      </Tip>
                     </p>
                   </div>
                   {memCfg && (
@@ -675,10 +731,14 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 return (
                   <div className="mb-2.5">
                     <div className="flex items-center justify-between">
-                      <p
-                        className="text-[9px] text-gray-600 uppercase tracking-widest"
-                        title={`KV cache at max context (${fmtCtx(runway.arch.maxCtx)}): ${approx}${fmtKvSize(maxPt.kvGb)}. ${runway.arch.isExact ? 'Architecture from /api/show.' : 'Estimated from parameter count (±30%).'}`}
-                      >Context Runway</p>
+                      <p className="text-[9px] text-gray-600 uppercase tracking-widest">
+                        <Tip
+                          text={`KV cache at max context (${fmtCtx(runway.arch.maxCtx)}): ${approx}${fmtKvSize(maxPt.kvGb)}. ${runway.arch.isExact ? 'Architecture from /api/show.' : 'Estimated from parameter count (±30%).'}`}
+                          side="bottom"
+                        >
+                          Context Runway
+                        </Tip>
+                      </p>
                       <span className="text-[9px] text-green-400 font-mono flex items-center gap-1">
                         ✓ Full {fmtCtx(runway.arch.maxCtx)} window
                         <span className="text-gray-600">· {approx}{fmtKvSize(maxPt.kvGb)} KV cache</span>
@@ -695,10 +755,14 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               return (
                 <div className="mb-2.5">
                   <div className="flex items-center justify-between mb-1.5">
-                    <p
-                      className="text-[9px] text-gray-600 uppercase tracking-widest"
-                      title={`KV cache memory at each context length. Formula: 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ${runway.arch.isExact ? 'Architecture from /api/show.' : 'Estimated from parameter count (±30%).'}`}
-                    >Context Runway</p>
+                    <p className="text-[9px] text-gray-600 uppercase tracking-widest">
+                      <Tip
+                        text={`KV cache memory at each context length. Formula: 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ${runway.arch.isExact ? 'Architecture from /api/show.' : 'Estimated from parameter count (±30%).'}`}
+                        side="bottom"
+                      >
+                        Context Runway
+                      </Tip>
+                    </p>
                     <span className="text-[9px] text-gray-600 font-mono">
                       {fmtKvSize(memFit.headroomGb)} headroom{!runway.arch.isExact && <span className="ml-1 text-gray-700">est.</span>}
                     </span>
@@ -768,10 +832,11 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               return (
                 <div className="pt-2 border-t border-gray-800/50">
                   <div className="flex items-center justify-between mb-1">
-                    <p
-                      className="text-[9px] text-gray-600 uppercase tracking-widest"
-                      title="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio (memory-bandwidth-bound assumption). Quality deltas from llama.cpp perplexity benchmarks."
-                    >Quant Sweet Spot</p>
+                    <p className="text-[9px] text-gray-600 uppercase tracking-widest">
+                      <Tip text="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio. Quality deltas from llama.cpp perplexity benchmarks." side="top">
+                        Quant Sweet Spot
+                      </Tip>
+                    </p>
                     {rec.bandwidthGbs != null && (
                       <span
                         className="text-[9px] text-gray-700 font-mono"
