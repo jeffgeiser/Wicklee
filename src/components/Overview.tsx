@@ -792,9 +792,22 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       const hasProxy = m.ollama_proxy_active === true;
       const ttftSource = m.vllm_avg_ttft_ms != null ? 'vllm' : m.ollama_proxy_avg_ttft_ms != null ? 'proxy' : m.ollama_ttft_ms != null ? 'probe' : null;
 
+      // Runtime label — both can run simultaneously on the same node
+      const runtimeLabel = isOllama && isVllm ? 'Ollama + vLLM'
+        : isOllama ? 'Ollama'
+        : isVllm   ? 'vLLM'
+        : m.inference_state != null ? 'llama.cpp'
+        : 'None detected';
+
       return (
         <div className="px-6 py-3 bg-gray-950/40 border-b border-gray-800/60">
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-2 text-xs">
+            {/* Runtime + agent version — always first */}
+            <DetailCell label="Runtime" value={runtimeLabel}
+              tooltip="Inference runtime detected on this node. Wicklee supports Ollama, vLLM, and llama.cpp — a node can run more than one simultaneously." />
+            <DetailCell label="Agent" value={m.agent_version ?? null}
+              tooltip="Wicklee agent version running on this node. If behind fleet majority, the Agent Version Mismatch observation will fire." />
+
             {/* Always show TTFT + thermal source */}
             <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={ttftSource}
               tooltip="Time To First Token — latency from request arrival to first generated token. Source: vLLM histogram (production), proxy rolling avg (production), or Ollama probe (synthetic 20-token baseline every ~30s). Lower is more responsive." />
