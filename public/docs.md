@@ -166,15 +166,23 @@ TTFT (Time to First Token) resolution priority:
 
 ## Multi-Model Monitoring
 
-Most inference deployments run multiple models concurrently. Wicklee tracks each model independently when the optional proxy is enabled.
+Most inference deployments run multiple models concurrently. Wicklee always detects all loaded models and their VRAM — per-model throughput attribution depends on the runtime and whether the proxy is enabled.
 
-**Per-model metrics:** tok/s, VRAM allocation, average TTFT, average latency, request count, model size, and quantization level — all tracked independently for each loaded model.
-
-**How it works:** The proxy intercepts every request and extracts per-request metrics from Ollama's done packet, accumulating statistics per model name. The harvester reads all loaded models from `/api/ps` every 2 seconds and merges VRAM data with proxy-derived performance stats.
+**Per-model metrics (when attributed):** tok/s, VRAM allocation, average TTFT, average latency, request count, model size, and quantization level — all tracked independently for each loaded model.
 
 **Wire format:** When 2+ models are loaded, the `active_models` array is included in the SSE/WebSocket payload. Single-model deployments omit the field (zero overhead). Existing singular fields (`ollama_active_model`, `ollama_tokens_per_second`) report the most-recently-active model for backwards compatibility.
 
-**Without the proxy:** Wicklee still detects all loaded models and their VRAM via `/api/ps`, but tok/s and latency come from the single-model probe. Enable the proxy for full per-model production metrics.
+### Ollama — proxy required for per-model throughput
+
+The proxy intercepts every request and extracts per-request metrics from Ollama's done packet, accumulating statistics per model name. The harvester reads all loaded models from `/api/ps` every 2 seconds and merges VRAM data with proxy-derived performance stats.
+
+**Without the proxy:** Wicklee detects all loaded models and their VRAM via `/api/ps`, but tok/s and latency come from the single-model probe. The Model Fit Efficiency column shows `—` for all models — throughput cannot be attributed to a specific model without request interception.
+
+### vLLM — proxy optional, beneficial for multi-model setups
+
+vLLM's Prometheus endpoint (`/metrics`) reports server-wide aggregate throughput — accurate for single-model WES but can't distinguish which model served which request. When running multiple models on one vLLM instance, a proxy reads the `"model"` field from each `/v1/chat/completions` request body to attribute tok/s, TTFT, and request counts per model.
+
+**Without the proxy:** vLLM single-model deployments work fully (Prometheus gives exact throughput). Multi-model vLLM shows `—` for per-model efficiency in Model Fit Analysis — VRAM fit is still shown accurately.
 
 **Per-model WES:** Each model gets its own efficiency score using proportional VRAM share for power attribution: `model_tok_s / (total_watts * vram_share * thermal_penalty)`. Answers "which model is most efficient on my hardware?" with live data.
 
@@ -710,9 +718,17 @@ Verify the proxy is active — your dashboard will show `proxy: :11434 → :1143
 
 The proxy works locally on all tiers (Community included). Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for **Pro tier and above**.
 
-### Why Ollama only?
+### Runtime coverage
 
-vLLM already exposes production latency histograms natively via its `/metrics` Prometheus endpoint — no proxy needed. Ollama doesn't expose request-level timing, so the proxy fills that gap.
+| Runtime | Without proxy | With proxy |
+|---------|--------------|------------|
+| **Ollama** | Synthetic probe (30s cadence); `/api/ps` for inference detection | Exact continuous tok/s, TTFT, E2E latency, request count — attributed per model |
+| **vLLM** | Live aggregate throughput from Prometheus `/metrics` (exact, no proxy needed for single-model) | Per-model tok/s in multi-model deployments — see below |
+| **llama.cpp** | Synthetic probe | Not yet supported |
+
+**Ollama** is where the proxy has the most impact. Ollama doesn't expose request-level timing or per-model throughput natively — the proxy is the only way to get exact, continuous metrics without the 30-second sampling gap.
+
+**vLLM** already exposes aggregate throughput and TTFT histograms via its `/metrics` Prometheus endpoint, so a proxy isn't needed for accurate single-model monitoring. However, if you run multiple models on a single vLLM instance, the Prometheus endpoint reports server-wide aggregate throughput — it doesn't break down tok/s by model. A proxy in front of vLLM reads the `"model"` field from each `/v1/chat/completions` request body and attributes throughput, TTFT, and request counts per model, enabling per-model WES scores and accurate Model Fit efficiency data. Without the proxy, multi-model vLLM nodes show `—` for per-model efficiency.
 
 ---
 

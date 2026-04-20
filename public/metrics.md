@@ -281,9 +281,9 @@ Estimated values are prefixed with `~` in the dashboard. Exact values (vLLM, or 
 
 ---
 
-### Optional Ollama Proxy (Upgrade Path)
+### Optional Inline Proxy (Upgrade Path)
 
-By default, inference detection uses `/api/ps` `expires_at` — zero configuration, no request interception. For exact live tok/s during inference, Wicklee supports an opt-in transparent proxy:
+By default, inference detection uses `/api/ps` `expires_at` — zero configuration, no request interception. For exact live tok/s during inference, Wicklee supports an opt-in transparent proxy. The proxy is primarily designed for **Ollama**, and also adds value for **multi-model vLLM** deployments:
 
 **What the proxy adds:**
 - `inference_active` flips to `true` the instant a request arrives — zero lag vs. the 5–35 second window from `/api/ps`
@@ -302,7 +302,9 @@ ollama_port = 11435  # where Ollama now listens (after you move it)
 
 To enable: set `OLLAMA_HOST=127.0.0.1:11435` in Ollama's environment and restart it. The Wicklee agent binds `:11434` (the standard Ollama port) on startup. If it can't bind (Ollama still there), it logs a clear message and falls back to `/api/ps` polling automatically.
 
-When the proxy is disabled (default), Wicklee uses `/api/ps` detection. The proxy is purely additive — disabling it does not change any other metric behavior. vLLM does not need this option; its Prometheus endpoint already provides exact live throughput.
+When the proxy is disabled (default), Wicklee uses `/api/ps` detection. The proxy is purely additive — disabling it does not change any other metric behavior.
+
+**vLLM:** The Prometheus endpoint provides exact live aggregate throughput — no proxy needed for single-model WES accuracy. For multi-model vLLM deployments, the proxy reads the `"model"` field from each `/v1/chat/completions` request body to attribute tok/s and TTFT per model, enabling per-model WES and Model Fit Efficiency scores. Without the proxy, multi-model vLLM shows `—` for per-model efficiency (VRAM fit is always shown).
 
 ---
 
