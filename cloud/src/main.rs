@@ -725,6 +725,26 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     ").execute(pool).await.expect("installs migration failed");
 
     // Model catalog — cached HuggingFace GGUF metadata for model discovery.
+    // Guard: if the table exists with a stale schema (missing model_id column),
+    // drop it so the CREATE TABLE below recreates it correctly.  The catalog is
+    // always re-fetched at startup so dropping it loses nothing permanent.
+    sqlx::query("
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'model_catalog'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name   = 'model_catalog'
+                  AND column_name  = 'model_id'
+            ) THEN
+                DROP TABLE model_catalog;
+            END IF;
+        END $$;
+    ").execute(pool).await.expect("model_catalog schema guard failed");
+
     sqlx::query("
         CREATE TABLE IF NOT EXISTS model_catalog (
             model_id    TEXT    NOT NULL,
