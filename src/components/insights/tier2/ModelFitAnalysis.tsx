@@ -270,9 +270,14 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   function buildEntries(n: SentinelMetrics): ModelEntry[] {
     const adj = adjWattsFor(n);
     if (n.active_models && n.active_models.length > 0) {
-      return n.active_models.map(am =>
-        deriveModelEntry(am.model, am.tok_s ?? null, am.wes ?? null, am.quantization ?? null, am.size_gb ?? null, adj, n.thermal_state)
-      );
+      const hasPerModelThroughput = n.active_models.some(am => am.tok_s != null);
+      return n.active_models.map(am => {
+        // When no per-model throughput (no proxy), attribute node-level tok/s to
+        // whichever model was most recently active — others show —.
+        const isActive = !hasPerModelThroughput && am.model === n.ollama_active_model;
+        const tps = am.tok_s ?? (isActive ? (n.ollama_tokens_per_second ?? null) : null);
+        return deriveModelEntry(am.model, tps, am.wes ?? null, am.quantization ?? null, am.size_gb ?? null, adj, n.thermal_state);
+      });
     }
     const primary = n.ollama_active_model ?? n.vllm_model_name ?? n.llamacpp_model_name ?? null;
     if (!primary) return [];
@@ -328,7 +333,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           <div className="flex items-center gap-2">
             <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
             <span
-              className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 cursor-help"
+              className="text-[10px] font-semibold uppercase tracking-widest text-gray-500"
               title="Two-dimensional fit scored per model: Memory (headroom vs model size after load) and Efficiency (WES: tok/s per watt, thermal penalty applied)."
             >
               Model Fit Analysis
@@ -361,21 +366,21 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   <th className="text-left pb-1.5 font-semibold pr-4">Model</th>
                   <th className="text-left pb-1.5 font-semibold pr-4">Quant</th>
                   <th
-                    className="text-left pb-1.5 font-semibold pr-4 cursor-help"
+                    className="text-left pb-1.5 font-semibold pr-4"
                     title="Headroom after model load. Good >20% free, Fair 10–20%, Poor <10% or thermal Serious/Critical."
                   >Memory</th>
                   <th
-                    className="text-left pb-1.5 font-semibold pr-4 cursor-help"
-                    title="WES: tok/s ÷ (watts × thermal penalty). Excellent >10, Good 3–10, Acceptable 1–3, Low <1. Shown as — when no inference has been measured."
+                    className="text-left pb-1.5 font-semibold pr-4"
+                    title="WES: tok/s ÷ (watts × thermal penalty). Excellent >10, Good 3–10, Acceptable 1–3, Low <1. Shows — when no inference has been measured yet."
                   >Efficiency</th>
                   <th className="text-right pb-1.5 font-semibold pr-4">Tok/s</th>
                   <th
-                    className="text-right pb-1.5 font-semibold pr-4 cursor-help"
+                    className="text-right pb-1.5 font-semibold pr-4"
                     title="Watts per 1,000 tokens at current draw. Hardware-agnostic — lower is better."
                   >W/1K Tkn</th>
                   <th
-                    className="text-right pb-1.5 font-semibold cursor-help"
-                    title="Largest context window where the KV cache fits within available memory headroom. KV cache = 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ~ = estimated from parameter count."
+                    className="text-right pb-1.5 font-semibold"
+                    title="Largest context window where the KV cache fits within available memory headroom. KV cache = 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ~ = estimated. — = architecture data not available for this runtime."
                   >Max Ctx</th>
                 </tr>
               </thead>
@@ -394,7 +399,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                         {row.entry.quant ? (
                           <span
                             title={QUANT_DESCRIPTION[row.entry.family] ?? ''}
-                            className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400 cursor-help"
+                            className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400"
                           >
                             {row.entry.quant}
                           </span>
@@ -426,16 +431,16 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                           </span>
                         ) : (
                           <span
-                            className="text-gray-700 cursor-help"
-                            title="Efficiency not available. On CPU-only nodes, or when multiple models share memory, per-model throughput cannot be attributed without proxy instrumentation."
+                            className="text-gray-700"
+                            title="No efficiency data. On CPU-only nodes or multi-model setups, per-model throughput can't be attributed without proxy instrumentation."
                           >—</span>
                         )}
                       </td>
                       <td className="py-2 pr-4 text-right font-mono text-gray-300">
                         {row.entry.tps != null ? row.entry.tps.toFixed(1) : (
                           <span
-                            className="text-gray-700 cursor-help"
-                            title="No throughput reading. CPU-only nodes or multi-model setups require proxy instrumentation for per-model tok/s."
+                            className="text-gray-700"
+                            title="No throughput reading. Multi-model setups show tok/s for the most-recently-active model only; others require proxy instrumentation."
                           >—</span>
                         )}
                       </td>
@@ -444,7 +449,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                       </td>
                       <td className="py-2 text-right font-mono">
                         {row.maxFitsCtx === undefined ? (
-                          <span className="text-gray-700">—</span>
+                          <span className="text-gray-700" title="Context runway not available — requires architecture data (layers, KV heads) from Ollama /api/show, or a parameter count for estimation. vLLM nodes always show —.">—</span>
                         ) : row.maxFitsCtx === null ? (
                           <span className="text-red-500 text-[10px]">swap</span>
                         ) : (
@@ -510,7 +515,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         <div className="flex items-center gap-2 min-w-0">
           <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
           <span
-            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate cursor-help"
+            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate"
             title="Two-dimensional fit: Memory (headroom after model load) and Efficiency (WES: tok/s per watt, thermal penalty applied). Both dimensions are needed — a model can fit in memory but still run inefficiently, or vice versa."
           >
             Model Fit Analysis{entries.length > 1 ? ` · ${entries.length} Models` : ''}
@@ -564,7 +569,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               {e.quant && (
                 <span
                   title={QUANT_DESCRIPTION[e.family] ?? ''}
-                  className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400 cursor-help"
+                  className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400"
                 >
                   {e.quant}
                 </span>
@@ -581,7 +586,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               </div>
               <div>
                 <p
-                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5 cursor-help"
+                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5"
                   title="Watts per 1,000 tokens at current accelerator draw. Hardware-agnostic efficiency metric — lower is better. Computed as: (accelerator watts ÷ tok/s) × 1000."
                 >W/1K Tkn</p>
                 <p className="font-telin text-sm text-gray-200">
@@ -590,7 +595,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               </div>
               <div>
                 <p
-                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5 cursor-help"
+                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5"
                   title="Wicklee Efficiency Score: tok/s ÷ (watts × thermal penalty). The thermal penalty increases with throttling (Fair 1.25×, Serious 1.75×, Critical 2×), so a throttled node's WES drops even if tok/s looks stable."
                 >WES</p>
                 <p className={`font-telin text-sm ${wesColorClass(e.wes)}`}>
@@ -610,7 +615,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-0.5">
                     <p
-                      className="text-[9px] text-gray-600 uppercase tracking-widest cursor-help"
+                      className="text-[9px] text-gray-600 uppercase tracking-widest"
                       title={`${memFit.isNvidia ? 'Dedicated GPU VRAM (NVML)' : 'Unified memory (shared CPU + GPU)'}. Headroom is free space after all loaded models and system processes. Context windows and KV cache grow into this space during inference.`}
                     >
                       {memFit.isNvidia ? 'VRAM' : 'Memory'}
@@ -618,7 +623,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   </div>
                   {memCfg && (
                     <span
-                      className={`text-[9px] font-semibold ${memCfg.textColor} cursor-help`}
+                      className={`text-[9px] font-semibold ${memCfg.textColor}`}
                       title={memFit.reason}
                     >
                       ● {memCfg.label}
@@ -667,7 +672,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 <div className="mb-2.5">
                   <div className="flex items-center gap-0.5 mb-1.5">
                     <p
-                      className="text-[9px] text-gray-600 uppercase tracking-widest cursor-help"
+                      className="text-[9px] text-gray-600 uppercase tracking-widest"
                       title={`How much memory the KV cache consumes at each context length. Formula: 2 × layers × KV-heads × head-dim × ctx-tokens × 2 bytes (FP16). ${runway.arch.isExact ? 'Architecture from /api/show (exact).' : 'Estimated from parameter count (±30%).'}`}
                     >Context Runway</p>
                     {!runway.arch.isExact && (
@@ -751,7 +756,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 <div className="pt-2 border-t border-gray-800/50">
                   <div className="flex items-center gap-0.5 mb-1">
                     <p
-                      className="text-[9px] text-gray-600 uppercase tracking-widest cursor-help"
+                      className="text-[9px] text-gray-600 uppercase tracking-widest"
                       title="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio (memory-bandwidth-bound assumption). Quality deltas from llama.cpp perplexity benchmarks."
                     >Quant Sweet Spot</p>
                     {rec.bandwidthGbs != null && (
