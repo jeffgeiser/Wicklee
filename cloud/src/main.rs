@@ -3859,148 +3859,51 @@ async fn handle_fleet_model_candidates(
         .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     let search = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
-    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(40);
-    let cache_key = search.clone().unwrap_or_default();
-    let cache_ttl_ms: u64 = if search.is_some() { 3_600_000 } else { 86_400_000 };
+    let limit: i32 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20_i32).min(40);
 
-    // Check in-memory cache
-    let cached: Option<Vec<(String, u64, Vec<(String, String, u64)>)>> = {
-        let guard = state.hf_cache.lock().await;
-        guard.get(&cache_key).and_then(|(ts, v)| {
-            if now_ms().saturating_sub(*ts) < cache_ttl_ms { Some(v.clone()) } else { None }
-        }).map(|v| {
-            v.as_array().unwrap_or(&vec![]).iter().filter_map(|m| {
-                let model_id  = m["model_id"].as_str()?.to_string();
-                let downloads = m["downloads"].as_u64().unwrap_or(0);
-                let variants: Vec<(String, String, u64)> = m["variants"].as_array()
-                    .unwrap_or(&vec![]).iter().filter_map(|vv| {
-                        Some((vv["filename"].as_str()?.to_string(),
-                              vv["quant"].as_str()?.to_string(),
-                              vv["file_size"].as_u64()?))
-                    }).collect();
-                Some((model_id, downloads, variants))
-            }).collect()
-        })
-    };
-
-    let (hf_models, hf_reachable, hf_debug): (Vec<(String, u64, Vec<(String, String, u64)>)>, bool, String) = if let Some(hit) = cached {
-        let n = hit.len();
-        (hit, true, format!("cache hit ({n} models)"))
+    // Query the Postgres model_catalog (populated by refresh_cloud_model_catalog at startup
+    // + 3 AM nightly). This uses the correct HF tree API that includes actual file sizes —
+    // unlike the old ?full=true approach which never included the size field in siblings.
+    let rows: Vec<(String, String, String, i64, i64)> = if let Some(ref s) = search {
+        sqlx::query_as(
+            "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
+             WHERE LOWER(model_id) LIKE '%' || LOWER($2) || '%'
+             ORDER BY downloads DESC LIMIT $1"
+        ).bind(limit).bind(s).fetch_all(&state.pool).await.unwrap_or_default()
     } else {
-        // Fetch from HuggingFace via ureq (sync → spawn_blocking)
-        let search_clone = search.clone();
-        let (results, reached, dbg) = tokio::task::spawn_blocking(move || -> (Vec<(String, u64, Vec<(String, String, u64)>)>, bool, String) {
-            // Rate-limit: at most 1 HF fetch per second to avoid IP bans.
-            let delay = {
-                let mut guard = HF_LAST_FETCH_CLOUD.lock().unwrap();
-                let now = std::time::Instant::now();
-                let d = guard.map(|t| {
-                    let since = now.saturating_duration_since(t);
-                    if since < std::time::Duration::from_secs(1) { std::time::Duration::from_secs(1) - since }
-                    else { std::time::Duration::ZERO }
-                }).unwrap_or(std::time::Duration::ZERO);
-                *guard = Some(now + d);
-                d
-            };
-            if !delay.is_zero() { std::thread::sleep(delay); }
-
-            let mut url = format!(
-                "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit={limit}&full=true"
-            );
-            if let Some(ref t) = search_clone {
-                url.push_str(&format!("&search={}", pct_encode_query_cloud(t)));
-            }
-
-            const MAX_BYTES: u64 = 10_000_000;
-            // Use a HuggingFace token if configured — authenticated requests
-            // get a much higher rate limit (avoids 429s on Railway's shared IP).
-            let hf_token = std::env::var("HUGGINGFACE_TOKEN").ok();
-            let req = ureq::get(&url).timeout(std::time::Duration::from_secs(30));
-            let req = if let Some(ref tok) = hf_token {
-                req.set("Authorization", &format!("Bearer {tok}"))
-            } else {
-                req
-            };
-            eprintln!("[fleet-discovery] fetching HF (auth={}): {url}", hf_token.is_some());
-            let call = match req.call() {
-                Ok(r) => r,
-                Err(ureq::Error::Status(code, ref resp)) => {
-                    let body = resp.status_text().to_string();
-                    let msg = format!("HF HTTP {code}: {body}");
-                    eprintln!("[fleet-discovery] {msg}");
-                    return (Vec::new(), false, msg);
-                }
-                Err(e) => {
-                    let msg = format!("HF fetch error: {e}");
-                    eprintln!("[fleet-discovery] {msg}");
-                    return (Vec::new(), false, msg);
-                }
-            };
-            if call.header("content-length").and_then(|v| v.parse::<u64>().ok()).map(|n| n > MAX_BYTES).unwrap_or(false) {
-                let msg = "HF response exceeded 10MB limit".to_string();
-                eprintln!("[fleet-discovery] {msg}");
-                return (Vec::new(), false, msg);
-            }
-            let hf_resp: Vec<serde_json::Value> = match call.into_json() {
-                Ok(v) => v,
-                Err(e) => {
-                    let msg = format!("HF JSON parse failed: {e}");
-                    eprintln!("[fleet-discovery] {msg}");
-                    return (Vec::new(), false, msg);
-                }
-            };
-
-            let raw_count = hf_resp.len();
-            // Log first model's structure to diagnose missing siblings/size fields.
-            if let Some(first) = hf_resp.first() {
-                let sibling_count = first["siblings"].as_array().map(|a| a.len()).unwrap_or(0);
-                let first_sib = first["siblings"].as_array()
-                    .and_then(|a| a.first())
-                    .map(|s| format!("keys={:?}", s.as_object().map(|o| o.keys().collect::<Vec<_>>()).unwrap_or_default()))
-                    .unwrap_or_else(|| "no siblings".into());
-                eprintln!("[fleet-discovery] raw={raw_count} first={} siblings={sibling_count} first_sib={first_sib}",
-                    first["id"].as_str().unwrap_or("?"));
-            } else {
-                eprintln!("[fleet-discovery] HF returned empty array (raw_count=0)");
-            }
-
-            let mut out = Vec::new();
-            for m in &hf_resp {
-                let model_id = m["id"].as_str().unwrap_or("").to_string();
-                if !valid_hf_model_id_cloud(&model_id) { continue; }
-                let downloads = m["downloads"].as_u64().unwrap_or(0);
-                let mut variants: Vec<(String, String, u64)> = Vec::new();
-                if let Some(siblings) = m["siblings"].as_array() {
-                    for sib in siblings {
-                        let fname = sib["rfilename"].as_str().unwrap_or("");
-                        if !fname.ends_with(".gguf") { continue; }
-                        let size = sib["size"].as_u64().unwrap_or(0);
-                        if size == 0 { continue; }
-                        let filename = fname.rsplit('/').next().unwrap_or(fname);
-                        let quant = parse_gguf_quant(filename);
-                        variants.push((filename.to_string(), quant, size));
-                    }
-                }
-                if !variants.is_empty() { out.push((model_id, downloads, variants)); }
-            }
-            let msg = format!("ok: raw={raw_count} with_variants={}", out.len());
-            eprintln!("[fleet-discovery] {msg}");
-            (out, true, msg)
-        }).await.unwrap_or((Vec::new(), false, "spawn_blocking panicked".to_string()));
-
-        // Only cache successful HF fetches — never cache an empty error response.
-        if reached && !results.is_empty() {
-            let cache_json: serde_json::Value = results.iter().map(|(mid, dl, vars)| {
-                serde_json::json!({
-                    "model_id": mid, "downloads": dl,
-                    "variants": vars.iter().map(|(f, q, s)| serde_json::json!({"filename": f, "quant": q, "file_size": s})).collect::<Vec<_>>()
-                })
-            }).collect::<Vec<_>>().into();
-            state.hf_cache.lock().await.insert(cache_key, (now_ms(), cache_json));
-        }
-
-        (results, reached, dbg)
+        sqlx::query_as(
+            "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
+             ORDER BY downloads DESC LIMIT $1"
+        ).bind(limit).fetch_all(&state.pool).await.unwrap_or_default()
     };
+
+    // Group flat rows by model_id → variants list
+    let mut model_map: std::collections::HashMap<String, (u64, Vec<(String, String, u64)>)> = std::collections::HashMap::new();
+    for (model_id, filename, quant, file_size, downloads) in &rows {
+        if !valid_hf_model_id_cloud(model_id) { continue; }
+        if *file_size <= 0 { continue; }
+        let entry = model_map.entry(model_id.clone()).or_insert_with(|| (*downloads as u64, Vec::new()));
+        entry.1.push((filename.clone(), quant.clone(), *file_size as u64));
+    }
+    // Sort each model's variants by file size descending (largest first = highest quality first)
+    for (_, (_, variants)) in model_map.iter_mut() {
+        variants.sort_by(|a, b| b.2.cmp(&a.2));
+    }
+
+    let hf_reachable = !model_map.is_empty();
+    let hf_debug = if hf_reachable {
+        format!("catalog: {} models, {} variants", model_map.len(), rows.len())
+    } else {
+        "model_catalog empty — catalog refresh may still be in progress (runs 5s after startup)".to_string()
+    };
+    eprintln!("[fleet-discovery] {hf_debug}");
+
+    // Build hf_models sorted by downloads descending
+    let mut hf_models: Vec<(String, u64, Vec<(String, String, u64)>)> = model_map
+        .into_iter()
+        .map(|(id, (dl, vars))| (id, dl, vars))
+        .collect();
+    hf_models.sort_by(|a, b| b.1.cmp(&a.1));
 
     // Snapshot online fleet node hardware
     let now = now_ms();
@@ -6695,6 +6598,24 @@ async fn main() {
     tokio::spawn(events_writer_task(events_rx, pool.clone()));
     tokio::spawn(rollup_task(pool.clone()));
     tokio::spawn(nightly_task(pool.clone()));
+    // Populate model_catalog on startup so fleet discovery works immediately
+    // after a fresh Railway deploy (nightly task only runs at 3 AM UTC).
+    tokio::spawn({
+        let pool2 = pool.clone();
+        async move {
+            // Short delay so the server is fully up before hitting HF.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Only refresh if catalog is empty.
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_catalog")
+                .fetch_one(&pool2).await.unwrap_or(0);
+            if count == 0 {
+                eprintln!("[startup] model_catalog empty — running initial HF catalog fetch");
+                refresh_cloud_model_catalog(&pool2).await;
+            } else {
+                eprintln!("[startup] model_catalog has {count} entries — skipping initial fetch");
+            }
+        }
+    });
     tokio::spawn(node_offline_alert_task(state.clone()));
     tokio::spawn(fleet_alert_evaluator_task(state.clone()));
     tokio::spawn(otel_exporter_task(state.clone()));

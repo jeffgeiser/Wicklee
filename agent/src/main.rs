@@ -4873,51 +4873,62 @@ async fn fetch_hf_gguf(
     };
     if !delay.is_zero() { tokio::time::sleep(delay).await; }
 
-    let mut url = format!(
-        "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit={limit}&full=true"
-    );
-    if let Some(term) = search {
-        url.push_str(&format!("&search={}", pct_encode_query(term)));
-    }
-
-    const MAX_RESPONSE_BYTES: u64 = 10_000_000; // 10 MB guard
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
-    let mut req = client.get(&url);
-    if let Ok(tok) = std::env::var("HUGGINGFACE_TOKEN") {
-        req = req.bearer_auth(tok);
-    }
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => { eprintln!("[model-discovery] HF fetch failed: {e}"); return Vec::new(); }
+    // Step 1: fetch model list (no full=true — HF never included size in siblings).
+    let list_url = if let Some(term) = search {
+        format!(
+            "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit={limit}&search={}",
+            pct_encode_query(term)
+        )
+    } else {
+        format!("https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit={limit}")
     };
-    if resp.content_length().map(|n| n > MAX_RESPONSE_BYTES).unwrap_or(false) {
-        eprintln!("[model-discovery] HF response too large, skipping");
-        return Vec::new();
-    }
-    let models: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
 
+    let hf_token = std::env::var("HUGGINGFACE_TOKEN").ok();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+
+    let mut list_req = client.get(&list_url);
+    if let Some(ref tok) = hf_token { list_req = list_req.bearer_auth(tok.clone()); }
+    let list_resp = match list_req.send().await {
+        Ok(r) => r,
+        Err(e) => { eprintln!("[model-discovery] HF list failed: {e}"); return Vec::new(); }
+    };
+    let model_list: Vec<serde_json::Value> = list_resp.json().await.unwrap_or_default();
+
+    // Step 2: for each model, fetch /api/models/{id}/tree/main to get actual file sizes.
     let mut results = Vec::new();
-    for model in &models {
-        let model_id  = model["id"].as_str().unwrap_or("");
+    for model in &model_list {
+        let model_id = model["id"].as_str().unwrap_or("");
         if !valid_hf_model_id(model_id) { continue; }
         let downloads = model["downloads"].as_u64().unwrap_or(0);
-        let mut variants: Vec<(String, String, u64)> = Vec::new();
 
-        if let Some(siblings) = model["siblings"].as_array() {
-            for sib in siblings {
-                let fname = sib["rfilename"].as_str().unwrap_or("");
-                if !fname.ends_with(".gguf") { continue; }
-                let size = sib["size"].as_u64().unwrap_or(0);
-                if size == 0 { continue; }
-                let filename = fname.rsplit('/').next().unwrap_or(fname);
-                let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
-                variants.push((filename.to_string(), quant, size));
-            }
+        let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
+        let mut tree_req = client.get(&tree_url);
+        if let Some(ref tok) = hf_token { tree_req = tree_req.bearer_auth(tok.clone()); }
+        let tree_resp = match tree_req.send().await {
+            Ok(r) => r,
+            Err(e) => { eprintln!("[model-discovery] tree fetch failed for {model_id}: {e}"); continue; }
+        };
+        let files: Vec<serde_json::Value> = tree_resp.json().await.unwrap_or_default();
+
+        let mut variants: Vec<(String, String, u64)> = Vec::new();
+        for file in &files {
+            let path = file["path"].as_str().unwrap_or("");
+            if !path.ends_with(".gguf") { continue; }
+            let size = file["size"].as_u64().unwrap_or(0);
+            if size == 0 { continue; }
+            let filename = path.rsplit('/').next().unwrap_or(path);
+            let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
+            variants.push((filename.to_string(), quant, size));
         }
+        // Sort variants largest-first (highest quality first)
+        variants.sort_by(|a, b| b.2.cmp(&a.2));
 
         if !variants.is_empty() {
             results.push((model_id.to_string(), downloads, variants));
         }
+
+        // Brief pause between tree requests to be polite to HF
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
     results
 }
