@@ -120,6 +120,20 @@ struct MetricsPayload {
     /// True during probe and 40s afterward — frontend uses for IDLE-SPD display.
     #[serde(default)]
     ollama_is_probing: Option<bool>,
+    // Ollama model architecture (from /api/show) — used for KV cache / context runway math.
+    // These were previously dropped on cloud ingestion, causing Max CTX to always show —.
+    #[serde(default)]
+    ollama_context_length:  Option<u64>,
+    #[serde(default)]
+    ollama_parameter_count: Option<u64>,
+    #[serde(default)]
+    ollama_num_layers:      Option<u64>,
+    #[serde(default)]
+    ollama_kv_heads:        Option<u64>,
+    #[serde(default)]
+    ollama_num_heads:       Option<u64>,
+    #[serde(default)]
+    ollama_embedding_dim:   Option<u64>,
     #[serde(default)]
     os: Option<String>,
     /// CPU architecture: "x86_64" | "aarch64".
