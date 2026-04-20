@@ -268,6 +268,14 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // When catalog is still loading (hf_reachable === false), auto-retry every 30s
+  // so the UI updates automatically once the server finishes fetching from HF.
+  useEffect(() => {
+    if (!data || data.hf_reachable !== false || loading) return;
+    const id = setTimeout(() => fetchModels(), 30_000);
+    return () => clearTimeout(id);
+  }, [data, loading, fetchModels]);
+
   const handleChange = (val: string) => {
     setPending(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);

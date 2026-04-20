@@ -425,11 +425,19 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                             <span className="text-gray-600 font-mono">({formatWES(row.entry.wes)})</span>
                           </span>
                         ) : (
-                          <span className="text-gray-700" title="No inference measured yet — WES requires active tok/s and watt readings.">—</span>
+                          <span
+                            className="text-gray-700 cursor-help"
+                            title="Efficiency not available. On CPU-only nodes, or when multiple models share memory, per-model throughput cannot be attributed without proxy instrumentation."
+                          >—</span>
                         )}
                       </td>
                       <td className="py-2 pr-4 text-right font-mono text-gray-300">
-                        {row.entry.tps != null ? row.entry.tps.toFixed(1) : <span className="text-gray-700">—</span>}
+                        {row.entry.tps != null ? row.entry.tps.toFixed(1) : (
+                          <span
+                            className="text-gray-700 cursor-help"
+                            title="No throughput reading. CPU-only nodes or multi-model setups require proxy instrumentation for per-model tok/s."
+                          >—</span>
+                        )}
                       </td>
                       <td className="py-2 pr-4 text-right font-mono text-gray-300">
                         {row.entry.w1k != null ? `${row.entry.w1k.toFixed(0)}W` : <span className="text-gray-700">—</span>}
@@ -454,6 +462,13 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               </tbody>
             </table>
           </div>
+        )}
+
+        {/* Footer note when any row lacks efficiency data */}
+        {rows.some(r => r.entry.wes == null) && (
+          <p className="text-[9px] text-gray-700 mt-1">
+            — Efficiency and tok/s require active inference data. CPU-only nodes and multi-model setups need proxy instrumentation for per-model throughput.
+          </p>
         )}
       </div>
     );
