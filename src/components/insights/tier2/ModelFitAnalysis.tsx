@@ -328,11 +328,11 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 
     const activeNodeCount = new Set(rows.map(r => r.nodeId)).size;
     const poorCount = rows.filter(r =>
-      r.memScore === 'poor' || r.entry.effLevel === 'low'
+      r.memScore === 'poor' || (r.entry.effLevel === 'low' && r.entry.wes != null)
     ).length;
     const fairCount = rows.filter(r =>
       (r.memScore === 'fair' || r.entry.effLevel === 'acceptable') &&
-      r.memScore !== 'poor' && r.entry.effLevel !== 'low'
+      r.memScore !== 'poor' && !(r.entry.effLevel === 'low' && r.entry.wes != null)
     ).length;
     const goodCount = rows.length - poorCount - fairCount;
 
