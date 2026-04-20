@@ -3682,33 +3682,37 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
         Err(e) => { eprintln!("[model-catalog] HF parse failed: {e}"); return; }
     };
 
-    // Step 2: For each repo, fetch /tree/main for actual file sizes
-    let mut count = 0usize;
+    // Step 2: Fetch /tree/main for all repos concurrently (max 5 in-flight).
+    // Sequential fetches take 30–60 s for 30 repos; parallel cuts it to ~6 s.
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
+    let mut tasks: Vec<tokio::task::JoinHandle<Option<(String, i64, Vec<serde_json::Value>)>>> = Vec::new();
+
     for model in &models {
         let model_id = model["id"].as_str().unwrap_or("").to_string();
         if model_id.is_empty() { continue; }
         let downloads = model["downloads"].as_i64().unwrap_or(0);
+        let tok2      = hf_token.clone();
+        let sem       = semaphore.clone();
 
-        let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
-        let tok2 = hf_token.clone();
-        let tree_resp = match tokio::task::spawn_blocking(move || {
-            let req = ureq::get(&tree_url);
-            let req = if let Some(t) = tok2 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
-            req.call()
-        }).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => { eprintln!("[model-catalog] tree fetch failed for {model_id}: {e}"); continue; }
-            Err(_) => continue,
-        };
-        let tree_body: String = match tree_resp.into_string() {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let files: Vec<serde_json::Value> = match serde_json::from_str(&tree_body) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        tasks.push(tokio::spawn(async move {
+            let _permit  = sem.acquire_owned().await.ok()?;
+            let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
+            let tree_resp = tokio::task::spawn_blocking(move || {
+                let req = ureq::get(&tree_url);
+                let req = if let Some(t) = tok2 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
+                req.call()
+            }).await.ok()?.ok()?;
+            let tree_body  = tree_resp.into_string().ok()?;
+            let files: Vec<serde_json::Value> = serde_json::from_str(&tree_body).ok()?;
+            Some((model_id, downloads, files))
+        }));
+    }
 
+    let mut count      = 0usize;
+    let mut repo_count = 0usize;
+    for task in tasks {
+        let Some((model_id, downloads, files)) = task.await.unwrap_or(None) else { continue };
+        repo_count += 1;
         for file in &files {
             let path = file["path"].as_str().unwrap_or("");
             if !path.ends_with(".gguf") { continue; }
@@ -3730,7 +3734,7 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
             count += 1;
         }
     }
-    println!("[model-catalog] cached {count} GGUF variants from {} repos", models.len());
+    println!("[model-catalog] cached {count} GGUF variants from {repo_count} repos");
 }
 
 /// Hardware simulation profiles for Pro tier "what if I had a 4090?" feature.
