@@ -348,13 +348,13 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* HuggingFace unreachable warning */}
+      {/* Model catalog not yet populated */}
       {data && data.hf_reachable === false && !loading && (
         <div className="flex items-start gap-2 py-3 px-3 bg-orange-500/5 border border-orange-500/15 rounded-lg text-xs text-orange-400/80">
           <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
           <div>
-            <span className="font-medium">HuggingFace is unreachable from the cloud server.</span>
-            <span className="text-gray-600 ml-1">This can happen due to a temporary network issue or rate limiting. Try searching manually or check back in a minute.</span>
+            <span className="font-medium">Model catalog is still loading.</span>
+            <span className="text-gray-600 ml-1">The server fetches GGUF metadata from HuggingFace at startup — this takes about 30 seconds. Try searching by name below, or check back in a moment.</span>
           </div>
         </div>
       )}

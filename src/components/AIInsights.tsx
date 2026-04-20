@@ -2203,6 +2203,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 <ModelFitAnalysis
                   node={effectiveNodes[0]}
                   nodes={effectiveNodes}
+                  fleetView={!isLocalHost && effectiveNodes.length > 1}
                   onNavigateToPerformance={() => setActiveTab('performance')}
                   systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
                 />

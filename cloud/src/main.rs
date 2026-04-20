@@ -3658,9 +3658,17 @@ async fn run_rollup(pool: &sqlx::PgPool) {
 
 /// Refresh the HuggingFace GGUF model catalog into Postgres.
 async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
+    let hf_token: Option<String> = std::env::var("HUGGINGFACE_TOKEN").ok()
+        .filter(|t| !t.is_empty());
+
     // Step 1: List top GGUF repos by downloads
     let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=30";
-    let list_resp = match tokio::task::spawn_blocking(move || ureq::get(list_url).call()).await {
+    let tok1 = hf_token.clone();
+    let list_resp = match tokio::task::spawn_blocking(move || {
+        let req = ureq::get(list_url);
+        let req = if let Some(t) = tok1 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
+        req.call()
+    }).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => { eprintln!("[model-catalog] HF list failed: {e}"); return; }
         Err(e) => { eprintln!("[model-catalog] task join failed: {e}"); return; }
@@ -3682,7 +3690,12 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
         let downloads = model["downloads"].as_i64().unwrap_or(0);
 
         let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
-        let tree_resp = match tokio::task::spawn_blocking(move || ureq::get(&tree_url).call()).await {
+        let tok2 = hf_token.clone();
+        let tree_resp = match tokio::task::spawn_blocking(move || {
+            let req = ureq::get(&tree_url);
+            let req = if let Some(t) = tok2 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
+            req.call()
+        }).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => { eprintln!("[model-catalog] tree fetch failed for {model_id}: {e}"); continue; }
             Err(_) => continue,
@@ -6568,6 +6581,14 @@ async fn main() {
             if count == 0 {
                 eprintln!("[startup] model_catalog empty — running initial HF catalog fetch");
                 refresh_cloud_model_catalog(&pool2).await;
+                // If still empty after first attempt (HF rate-limited), retry after 90s.
+                let count2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_catalog")
+                    .fetch_one(&pool2).await.unwrap_or(0);
+                if count2 == 0 {
+                    eprintln!("[startup] model_catalog still empty — retrying in 90s");
+                    tokio::time::sleep(Duration::from_secs(90)).await;
+                    refresh_cloud_model_catalog(&pool2).await;
+                }
             } else {
                 eprintln!("[startup] model_catalog has {count} entries — skipping initial fetch");
             }
