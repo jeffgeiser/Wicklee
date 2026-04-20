@@ -385,19 +385,11 @@ struct AppState {
     /// Channel to the event writer task.  Persists Live Activity events
     /// for the fleet event history endpoint.
     events_tx:        mpsc::Sender<EventRow>,
-    /// In-memory cache for HuggingFace GGUF search results.
-    /// Key: search term ("" = trending). Value: (cached_at_ms, JSON result array).
-    hf_cache:         Arc<tokio::sync::Mutex<HashMap<String, (u64, serde_json::Value)>>>,
 }
 
 // ── PG bootstrap ──────────────────────────────────────────────────────────────
 
 async fn run_pg_migrations(pool: &sqlx::PgPool) {
-    // ── Extensions ──────────────────────────────────────────────────────────
-    sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE")
-        .execute(pool).await
-        .unwrap_or_else(|e| { eprintln!("[pg] timescaledb extension: {e}"); Default::default() });
-
     // ── Transactional tables ────────────────────────────────────────────────
 
     sqlx::query("
@@ -730,26 +722,6 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
             PRIMARY KEY (model_id, filename)
         )
     ").execute(pool).await.expect("model_catalog migration failed");
-
-    // ── TimescaleDB policies ────────────────────────────────────────────────
-    // Retention: metrics_raw 2 days, node_events 30 days
-    // These are idempotent — TimescaleDB ignores if already set.
-    sqlx::query("SELECT add_retention_policy('metrics_raw', INTERVAL '2 days', if_not_exists => true)")
-        .execute(pool).await.ok();
-    sqlx::query("SELECT add_retention_policy('node_events', INTERVAL '30 days', if_not_exists => true)")
-        .execute(pool).await.ok();
-    sqlx::query("SELECT add_retention_policy('metrics_5min', INTERVAL '365 days', if_not_exists => true)")
-        .execute(pool).await.ok();
-
-    // Compression policies
-    sqlx::query("ALTER TABLE metrics_raw SET (timescaledb.compress, timescaledb.compress_segmentby = 'node_id,tenant_id')")
-        .execute(pool).await.ok();
-    sqlx::query("SELECT add_compression_policy('metrics_raw', INTERVAL '1 day', if_not_exists => true)")
-        .execute(pool).await.ok();
-    sqlx::query("ALTER TABLE metrics_5min SET (timescaledb.compress, timescaledb.compress_segmentby = 'node_id,tenant_id')")
-        .execute(pool).await.ok();
-    sqlx::query("SELECT add_compression_policy('metrics_5min', INTERVAL '7 days', if_not_exists => true)")
-        .execute(pool).await.ok();
 
     // ── Backfill: if only one user exists, assign all orphaned nodes to them. ──
     sqlx::query("
@@ -3825,20 +3797,6 @@ fn valid_hf_model_id_cloud(id: &str) -> bool {
     safe(owner) && safe(name)
 }
 
-fn pct_encode_query_cloud(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            b' ' => out.push('+'),
-            _ => { out.push('%'); out.push_str(&format!("{b:02X}")); }
-        }
-    }
-    out
-}
-
-static HF_LAST_FETCH_CLOUD: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-
 /// Fetches GGUF models from HuggingFace and scores each against every online fleet node.
 /// When search is provided: queries HF live (1h cache). Without search: trending top-20 (24h cache).
 async fn handle_fleet_model_candidates(
@@ -6590,7 +6548,6 @@ async fn main() {
         auth_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         metrics_tx,
         events_tx,
-        hf_cache:         Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
 
     // Spawn background tasks.
@@ -6712,7 +6669,7 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("Failed to bind");
 
-    println!("  Wicklee Cloud — Phase 5 — Postgres + TimescaleDB listening on {addr}");
+    println!("  Wicklee Cloud — Postgres listening on {addr}");
 
     axum::serve(listener, app).await.expect("Server exited unexpectedly");
 }
