@@ -208,21 +208,21 @@ function buildSummary(
 
   if (maxFitsCtx === null) {
     const smallest = points[0];
-    return `Even at ${fmtCtx(smallest.tokens)}, the KV cache (~${approx}${smallest.kvGb.toFixed(1)} GB) exceeds the ${headroomGb.toFixed(1)} GB available. Swapping likely under any extended context.`;
+    return `Even at ${fmtCtx(smallest.tokens)}, the KV cache (${approx}${fmtKvSize(smallest.kvGb)}) exceeds the ${fmtKvSize(headroomGb)} available. Swapping likely under any extended context.`;
   }
 
   const maxPoint = points.find(p => p.tokens === maxFitsCtx)!;
 
   if (maxFitsCtx >= arch.maxCtx) {
-    return `Full context window (${fmtCtx(arch.maxCtx)}) fits in ${approx}${maxPoint.kvGb.toFixed(1)} GB of KV cache. No context pressure expected.`;
+    return `Full ${fmtCtx(arch.maxCtx)} context fits in ${approx}${fmtKvSize(maxPoint.kvGb)} of KV cache. No context pressure expected.`;
   }
 
   const nextPoint = points.find(p => p.tokens > maxFitsCtx);
   const pressure  = nextPoint
-    ? ` Beyond ${fmtCtx(maxFitsCtx)}, KV cache reaches ${approx}${nextPoint.kvGb.toFixed(1)} GB — exceeding the ${headroomGb.toFixed(1)} GB headroom.`
+    ? ` Beyond ${fmtCtx(maxFitsCtx)}, KV cache reaches ${approx}${fmtKvSize(nextPoint.kvGb)} — exceeding ${fmtKvSize(headroomGb)} headroom.`
     : '';
 
-  return `Comfortable up to ${fmtCtx(maxFitsCtx)} context (${approx}${maxPoint.kvGb.toFixed(1)} GB KV cache).${pressure}`;
+  return `Comfortable up to ${fmtCtx(maxFitsCtx)} context (${approx}${fmtKvSize(maxPoint.kvGb)} KV cache).${pressure}`;
 }
 
 /** Format token count as "4k", "32k", "128k". */
@@ -230,4 +230,13 @@ export function fmtCtx(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(0)}M`;
   if (tokens >= 1_000)     return `${(tokens / 1_000).toFixed(0)}k`;
   return `${tokens}`;
+}
+
+/**
+ * Format a KV cache size.
+ * Uses MB for values under 0.1 GB so "0.0 GB" never appears.
+ */
+export function fmtKvSize(gb: number): string {
+  if (gb < 0.1) return `${Math.round(gb * 1024)} MB`;
+  return `${gb.toFixed(1)} GB`;
 }

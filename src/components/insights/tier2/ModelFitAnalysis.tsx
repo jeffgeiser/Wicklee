@@ -41,7 +41,7 @@ import { computeModelFitScore } from '../../../utils/modelFit';
 import type { FitScore } from '../../../utils/modelFit';
 import { computeWES, formatWES, wesColorClass } from '../../../utils/wes';
 import { getNodePowerW } from '../../../utils/power';
-import { computeContextRunway, fmtCtx } from '../../../utils/kvCache';
+import { computeContextRunway, fmtCtx, fmtKvSize } from '../../../utils/kvCache';
 import { computeQuantRecommendation } from '../../../utils/quantSweet';
 
 // ── Quantization helpers ───────────────────────────────────────────────────────
@@ -664,28 +664,51 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               const runway = computeContextRunway(node, memFit.headroomGb);
               if (!runway) return null;
 
-              // Show milestones up to the model's max context (cap at 5 points for space)
+              const approx = runway.arch.isExact ? '' : '~';
+              // "Compact" mode: model max context is small enough that every milestone fits.
+              // Showing bars for a single passing row is noisy — use an inline badge instead.
+              const isCompact = runway.points.length === 1 ||
+                (runway.maxFitsCtx != null && runway.maxFitsCtx >= runway.arch.maxCtx);
+
+              if (isCompact) {
+                const maxPt = runway.points[runway.points.length - 1];
+                return (
+                  <div className="mb-2.5">
+                    <div className="flex items-center justify-between">
+                      <p
+                        className="text-[9px] text-gray-600 uppercase tracking-widest"
+                        title={`KV cache at max context (${fmtCtx(runway.arch.maxCtx)}): ${approx}${fmtKvSize(maxPt.kvGb)}. ${runway.arch.isExact ? 'Architecture from /api/show.' : 'Estimated from parameter count (±30%).'}`}
+                      >Context Runway</p>
+                      <span className="text-[9px] text-green-400 font-mono flex items-center gap-1">
+                        ✓ Full {fmtCtx(runway.arch.maxCtx)} window
+                        <span className="text-gray-600">· {approx}{fmtKvSize(maxPt.kvGb)} KV cache</span>
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
+
+              // Multi-milestone bar chart
               const visiblePoints = runway.points.slice(0, 5);
-              const maxBarKvGb    = visiblePoints[visiblePoints.length - 1]?.kvGb ?? 1;
+              const scale = Math.max(...visiblePoints.map(p => p.kvGb), memFit.headroomGb * 0.1);
 
               return (
                 <div className="mb-2.5">
-                  <div className="flex items-center gap-0.5 mb-1.5">
+                  <div className="flex items-center justify-between mb-1.5">
                     <p
                       className="text-[9px] text-gray-600 uppercase tracking-widest"
-                      title={`How much memory the KV cache consumes at each context length. Formula: 2 × layers × KV-heads × head-dim × ctx-tokens × 2 bytes (FP16). ${runway.arch.isExact ? 'Architecture from /api/show (exact).' : 'Estimated from parameter count (±30%).'}`}
+                      title={`KV cache memory at each context length. Formula: 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ${runway.arch.isExact ? 'Architecture from /api/show.' : 'Estimated from parameter count (±30%).'}`}
                     >Context Runway</p>
-                    {!runway.arch.isExact && (
-                      <span className="text-[8px] text-gray-600 ml-1">est.</span>
-                    )}
+                    <span className="text-[9px] text-gray-600 font-mono">
+                      {fmtKvSize(memFit.headroomGb)} headroom{!runway.arch.isExact && <span className="ml-1 text-gray-700">est.</span>}
+                    </span>
                   </div>
 
-                  {/* Milestone bars */}
                   <div className="space-y-1">
                     {visiblePoints.map(pt => {
-                      const isMax     = pt.tokens === runway.arch.maxCtx;
-                      const barPct    = Math.min((pt.kvGb / (memFit.headroomGb + maxBarKvGb * 0.1)) * 100, 100);
-                      const fitsColor = pt.fits
+                      const isMax      = pt.tokens === runway.arch.maxCtx;
+                      const barPct     = Math.min((pt.kvGb / scale) * 100, 100);
+                      const fitsColor  = pt.fits
                         ? pt.headroomRatio > 0.7 ? 'bg-amber-500/70' : 'bg-green-500/70'
                         : 'bg-red-500/70';
                       const labelColor = pt.fits
@@ -696,19 +719,16 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                         <div
                           key={pt.tokens}
                           className="flex items-center gap-2"
-                          title={`${fmtCtx(pt.tokens)} context → KV cache ${runway.arch.isExact ? '' : '~'}${pt.kvGb.toFixed(2)} GB (${(pt.headroomRatio * 100).toFixed(0)}% of ${memFit.headroomGb.toFixed(1)} GB headroom)`}
+                          title={`${fmtCtx(pt.tokens)} context → ${approx}${fmtKvSize(pt.kvGb)} KV cache (${(pt.headroomRatio * 100).toFixed(0)}% of ${fmtKvSize(memFit.headroomGb)} headroom)`}
                         >
                           <span className={`text-[9px] font-mono w-9 shrink-0 text-right ${isMax ? 'text-gray-400 font-semibold' : 'text-gray-600'}`}>
                             {fmtCtx(pt.tokens)}
                           </span>
                           <div className="flex-1 h-1 bg-gray-800 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${fitsColor}`}
-                              style={{ width: `${barPct}%` }}
-                            />
+                            <div className={`h-full rounded-full ${fitsColor}`} style={{ width: `${barPct}%` }} />
                           </div>
-                          <span className={`text-[9px] font-mono w-12 shrink-0 ${labelColor}`}>
-                            {runway.arch.isExact ? '' : '~'}{pt.kvGb.toFixed(1)} GB
+                          <span className={`text-[9px] font-mono w-14 shrink-0 text-right ${labelColor}`}>
+                            {approx}{fmtKvSize(pt.kvGb)}
                           </span>
                           <span className={`text-[8px] shrink-0 ${pt.fits ? 'text-gray-700' : 'text-red-500'}`}>
                             {pt.fits ? '✓' : '✗'}
@@ -718,16 +738,9 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                     })}
                   </div>
 
-                  {/* Headroom reference line */}
-                  <p className="text-[9px] text-gray-600 mt-1">
-                    {memFit.headroomGb.toFixed(1)} GB available for KV cache
-                    {runway.arch.maxCtx && (
-                      <span> · max context {fmtCtx(runway.arch.maxCtx)}</span>
-                    )}
-                  </p>
-
-                  {/* Summary sentence */}
-                  <p className="text-[10px] text-gray-500 leading-relaxed mt-0.5">{runway.summary}</p>
+                  {runway.summary && (
+                    <p className="text-[9px] text-gray-600 leading-relaxed mt-1.5">{runway.summary}</p>
+                  )}
                 </div>
               );
             })()}
@@ -754,14 +767,14 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 
               return (
                 <div className="pt-2 border-t border-gray-800/50">
-                  <div className="flex items-center gap-0.5 mb-1">
+                  <div className="flex items-center justify-between mb-1">
                     <p
                       className="text-[9px] text-gray-600 uppercase tracking-widest"
                       title="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio (memory-bandwidth-bound assumption). Quality deltas from llama.cpp perplexity benchmarks."
                     >Quant Sweet Spot</p>
                     {rec.bandwidthGbs != null && (
                       <span
-                        className="text-[8px] text-gray-700 ml-1.5 font-mono"
+                        className="text-[9px] text-gray-700 font-mono"
                         title={`${node.chip_name ?? node.gpu_name ?? 'Chip'} rated memory bandwidth`}
                       >
                         {rec.bandwidthGbs.toLocaleString()} GB/s
@@ -774,25 +787,9 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   <p className="text-[10px] text-gray-500 leading-relaxed mt-0.5">
                     {rec.detail}
                   </p>
-                  {/* VRAM savings vs FP16 — compact supporting fact */}
-                  {e.vramSavedGb != null && e.vramSavedGb > 0.1 && (
-                    <p
-                      className="text-[9px] text-gray-700 mt-1"
-                      title="Estimated savings vs FP16 full-precision weights. Based on GGUF average compression ratios (±10%)."
-                    >
-                      {e.quant} saves ~{e.vramSavedGb.toFixed(1)} GB vs FP16 baseline
-                    </p>
-                  )}
                 </div>
               );
             })()}
-
-            {/* Efficiency verdict — only when WES has been measured */}
-            {e.wes != null && (
-              <p className="text-[10px] text-gray-600 leading-relaxed mt-1" title={effCfg.tooltip}>
-                {effCfg.tooltip}
-              </p>
-            )}
 
           </div>
         );
