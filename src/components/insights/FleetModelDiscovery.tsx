@@ -8,6 +8,9 @@
  *   - Which nodes can run it and at what quality (Excellent/Good/Tight/Marginal/Won't Fit)
  *   - The best-fit quantization variant per node
  *   - The Ollama pull command, ready to copy
+ *
+ * Node filter: selecting a specific node re-sorts and filters results to show
+ * what fits that machine, with a per-node pull command highlighted.
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -79,13 +82,13 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
 
 // ── Node fit pill ─────────────────────────────────────────────────────────────
 
-const NodePill: React.FC<{ node: NodeFit }> = ({ node }) => {
+const NodePill: React.FC<{ node: NodeFit; highlighted?: boolean }> = ({ node, highlighted }) => {
   const c = fitColors(node.fit_score);
   const label = node.hostname ?? node.node_id.slice(0, 8);
   return (
     <span
       title={`${label}: ${node.fit_label} (${node.best_quant}, ${(node.file_size_mb / 1024).toFixed(1)} GB)`}
-      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${c.badge} whitespace-nowrap`}
+      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${c.badge} whitespace-nowrap transition-opacity ${highlighted === false ? 'opacity-30' : ''}`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot} shrink-0`} />
       {label}
@@ -95,11 +98,24 @@ const NodePill: React.FC<{ node: NodeFit }> = ({ node }) => {
 
 // ── Fleet model row ───────────────────────────────────────────────────────────
 
-const FleetModelRow: React.FC<{ model: FleetModel; getToken: () => Promise<string | null> }> = ({ model }) => {
+const FleetModelRow: React.FC<{
+  model:          FleetModel;
+  getToken:       () => Promise<string | null>;
+  focusNodeId:    string | null;
+}> = ({ model, focusNodeId }) => {
   const [open, setOpen] = useState(false);
-  const best = fitColors(model.fleet_best_score);
+
+  // When a node is focused, score and sort from that node's perspective.
+  const focusedNode = focusNodeId
+    ? model.nodes.find(n => n.node_id === focusNodeId) ?? null
+    : null;
+
+  const effectiveScore = focusedNode?.fit_score ?? model.fleet_best_score;
+  const best = fitColors(effectiveScore);
   const fittingNodes = model.nodes.filter(n => n.fit_score >= 40);
-  const bestNode = model.nodes[0]; // already sorted best-first
+
+  // Best node for the pull command — focused node first, then highest scorer.
+  const pullNode = focusedNode ?? model.nodes[0];
 
   return (
     <div className="border border-gray-800/60 rounded-xl overflow-hidden">
@@ -114,10 +130,14 @@ const FleetModelRow: React.FC<{ model: FleetModel; getToken: () => Promise<strin
           {shortName(model.model_id)}
         </span>
 
-        {/* Fleet fit summary: node pills */}
+        {/* Fleet fit summary: node pills (dim non-focus nodes when filtering) */}
         <div className="flex items-center gap-1 flex-wrap justify-end max-w-[45%] hidden sm:flex">
           {model.nodes.slice(0, 4).map(n => (
-            <NodePill key={n.node_id} node={n} />
+            <NodePill
+              key={n.node_id}
+              node={n}
+              highlighted={focusNodeId == null ? undefined : n.node_id === focusNodeId}
+            />
           ))}
           {model.nodes.length > 4 && (
             <span className="text-[10px] text-gray-600">+{model.nodes.length - 4}</span>
@@ -164,10 +184,14 @@ const FleetModelRow: React.FC<{ model: FleetModel; getToken: () => Promise<strin
             {model.nodes.map(node => {
               const nc = fitColors(node.fit_score);
               const displayName = node.hostname ?? node.node_id;
+              const isFocused = focusNodeId === node.node_id;
               return (
-                <div key={node.node_id} className="flex items-center gap-2 py-2 border-t border-gray-800/20 first:border-t-0">
+                <div
+                  key={node.node_id}
+                  className={`flex items-center gap-2 py-2 border-t border-gray-800/20 first:border-t-0 transition-opacity ${focusNodeId && !isFocused ? 'opacity-40' : ''}`}
+                >
                   <Server className="w-3 h-3 text-gray-600 shrink-0" />
-                  <span className="text-[11px] text-gray-400 w-24 shrink-0 truncate" title={displayName}>
+                  <span className={`text-[11px] w-24 shrink-0 truncate ${isFocused ? 'text-gray-200 font-semibold' : 'text-gray-400'}`} title={displayName}>
                     {displayName}
                   </span>
                   <span className={`text-[10px] font-medium px-1.5 py-px rounded border ${nc.badge} shrink-0`}>
@@ -196,17 +220,17 @@ const FleetModelRow: React.FC<{ model: FleetModel; getToken: () => Promise<strin
             })}
           </div>
 
-          {/* Best-node pull command featured */}
-          {bestNode && bestNode.pull_cmd && bestNode.fit_score >= 40 && (
+          {/* Pull command — focused node or best node */}
+          {pullNode && pullNode.pull_cmd && pullNode.fit_score >= 40 && (
             <div className="space-y-1 pt-1">
               <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
-                Best node · {bestNode.hostname ?? bestNode.node_id} · {bestNode.best_quant}
+                {focusedNode ? `${focusedNode.hostname ?? focusedNode.node_id}` : 'Best node'} · {pullNode.hostname ?? pullNode.node_id} · {pullNode.best_quant}
               </div>
               <div className="flex items-center gap-1.5 bg-gray-950/60 border border-gray-800/60 rounded-lg px-2.5 py-1.5">
                 <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">
-                  {bestNode.pull_cmd}
+                  {pullNode.pull_cmd}
                 </code>
-                <CopyButton text={bestNode.pull_cmd} />
+                <CopyButton text={pullNode.pull_cmd} />
               </div>
             </div>
           )}
@@ -227,6 +251,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   const [data, setData]             = useState<FleetDiscoveryResponse | null>(null);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
+  const [focusNodeId, setFocusNode] = useState<string | null>(null);
   const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchModels = useCallback(async (query?: string) => {
@@ -249,8 +274,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     }
   }, [getToken]);
 
-  // Load trending on mount — retry up to 5× with 600ms backoff to handle
-  // Clerk JWT not yet resolved when component first mounts.
+  // Load trending on mount — retry up to 5× with 600ms backoff.
   useEffect(() => {
     let cancelled = false;
     let attempt = 0;
@@ -268,8 +292,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When catalog is still loading (hf_reachable === false), auto-retry every 30s
-  // so the UI updates automatically once the server finishes fetching from HF.
+  // Auto-retry when catalog is still loading (hf_reachable === false).
   useEffect(() => {
     if (!data || data.hf_reachable !== false || loading) return;
     const id = setTimeout(() => fetchModels(), 30_000);
@@ -288,23 +311,52 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     fetchModels(pendingSearch || undefined);
   };
 
-  const fittingModels = data?.models.filter(m => m.fleet_best_score >= 60).length ?? 0;
+  // Derive unique online nodes from the first model's node list (all models share the same set).
+  const onlineNodes: Pick<NodeFit, 'node_id' | 'hostname'>[] = data?.models[0]?.nodes ?? [];
+
+  // Filter and sort models based on selected node.
+  const displayModels = (() => {
+    if (!data) return [];
+    if (!focusNodeId) return data.models;
+
+    return data.models
+      .map(m => {
+        const nodeEntry = m.nodes.find(n => n.node_id === focusNodeId);
+        return { model: m, nodeScore: nodeEntry?.fit_score ?? 0 };
+      })
+      .filter(({ nodeScore }) => nodeScore > 0)
+      .sort((a, b) => b.nodeScore - a.nodeScore)
+      .map(({ model }) => model);
+  })();
+
+  const focusNodeLabel = focusNodeId
+    ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)
+    : null;
+
+  const fitCount = focusNodeId
+    ? displayModels.filter(m => {
+        const n = m.nodes.find(x => x.node_id === focusNodeId);
+        return (n?.fit_score ?? 0) >= 60;
+      }).length
+    : data?.models.filter(m => m.fleet_best_score >= 60).length ?? 0;
 
   return (
     <div className="space-y-3">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Package className="w-4 h-4 text-cyan-400" />
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
             Fleet Model Discovery
           </span>
           {data && !loading && (
             <span
-              title="Models where at least one fleet node scores ≥60 — VRAM headroom (40 pts) · thermal margin (20 pts) · WES history (20 pts) · power efficiency (20 pts)"
+              title={focusNodeId
+                ? `Models where ${focusNodeLabel} scores ≥60 — VRAM headroom · thermal margin · power efficiency`
+                : 'Models where at least one fleet node scores ≥60 — VRAM headroom (40 pts) · thermal margin (20 pts) · WES history (20 pts) · power efficiency (20 pts)'}
               className="text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/15 font-medium cursor-default"
             >
-              {fittingModels} fit your fleet
+              {fitCount} fit {focusNodeLabel ?? 'your fleet'}
             </span>
           )}
         </div>
@@ -314,6 +366,36 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           </span>
         )}
       </div>
+
+      {/* Node filter pills */}
+      {onlineNodes.length > 1 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[9px] text-gray-700 uppercase tracking-widest mr-0.5">Filter:</span>
+          <button
+            onClick={() => setFocusNode(null)}
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+              focusNodeId == null
+                ? 'bg-gray-700 border-gray-600 text-gray-200'
+                : 'bg-transparent border-gray-800 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+            }`}
+          >
+            All nodes
+          </button>
+          {onlineNodes.map(n => (
+            <button
+              key={n.node_id}
+              onClick={() => setFocusNode(prev => prev === n.node_id ? null : n.node_id)}
+              className={`text-[10px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
+                focusNodeId === n.node_id
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : 'bg-transparent border-gray-800 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+              }`}
+            >
+              {n.hostname ?? n.node_id}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Search */}
       <form onSubmit={handleSubmit} className="flex gap-2">
@@ -345,6 +427,9 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           {data.is_live_search
             ? `Live HuggingFace search · each model scored against ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`
             : `Trending GGUF by downloads · scored across your ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`}
+          {focusNodeId && focusNodeLabel && (
+            <span className="text-cyan-600 ml-1">· filtered for {focusNodeLabel}</span>
+          )}
         </div>
       )}
 
@@ -380,18 +465,25 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* Empty — only show "no results" when HF was actually reachable */}
-      {data && data.models.length === 0 && !loading && data.hf_reachable !== false && (
+      {/* Empty */}
+      {data && displayModels.length === 0 && !loading && data.hf_reachable !== false && (
         <p className="text-xs text-gray-600 py-6 text-center">
-          No GGUF models found{pendingSearch ? ` for "${pendingSearch}"` : ''}. Try a different search term.
+          {focusNodeId
+            ? `No models scored for ${focusNodeLabel}. Try a different search or select a different node.`
+            : `No GGUF models found${pendingSearch ? ` for "${pendingSearch}"` : ''}. Try a different search term.`}
         </p>
       )}
 
       {/* Results */}
-      {data && data.models.length > 0 && (
+      {displayModels.length > 0 && (
         <div className="space-y-1">
-          {data.models.map(model => (
-            <FleetModelRow key={model.model_id} model={model} getToken={getToken} />
+          {displayModels.map(model => (
+            <FleetModelRow
+              key={model.model_id}
+              model={model}
+              getToken={getToken}
+              focusNodeId={focusNodeId}
+            />
           ))}
         </div>
       )}
