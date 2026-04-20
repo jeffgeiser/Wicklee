@@ -168,22 +168,6 @@ function efficiencyLevel(wes: number | null): EfficiencyLevel {
   return 'excellent';
 }
 
-// ── Inline tooltip ─────────────────────────────────────────────────────────────
-
-/**
- * Small '?' icon with a browser-native tooltip (title attribute).
- * Used on metric labels and calculated values to expose data provenance
- * without cluttering the primary reading path.
- */
-const Tip: React.FC<{ text: string }> = ({ text }) => (
-  <span
-    title={text}
-    className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-gray-700 text-[8px] text-gray-600 cursor-help hover:text-gray-400 hover:border-gray-500 transition-colors select-none ml-0.5 shrink-0"
-  >
-    ?
-  </span>
-);
-
 // ── Per-model data ─────────────────────────────────────────────────────────────
 
 interface ModelEntry {
@@ -343,10 +327,12 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <span
+              className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 cursor-help"
+              title="Two-dimensional fit scored per model: Memory (headroom vs model size after load) and Efficiency (WES: tok/s per watt, thermal penalty applied)."
+            >
               Model Fit Analysis
             </span>
-            <Tip text="Two-dimensional fit scored per model: Memory (headroom vs model size after load) and Efficiency (WES: tok/s per watt, thermal penalty applied)." />
           </div>
           <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded border text-green-400 bg-green-500/10 border-green-500/25 flex items-center gap-1 shrink-0">
             <Activity className="w-2.5 h-2.5 animate-pulse" />
@@ -374,31 +360,23 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   <th className="text-left pb-1.5 font-semibold pr-4">Node</th>
                   <th className="text-left pb-1.5 font-semibold pr-4">Model</th>
                   <th className="text-left pb-1.5 font-semibold pr-4">Quant</th>
-                  <th className="text-left pb-1.5 font-semibold pr-4">
-                    <span className="flex items-center gap-0.5">
-                      Memory
-                      <Tip text="Headroom after model load. Good >20% free, Fair 10–20%, Poor <10% or thermal Serious/Critical." />
-                    </span>
-                  </th>
-                  <th className="text-left pb-1.5 font-semibold pr-4">
-                    <span className="flex items-center gap-0.5">
-                      Efficiency
-                      <Tip text="WES: tok/s ÷ (watts × thermal penalty). Excellent >10, Good 3–10, Acceptable 1–3, Low <1." />
-                    </span>
-                  </th>
+                  <th
+                    className="text-left pb-1.5 font-semibold pr-4 cursor-help"
+                    title="Headroom after model load. Good >20% free, Fair 10–20%, Poor <10% or thermal Serious/Critical."
+                  >Memory</th>
+                  <th
+                    className="text-left pb-1.5 font-semibold pr-4 cursor-help"
+                    title="WES: tok/s ÷ (watts × thermal penalty). Excellent >10, Good 3–10, Acceptable 1–3, Low <1. Shown as — when no inference has been measured."
+                  >Efficiency</th>
                   <th className="text-right pb-1.5 font-semibold pr-4">Tok/s</th>
-                  <th className="text-right pb-1.5 font-semibold pr-4">
-                    <span className="flex items-center justify-end gap-0.5">
-                      W/1K Tkn
-                      <Tip text="Watts per 1,000 tokens at current draw. Hardware-agnostic — lower is better." />
-                    </span>
-                  </th>
-                  <th className="text-right pb-1.5 font-semibold">
-                    <span className="flex items-center justify-end gap-0.5">
-                      Max Ctx
-                      <Tip text="Largest context window where the KV cache fits within available memory headroom. KV cache = 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ~ = estimated from parameter count." />
-                    </span>
-                  </th>
+                  <th
+                    className="text-right pb-1.5 font-semibold pr-4 cursor-help"
+                    title="Watts per 1,000 tokens at current draw. Hardware-agnostic — lower is better."
+                  >W/1K Tkn</th>
+                  <th
+                    className="text-right pb-1.5 font-semibold cursor-help"
+                    title="Largest context window where the KV cache fits within available memory headroom. KV cache = 2 × layers × KV-heads × head-dim × ctx × 2 bytes (FP16). ~ = estimated from parameter count."
+                  >Max Ctx</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/40">
@@ -437,16 +415,18 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                         ) : <span className="text-gray-700">—</span>}
                       </td>
                       <td className="py-2 pr-4">
-                        <span
-                          className={`flex items-center gap-1.5 ${effCfg.textColor}`}
-                          title={`WES ${row.entry.wes != null ? row.entry.wes.toFixed(1) : '—'} · ${effCfg.tooltip}`}
-                        >
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${effCfg.dotColor}`} />
-                          {effCfg.label}
-                          {row.entry.wes != null && (
+                        {row.entry.wes != null ? (
+                          <span
+                            className={`flex items-center gap-1.5 ${effCfg.textColor}`}
+                            title={`WES ${row.entry.wes.toFixed(1)} · ${effCfg.tooltip}`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${effCfg.dotColor}`} />
+                            {effCfg.label}
                             <span className="text-gray-600 font-mono">({formatWES(row.entry.wes)})</span>
-                          )}
-                        </span>
+                          </span>
+                        ) : (
+                          <span className="text-gray-700" title="No inference measured yet — WES requires active tok/s and watt readings.">—</span>
+                        )}
                       </td>
                       <td className="py-2 pr-4 text-right font-mono text-gray-300">
                         {row.entry.tps != null ? row.entry.tps.toFixed(1) : <span className="text-gray-700">—</span>}
@@ -514,10 +494,12 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate">
+          <span
+            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate cursor-help"
+            title="Two-dimensional fit: Memory (headroom after model load) and Efficiency (WES: tok/s per watt, thermal penalty applied). Both dimensions are needed — a model can fit in memory but still run inefficiently, or vice versa."
+          >
             Model Fit Analysis{entries.length > 1 ? ` · ${entries.length} Models` : ''}
           </span>
-          <Tip text="Two-dimensional fit: Memory (headroom after model load) and Efficiency (WES: tok/s per watt, thermal penalty applied). Both dimensions are needed — a model can fit in memory but still run inefficiently, or vice versa." />
         </div>
         <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded border text-green-400 bg-green-500/10 border-green-500/25 shrink-0 flex items-center gap-1">
           <Activity className="w-2.5 h-2.5 animate-pulse" />
@@ -559,7 +541,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 
             {/* Identity row: model name + quant badge */}
             <div className="flex items-center gap-2 flex-wrap mb-2.5">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${effCfg.dotColor} ${e.effLevel === 'low' ? 'animate-pulse' : ''}`} />
+              <span className={`w-2 h-2 rounded-full shrink-0 ${e.wes != null ? effCfg.dotColor : 'bg-gray-600'} ${e.effLevel === 'low' && e.wes != null ? 'animate-pulse' : ''}`} />
               <span className="font-mono text-xs text-gray-200">
                 {e.base}
                 {e.tag && <span className="text-gray-500">:{e.tag}</span>}
@@ -583,19 +565,19 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 </p>
               </div>
               <div>
-                <div className="flex items-center gap-0.5 mb-0.5">
-                  <p className="text-[9px] text-gray-600 uppercase tracking-widest">W/1K Tkn</p>
-                  <Tip text="Watts per 1,000 tokens at current accelerator draw. Hardware-agnostic efficiency metric — lower is better. Computed as: (accelerator watts ÷ tok/s) × 1000." />
-                </div>
+                <p
+                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5 cursor-help"
+                  title="Watts per 1,000 tokens at current accelerator draw. Hardware-agnostic efficiency metric — lower is better. Computed as: (accelerator watts ÷ tok/s) × 1000."
+                >W/1K Tkn</p>
                 <p className="font-telin text-sm text-gray-200">
                   {e.w1k != null ? `${e.w1k.toFixed(0)}W` : <span className="text-gray-600">—</span>}
                 </p>
               </div>
               <div>
-                <div className="flex items-center gap-0.5 mb-0.5">
-                  <p className="text-[9px] text-gray-600 uppercase tracking-widest">WES</p>
-                  <Tip text="Wicklee Efficiency Score: tok/s ÷ (watts × thermal penalty). The thermal penalty increases with throttling (Fair 1.25×, Serious 1.75×, Critical 2×), so a throttled node's WES drops even if tok/s looks stable." />
-                </div>
+                <p
+                  className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5 cursor-help"
+                  title="Wicklee Efficiency Score: tok/s ÷ (watts × thermal penalty). The thermal penalty increases with throttling (Fair 1.25×, Serious 1.75×, Critical 2×), so a throttled node's WES drops even if tok/s looks stable."
+                >WES</p>
                 <p className={`font-telin text-sm ${wesColorClass(e.wes)}`}>
                   {e.wes != null ? formatWES(e.wes) : <span className="text-gray-600">—</span>}
                 </p>
@@ -612,10 +594,12 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               <div className="mb-2.5">
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-0.5">
-                    <p className="text-[9px] text-gray-600 uppercase tracking-widest">
+                    <p
+                      className="text-[9px] text-gray-600 uppercase tracking-widest cursor-help"
+                      title={`${memFit.isNvidia ? 'Dedicated GPU VRAM (NVML)' : 'Unified memory (shared CPU + GPU)'}. Headroom is free space after all loaded models and system processes. Context windows and KV cache grow into this space during inference.`}
+                    >
                       {memFit.isNvidia ? 'VRAM' : 'Memory'}
                     </p>
-                    <Tip text={`${memFit.isNvidia ? 'Dedicated GPU VRAM (NVML)' : 'Unified memory (shared CPU + GPU)'}. Headroom is free space after all loaded models and system processes. Context windows and KV cache grow into this space during inference.`} />
                   </div>
                   {memCfg && (
                     <span
@@ -667,8 +651,10 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               return (
                 <div className="mb-2.5">
                   <div className="flex items-center gap-0.5 mb-1.5">
-                    <p className="text-[9px] text-gray-600 uppercase tracking-widest">Context Runway</p>
-                    <Tip text={`How much memory the KV cache consumes at each context length. Formula: 2 × layers × KV-heads × head-dim × ctx-tokens × 2 bytes (FP16). ${runway.arch.isExact ? 'Architecture from /api/show (exact).' : 'Estimated from parameter count (±30%).'}`} />
+                    <p
+                      className="text-[9px] text-gray-600 uppercase tracking-widest cursor-help"
+                      title={`How much memory the KV cache consumes at each context length. Formula: 2 × layers × KV-heads × head-dim × ctx-tokens × 2 bytes (FP16). ${runway.arch.isExact ? 'Architecture from /api/show (exact).' : 'Estimated from parameter count (±30%).'}`}
+                    >Context Runway</p>
                     {!runway.arch.isExact && (
                       <span className="text-[8px] text-gray-600 ml-1">est.</span>
                     )}
@@ -749,8 +735,10 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               return (
                 <div className="pt-2 border-t border-gray-800/50">
                   <div className="flex items-center gap-0.5 mb-1">
-                    <p className="text-[9px] text-gray-600 uppercase tracking-widest">Quant Sweet Spot</p>
-                    <Tip text="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio (memory-bandwidth-bound assumption). Quality deltas from llama.cpp perplexity benchmarks." />
+                    <p
+                      className="text-[9px] text-gray-600 uppercase tracking-widest cursor-help"
+                      title="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio (memory-bandwidth-bound assumption). Quality deltas from llama.cpp perplexity benchmarks."
+                    >Quant Sweet Spot</p>
                     {rec.bandwidthGbs != null && (
                       <span
                         className="text-[8px] text-gray-700 ml-1.5 font-mono"
@@ -779,10 +767,12 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               );
             })()}
 
-            {/* Efficiency verdict */}
-            <p className="text-[10px] text-gray-600 leading-relaxed mt-1" title={effCfg.tooltip}>
-              {effCfg.tooltip}
-            </p>
+            {/* Efficiency verdict — only when WES has been measured */}
+            {e.wes != null && (
+              <p className="text-[10px] text-gray-600 leading-relaxed mt-1" title={effCfg.tooltip}>
+                {effCfg.tooltip}
+              </p>
+            )}
 
           </div>
         );

@@ -55,6 +55,85 @@ Wicklee Efficiency Score — the MPG for local AI. A direct measure of how effic
 
 ---
 
+## Model Fit Analysis
+
+Model Fit Analysis scores each loaded model across two independent dimensions. A model can fit in memory but still run inefficiently — both dimensions matter.
+
+### Dimension 1 — Memory Fit
+
+Measures how much headroom remains after the model weights are loaded, on top of all other system memory use.
+
+| Score | Condition | Meaning |
+|-------|-----------|---------|
+| **Good** | Headroom > 20% | Comfortable room for context and KV cache growth |
+| **Fair** | Headroom 10–20% OR thermal Fair | Monitor closely under long contexts |
+| **Poor** | Headroom < 10%, model exceeds capacity, OR thermal Serious/Critical | Risk of VRAM swapping or OOM |
+
+Source: `src/utils/modelFit.ts :: computeModelFitScore`
+
+### Dimension 2 — Efficiency (WES)
+
+See [WES Score](#wes-score) above for the full formula. In Model Fit Analysis the WES thresholds map to:
+
+| WES | Label | Meaning |
+|-----|-------|---------|
+| > 10 | Excellent | Exceptional throughput per watt — silicon is extremely well-matched |
+| 3–10 | Good | Solid inference efficiency for this hardware class |
+| 1–3 | Acceptable | Adequate — different quant or model size may improve tok/W |
+| < 1 | Low | High energy cost per token — check thermal state |
+| — | No data | No active inference measured yet; WES requires live tok/s and watt readings |
+
+CPU-only nodes (no GPU/VRAM) show `—` for Efficiency until an inference probe completes. This is expected — it is not a negative rating.
+
+### W/1K TKN
+
+`(accelerator watts ÷ tok/s) × 1000`
+
+Watts consumed per 1,000 tokens generated. Hardware-agnostic — lower is better. Useful for direct node-to-node comparisons regardless of model size.
+
+### Quant Sweet Spot
+
+A bandwidth-aware quantization recommendation computed from:
+- Observed tok/s at the current quant
+- Node chip memory bandwidth (from a chip lookup table)
+- Model size in GB (from Ollama/vLLM metadata)
+- Estimated speed change: scales tok/s by the inverse size ratio (memory-bandwidth-bound assumption)
+- Quality delta: perplexity benchmarks from llama.cpp (conservative estimates ±10%)
+
+The recommendation upgrades quality when headroom allows, or downgrades when the node is memory-constrained.
+
+### Context Runway
+
+Projects how much memory the KV cache will consume at each context-length milestone.
+
+**Formula:** `2 × layers × KV-heads × head-dim × ctx-tokens × 2 bytes (FP16)`
+
+When the model architecture is loaded from Ollama `/api/show`, values are exact. Otherwise they are estimated from parameter count (±30%) and labeled with `~`.
+
+**Source:** `src/utils/kvCache.ts :: computeContextRunway`
+
+### Quantization Compression Ratios
+
+Used to estimate FP16-equivalent model size and VRAM savings.
+
+| Quant | Bits/weight avg | Size vs FP16 |
+|-------|----------------|--------------|
+| Q2 | ~2 | 25% |
+| Q3 | ~3 | 35% |
+| Q4 | ~4.5 (K-quant mixed) | 45% |
+| Q5 | ~5 | 55% |
+| Q6 | ~6 | 65% |
+| Q8 | ~8 | 80% |
+| F16 | 16 | 100% (baseline) |
+| F32 | 32 | 200% |
+
+Ratios are approximate (±10%); actual values vary by model architecture (attention head count, MoE sparsity, K-quant mixed precision).
+
+**Source:** `src/components/insights/tier2/ModelFitAnalysis.tsx :: quantCompressionRatio`  
+**GGUF spec reference:** https://github.com/ggerganov/llama.cpp/blob/master/docs/development/gguf.md
+
+---
+
 ## Node States
 
 The agent computes inference state once per second as a pure function from sensor readings. The `inference_state` field is the single source of truth — the dashboard displays it directly and never re-computes it.
