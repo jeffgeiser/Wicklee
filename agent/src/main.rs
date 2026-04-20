@@ -4882,7 +4882,11 @@ async fn fetch_hf_gguf(
 
     const MAX_RESPONSE_BYTES: u64 = 10_000_000; // 10 MB guard
     let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
-    let resp = match client.get(&url).send().await {
+    let mut req = client.get(&url);
+    if let Ok(tok) = std::env::var("HUGGINGFACE_TOKEN") {
+        req = req.bearer_auth(tok);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => { eprintln!("[model-discovery] HF fetch failed: {e}"); return Vec::new(); }
     };

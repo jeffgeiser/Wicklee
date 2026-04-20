@@ -3911,8 +3911,23 @@ async fn handle_fleet_model_candidates(
             }
 
             const MAX_BYTES: u64 = 10_000_000;
-            let call = match ureq::get(&url).timeout(std::time::Duration::from_secs(30)).call() {
+            // Use a HuggingFace token if configured — authenticated requests
+            // get a much higher rate limit (avoids 429s on Railway's shared IP).
+            let hf_token = std::env::var("HUGGINGFACE_TOKEN").ok();
+            let req = ureq::get(&url).timeout(std::time::Duration::from_secs(30));
+            let req = if let Some(ref tok) = hf_token {
+                req.set("Authorization", &format!("Bearer {tok}"))
+            } else {
+                req
+            };
+            eprintln!("[fleet-discovery] fetching HF (auth={}): {url}", hf_token.is_some());
+            let call = match req.call() {
                 Ok(r) => r,
+                Err(ureq::Error::Status(code, ref resp)) => {
+                    let body = resp.status_text().to_string();
+                    eprintln!("[fleet-discovery] HF returned HTTP {code}: {body}");
+                    return (Vec::new(), false);
+                }
                 Err(e) => {
                     eprintln!("[fleet-discovery] HF fetch failed: {e}");
                     return (Vec::new(), false);
