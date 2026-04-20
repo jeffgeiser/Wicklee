@@ -28,7 +28,8 @@ set -euo pipefail
 # installs it to /usr/local/bin/wicklee, and prints getting-started tips.
 
 REPO="jeffgeiser/Wicklee"
-RELEASE_TAG="nightly"
+RELEASE_TAG="nightly"       # GitHub release tag used in the download URL
+DISPLAY_CHANNEL="latest"    # Human-friendly label shown in install output
 INSTALL_DIR="/usr/local/bin"
 BIN_NAME="wicklee"
 
@@ -81,7 +82,7 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSE
 need curl
 
 echo ""
-echo "  Downloading Wicklee (${RELEASE_TAG} · ${OS_TAG}-${ARCH_TAG}${NVIDIA_SUFFIX})…"
+echo "  Downloading Wicklee (${DISPLAY_CHANNEL} · ${OS_TAG}-${ARCH_TAG}${NVIDIA_SUFFIX})…"
 
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
@@ -174,7 +175,7 @@ fi
 SERVICE_UPDATED=false
 
 if [[ "$OS_TAG" == "linux" ]] && command -v systemctl &>/dev/null; then
-  if systemctl list-unit-files wicklee.service &>/dev/null 2>&1; then
+  if [[ -f "/etc/systemd/system/wicklee.service" ]]; then
     echo "  Updating systemd service…"
     sudo "${INSTALL_PATH}" --install-service
     SERVICE_UPDATED=true
@@ -205,7 +206,7 @@ curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \
   >/dev/null 2>&1 &
 
 echo ""
-green "  ✓ Wicklee agent installed successfully  —  ${VERSION_LABEL}"
+green "  ✓ Wicklee agent installed successfully — ${VERSION_LABEL}"
 echo ""
 
 if [[ "$SERVICE_UPDATED" == "true" ]]; then
@@ -233,6 +234,6 @@ else
 fi
 
 echo ""
-echo "  Your dashboard:     http://localhost:7700"
-echo "  Pair with your fleet: https://wicklee.dev"
+echo "  Local dashboard:    http://localhost:7700"
+echo "  Fleet dashboard:    https://wicklee.dev"
 echo ""
