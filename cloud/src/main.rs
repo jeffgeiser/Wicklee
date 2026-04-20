@@ -3883,12 +3883,13 @@ async fn handle_fleet_model_candidates(
         })
     };
 
-    let (hf_models, hf_reachable): (Vec<(String, u64, Vec<(String, String, u64)>)>, bool) = if let Some(hit) = cached {
-        (hit, true)
+    let (hf_models, hf_reachable, hf_debug): (Vec<(String, u64, Vec<(String, String, u64)>)>, bool, String) = if let Some(hit) = cached {
+        let n = hit.len();
+        (hit, true, format!("cache hit ({n} models)"))
     } else {
         // Fetch from HuggingFace via ureq (sync → spawn_blocking)
         let search_clone = search.clone();
-        let (results, reached) = tokio::task::spawn_blocking(move || -> (Vec<(String, u64, Vec<(String, String, u64)>)>, bool) {
+        let (results, reached, dbg) = tokio::task::spawn_blocking(move || -> (Vec<(String, u64, Vec<(String, String, u64)>)>, bool, String) {
             // Rate-limit: at most 1 HF fetch per second to avoid IP bans.
             let delay = {
                 let mut guard = HF_LAST_FETCH_CLOUD.lock().unwrap();
@@ -3925,25 +3926,43 @@ async fn handle_fleet_model_candidates(
                 Ok(r) => r,
                 Err(ureq::Error::Status(code, ref resp)) => {
                     let body = resp.status_text().to_string();
-                    eprintln!("[fleet-discovery] HF returned HTTP {code}: {body}");
-                    return (Vec::new(), false);
+                    let msg = format!("HF HTTP {code}: {body}");
+                    eprintln!("[fleet-discovery] {msg}");
+                    return (Vec::new(), false, msg);
                 }
                 Err(e) => {
-                    eprintln!("[fleet-discovery] HF fetch failed: {e}");
-                    return (Vec::new(), false);
+                    let msg = format!("HF fetch error: {e}");
+                    eprintln!("[fleet-discovery] {msg}");
+                    return (Vec::new(), false, msg);
                 }
             };
             if call.header("content-length").and_then(|v| v.parse::<u64>().ok()).map(|n| n > MAX_BYTES).unwrap_or(false) {
-                eprintln!("[fleet-discovery] HF response too large, skipping");
-                return (Vec::new(), false);
+                let msg = "HF response exceeded 10MB limit".to_string();
+                eprintln!("[fleet-discovery] {msg}");
+                return (Vec::new(), false, msg);
             }
             let hf_resp: Vec<serde_json::Value> = match call.into_json() {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("[fleet-discovery] HF JSON parse failed: {e}");
-                    return (Vec::new(), false);
+                    let msg = format!("HF JSON parse failed: {e}");
+                    eprintln!("[fleet-discovery] {msg}");
+                    return (Vec::new(), false, msg);
                 }
             };
+
+            let raw_count = hf_resp.len();
+            // Log first model's structure to diagnose missing siblings/size fields.
+            if let Some(first) = hf_resp.first() {
+                let sibling_count = first["siblings"].as_array().map(|a| a.len()).unwrap_or(0);
+                let first_sib = first["siblings"].as_array()
+                    .and_then(|a| a.first())
+                    .map(|s| format!("keys={:?}", s.as_object().map(|o| o.keys().collect::<Vec<_>>()).unwrap_or_default()))
+                    .unwrap_or_else(|| "no siblings".into());
+                eprintln!("[fleet-discovery] raw={raw_count} first={} siblings={sibling_count} first_sib={first_sib}",
+                    first["id"].as_str().unwrap_or("?"));
+            } else {
+                eprintln!("[fleet-discovery] HF returned empty array (raw_count=0)");
+            }
 
             let mut out = Vec::new();
             for m in &hf_resp {
@@ -3964,11 +3983,13 @@ async fn handle_fleet_model_candidates(
                 }
                 if !variants.is_empty() { out.push((model_id, downloads, variants)); }
             }
-            (out, true)
-        }).await.unwrap_or((Vec::new(), false));
+            let msg = format!("ok: raw={raw_count} with_variants={}", out.len());
+            eprintln!("[fleet-discovery] {msg}");
+            (out, true, msg)
+        }).await.unwrap_or((Vec::new(), false, "spawn_blocking panicked".to_string()));
 
         // Only cache successful HF fetches — never cache an empty error response.
-        if reached {
+        if reached && !results.is_empty() {
             let cache_json: serde_json::Value = results.iter().map(|(mid, dl, vars)| {
                 serde_json::json!({
                     "model_id": mid, "downloads": dl,
@@ -3978,7 +3999,7 @@ async fn handle_fleet_model_candidates(
             state.hf_cache.lock().await.insert(cache_key, (now_ms(), cache_json));
         }
 
-        (results, reached)
+        (results, reached, dbg)
     };
 
     // Snapshot online fleet node hardware
@@ -4053,6 +4074,7 @@ async fn handle_fleet_model_candidates(
         "is_live_search": search.is_some(),
         "online_nodes":   online_count,
         "hf_reachable":   hf_reachable,
+        "hf_debug":       hf_debug,
         "models":         models,
     })).into_response()
 }
