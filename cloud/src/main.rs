@@ -3657,7 +3657,8 @@ async fn run_rollup(pool: &sqlx::PgPool) {
 // ── Model Discovery (Cloud) ──────────────────────────────────────────────────
 
 /// Refresh the HuggingFace GGUF model catalog into Postgres.
-async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
+/// Returns the number of variants successfully written to model_catalog.
+async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
     let hf_token: Option<String> = std::env::var("HUGGINGFACE_TOKEN").ok()
         .filter(|t| !t.is_empty());
 
@@ -3670,16 +3671,16 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
         req.call()
     }).await {
         Ok(Ok(r)) => r,
-        Ok(Err(e)) => { eprintln!("[model-catalog] HF list failed: {e}"); return; }
-        Err(e) => { eprintln!("[model-catalog] task join failed: {e}"); return; }
+        Ok(Err(e)) => { eprintln!("[model-catalog] HF list failed: {e}"); return 0; }
+        Err(e) => { eprintln!("[model-catalog] task join failed: {e}"); return 0; }
     };
     let body: String = match list_resp.into_string() {
         Ok(b) => b,
-        Err(e) => { eprintln!("[model-catalog] HF read failed: {e}"); return; }
+        Err(e) => { eprintln!("[model-catalog] HF read failed: {e}"); return 0; }
     };
     let models: Vec<serde_json::Value> = match serde_json::from_str(&body) {
         Ok(v) => v,
-        Err(e) => { eprintln!("[model-catalog] HF parse failed: {e}"); return; }
+        Err(e) => { eprintln!("[model-catalog] HF parse failed: {e}"); return 0; }
     };
 
     // Step 2: Fetch /tree/main for all repos concurrently (max 5 in-flight).
@@ -3724,17 +3725,20 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) {
                 .filter(|q| q.starts_with('Q') || q.starts_with("IQ") || q.starts_with('F') || q.starts_with("BF"))
                 .unwrap_or("unknown");
 
-            let _ = sqlx::query(
+            match sqlx::query(
                 "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (model_id, filename) DO UPDATE SET
                    file_size = EXCLUDED.file_size, downloads = EXCLUDED.downloads, fetched_at = NOW()"
             ).bind(&model_id).bind(filename).bind(quant).bind(file_size).bind(downloads)
-            .execute(pool).await;
-            count += 1;
+            .execute(pool).await {
+                Ok(_)  => count += 1,
+                Err(e) => eprintln!("[model-catalog] insert failed for {model_id}/{filename}: {e}"),
+            }
         }
     }
     println!("[model-catalog] cached {count} GGUF variants from {repo_count} repos");
+    count
 }
 
 /// Hardware simulation profiles for Pro tier "what if I had a 4090?" feature.
@@ -4185,7 +4189,7 @@ async fn run_nightly_maintenance(pool: &sqlx::PgPool) {
     let _ = sqlx::query("ANALYZE fleet_observations").execute(pool).await;
 
     // Refresh HuggingFace GGUF model catalog (24h cycle).
-    refresh_cloud_model_catalog(pool).await;
+    let _ = refresh_cloud_model_catalog(pool).await;
 
     println!("[nightly] maintenance complete — pruned + ANALYZE + catalog refresh");
 }
@@ -6584,12 +6588,10 @@ async fn main() {
                 .fetch_one(&pool2).await.unwrap_or(0);
             if count == 0 {
                 eprintln!("[startup] model_catalog empty — running initial HF catalog fetch");
-                refresh_cloud_model_catalog(&pool2).await;
-                // If still empty after first attempt (HF rate-limited), retry after 90s.
-                let count2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_catalog")
-                    .fetch_one(&pool2).await.unwrap_or(0);
-                if count2 == 0 {
-                    eprintln!("[startup] model_catalog still empty — retrying in 90s");
+                let inserted = refresh_cloud_model_catalog(&pool2).await;
+                // Retry if no rows were actually written (HF rate-limit or pool contention at startup).
+                if inserted == 0 {
+                    eprintln!("[startup] 0 variants written — retrying catalog fetch in 90s");
                     tokio::time::sleep(Duration::from_secs(90)).await;
                     refresh_cloud_model_catalog(&pool2).await;
                 }
