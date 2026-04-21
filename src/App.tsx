@@ -469,7 +469,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} cloudUrl={isLocalHost ? undefined : CLOUD_URL} onNodesRemoved={handleNodeAdded} />;
       case DashboardTab.TRACES:
-        return <TracesView nodes={nodes} tenantId={currentTenant.id} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} subscriptionTier={permissions.subscriptionTier} navParams={observabilityNav} onNavConsumed={() => setObservabilityNav(undefined)} />;
+        return <TracesView nodes={nodes} tenantId={currentTenant.id} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} subscriptionTier={permissions.subscriptionTier} getNodeSettings={getNodeSettings} navParams={observabilityNav} onNavConsumed={() => setObservabilityNav(undefined)} />;
       case DashboardTab.SCAFFOLDING:
         return permissions.canViewScaffolding ? <ScaffoldingView /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.AI_INSIGHTS:

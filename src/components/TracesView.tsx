@@ -70,12 +70,15 @@ function useProxyStatus() {
   return status;
 }
 
+import type { NodeEffectiveSettings } from '../hooks/useSettings';
+
 interface TracesViewProps {
   nodes: NodeAgent[];
   tenantId: string;
   pairingInfo: PairingInfo | null;
   getToken?: () => Promise<string | null>;
   subscriptionTier?: SubscriptionTier;
+  getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
   /** Cross-nav params from Insights → Observability (node_id + time filter). */
   navParams?: import('../types').ObservabilityNavParams;
   /** Called after nav params are consumed to clear stale state. */
@@ -1350,7 +1353,7 @@ const SYNCED_FIELD_GROUPS: { label: string; fields: string[] }[] = [
   { label: 'Identity', fields: ['node_id', 'hostname', 'os', 'arch', 'agent_version'] },
   { label: 'CPU & Memory', fields: ['cpu_usage_percent', 'total_memory_mb', 'used_memory_mb', 'available_memory_mb', 'cpu_core_count', 'memory_pressure_percent'] },
   { label: 'GPU / Accelerator', fields: ['gpu_name', 'gpu_utilization_percent', 'nvidia_gpu_utilization_percent', 'nvidia_vram_used_mb', 'nvidia_vram_total_mb', 'nvidia_gpu_temp_c', 'nvidia_power_draw_w'] },
-  { label: 'Apple Silicon', fields: ['apple_soc_power_w', 'apple_gpu_power_w', 'cpu_power_w', 'gpu_wired_limit_mb'] },
+  { label: 'Power', fields: ['apple_soc_power_w', 'apple_gpu_power_w', 'cpu_power_w', 'gpu_wired_limit_mb'] },
   { label: 'Inference State', fields: ['inference_state', 'ollama_tokens_per_second', 'vllm_tokens_per_sec', 'llamacpp_tokens_per_sec', 'ollama_active_model', 'vllm_model_name'] },
   { label: 'Thermal & Efficiency', fields: ['thermal_state', 'penalty_avg', 'penalty_peak', 'swap_write_mb_s', 'clock_throttle_pct'] },
 ];
@@ -1438,7 +1441,10 @@ const NodeFieldInspector: React.FC<{ metrics: SentinelMetrics }> = ({ metrics })
   );
 };
 
-const FleetSovereigntyGuard: React.FC<{ nodes: NodeAgent[] }> = ({ nodes: _nodes }) => {
+const FleetSovereigntyGuard: React.FC<{
+  nodes: NodeAgent[];
+  getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
+}> = ({ nodes: _nodes, getNodeSettings }) => {
   const { allNodeMetrics, connectionState } = useFleetStream();
   const [tick, setTick] = useState(0);
   const [expandedNode, setExpandedNode] = useState<string | null>(null);
@@ -1506,7 +1512,9 @@ const FleetSovereigntyGuard: React.FC<{ nodes: NodeAgent[] }> = ({ nodes: _nodes
                     onClick={() => setExpandedNode(isExpanded ? null : m.node_id)}
                   >
                     <td className="px-4 py-2.5"><span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} /></td>
-                    <td className="px-3 py-2.5 text-xs font-semibold text-gray-900 dark:text-white">{m.hostname || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs font-semibold text-gray-900 dark:text-white">
+                      {getNodeSettings?.(m.node_id)?.locationLabel || m.hostname || '—'}
+                    </td>
                     <td className="px-3 py-2.5 text-[11px] font-mono text-gray-400">{m.node_id}</td>
                     <td className="px-3 py-2.5 text-[11px] text-gray-500">{m.agent_version || '—'}</td>
                     <td className="px-4 py-2.5 text-right text-[11px] font-telin tabular-nums text-gray-500">{ageLabel}</td>
@@ -1554,26 +1562,29 @@ const EVENT_TYPE_BADGE: Record<string, string> = {
   oom_warning: 'text-amber-400 bg-amber-500/10',
   wes_cliff: 'text-purple-400 bg-purple-500/10',
   agent_version_mismatch: 'text-yellow-400 bg-yellow-500/10',
+  fleet_load_imbalance: 'text-orange-400 bg-orange-500/10',
   // Resolved variants
   zombied_engine_resolved: 'text-emerald-400 bg-emerald-500/10',
   thermal_redline_resolved: 'text-emerald-400 bg-emerald-500/10',
   oom_warning_resolved: 'text-emerald-400 bg-emerald-500/10',
   wes_cliff_resolved: 'text-emerald-400 bg-emerald-500/10',
   agent_version_mismatch_resolved: 'text-emerald-400 bg-emerald-500/10',
+  fleet_load_imbalance_resolved: 'text-emerald-400 bg-emerald-500/10',
 };
 // Map observation event_types to the "observation" filter category
 const OBSERVATION_EVENT_TYPES = new Set([
-  'zombied_engine', 'thermal_redline', 'oom_warning', 'wes_cliff', 'agent_version_mismatch',
+  'zombied_engine', 'thermal_redline', 'oom_warning', 'wes_cliff', 'agent_version_mismatch', 'fleet_load_imbalance',
   'zombied_engine_resolved', 'thermal_redline_resolved', 'oom_warning_resolved',
-  'wes_cliff_resolved', 'agent_version_mismatch_resolved',
+  'wes_cliff_resolved', 'agent_version_mismatch_resolved', 'fleet_load_imbalance_resolved',
 ]);
 
 const FleetEventTimeline: React.FC<{
   nodes: NodeAgent[];
   getToken: () => Promise<string | null>;
+  getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
   /** Pre-select a node via cross-nav from Insights tab. */
   initialNodeId?: string;
-}> = ({ nodes, getToken, initialNodeId }) => {
+}> = ({ nodes, getToken, getNodeSettings, initialNodeId }) => {
   const [selectedNode, setSelectedNode] = useState<string>(initialNodeId ?? '');
   const [selectedType, setSelectedType] = useState<string>('');
   const [token, setToken] = useState<string | null>(null);
@@ -1622,12 +1633,15 @@ const FleetEventTimeline: React.FC<{
     URL.revokeObjectURL(url);
   }, [getToken, selectedNode]);
 
-  // Build hostname map for display
+  // Build hostname map for display — prefer configured location label over raw hostname
   const hostnameMap = React.useMemo(() => {
     const map: Record<string, string> = {};
-    nodes.forEach(n => { map[n.id] = n.hostname || n.id; });
+    nodes.forEach(n => {
+      const label = getNodeSettings?.(n.id)?.locationLabel;
+      map[n.id] = label || n.hostname || n.id;
+    });
     return map;
-  }, [nodes]);
+  }, [nodes, getNodeSettings]);
 
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
@@ -1639,6 +1653,11 @@ const FleetEventTimeline: React.FC<{
           <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
             node_events · 30d
           </span>
+          {events.length > 0 && (
+            <span className="text-[10px] text-gray-500 tabular-nums">
+              {events.length}{hasMore ? '+' : ''} events
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -1696,7 +1715,11 @@ const FleetEventTimeline: React.FC<{
         )}
         {events.map((ev, i) => {
           const d = new Date(ev.ts_ms);
-          const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const isOldEvent = Date.now() - ev.ts_ms > 24 * 60 * 60 * 1000;
+          const timeLabel = isOldEvent
+            ? d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+              d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
           const dotCls = EVENT_LEVEL_DOT[ev.level] ?? 'bg-gray-500';
           const badgeCls = EVENT_TYPE_BADGE[ev.event_type ?? ''] ?? 'text-gray-400 bg-gray-500/10';
           return (
@@ -1704,7 +1727,7 @@ const FleetEventTimeline: React.FC<{
               <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${dotCls}`} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px] font-telin tabular-nums text-gray-500">{time}</span>
+                  <span className="text-[10px] font-telin tabular-nums text-gray-500 whitespace-nowrap">{timeLabel}</span>
                   <span className="text-[10px] font-semibold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
                     {hostnameMap[ev.node_id] ?? ev.node_id}
                   </span>
@@ -1747,6 +1770,9 @@ interface FleetMetricPoint {
   mem_pct: number | null;
   cpu_pct: number | null;
   swap_write: number | null;
+  duty_pct: number | null;
+  ttft_ms: number | null;
+  wes_score: number | null;
 }
 
 interface FleetMetricsNode {
@@ -1756,12 +1782,15 @@ interface FleetMetricsNode {
 }
 
 const FLEET_CHART_CONFIG: { key: keyof FleetMetricPoint; label: string; unit: string; color: string; gradId: string }[] = [
-  { key: 'tok_s',      label: 'Tok/s',        unit: 'tok/s', color: '#6366f1', gradId: 'fmcToks' },
-  { key: 'watts',      label: 'Power',        unit: 'W',     color: '#f59e0b', gradId: 'fmcWatt' },
-  { key: 'gpu_pct',    label: 'GPU Util',     unit: '%',     color: '#06b6d4', gradId: 'fmcGpu' },
-  { key: 'cpu_pct',    label: 'CPU Usage',    unit: '%',     color: '#3b82f6', gradId: 'fmcCpu' },
-  { key: 'mem_pct',    label: 'Mem Pressure', unit: '%',     color: '#93c5fd', gradId: 'fmcMem' },
-  { key: 'swap_write', label: 'Swap Write',   unit: 'MB/s',  color: '#f43f5e', gradId: 'fmcSwap' },
+  { key: 'tok_s',      label: 'Tok/s',         unit: 'tok/s', color: '#6366f1', gradId: 'fmcToks' },
+  { key: 'watts',      label: 'Power',         unit: 'W',     color: '#f59e0b', gradId: 'fmcWatt' },
+  { key: 'gpu_pct',    label: 'GPU Util',      unit: '%',     color: '#06b6d4', gradId: 'fmcGpu' },
+  { key: 'cpu_pct',    label: 'CPU Usage',     unit: '%',     color: '#3b82f6', gradId: 'fmcCpu' },
+  { key: 'mem_pct',    label: 'Mem Pressure',  unit: '%',     color: '#93c5fd', gradId: 'fmcMem' },
+  { key: 'swap_write', label: 'Swap Write',    unit: 'MB/s',  color: '#f43f5e', gradId: 'fmcSwap' },
+  { key: 'duty_pct',   label: 'Duty Cycle',    unit: '%',     color: '#10b981', gradId: 'fmcDuty' },
+  { key: 'ttft_ms',    label: 'TTFT',          unit: 'ms',    color: '#a855f7', gradId: 'fmcTtft' },
+  { key: 'wes_score',  label: 'WES Score',     unit: '',      color: '#14b8a6', gradId: 'fmcWes'  },
 ];
 
 const RANGE_LIMITS: Record<SubscriptionTier, FleetMetricRange[]> = {
@@ -1827,7 +1856,7 @@ const FleetMetricsMini: React.FC<{
           const vals = pts.map(p => p[key]).filter((v): v is number => v != null);
           return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
         };
-        return { ts_ms, tok_s: avg('tok_s'), tok_s_p95: avg('tok_s_p95'), watts: avg('watts'), gpu_pct: avg('gpu_pct'), mem_pct: avg('mem_pct'), cpu_pct: avg('cpu_pct'), swap_write: avg('swap_write') };
+        return { ts_ms, tok_s: avg('tok_s'), tok_s_p95: avg('tok_s_p95'), watts: avg('watts'), gpu_pct: avg('gpu_pct'), mem_pct: avg('mem_pct'), cpu_pct: avg('cpu_pct'), swap_write: avg('swap_write'), duty_pct: avg('duty_pct'), ttft_ms: avg('ttft_ms'), wes_score: avg('wes_score') };
       });
   }, [data]);
 
@@ -1964,7 +1993,7 @@ const FleetMetricsMini: React.FC<{
                       minTickGap={40}
                       height={16}
                     />
-                    <YAxis hide domain={['auto', 'auto']} />
+                    <YAxis hide domain={[0, 'auto']} />
                     <Tooltip
                       contentStyle={{ background: '#1a1a2e', border: '1px solid #374151', borderRadius: '8px', fontSize: '11px' }}
                       labelFormatter={v => new Date(v as number).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -1994,7 +2023,7 @@ const FleetMetricsMini: React.FC<{
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo, getToken, subscriptionTier, navParams, onNavConsumed }) => {
+const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo, getToken, subscriptionTier, getNodeSettings, navParams, onNavConsumed }) => {
   // Derive nodeId from pairing info first, then fall back to the WS metrics
   // stream so Metric History / Agent Health render even before /api/pair/status
   // resolves (or when the node is unpaired).
@@ -2017,8 +2046,8 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
       {/* ── Cloud: Fleet-first Mission Control ─────────────────────────── */}
       {!isLocalHost && (
         <>
-          <FleetSovereigntyGuard nodes={_nodes} />
-          {getToken && <FleetEventTimeline nodes={_nodes} getToken={getToken} initialNodeId={navParams?.nodeId} />}
+          <FleetSovereigntyGuard nodes={_nodes} getNodeSettings={getNodeSettings} />
+          {getToken && <FleetEventTimeline nodes={_nodes} getToken={getToken} getNodeSettings={getNodeSettings} initialNodeId={navParams?.nodeId} />}
           {getToken && subscriptionTier && <FleetMetricsMini nodes={_nodes} getToken={getToken} subscriptionTier={subscriptionTier} initialNodeId={navParams?.nodeId} />}
         </>
       )}

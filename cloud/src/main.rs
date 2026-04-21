@@ -2996,7 +2996,7 @@ async fn handle_metrics_history(
             let sql = format!(
                 "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
                         AVG(tok_s)            AS tok_s,
-                        NULL::float8           AS tok_s_p95,
+                        NULL::float8          AS tok_s_p95,
                         AVG(watts)            AS watts,
                         AVG(gpu_pct)          AS gpu_pct,
                         AVG(mem_pressure_pct) AS mem_pct,
@@ -3004,17 +3004,18 @@ async fn handle_metrics_history(
                         AVG(cpu_pct)          AS cpu_pct,
                         AVG(swap_write)       AS swap_write,
                         AVG(ttft_ms)          AS ttft_ms,
-                        AVG(avg_latency_ms)   AS e2e_latency_ms
+                        AVG(avg_latency_ms)   AS e2e_latency_ms,
+                        AVG(wes_penalized)    AS wes_score
                  FROM metrics_raw
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
-            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
-                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e)| {
-                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e })
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e, wes)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e, "wes_score": wes })
                 }).collect()
         } else {
             let sql = format!(
@@ -3028,17 +3029,18 @@ async fn handle_metrics_history(
                         NULL::float8              AS cpu_pct,
                         AVG(swap_write_avg)       AS swap_write,
                         NULL::float8              AS ttft_ms,
-                        NULL::float8              AS e2e_latency_ms
+                        NULL::float8              AS e2e_latency_ms,
+                        AVG(wes_penalized_avg)    AS wes_score
                  FROM metrics_5min
                  WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
-            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
                 .bind(&user_id).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
-                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e)| {
-                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e })
+                .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e, wes)| {
+                    serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e, "wes_score": wes })
                 }).collect()
         };
 
