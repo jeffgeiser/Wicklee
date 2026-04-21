@@ -247,28 +247,40 @@ interface Props {
 }
 
 const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
-  const [pendingSearch, setPending] = useState('');
-  const [data, setData]             = useState<FleetDiscoveryResponse | null>(null);
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-  const [focusNodeId, setFocusNode] = useState<string | null>(null);
-  const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pendingSearch, setPending]   = useState('');
+  const [data, setData]               = useState<FleetDiscoveryResponse | null>(null);
+  // Cache of the "all nodes" baseline so switching back doesn't re-fetch.
+  const baseDataRef                   = useRef<FleetDiscoveryResponse | null>(null);
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+  const [focusNodeId, setFocusNode]   = useState<string | null>(null);
+  const debounceRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Stable list of online nodes (from most recent all-nodes response).
+  const [onlineNodes, setOnlineNodes] = useState<Pick<NodeFit, 'node_id' | 'hostname'>[]>([]);
 
-  const fetchModels = useCallback(async (query?: string) => {
+  const fetchModels = useCallback(async (query?: string, nodeId?: string | null) => {
     const token = await getToken();
     if (!token) return;
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({ limit: '20' });
-      if (query) params.set('search', query);
+      if (query)  params.set('search', query);
+      if (nodeId) params.set('node_id', nodeId);
       const resp = await fetch(`/api/fleet/model-candidates?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!resp.ok) throw new Error(`${resp.status}`);
-      setData(await resp.json());
+      const json: FleetDiscoveryResponse = await resp.json();
+      setData(json);
+      // Keep a stable node list from the all-nodes response (not per-node filtered).
+      if (!nodeId) {
+        const nodes = json.models[0]?.nodes ?? [];
+        setOnlineNodes(nodes);
+        baseDataRef.current = json;
+      }
     } catch (e: any) {
-      setError(e.message ?? 'Failed to load');
+      setError((e as Error).message ?? 'Failed to load');
     } finally {
       setLoading(false);
     }
@@ -292,42 +304,38 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Re-fetch when node focus changes — server ranks results for the selected node.
+  useEffect(() => {
+    if (focusNodeId === null) {
+      // Restore cached baseline instead of re-fetching.
+      if (baseDataRef.current) setData(baseDataRef.current);
+      else fetchModels(pendingSearch || undefined, null);
+    } else {
+      fetchModels(pendingSearch || undefined, focusNodeId);
+    }
+  }, [focusNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-retry when catalog is still loading (hf_reachable === false).
   useEffect(() => {
     if (!data || data.hf_reachable !== false || loading) return;
-    const id = setTimeout(() => fetchModels(), 30_000);
+    const id = setTimeout(() => fetchModels(undefined, focusNodeId ?? undefined), 30_000);
     return () => clearTimeout(id);
-  }, [data, loading, fetchModels]);
+  }, [data, loading, fetchModels, focusNodeId]);
 
   const handleChange = (val: string) => {
     setPending(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchModels(val || undefined), 600);
+    debounceRef.current = setTimeout(() => fetchModels(val || undefined, focusNodeId ?? undefined), 600);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    fetchModels(pendingSearch || undefined);
+    fetchModels(pendingSearch || undefined, focusNodeId ?? undefined);
   };
 
-  // Derive unique online nodes from the first model's node list (all models share the same set).
-  const onlineNodes: Pick<NodeFit, 'node_id' | 'hostname'>[] = data?.models[0]?.nodes ?? [];
-
-  // Filter and sort models based on selected node.
-  const displayModels = (() => {
-    if (!data) return [];
-    if (!focusNodeId) return data.models;
-
-    return data.models
-      .map(m => {
-        const nodeEntry = m.nodes.find(n => n.node_id === focusNodeId);
-        return { model: m, nodeScore: nodeEntry?.fit_score ?? 0 };
-      })
-      .filter(({ nodeScore }) => nodeScore > 0)
-      .sort((a, b) => b.nodeScore - a.nodeScore)
-      .map(({ model }) => model);
-  })();
+  // Server already filtered and ranked per-node when focusNodeId is set.
+  const displayModels = data?.models ?? [];
 
   const focusNodeLabel = focusNodeId
     ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)

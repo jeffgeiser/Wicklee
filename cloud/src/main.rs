@@ -3871,8 +3871,10 @@ async fn handle_fleet_model_candidates(
     let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
         .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let search = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
-    let limit: i32 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20_i32).min(40);
+    let search          = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
+    let limit: i32      = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20_i32).min(40);
+    // Optional: when set, results are ranked + filtered for this specific node_id.
+    let filter_node_id  = params.get("node_id").filter(|s| !s.trim().is_empty()).cloned();
 
     // Query the Postgres model_catalog (populated by refresh_cloud_model_catalog at startup
     // + 3 AM nightly). This uses the correct HF tree API that includes actual file sizes —
@@ -3991,7 +3993,20 @@ async fn handle_fleet_model_candidates(
         }));
     }
 
-    models.sort_by(|a, b| b["fleet_best_score"].as_u64().cmp(&a["fleet_best_score"].as_u64()));
+    // Default: rank by fleet_best_score.
+    // Per-node view: filter to models the node can run (score > 0) then rank by that node's score.
+    if let Some(ref nid) = filter_node_id {
+        let node_score = |m: &serde_json::Value| -> u64 {
+            m["nodes"].as_array()
+                .and_then(|nodes| nodes.iter().find(|n| n["node_id"].as_str() == Some(nid.as_str())))
+                .and_then(|n| n["fit_score"].as_u64())
+                .unwrap_or(0)
+        };
+        models.retain(|m| node_score(m) > 0);
+        models.sort_by(|a, b| node_score(b).cmp(&node_score(a)));
+    } else {
+        models.sort_by(|a, b| b["fleet_best_score"].as_u64().cmp(&a["fleet_best_score"].as_u64()));
+    }
 
     Json(serde_json::json!({
         "is_live_search": search.is_some(),
