@@ -1997,7 +1997,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   <div className="space-y-3">
                     {fleetEvictionNodes.map(n => (
                       <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
-                        <ModelEvictionCard node={n} idleSinceMs={nodeIdleStartMsRef.current[n.node_id] ?? null} showNodeHeader={fleetEvictionNodes.length > 1} canKeepWarm
+                        <ModelEvictionCard node={n} idleSinceMs={nodeIdleStartMsRef.current[n.node_id] ?? null} showNodeHeader canKeepWarm
                           onKeepWarm={() => emitFleetEvent({ id: `${Date.now()}-keepwarm`, ts: Date.now(), type: 'keep_warm_taken', nodeId: n.node_id, hostname: n.hostname ?? n.node_id, detail: n.ollama_active_model ?? 'active model' })} />
                       </div>
                     ))}
@@ -2024,7 +2024,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                         const ns = getNodeSettings(n.node_id);
                         return (
                           <div key={n.node_id} id={`insight-idle-resource-${n.node_id}`}>
-                            <IdleResourceCard node={n} dutyPct={fleetDuty?.nodes.find(d => d.node_id === n.node_id)?.duty_pct ?? null} kwhRate={ns.kwhRate} pue={ns.pue} showNodeHeader={fleetIdleNodes.length > 1} />
+                            <IdleResourceCard node={n} dutyPct={fleetDuty?.nodes.find(d => d.node_id === n.node_id)?.duty_pct ?? null} kwhRate={ns.kwhRate} pue={ns.pue} showNodeHeader />
                           </div>
                         );
                       })}

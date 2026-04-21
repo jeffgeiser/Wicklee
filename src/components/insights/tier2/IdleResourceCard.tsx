@@ -35,10 +35,19 @@ function formatDuration(ms: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-function costPerHr(node: SentinelMetrics, kwhRate: number, pue: number): string | null {
+interface CostDisplay {
+  perHr:  string;
+  perDay: string;
+}
+
+function computeCost(node: SentinelMetrics, kwhRate: number, pue: number): CostDisplay | null {
   const watts = getNodePowerW(node);
   if (watts == null) return null;
-  return (watts * pue * (kwhRate / 1000)).toFixed(3);
+  const hr = watts * pue * (kwhRate / 1000);
+  return {
+    perHr:  hr < 0.01  ? hr.toFixed(3) : hr.toFixed(2),
+    perDay: (hr * 24) < 0.01 ? (hr * 24).toFixed(3) : (hr * 24).toFixed(2),
+  };
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -57,6 +66,7 @@ interface Props {
   idleSinceMs?:    number | null;
   kwhRate:         number;
   pue:             number;
+  /** When true, always show node hostname in title and recommendation text. */
   showNodeHeader?: boolean;
 }
 
@@ -70,8 +80,10 @@ const IdleResourceCard: React.FC<Props> = ({
   pue,
   showNodeHeader = false,
 }) => {
-  const titleSuffix = showNodeHeader ? ` · ${node.hostname ?? node.node_id}` : '';
-  const costStr     = costPerHr(node, kwhRate, pue);
+  const titleSuffix  = showNodeHeader ? ` · ${node.hostname ?? node.node_id}` : '';
+  const nodeName     = node.hostname ?? node.node_id;
+  const suspendLabel = showNodeHeader ? nodeName : 'this node';
+  const cost         = computeCost(node, kwhRate, pue);
 
   // ── Cloud path (duty-based) ──────────────────────────────────────────────
   if (dutyPct != null) {
@@ -92,10 +104,12 @@ const IdleResourceCard: React.FC<Props> = ({
             {' '}inference duty in the last 24 hours.
           </p>
 
-          {costStr != null && (
+          {cost != null && (
             <p className="text-sm text-gray-400">
               Estimated idle cost:{' '}
-              <span className="font-telin text-amber-400">${costStr}/hr</span>
+              <span className="font-telin text-amber-400">${cost.perHr}/hr</span>
+              <span className="text-gray-500 mx-1">·</span>
+              <span className="font-telin text-amber-300/70">${cost.perDay}/day</span>
               <span className="text-gray-600 text-xs ml-1">
                 at ${kwhRate}/kWh · PUE {pue}
               </span>
@@ -104,7 +118,9 @@ const IdleResourceCard: React.FC<Props> = ({
 
           <div className="pt-1 border-t border-gray-800">
             <p className="text-xs text-gray-500">
-              Consider suspending this node if inference is not needed.
+              Consider suspending{' '}
+              <span className="text-gray-400">{suspendLabel}</span>
+              {' '}if inference is not needed.
             </p>
           </div>
         </div>
@@ -131,10 +147,12 @@ const IdleResourceCard: React.FC<Props> = ({
           <span className="font-telin text-gray-300">{formatDuration(idleMs)}</span>.
         </p>
 
-        {costStr != null && (
+        {cost != null && (
           <p className="text-sm text-gray-400">
             Estimated idle cost:{' '}
-            <span className="font-telin text-amber-400">${costStr}/hr</span>
+            <span className="font-telin text-amber-400">${cost.perHr}/hr</span>
+            <span className="text-gray-500 mx-1">·</span>
+            <span className="font-telin text-amber-300/70">${cost.perDay}/day</span>
             <span className="text-gray-600 text-xs ml-1">
               at ${kwhRate}/kWh · PUE {pue}
             </span>
@@ -143,7 +161,9 @@ const IdleResourceCard: React.FC<Props> = ({
 
         <div className="pt-1 border-t border-gray-800">
           <p className="text-xs text-gray-500">
-            Consider suspending this node if inference is not needed.
+            Consider suspending{' '}
+            <span className="text-gray-400">{suspendLabel}</span>
+            {' '}if inference is not needed.
           </p>
         </div>
       </div>
