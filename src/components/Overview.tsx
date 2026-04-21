@@ -1744,6 +1744,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     return totalCapMb > 0 ? Math.round((totalUsedMb / totalCapMb) * 100) : null;
   })();
 
+  // NODE MEMORY display value — for Apple Silicon localhost prefer the OS memory_pressure_percent
+  // (kernel's true pressure metric) over the derived (total−avail)/total ratio.
+  // Both are valid but memory_pressure_percent matches the DiagnosticRail and is more actionable.
+  const displayMemPressure = (isLocalMode && sentinel?.memory_pressure_percent != null)
+    ? Math.round(sentinel.memory_pressure_percent)
+    : fleetMemPressure;
+
   // ── Inference Duty Cycle ──
   // Cloud: prefer server-side 24h duty from /api/fleet/duty (persisted in Postgres).
   // Localhost: fall back to client-side tick counter.
@@ -2132,7 +2139,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           label={isLocalMode ? 'Node VRAM' : 'Total Fleet VRAM'}
           value={
             isLocalMode && localIsAppleSilicon
-              ? (localGpuUsedGb != null ? `${localGpuUsedGb} GB` : '—')
+              ? (localGpuUsedGb != null && localWiredLimitGb != null
+                  ? `${localGpuUsedGb} / ${localWiredLimitGb} GB`
+                  : localGpuUsedGb != null ? `${localGpuUsedGb} GB` : '—')
               : vramUtilPct != null
               ? `${vramUtilPct}%`
               : effectiveMetrics.length > 0
@@ -2147,8 +2156,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           }
           sub={
             isLocalMode && localIsAppleSilicon
-              ? (localGpuUsedGb != null && localWiredLimitGb != null
-                  ? `${localGpuUsedGb} / ${localWiredLimitGb} GB`
+              ? (localGpuAvailMb != null
+                  ? `${(localGpuAvailMb / 1024).toFixed(1)} GB free`
                   : undefined)
               : (vramUsedGB != null && vramCapacityGB != null && Number(vramCapacityGB) > 0)
               ? `${vramUsedGB} / ${vramCapacityGB} GB${vramSubHint ? ` · ${vramSubHint}` : ''}`
@@ -2204,8 +2213,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           <InsightTile
             label="Runtime"
             value={
-              sentinel?.vllm_running  ? (sentinel.vllm_model_name ?? 'vLLM') :
-              sentinel?.ollama_running ? (sentinel.ollama_active_model ?? 'Ollama') :
+              sentinel?.vllm_running  ? 'vLLM' :
+              sentinel?.ollama_running ? 'Ollama' :
               sentinel ? 'No runtime' : '—'
             }
             valueCls={
@@ -2214,8 +2223,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 : 'text-gray-400 dark:text-gray-600'
             }
             sub={
-              sentinel?.vllm_running  ? 'vLLM · active' :
-              sentinel?.ollama_running ? 'Ollama · active' :
+              sentinel?.vllm_running  ? (sentinel.vllm_model_name ?? 'vLLM · active') :
+              sentinel?.ollama_running ? (sentinel.ollama_active_model ?? 'Ollama · active') :
               sentinel ? 'Ollama + vLLM not detected' : undefined
             }
             icon={Cpu}
@@ -2237,7 +2246,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             valueCls={
               localIsInferring ? 'text-green-400' :
               localIsBusy      ? 'text-amber-400' :
-              localIsIdleSpeed ? 'text-blue-400' :
+              localIsIdleSpeed ? 'text-gray-400 dark:text-gray-500' :
               localIsIdle      ? 'text-gray-400 dark:text-gray-600' :
               'text-gray-400 dark:text-gray-600'
             }
@@ -2252,7 +2261,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             iconCls={
               localIsInferring ? 'text-green-400' :
               localIsBusy      ? 'text-amber-400' :
-              localIsIdleSpeed ? 'text-blue-400' :
               'text-gray-500'
             }
           />
@@ -2357,7 +2365,15 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
           valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
           sub={wattPowerNodes.length > 0
-            ? `${wattPowerNodes.length} node${wattPowerNodes.length === 1 ? '' : 's'} reporting`
+            ? isLocalMode && sentinel
+              ? (() => {
+                  const w = getNodePowerW(sentinel);
+                  const t = displayFleetTps;
+                  return (w != null && t != null && t > 0)
+                    ? `${w.toFixed(1)}W @ ${t.toFixed(0)} tok/s`
+                    : '1 node reporting';
+                })()
+              : `${wattPowerNodes.length} node${wattPowerNodes.length === 1 ? '' : 's'} reporting`
             : undefined}
           icon={Zap}
           iconCls="text-emerald-400"
@@ -2379,10 +2395,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               {isLocalMode ? 'Node Memory' : 'Fleet Memory'}
             </MetricTooltip>
           }
-          value={fleetMemPressure != null ? `${fleetMemPressure}%` : '—'}
-          valueCls={fleetMemPressure == null ? 'text-gray-400 dark:text-gray-600'
-            : fleetMemPressure > 80 ? 'text-red-400'
-            : fleetMemPressure > 60 ? 'text-amber-400'
+          value={displayMemPressure != null ? `${displayMemPressure}%` : '—'}
+          valueCls={displayMemPressure == null ? 'text-gray-400 dark:text-gray-600'
+            : displayMemPressure > 80 ? 'text-red-400'
+            : displayMemPressure > 60 ? 'text-amber-400'
             : undefined}
           sub={effectiveMetrics.length > 0
             ? isLocalMode
@@ -2390,8 +2406,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               : `${effectiveMetrics.length} node${effectiveMetrics.length !== 1 ? 's' : ''} reporting`
             : 'no data'}
           icon={Database}
-          iconCls={fleetMemPressure != null && fleetMemPressure > 80 ? 'text-red-400'
-            : fleetMemPressure != null && fleetMemPressure > 60 ? 'text-amber-400'
+          iconCls={displayMemPressure != null && displayMemPressure > 80 ? 'text-red-400'
+            : displayMemPressure != null && displayMemPressure > 60 ? 'text-amber-400'
             : 'text-indigo-400'}
         />
 
@@ -2415,7 +2431,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           value={displayFleetAvgTokW != null ? formatWES(displayFleetAvgTokW) : '—'}
           valueCls={wesColorClass(displayFleetAvgTokW)}
           sub={fleetAvgTokW != null
-            ? `${rankedTokW.length} node${rankedTokW.length !== 1 ? 's' : ''} reporting`
+            ? isLocalMode
+              ? 'raw · no thermal penalty'
+              : `${rankedTokW.length} node${rankedTokW.length !== 1 ? 's' : ''} reporting`
             : 'no active inference'}
           icon={Zap}
           iconCls={displayFleetAvgTokW != null && displayFleetAvgTokW > 10 ? 'text-emerald-400'
