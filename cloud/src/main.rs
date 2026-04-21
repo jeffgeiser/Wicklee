@@ -5367,17 +5367,33 @@ async fn fleet_alert_evaluator_task(state: AppState) {
         // ── Staleness reaper: auto-resolve observations for offline nodes ────
         // If a node hasn't been seen in 5+ minutes, resolve ALL its open
         // observations (both agent-pushed and cloud-generated).
+        //
+        // IMPORTANT: also clear these nodes from the in-memory open_observations map.
+        // Without this, if a node goes offline (DB observations resolved by the reaper)
+        // and then comes back online, the evaluator still sees is_open = true from the
+        // stale in-memory entry — so conditions never re-fire on reconnect.
         {
             let stale_cutoff = (now as i64) - 300_000; // 5 minutes
-            let _ = sqlx::query(
-                "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1 \
-                 WHERE state = 'open' \
-                 AND node_id IN ( \
-                   SELECT wk_id FROM nodes WHERE last_seen < $2 \
-                 )"
-            )
-            .bind(now as i64).bind(stale_cutoff)
-            .execute(&state.pool).await;
+
+            // Query stale node IDs first so we can evict them from in-memory tracking.
+            let stale_node_ids: Vec<String> = sqlx::query_scalar(
+                "SELECT wk_id FROM nodes WHERE last_seen < $1"
+            ).bind(stale_cutoff).fetch_all(&state.pool).await.unwrap_or_default();
+
+            if !stale_node_ids.is_empty() {
+                let _ = sqlx::query(
+                    "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1 \
+                     WHERE state = 'open' \
+                     AND node_id IN ( \
+                       SELECT wk_id FROM nodes WHERE last_seen < $2 \
+                     )"
+                )
+                .bind(now as i64).bind(stale_cutoff)
+                .execute(&state.pool).await;
+
+                // Remove stale entries from in-memory map so alerts re-fire if the node returns.
+                open_observations.retain(|(nid, _), _| !stale_node_ids.contains(nid));
+            }
         }
     }
 }
