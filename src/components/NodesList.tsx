@@ -359,7 +359,7 @@ const DetailBand: React.FC<{
             <div>
               <p className="text-[10px] text-gray-600 dark:text-gray-400 leading-tight">Thermal</p>
               <p className="text-[9px] text-gray-500">
-                {thermalAvail ? 'available' : '— (Phase 3B: Linux)'}
+                {thermalAvail ? 'available' : 'not available'}
               </p>
             </div>
           </div>
@@ -639,7 +639,9 @@ const MgmtRow: React.FC<{
               title={[
                 'Some metrics unavailable',
                 m?.cpu_power_w == null    ? 'CPU power data missing' : null,
-                m?.nvidia_vram_total_mb == null ? 'GPU data missing'  : null,
+                // Only flag missing NVML VRAM on non-Apple nodes — Apple Silicon has no discrete GPU
+                (m?.nvidia_vram_total_mb == null && m?.memory_pressure_percent == null)
+                  ? 'GPU data missing' : null,
                 m?.thermal_state == null  ? 'Thermal data missing'    : null,
               ].filter(Boolean).join(' · ')}
             >
@@ -991,11 +993,11 @@ const NodesList: React.FC<NodesListProps> = ({
 
         {/* Header tiles */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <MgmtTile label="Fleet VRAM" icon={Database} iconCls="text-blue-400">
+          <MgmtTile label="Node Memory" icon={Database} iconCls="text-blue-400">
             <p className="text-xl font-bold font-telin text-gray-900 dark:text-white leading-none">{mem}</p>
             <p className="text-[10px] text-gray-500 mt-1">
-              {m?.nvidia_vram_total_mb != null ? '1 NVIDIA node'
-                : m?.cpu_power_w != null       ? '1 Apple Silicon node'
+              {m?.nvidia_vram_total_mb != null ? 'NVIDIA · unified'
+                : m?.memory_pressure_percent != null ? 'Apple Silicon · unified'
                 : '1 node'}
             </p>
           </MgmtTile>
@@ -1011,7 +1013,7 @@ const NodesList: React.FC<NodesListProps> = ({
           <MgmtTile label="Hardware Mix" icon={Cpu} iconCls="text-indigo-400">
             <div className="flex items-center gap-1.5 flex-wrap">
               {os !== 'Unknown'
-                ? <span className="text-[10px] font-telin text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">{os} [1]</span>
+                ? <span className="text-[10px] font-telin text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">{os}</span>
                 : <span className="text-[10px] text-gray-600">—</span>
               }
             </div>
@@ -1205,7 +1207,7 @@ const NodesList: React.FC<NodesListProps> = ({
                     key={os}
                     className="text-[10px] font-telin text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded"
                   >
-                    {os} [{count}]
+                    {os}{count > 1 ? ` ×${count}` : ''}
                   </span>
                 ))
               : <span className="text-[10px] text-gray-600">—</span>
