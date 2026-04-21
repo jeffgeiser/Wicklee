@@ -1643,7 +1643,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   ...(!thermalLatch.showing ? [{ key: 'thermal', icon: <Thermometer className="w-3 h-3" />, label: 'Thermal',      reading: thermalReading }] : []),
                   ...(!powerLatch.showing   ? [{ key: 'power',   icon: <Zap          className="w-3 h-3" />, label: 'Power',        reading: powerReading   }] : []),
                   ...(!memLatch.showing     ? [{ key: 'mem',     icon: <HardDrive    className="w-3 h-3" />, label: 'Memory',       reading: memReading     }] : []),
-                  ...(!tcLatch.showing      ? [{ key: 'tc',      icon: <Thermometer  className="w-3 h-3" />, label: 'TC',           reading: tcReading      }] : []),
+                  ...(!tcLatch.showing      ? [{ key: 'tc',      icon: <Thermometer  className="w-3 h-3" />, label: 'Penalty',      reading: tcReading      }] : []),
                 ];
                 return (
                   <FleetHeaderBar
@@ -1654,6 +1654,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     topWesHost={topWesNode ? (topWesNode.hostname ?? topWesNode.node_id) : null}
                     fleetWatts={fleetWatts}
                     healthPips={healthPips}
+                    isSingleNode={effectiveNodes.length <= 1}
                   />
                 );
               })()}
@@ -1710,50 +1711,31 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* ── Cloud-Only placeholders (localhost only) ─────────────────
-                  Show what patterns require fleet context so the user knows what
-                  they're missing without a cloud connection. */}
+              {/* ── Cloud-Only patterns strip (localhost only) ───────────────
+                  Collapsed to one compact row — 3 individual ghost cards consumed
+                  ~240 px of vertical space for essentially the same CTA repeated. */}
               {isLocalHost && (
-                <div className="space-y-2 mt-2">
-                  {[
-                    {
-                      id: 'wes_velocity_drop',
-                      label: 'WES Velocity Drop',
-                      desc: 'Detects rapid WES score decline across 10-minute fleet-wide trending windows.',
-                    },
-                    {
-                      id: 'fleet_load_imbalance',
-                      label: 'Fleet Load Imbalance',
-                      desc: 'Identifies nodes under thermal stress while healthier peers have spare capacity.',
-                    },
-                    {
-                      id: 'efficiency_penalty_drag',
-                      label: 'Efficiency Penalty Drag',
-                      desc: 'Catches hidden WES penalties from context window, batch fragmentation, and KV cache overhead.',
-                    },
-                  ].map(p => (
-                    <div
-                      key={p.id}
-                      className="rounded-2xl border border-gray-800/40 bg-gray-900/30 p-4 flex items-center gap-3 opacity-50"
-                    >
-                      <Globe className="w-4 h-4 text-gray-600 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
-                          {p.label}
-                          <span className="ml-2 text-[9px] font-normal tracking-normal text-gray-700">Cloud-Only</span>
-                        </p>
-                        <p className="text-xs text-gray-700 mt-0.5 truncate">{p.desc}</p>
-                      </div>
-                      <a
-                        href="https://wicklee.dev"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[10px] text-indigo-400/50 hover:text-indigo-400 transition-colors whitespace-nowrap"
-                      >
-                        Pair with wicklee.dev →
-                      </a>
-                    </div>
-                  ))}
+                <div className="rounded-2xl border border-gray-800/30 bg-gray-900/20 px-4 py-3 flex items-start gap-3">
+                  <Globe className="w-3.5 h-3.5 text-gray-700 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+                      Fleet Patterns
+                      <span className="ml-2 text-[9px] font-normal normal-case tracking-normal text-gray-700">
+                        WES Velocity Drop · Fleet Load Imbalance · Efficiency Penalty Drag
+                      </span>
+                    </p>
+                    <p className="text-[10px] text-gray-700 mt-0.5">
+                      These patterns evaluate across nodes and require fleet telemetry — connect to wicklee.dev to enable.
+                    </p>
+                  </div>
+                  <a
+                    href="https://wicklee.dev"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] text-indigo-400/50 hover:text-indigo-400 transition-colors whitespace-nowrap shrink-0 mt-0.5"
+                  >
+                    Connect →
+                  </a>
                 </div>
               )}
 

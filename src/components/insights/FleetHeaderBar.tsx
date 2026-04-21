@@ -33,6 +33,8 @@ interface FleetHeaderBarProps {
   fleetWatts:   number | null;
   /** Health pips — only items whose latch is NOT active (dormant dimensions). */
   healthPips:   HealthPip[];
+  /** When true, suppress the "peak" prefix (single-node context). */
+  isSingleNode?: boolean;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -45,6 +47,7 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
   topWesHost,
   fleetWatts,
   healthPips,
+  isSingleNode = false,
 }) => {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl px-4 py-2.5 flex items-center gap-4 flex-wrap">
@@ -81,7 +84,9 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
 
         {/* Top WES */}
         <div className="flex items-center gap-1">
-          <span className="text-[9px] text-gray-600 uppercase tracking-wider">peak</span>
+          {!isSingleNode && (
+            <span className="text-[9px] text-gray-600 uppercase tracking-wider">peak</span>
+          )}
           <span className={`font-mono text-sm font-bold ${
             topWes != null
               ? topWes > 10 ? 'text-emerald-400' : topWes >= 3 ? 'text-green-300' : topWes >= 1 ? 'text-yellow-400' : 'text-red-400'
@@ -90,7 +95,7 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
             {topWes != null ? topWes.toFixed(1) : '—'}
           </span>
           <span className="text-[9px] text-gray-600">WES</span>
-          {topWesHost && (
+          {!isSingleNode && topWesHost && (
             <span className="text-[9px] text-gray-500 truncate max-w-[80px]">{topWesHost}</span>
           )}
         </div>

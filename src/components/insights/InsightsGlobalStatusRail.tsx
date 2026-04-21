@@ -111,7 +111,7 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
           {hasObs ? `${activeObsCount} Active ${activeObsCount === 1 ? 'Observation' : 'Observations'}` : 'All Systems Nominal'}
         </span>
         <span className="font-telin text-[9px] text-gray-600 tracking-wide">
-          {hasObs ? 'No critical hardware events · insight history persists for 24h' : 'No active observations · insight history persists for 24h'}
+          {hasObs ? 'No critical hardware events · patterns checked every 10s' : 'All patterns nominal · checked every 10s'}
         </span>
       </div>
 
