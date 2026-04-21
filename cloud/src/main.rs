@@ -5011,6 +5011,8 @@ async fn fleet_alert_evaluator_task(state: AppState) {
         }
         let mut to_fire: Vec<PendingObs> = Vec::new();
         let mut to_resolve: Vec<(String, String)> = Vec::new();
+        // (node_id, alert_type, new_detail, new_context_json) — refreshes stale open observations.
+        let mut to_update: Vec<(String, String, String, String)> = Vec::new();
 
         for (node_id, m) in &snapshot {
             let ring = ring_buffers.entry(node_id.clone()).or_insert_with(|| NodeRingBuffer::new(15));
@@ -5174,32 +5176,51 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 let is_firing = best_peer.is_some() && (is_thermally_stressed || is_wes_poor);
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
 
+                // Build detail + context once, reused for both fire and update paths.
+                let build_detail_ctx = |best_id: &str, best_wes: f32| -> (String, serde_json::Value) {
+                    let this_host = m.hostname.as_deref().unwrap_or(node_id.as_str());
+                    let best_host = snapshot.iter()
+                        .find(|(id, _)| id.as_str() == best_id)
+                        .and_then(|(_, bm)| bm.hostname.as_deref().map(|s: &str| s.to_owned()))
+                        .unwrap_or_else(|| best_id.to_owned());
+                    let detail = format!(
+                        "{} is {}{}while {} has better capacity (WES {:.1}).",
+                        this_host,
+                        if is_thermally_stressed { "thermally stressed " } else { "" },
+                        if is_wes_poor { format!("{:.0}% below fleet-peak WES ", wes_gap_pct) } else { String::new() },
+                        best_host,
+                        best_wes,
+                    );
+                    let ctx = serde_json::json!({
+                        "thermal_state":       m.thermal_state,
+                        "hot_ticks":           hot_ticks,
+                        "current_wes":         this_wes,
+                        "best_peer_wes":       best_wes,
+                        "wes_gap_pct":         wes_gap_pct,
+                        "inference_state":     m.inference_state,
+                    });
+                    (detail, ctx)
+                };
+
                 if is_firing && !is_open {
                     let (best_id, _) = best_peer.unwrap();
                     let best_wes = live_wes.get(best_id.as_str()).copied().unwrap_or(0.0);
+                    let (detail, context) = build_detail_ctx(best_id, best_wes);
                     to_fire.push(PendingObs {
                         node_id: node_id.clone(),
                         alert_type: alert_type.into(),
                         severity: ObsSeverity::Warning,
                         title: "Fleet Load Imbalance".into(),
-                        detail: format!(
-                            "{} is {}{}while {} has better capacity (WES {:.1}).",
-                            node_id,
-                            if is_thermally_stressed { "thermally stressed " } else { "" },
-                            if is_wes_poor { format!("{:.0}% below fleet-peak WES ", wes_gap_pct) } else { String::new() },
-                            best_id,
-                            best_wes,
-                        ),
-                        context: serde_json::json!({
-                            "thermal_state":       m.thermal_state,
-                            "hot_ticks":           hot_ticks,
-                            "current_wes":         this_wes,
-                            "best_peer_node_id":   best_id,
-                            "best_peer_wes":       best_wes,
-                            "wes_gap_pct":         wes_gap_pct,
-                            "inference_state":     m.inference_state,
-                        }),
+                        detail,
+                        context,
                     });
+                } else if is_firing && is_open {
+                    // Refresh stale detail/context (best peer may have changed since first fire).
+                    let (best_id, _) = best_peer.unwrap();
+                    let best_wes = live_wes.get(best_id.as_str()).copied().unwrap_or(0.0);
+                    let (detail, context) = build_detail_ctx(best_id, best_wes);
+                    let ctx_str = serde_json::to_string(&context).unwrap_or_default();
+                    to_update.push((node_id.clone(), alert_type.into(), detail, ctx_str));
                 } else if !is_firing && is_open {
                     to_resolve.push((node_id.clone(), alert_type.into()));
                 }
@@ -5207,9 +5228,11 @@ async fn fleet_alert_evaluator_task(state: AppState) {
         }
 
         // Write observations.
-        if !to_fire.is_empty() || !to_resolve.is_empty() {
+        if !to_fire.is_empty() || !to_resolve.is_empty() || !to_update.is_empty() {
             let affected_nodes: HashSet<String> = to_fire.iter().map(|o| o.node_id.clone())
-                .chain(to_resolve.iter().map(|(nid, _)| nid.clone())).collect();
+                .chain(to_resolve.iter().map(|(nid, _)| nid.clone()))
+                .chain(to_update.iter().map(|(nid, _, _, _)| nid.clone()))
+                .collect();
 
             let mut tenant_map: HashMap<String, String> = HashMap::new();
             for nid in &affected_nodes {
@@ -5310,6 +5333,16 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                         });
                     }
                     println!("[evaluator] resolved {} for {}", alert_type, node_id);
+                }
+            }
+
+            // Refresh open observations whose detail/context may have gone stale
+            // (e.g. fleet_load_imbalance best-peer changed since the alert first fired).
+            for (node_id, alert_type, detail, ctx_str) in &to_update {
+                if let Some(obs_id) = open_observations.get(&(node_id.clone(), alert_type.clone())) {
+                    let _ = sqlx::query(
+                        "UPDATE fleet_observations SET detail = $1, context_json = $2::jsonb WHERE id = $3 AND state = 'open'"
+                    ).bind(detail).bind(ctx_str).bind(obs_id).execute(&state.pool).await;
                 }
             }
         }
