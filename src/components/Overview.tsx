@@ -639,7 +639,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             />
           )}
         </div>
-        {hasVllm && m?.vllm_cache_usage_perc != null && (
+        {hasVllm && m?.vllm_cache_usage_perc != null && m.vllm_cache_usage_perc > 0 && (
           <p className="text-[9px] text-cyan-400 font-telin truncate leading-none">
             Cache: {m.vllm_cache_usage_perc.toFixed(0)}%
           </p>
@@ -1354,7 +1354,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // while still updating visibly across ~2 probe cycles (~60 s).
   // Steadier metrics (raw watts, power cost): default node window (8) is fine.
   const fleetTpsBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 1: fleet throughput
-  const wattPer1kBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 6: W / 1k tokens — tok/s-derived
+  const wattPer1kBuf    = useRollingBuffer(4);                    // Tile 6: W / 1k tokens — short window; converges quickly when fleet composition changes
   const costPer1kBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 7: $ / 1M — tok/s-derived
   const fleetWesBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 5 + Fleet Intelligence WES card
   const fleetTokWBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 8: tok/W (raw, no penalty)
@@ -1757,7 +1757,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : counts.total;
 
   // Tiles 5-7 — WES leaderboard + fleet average
-  interface WESEntry { nodeId: string; hostname: string; wes: number | null; rawWes: number | null; tcPct: number; tps: number | null; watts: number | null; thermalState: string | null; thermalSource: string | null; nullReason: string; costPer1mRaw: number | null; kwhRate: number; }
+  interface WESEntry { nodeId: string; hostname: string; activeModel: string | null; wes: number | null; rawWes: number | null; tcPct: number; tps: number | null; watts: number | null; thermalState: string | null; thermalSource: string | null; nullReason: string; costPer1mRaw: number | null; kwhRate: number; }
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
     const _ollamaTps = m.ollama_tokens_per_second ?? null;
     const _vllmTps   = m.vllm_tokens_per_sec ?? null;
@@ -1782,7 +1782,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     const costPer1mRaw = (tps != null && tps > 0 && watts != null)
       ? ((watts * pue * kwhRate) / (tps * 3.6))
       : null;
-    return { nodeId: m.node_id, hostname: m.hostname ?? m.node_id, wes, rawWes, tcPct, tps, watts, thermalState: m.thermal_state, thermalSource: m.thermal_source ?? null, nullReason, costPer1mRaw, kwhRate };
+    // Use location label (user-configured name) consistent with Fleet Status table.
+    const displayName   = ns?.locationLabel || m.hostname || m.node_id;
+    // Truncate model name for compact display: keep the part after the last slash.
+    const rawModel      = m.ollama_active_model ?? m.vllm_model_name ?? null;
+    const activeModel   = rawModel ? (rawModel.split('/').pop() ?? rawModel) : null;
+    return { nodeId: m.node_id, hostname: displayName, activeModel, wes, rawWes, tcPct, tps, watts, thermalState: m.thermal_state, thermalSource: m.thermal_source ?? null, nullReason, costPer1mRaw, kwhRate };
   });
   const pueValues = effectiveMetrics.map(m => getNodeSettings?.(m.node_id)?.pue ?? 1.0);
   const hasPerNodePueDiversity = new Set(pueValues).size > 1;
@@ -2110,7 +2115,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             label="Fleet Health"
             value={fleetHealthPct != null ? `${fleetHealthPct}%` : '—'}
             valueCls={fleetHealthCls}
-            sub={fleetHealthPct != null ? 'Normal / Fair thermal' : 'no thermal data'}
+            sub={fleetHealthPct != null
+              ? allNormal
+                ? 'All Normal thermal'
+                : Object.entries(thermalCounts)
+                    .map(([s, n]) => `${n} ${s.charAt(0).toUpperCase() + s.slice(1)}`)
+                    .join(' · ')
+              : 'no thermal data'}
             icon={Thermometer}
             iconCls="text-amber-400"
           />
@@ -2345,10 +2356,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           }
           value={displayWattPer1k != null ? `${displayWattPer1k.toFixed(1)} W` : '—'}
           valueCls={displayWattPer1k == null ? 'text-gray-400 dark:text-gray-600' : undefined}
-          sub={idleFleetCostPerDay != null
-            ? idleFleetCostPerDay > 0 && idleFleetCostPerDay < 0.01
-              ? 'est < $0.01/day'
-              : `est $${idleFleetCostPerDay.toFixed(2)}/day`
+          sub={wattPowerNodes.length > 0
+            ? `${wattPowerNodes.length} node${wattPowerNodes.length === 1 ? '' : 's'} reporting`
             : undefined}
           icon={Zap}
           iconCls="text-emerald-400"
@@ -2921,14 +2930,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 <div className="flex items-center gap-2">
                   <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Latency</span>
                   <span className="text-xs text-gray-400">→</span>
-                  <button onClick={() => onNavigateToObservability?.({ nodeId: bestLatNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestLatNode!.hostname || bestLatNode!.nodeId}</button>
-                  <span className="text-xs font-telin text-green-400 ml-auto">{bestLatNode!.tps!.toFixed(1)} tok/s</span>
+                  <div className="flex flex-col min-w-0">
+                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestLatNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer leading-tight">{bestLatNode!.hostname || bestLatNode!.nodeId}</button>
+                    {bestLatNode!.activeModel && <span className="text-[9px] text-gray-600 font-mono truncate leading-tight">{bestLatNode!.activeModel}</span>}
+                  </div>
+                  <span className="text-xs font-telin text-green-400 ml-auto shrink-0">{bestLatNode!.tps!.toFixed(1)} tok/s</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Efficiency</span>
                   <span className="text-xs text-gray-400">→</span>
-                  <button onClick={() => onNavigateToObservability?.({ nodeId: bestEffNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestEffNode!.hostname || bestEffNode!.nodeId}</button>
-                  <div className="ml-auto flex flex-col items-end gap-0">
+                  <div className="flex flex-col min-w-0">
+                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestEffNode!.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer leading-tight">{bestEffNode!.hostname || bestEffNode!.nodeId}</button>
+                    {bestEffNode!.activeModel && <span className="text-[9px] text-gray-600 font-mono truncate leading-tight">{bestEffNode!.activeModel}</span>}
+                  </div>
+                  <div className="ml-auto shrink-0 flex flex-col items-end gap-0">
                     <span className={`text-xs font-telin ${wesColorClass(bestEffNode!.wes)}`}>WES {formatWES(bestEffNode!.wes)}</span>
                     {bestEffNode!.tcPct > 0 && (
                       <span className="text-[9px] font-telin text-amber-400/70">-{bestEffNode!.tcPct}% thermal</span>
@@ -2939,9 +2954,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0">Cost</span>
                     <span className="text-xs text-gray-400">→</span>
-                    <button onClick={() => onNavigateToObservability?.({ nodeId: bestCostNode.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer">{bestCostNode.hostname || bestCostNode.nodeId}</button>
-                    <span className="text-xs font-telin text-cyan-400 ml-auto">
-                      {bestCostNode.costPer1m! < 0.01 ? '< $0.01' : `$${bestCostNode.costPer1m!.toFixed(2)}`}/1M
+                    <div className="flex flex-col min-w-0">
+                      <button onClick={() => onNavigateToObservability?.({ nodeId: bestCostNode.nodeId })} className="text-sm font-bold font-telin text-gray-200 hover:text-indigo-400 transition-colors cursor-pointer leading-tight">{bestCostNode.hostname || bestCostNode.nodeId}</button>
+                      {bestCostNode.activeModel && <span className="text-[9px] text-gray-600 font-mono truncate leading-tight">{bestCostNode.activeModel}</span>}
+                    </div>
+                    <span className="text-xs font-telin text-cyan-400 ml-auto shrink-0">
+                      {bestCostNode.costPer1m! < 0.001 ? `$${(bestCostNode.costPer1m! * 1000).toFixed(2)}m` : bestCostNode.costPer1m! < 0.01 ? `$${bestCostNode.costPer1m!.toFixed(3)}` : `$${bestCostNode.costPer1m!.toFixed(2)}`}/1M
                     </span>
                   </div>
                 )}
