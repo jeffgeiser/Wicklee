@@ -1072,12 +1072,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     if (nowMs - lastObsEvalRef.current < 10_000) return;
     lastObsEvalRef.current = nowMs;
 
-    // Merge observations from the appropriate source
+    // Localhost: use agent observations for the accordion section.
+    // Cloud: serverObservations are rendered directly in the Fleet Alerts section
+    // with acknowledge + timeline nav — don't duplicate them in obsEntries.
     const allObservations: DetectedInsight[] = isLocalHost
       ? [...localAgentObs]
-      : serverObservations
-          .filter(o => o.state === 'open')
-          .map(o => serverObsToInsight(o, allNodeMetrics[o.node_id]?.hostname ?? o.node_id));
+      : [];
 
     // ── Observation cache: sticky firstFiredMs + hold-after-clear ─────────
     const cache  = obsCacheRef.current;
@@ -1598,6 +1598,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         fleetWes={fleetWes}
         reachableNodes={effectiveNodes.length}
         fleetTokS={fleetTokS}
+        activeObsCount={
+          isLocalHost
+            ? localAgentObs.length
+            : serverObservations.filter(o => o.state === 'open').length
+        }
       />
 
       {/* ── Tab Bar ─────────────────────────────────────────────────────────── */}
@@ -1852,13 +1857,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 );
               })()}
 
-              {/* ── Server-side Fleet Alerts (Phase 4B — cloud only) ─────────
-                  Cloud evaluator observations (wes_cliff, agent_version_mismatch,
-                  fleet_load_imbalance, etc.) rendered with acknowledge button and
-                  Observability cross-nav. Shown below pattern observations. */}
+              {/* ── Server-side Fleet Observations (cloud only) ──────────────
+                  Cloud evaluator observations (wes_velocity_drop, fleet_load_imbalance,
+                  wes_cliff, agent_version_mismatch, etc.) with acknowledge + timeline nav.
+                  These are NOT duplicated in the accordion obsEntries above. */}
               {!isLocalHost && serverObservations.length > 0 && (
                 <div className="space-y-2">
-                  <SectionHeader>Fleet Alerts</SectionHeader>
+                  <SectionHeader>Observations</SectionHeader>
                   {serverObservations
                     .filter(o => showResolved || o.state === 'open')
                     .map(obs => {
@@ -1906,19 +1911,38 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                             {obs.title}
                           </p>
                           <p className={`text-xs mt-1 leading-relaxed ${isOpen ? 'text-gray-400' : 'text-gray-600'}`}>
-                            {obs.detail}
+                            {obs.detail.replace(/~0 min/g, 'imminent')}
                           </p>
 
-                          {/* Context chips */}
-                          {Object.keys(ctx).length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mt-2">
-                              {Object.entries(ctx).filter(([, v]) => v != null).slice(0, 4).map(([k, v]) => (
-                                <span key={k} className="text-[9px] px-1.5 py-0.5 rounded bg-gray-800/80 text-gray-500 font-mono">
-                                  {k.replace(/_/g, ' ')}: {String(v)}
-                                </span>
-                              ))}
-                            </div>
-                          )}
+                          {/* Context chips — formatted, debug fields filtered */}
+                          {Object.keys(ctx).length > 0 && (() => {
+                            const chips = Object.entries(ctx)
+                              .filter(([k, v]) => {
+                                if (v == null) return false;
+                                // Hide internal debug counters when they carry no signal
+                                if (k === 'hot_ticks' && (v === 0 || v === '0')) return false;
+                                return true;
+                              })
+                              .slice(0, 5);
+                            if (chips.length === 0) return null;
+                            return (
+                              <div className="flex flex-wrap gap-1.5 mt-2">
+                                {chips.map(([k, v]) => {
+                                  // Format floats to 1 decimal place
+                                  const raw = String(v);
+                                  const asNum = Number(raw);
+                                  const display = !isNaN(asNum) && raw.includes('.')
+                                    ? asNum.toFixed(1)
+                                    : raw;
+                                  return (
+                                    <span key={k} className="text-[9px] px-1.5 py-0.5 rounded bg-gray-800/80 text-gray-500 font-mono">
+                                      {k.replace(/_/g, ' ')}: {display}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
 
                           {/* Action row */}
                           <div className="flex items-center gap-3 mt-3">

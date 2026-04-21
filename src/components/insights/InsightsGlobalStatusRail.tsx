@@ -30,6 +30,8 @@ interface InsightsGlobalStatusRailProps {
   fleetWes: number | null;
   reachableNodes: number;
   fleetTokS: number | null;
+  /** Number of open fleet/agent observations (not Tier-1 hardware latches). */
+  activeObsCount?: number;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -49,6 +51,7 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
   fleetWes,
   reachableNodes,
   fleetTokS,
+  activeObsCount = 0,
 }) => {
   const isFiring    = firingAlerts.length > 0;
   const hasCritical = firingAlerts.some(a => a.severity === 'red');
@@ -91,17 +94,24 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
   }
 
   // ── Nominal state ──────────────────────────────────────────────────────────
+  const hasObs = activeObsCount > 0;
   return (
-    <div className="w-full px-4 py-2.5 bg-gray-900 border-b border-gray-800 flex items-center gap-3 min-h-[40px]">
-      {/* Green pulse dot */}
-      <div className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0 animate-pulse shadow-[0_0_6px_rgba(34,197,94,0.5)]" />
+    <div className={`w-full px-4 py-2.5 border-b flex items-center gap-3 min-h-[40px] ${
+      hasObs ? 'bg-amber-950/30 border-amber-900/30' : 'bg-gray-900 border-gray-800'
+    }`}>
+      {/* Status dot */}
+      <div className={`w-1.5 h-1.5 rounded-full shrink-0 animate-pulse ${
+        hasObs
+          ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.4)]'
+          : 'bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)]'
+      }`} />
 
       <div className="flex flex-col gap-0.5">
-        <span className="font-telin text-[10px] tracking-widest text-gray-400 uppercase">
-          All Systems Nominal
+        <span className={`font-telin text-[10px] tracking-widest uppercase ${hasObs ? 'text-amber-400/80' : 'text-gray-400'}`}>
+          {hasObs ? `${activeObsCount} Active ${activeObsCount === 1 ? 'Observation' : 'Observations'}` : 'All Systems Nominal'}
         </span>
         <span className="font-telin text-[9px] text-gray-600 tracking-wide">
-          No alerts this session · insight history persists for 24h
+          {hasObs ? 'No critical hardware events · insight history persists for 24h' : 'No active observations · insight history persists for 24h'}
         </span>
       </div>
 
