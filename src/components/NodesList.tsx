@@ -89,16 +89,17 @@ const deriveMemCapacity = (m: SentinelMetrics | null): string => {
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
-type SortKey     = 'registered' | 'nodeId' | 'hostname';
+type SortKey     = 'registered' | 'nodeId' | 'hostname' | 'location';
 type StatusFilter = 'all' | 'online' | 'offline';
 
 interface EnrichedNode {
-  node:      NodeAgent;
-  metrics:   SentinelMetrics | null;
-  lastSeenMs: number | undefined;
-  isOnline:  boolean;
-  isFlagged: boolean;
-  idx:       number;
+  node:          NodeAgent;
+  metrics:       SentinelMetrics | null;
+  lastSeenMs:    number | undefined;
+  isOnline:      boolean;
+  isFlagged:     boolean;
+  locationLabel: string | null;
+  idx:           number;
 }
 
 // ── Header tile ───────────────────────────────────────────────────────────────
@@ -161,7 +162,7 @@ const MgmtTableHeader: React.FC<{
       <p className={COL}>OS</p>
       <p className={COL}>Memory</p>
       <p className={COL}>Connectivity</p>
-      <p className={COL}>Uptime</p>
+      <p className={COL}>Runtime</p>
       <p className={COL}>Version</p>
       <p className={COL} title="Metric coverage — what this agent can see on its node">Coverage</p>
       <div />
@@ -195,8 +196,9 @@ const DetailBand: React.FC<{
   const cpuPowerAvail  = m?.cpu_power_w != null;
   const nvidiaAvail    = m?.nvidia_vram_total_mb != null;
   const thermalAvail   = m?.thermal_state != null;
-  const ollamaDetected = m?.ollama_running === true;
-  const vllmDetected   = m?.vllm_running   === true;
+  const ollamaDetected   = m?.ollama_running    === true;
+  const vllmDetected     = m?.vllm_running      === true;
+  const llamacppDetected = m?.llamacpp_running   === true;
 
   return (
     <div className="border-t border-gray-100 dark:border-gray-800 grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-800 min-[860px]:grid-cols-3 min-[860px]:divide-y-0 min-[860px]:divide-x">
@@ -217,10 +219,6 @@ const DetailBand: React.FC<{
         <div>
           <DL label="Node ID" />
           <DV cls="text-indigo-400">{node.id}</DV>
-        </div>
-        <div>
-          <DL label="Pairing Log" />
-          <DV cls="text-gray-500">history N/A</DV>
         </div>
       </div>
 
@@ -378,6 +376,30 @@ const DetailBand: React.FC<{
           </div>
 
           <div className="flex items-start gap-2">
+            {llamacppDetected
+              ? <CheckCircle size={10} className="text-green-400 shrink-0 mt-0.5" />
+              : <span className="text-[10px] text-gray-600 leading-none shrink-0 mt-0.5">—</span>
+            }
+            <div>
+              <p className="text-[10px] text-gray-600 dark:text-gray-400 leading-tight">llama.cpp</p>
+              {llamacppDetected ? (
+                <>
+                  <p className="text-[9px] text-gray-500 truncate">
+                    {m?.llamacpp_model_name ?? 'detected'}
+                  </p>
+                  {m?.llamacpp_tokens_per_sec != null && (
+                    <p className="text-[9px] text-green-400 font-telin">
+                      {m.llamacpp_tokens_per_sec.toFixed(1)} tok/s
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-[9px] text-gray-500">not detected</p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2">
             {vllmDetected
               ? <CheckCircle size={10} className="text-green-400 shrink-0 mt-0.5" />
               : <span className="text-[10px] text-gray-600 leading-none shrink-0 mt-0.5">—</span>
@@ -394,7 +416,7 @@ const DetailBand: React.FC<{
                       {m.vllm_tokens_per_sec.toFixed(1)} tok/s
                     </p>
                   )}
-                  {m?.vllm_cache_usage_perc != null && (
+                  {m?.vllm_cache_usage_perc != null && m.vllm_cache_usage_perc > 0 && (
                     <p className="text-[9px] text-cyan-400 font-telin">
                       Cache: {m.vllm_cache_usage_perc.toFixed(0)}%
                     </p>
@@ -456,8 +478,7 @@ const MgmtRow: React.FC<{
   const identityTooltip = [
     os !== 'Unknown' ? os : null,
     memCap !== '—'   ? memCap : null,
-    isOnline && node.uptime ? `Up ${node.uptime}` : null,
-    'Agent v—',
+    m?.agent_version ? `Agent v${m.agent_version}` : null,
   ].filter(Boolean).join('  ·  ');
 
   return (
@@ -491,6 +512,9 @@ const MgmtRow: React.FC<{
               </>
             ) : (
               <p className="text-xs font-bold font-telin text-gray-900 dark:text-white truncate">{node.id}</p>
+            )}
+            {enriched.locationLabel && (
+              <p className="text-[9px] text-indigo-400/60 font-telin truncate leading-tight">{enriched.locationLabel}</p>
             )}
           </div>
         </div>
@@ -574,11 +598,14 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* Uptime — derive from first-seen timestamp or agent-reported uptime */}
+        {/* Runtime — which inference engine this node is running */}
         <div className="overflow-hidden">
-          <span className="text-xs font-telin tabular-nums text-gray-500">
+          <span className="text-xs font-telin text-gray-500">
             {isOnline
-              ? (node.uptime ?? (lastSeenMs != null ? fmtNodeAgo(lastSeenMs) : '—'))
+              ? m?.vllm_running      ? 'vLLM'
+              : m?.ollama_running    ? 'Ollama'
+              : m?.llamacpp_running  ? 'llama.cpp'
+              : '—'
               : '—'}
           </span>
         </div>
@@ -951,6 +978,7 @@ const NodesList: React.FC<NodesListProps> = ({
       lastSeenMs: m ? Date.now() : undefined,
       isOnline: connected,
       isFlagged: perm !== 'full',
+      locationLabel: m ? (getNodeSettings?.(m.node_id)?.locationLabel ?? null) : null,
       idx: 0,
     };
 
@@ -1067,14 +1095,18 @@ const NodesList: React.FC<NodesListProps> = ({
 
   // ── Enrich nodes ────────────────────────────────────────────────────────────
   const enriched: EnrichedNode[] = nodes.map((node, idx) => {
-    const metrics  = allMetrics[node.id] ?? null;
-    const ls       = lastSeenMap[node.id];
-    const isOnline = metrics !== null && (ls == null || Date.now() - ls <= NODE_REACHABLE_MS);
-    const perm     = derivePermissions(metrics);
-    const ollamaOk = metrics?.ollama_running === true;
-    const offlineGt10 = !isOnline && ls != null && Date.now() - ls > 10 * 60 * 1000;
-    const isFlagged = perm !== 'full' || !ollamaOk || offlineGt10;
-    return { node, metrics, lastSeenMs: ls, isOnline, isFlagged, idx };
+    const metrics      = allMetrics[node.id] ?? null;
+    const ls           = lastSeenMap[node.id];
+    const isOnline     = metrics !== null && (ls == null || Date.now() - ls <= NODE_REACHABLE_MS);
+    const perm         = derivePermissions(metrics);
+    const ollamaOk     = metrics?.ollama_running    === true;
+    const vllmOk       = metrics?.vllm_running      === true;
+    const llamacppOk   = metrics?.llamacpp_running   === true;
+    const offlineGt10  = !isOnline && ls != null && Date.now() - ls > 10 * 60 * 1000;
+    // Flag only when no recognised inference runtime is active — vLLM-only nodes should not be flagged.
+    const isFlagged    = perm !== 'full' || !(ollamaOk || vllmOk || llamacppOk) || offlineGt10;
+    const locationLabel = getNodeSettings?.(node.id)?.locationLabel ?? null;
+    return { node, metrics, lastSeenMs: ls, isOnline, isFlagged, locationLabel, idx };
   });
 
   // onlineCount / offlineCount removed — all display counts now derive from
@@ -1111,7 +1143,7 @@ const NodesList: React.FC<NodesListProps> = ({
 
   // ── Filter + sort ───────────────────────────────────────────────────────────
   const q = search.trim().toLowerCase();
-  let filtered = enriched.filter(({ node, metrics: m, isOnline, isFlagged }) => {
+  let filtered = enriched.filter(({ node, metrics: m, isOnline, isFlagged, locationLabel }) => {
     if (showFlaggedOnly && !isFlagged) return false;
     if (statusFilter === 'online'  && !isOnline) return false;
     if (statusFilter === 'offline' &&  isOnline) return false;
@@ -1120,6 +1152,7 @@ const NodesList: React.FC<NodesListProps> = ({
     return (
       node.id.toLowerCase().includes(q) ||
       (node.hostname ?? '').toLowerCase().includes(q) ||
+      (locationLabel ?? '').toLowerCase().includes(q) ||
       chip.includes(q) ||
       (isOnline ? 'online' : 'offline').includes(q)
     );
@@ -1130,6 +1163,9 @@ const NodesList: React.FC<NodesListProps> = ({
   else if (sortKey === 'hostname')
     filtered = [...filtered].sort((a, b) =>
       (a.node.hostname ?? '').localeCompare(b.node.hostname ?? ''));
+  else if (sortKey === 'location')
+    filtered = [...filtered].sort((a, b) =>
+      (a.locationLabel ?? a.node.hostname ?? '').localeCompare(b.locationLabel ?? b.node.hostname ?? ''));
 
   const filteredIds = filtered.map(e => e.node.id);
 
@@ -1230,15 +1266,16 @@ const NodesList: React.FC<NodesListProps> = ({
           >
             <ArrowUpDown className="w-3.5 h-3.5 text-gray-500" />
             <span>
-              {sortKey === 'nodeId' ? 'Node ID'
-                : sortKey === 'hostname' ? 'Hostname'
+              {sortKey === 'nodeId'   ? 'Node ID'
+                : sortKey === 'hostname'  ? 'Hostname'
+                : sortKey === 'location'  ? 'Location'
                 : 'Registration order'}
             </span>
             <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${sortOpen ? 'rotate-180' : ''}`} />
           </button>
           {sortOpen && (
             <div className="absolute right-0 top-full mt-1.5 w-44 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 py-1">
-              {(['registered', 'nodeId', 'hostname'] as SortKey[]).map(key => (
+              {(['registered', 'nodeId', 'hostname', 'location'] as SortKey[]).map(key => (
                 <button
                   key={key}
                   onClick={() => { setSortKey(key); setSortOpen(false); }}
@@ -1249,7 +1286,8 @@ const NodesList: React.FC<NodesListProps> = ({
                   }`}
                 >
                   {key === 'registered' ? 'Registration order'
-                    : key === 'nodeId' ? 'Node ID'
+                    : key === 'nodeId'   ? 'Node ID'
+                    : key === 'location' ? 'Location'
                     : 'Hostname'}
                 </button>
               ))}
