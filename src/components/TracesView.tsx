@@ -30,6 +30,7 @@ import {
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
+import { TrendingUp } from 'lucide-react';
 import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, EventHistoryRecord, SentinelMetrics, SubscriptionTier } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useEventHistory } from '../hooks/useEventHistory';
@@ -383,24 +384,42 @@ interface MiniChartProps {
   unit:      string;
   color:     string;
   colorFill: string;
+  /** Fixed Y-axis domain — pass [0, 100] for percentage metrics to prevent
+   *  the recharts auto-domain collapsing when all values are similar. */
+  yDomain?:  [number, number];
 }
 
-const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, color, colorFill }) => {
+const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, color, colorFill, yDomain }) => {
   const chartData = data
     .map(s => ({ ts: s.ts_ms, v: getValue(s) ?? undefined }))
     .filter(d => d.v !== undefined);
 
   const values = chartData.map(d => d.v as number).filter(v => v > 0);
   const peak   = values.length > 0 ? Math.max(...values) : null;
+  const latest = values.length > 0 ? values[values.length - 1] : null;
+
+  // If all values are nearly identical the recharts auto-domain collapses to
+  // [v, v], rendering the line invisible. Detect this and widen the domain.
+  const derivedDomain: [number, number] | undefined = (() => {
+    if (yDomain) return yDomain;
+    if (values.length < 2) return undefined;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    if (max - min < 1) return [Math.max(0, min - 5), max + 5];
+    return undefined;
+  })();
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-3 space-y-1">
       <div className="flex items-center justify-between">
         <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">{label}</p>
         {peak != null && (
-          <span className={`font-mono text-[10px] font-bold ${color}`}>
-            {peak % 1 === 0 ? peak.toFixed(0) : peak.toFixed(1)}{unit}
-          </span>
+          <div className="flex items-center gap-1">
+            <TrendingUp className="w-2.5 h-2.5 text-gray-600" />
+            <span className={`font-mono text-[10px] font-bold ${color}`}>
+              {peak % 1 === 0 ? peak.toFixed(0) : peak.toFixed(1)}{unit}
+            </span>
+          </div>
         )}
       </div>
       {chartData.length > 1 ? (
@@ -413,6 +432,10 @@ const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, colo
               </linearGradient>
             </defs>
             <XAxis dataKey="ts" hide />
+            {derivedDomain
+              ? <YAxis domain={derivedDomain} hide />
+              : <YAxis hide />
+            }
             <Tooltip
               contentStyle={{ background: '#111', border: '1px solid #374151', borderRadius: 8, fontSize: 10 }}
               formatter={(v: number) => [`${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}${unit}`, label]}
@@ -434,7 +457,14 @@ const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, colo
           <p className="text-[10px] text-gray-700">No data</p>
         </div>
       )}
-      <p className="text-[9px] text-gray-700">{chartData.length} samples</p>
+      <div className="flex items-center justify-between">
+        <p className="text-[9px] text-gray-700">{chartData.length} samples</p>
+        {latest != null && peak != null && Math.abs(latest - peak) > 0.5 && (
+          <p className="text-[9px] text-gray-700 font-mono">
+            now {latest % 1 === 0 ? latest.toFixed(0) : latest.toFixed(1)}{unit}
+          </p>
+        )}
+      </div>
     </div>
   );
 };
@@ -458,7 +488,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       const data: HistoryResponse = await r.json();
       setResp(data);
     } catch {
-      setError('History unavailable — History unavailable on this platform.');
+      setError('History unavailable on this platform.');
       setResp(null);
     }
     setLoading(false);
@@ -556,6 +586,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             unit="%"
             color="text-cyan-400"
             colorFill="#06b6d4"
+            yDomain={[0, 100]}
           />
           <MiniChart
             data={samples}
@@ -564,6 +595,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             unit="%"
             color="text-blue-400"
             colorFill="#3b82f6"
+            yDomain={[0, 100]}
           />
           <MiniChart
             data={samples}
@@ -572,6 +604,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             unit="%"
             color="text-blue-300"
             colorFill="#93c5fd"
+            yDomain={[0, 100]}
           />
           <MiniChart
             data={samples}
@@ -615,6 +648,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const [localAgentOk, setLocalAgentOk]         = useState(false);
   const [localLastMs, setLocalLastMs]            = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<'ok' | 'unavailable' | 'checking'>('checking');
+  const [liveMetrics, setLiveMetrics]            = useState<SentinelMetrics | null>(null);
 
   // Lightweight local agent + store probe — runs once on mount.
   useEffect(() => {
@@ -633,11 +667,16 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         setDbStatus('unavailable');
       }
     };
-    // Also hit the SSE endpoint to verify the agent's live stream is working.
+    // Also hit the SSE endpoint to verify the agent's live stream and get metrics.
     const sseProbe = async () => {
       try {
         const r = await fetch('/api/metrics');
-        if (r.ok) { setLocalAgentOk(true); setLocalLastMs(Date.now()); }
+        if (r.ok) {
+          const data: SentinelMetrics = await r.json();
+          setLocalAgentOk(true);
+          setLocalLastMs(Date.now());
+          setLiveMetrics(data);
+        }
       } catch { /* agent unreachable */ }
     };
     probe();
@@ -672,11 +711,55 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     connectionState === 'idle'         ? 'Idle'         :
                                          'Disconnected';
 
-  const harvesters = [
-    'metrics_harvester      (tok/s · CPU% · memory)',
-    'apple_silicon / nvidia (power W · GPU%)',
-    'ollama_harvester        (model probe · TTFT)',
-    'thermal_harvester       (state · temp °C)',
+  // Derive actual harvester status from live metrics (not just connectionState).
+  const m = liveMetrics;
+  const connected = connectionState === 'connected';
+
+  const chip   = ((m?.chip_name ?? m?.gpu_name) ?? '').toLowerCase();
+  const isApple  = m?.memory_pressure_percent != null || chip.includes('apple') || /\bm[1-4]\b/.test(chip);
+  const isNvidia = m?.nvidia_vram_total_mb != null;
+
+  type HarvesterEntry = { label: string; ok: boolean | null; detail: string };
+  const harvesters: HarvesterEntry[] = m ? [
+    {
+      label:  'metrics_harvester (tok/s · CPU% · memory)',
+      ok:     m.cpu_usage_pct != null || m.total_memory_mb != null,
+      detail: m.cpu_usage_pct != null ? `CPU ${m.cpu_usage_pct.toFixed(0)}%` : 'active',
+    },
+    {
+      label:  isApple
+        ? 'apple_silicon (power W · GPU%)'
+        : isNvidia
+          ? 'nvidia / nvml (power W · GPU%)'
+          : 'power_harvester (power W)',
+      ok: isApple
+        ? (m.cpu_power_w != null || (m as unknown as Record<string, unknown>).apple_soc_power_w != null)
+        : isNvidia
+          ? m.nvidia_power_draw_w != null
+          : m.cpu_power_w != null,
+      detail: isApple
+        ? (m.cpu_power_w != null ? `${m.cpu_power_w.toFixed(1)}W SoC` : 'no power data')
+        : isNvidia
+          ? (m.nvidia_power_draw_w != null ? `${m.nvidia_power_draw_w.toFixed(0)}W GPU` : 'NVML power unavailable')
+          : (m.cpu_power_w != null ? `${m.cpu_power_w.toFixed(1)}W` : 'no power data'),
+    },
+    {
+      label:  'ollama_harvester (model probe · TTFT)',
+      ok:     m.ollama_running === true,
+      detail: m.ollama_running
+        ? (m.ollama_active_model ?? 'idle')
+        : 'not detected',
+    },
+    {
+      label:  'thermal_harvester (state · temp °C)',
+      ok:     m.thermal_state != null,
+      detail: m.thermal_state ?? (isNvidia ? 'GPU temp via NVML' : 'not available'),
+    },
+  ] : [
+    { label: 'metrics_harvester (tok/s · CPU% · memory)', ok: connected ? true : null, detail: connected ? 'active' : 'awaiting data' },
+    { label: 'apple_silicon / nvidia (power W · GPU%)',    ok: connected ? true : null, detail: connected ? 'active' : 'awaiting data' },
+    { label: 'ollama_harvester (model probe · TTFT)',      ok: connected ? true : null, detail: connected ? 'active' : 'awaiting data' },
+    { label: 'thermal_harvester (state · temp °C)',        ok: connected ? true : null, detail: connected ? 'active' : 'awaiting data' },
   ];
 
   return (
@@ -732,7 +815,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             </span>
           </div>
           <p className="text-[9px] text-gray-600">
-            {dbStatus === 'unavailable' ? 'musl target — local store disabled' : '/api/history OK'}
+            {dbStatus === 'unavailable' ? 'local store disabled on this build' : '/api/history OK'}
           </p>
         </div>
 
@@ -748,7 +831,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
       </div>
 
-      {/* ── Harvesters list ──────────────────────────────────────────────────── */}
+      {/* ── Harvesters list — reflects actual metric availability ─────────────── */}
       <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 space-y-2">
         <div className="flex items-center gap-2 mb-3">
           <Cpu className="w-3 h-3 text-gray-600 shrink-0" />
@@ -757,11 +840,18 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           </p>
         </div>
         {harvesters.map(h => (
-          <div key={h} className="flex items-center gap-2.5">
+          <div key={h.label} className="flex items-center gap-2.5">
             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-              connectionState === 'connected' ? 'bg-green-400/70' : 'bg-gray-600'
+              h.ok === null ? 'bg-gray-600' :
+              h.ok          ? 'bg-green-400/70' :
+                              'bg-amber-500/70'
             }`} />
-            <span className="font-mono text-[10px] text-gray-500">{h}</span>
+            <span className="font-mono text-[10px] text-gray-500 flex-1">{h.label}</span>
+            {m && (
+              <span className={`font-mono text-[9px] shrink-0 ${h.ok ? 'text-gray-600' : 'text-amber-600'}`}>
+                {h.detail}
+              </span>
+            )}
           </div>
         ))}
         <div className="flex items-center gap-2.5 pt-0.5 border-t border-gray-800 mt-2">
@@ -1286,30 +1376,52 @@ const EventHistoryPanel: React.FC = () => {
         </p>
       )}
 
-      {/* Event list */}
+      {/* Event list — consecutive identical events collapsed into one row with ×N badge */}
       {events.length > 0 && (
         <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
-          {events.map((ev, i) => (
-            <div key={`${ev.ts_ms}-${i}`}
-              className="flex items-start gap-2.5 py-1.5 px-2 rounded hover:bg-gray-800/50 transition-colors"
-            >
-              {/* Level dot */}
-              <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${LEVEL_DOT[ev.level] ?? 'bg-gray-500'}`} />
+          {events
+            .reduce<{ event: EventHistoryRecord; count: number }[]>((acc, ev) => {
+              const prev = acc[acc.length - 1];
+              if (
+                prev &&
+                prev.event.message === ev.message &&
+                prev.event.event_type === ev.event_type
+              ) {
+                prev.count++;
+              } else {
+                acc.push({ event: ev, count: 1 });
+              }
+              return acc;
+            }, [])
+            .map(({ event: ev, count }, i) => (
+              <div key={`${ev.ts_ms}-${i}`}
+                className="flex items-start gap-2.5 py-1.5 px-2 rounded hover:bg-gray-800/50 transition-colors"
+              >
+                {/* Level dot */}
+                <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${LEVEL_DOT[ev.level] ?? 'bg-gray-500'}`} />
 
-              {/* Content */}
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-gray-300 leading-snug truncate">{ev.message}</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-[10px] text-gray-600 font-mono">{relativeTime(ev.ts_ms)}</span>
-                  {ev.event_type && (
-                    <span className={`text-[10px] font-mono ${EVENT_TYPE_COLORS[ev.event_type] ?? 'text-gray-500'}`}>
-                      {ev.event_type}
-                    </span>
-                  )}
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs text-gray-300 leading-snug truncate">{ev.message}</p>
+                    {count > 1 && (
+                      <span className="shrink-0 text-[9px] font-mono text-gray-600 bg-gray-800 px-1 py-0.5 rounded">
+                        ×{count}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] text-gray-600 font-mono">{relativeTime(ev.ts_ms)}</span>
+                    {ev.event_type && (
+                      <span className={`text-[10px] font-mono ${EVENT_TYPE_COLORS[ev.event_type] ?? 'text-gray-500'}`}>
+                        {ev.event_type}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))
+          }
         </div>
       )}
 
