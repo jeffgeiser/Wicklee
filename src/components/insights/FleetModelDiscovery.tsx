@@ -112,7 +112,13 @@ const FleetModelRow: React.FC<{
 
   const effectiveScore = focusedNode?.fit_score ?? model.fleet_best_score;
   const best = fitColors(effectiveScore);
-  const fittingNodes = model.nodes.filter(n => n.fit_score >= 40);
+  // When a node is focused, report fit status for just that node; otherwise fleet-wide count.
+  const fittingNodes = focusNodeId
+    ? model.nodes.filter(n => n.node_id === focusNodeId && n.fit_score >= 40)
+    : model.nodes.filter(n => n.fit_score >= 40);
+  const fitSummary = focusNodeId
+    ? (fittingNodes.length > 0 ? 'fits this node' : "won't fit")
+    : `${fittingNodes.length}/${model.nodes.length} nodes fit`;
 
   // Best node for the pull command — focused node first, then highest scorer.
   const pullNode = focusedNode ?? model.nodes[0];
@@ -144,12 +150,16 @@ const FleetModelRow: React.FC<{
           )}
         </div>
 
-        {/* Summary: X/Y nodes fit */}
+        {/* Summary: X/Y nodes fit — or per-node fit status when filtered */}
         <span
           title="Nodes with fit score ≥40 (Tight or better). Green = Excellent/Good (≥60). Yellow = Tight (40–59). Orange = Marginal (1–39). Red = Won't Fit."
-          className="text-[10px] text-gray-600 whitespace-nowrap shrink-0 cursor-default"
+          className={`text-[10px] whitespace-nowrap shrink-0 cursor-default ${
+            focusNodeId
+              ? fittingNodes.length > 0 ? 'text-emerald-500' : 'text-red-500/70'
+              : 'text-gray-600'
+          }`}
         >
-          {fittingNodes.length}/{model.nodes.length} nodes fit
+          {fitSummary}
         </span>
 
         {/* Downloads */}

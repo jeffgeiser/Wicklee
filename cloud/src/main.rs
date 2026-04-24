@@ -3797,27 +3797,51 @@ fn hardware_profile(name: &str) -> Option<(u64, f32)> {
     }
 }
 
+/// Quality factor for a GGUF quantisation level.
+/// Penalises extremely lossy quants (IQ1/Q2) that are rarely useful for real inference.
+/// Applied as a multiplier on the raw fit score during variant selection so that
+/// a Q4_K_M with 30 % headroom beats an IQ1_M with 90 % headroom.
+fn quant_quality_factor(quant: &str) -> f32 {
+    let q = quant.to_lowercase();
+    if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.0; }  // unusable
+    if q.starts_with("iq2") || q.starts_with("q2")      { return 0.4; }  // very lossy
+    if q.starts_with("iq3") || q.starts_with("q3")      { return 0.7; }  // lossy
+    1.0 // Q4 and above: full score
+}
+
 /// Compute fit score (mirrors agent logic).
+///
+/// Hard rule: when the model's estimated VRAM requirement exceeds the node's
+/// VRAM budget the score is 0 and the label is "Won't Fit".  Previously the
+/// thermal/WES/power sub-scores were still added even for non-fitting models,
+/// producing scores of 30–40 for models the node literally cannot load.  That
+/// caused `retain(score > 0)` in the per-node filter to keep *all* models,
+/// making the per-node view identical to the fleet-wide view.
 fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, power_w: f32, thermal: &str) -> (u8, String) {
     let vram_required = (file_size_bytes as u64 / (1024 * 1024)) + ((file_size_bytes as u64 / (1024 * 1024)) / 10).max(256);
+
+    // Hard gate: model does not fit in the available VRAM pool.
+    if vram_required > vram_mb {
+        return (0, "Won't Fit".into());
+    }
+
     let headroom_pct = if vram_mb > 0 {
-        ((vram_mb as f32 - vram_required as f32) / vram_mb as f32 * 100.0).max(-100.0)
-    } else { -100.0 };
+        ((vram_mb as f32 - vram_required as f32) / vram_mb as f32 * 100.0).max(0.0)
+    } else { 0.0 };
 
     let vram_score: u8 = if headroom_pct >= 50.0 { 40 }
         else if headroom_pct >= 30.0 { 35 } else if headroom_pct >= 15.0 { 28 }
-        else if headroom_pct >= 5.0 { 20 } else if headroom_pct >= 0.0 { 10 } else { 0 };
+        else if headroom_pct >= 5.0  { 20 } else { 10 }; // 0–5 % still fits, tight
     let thermal_score: u8 = match thermal { "Normal" => 20, "Fair" => 10, "Serious" => 5, _ => 0 };
     let wes_score: u8 = 10; // neutral — no historical data for simulation
     let power_score: u8 = if power_w <= 0.1 { 10 } else {
         let watts_per_gb = power_w / (vram_mb as f32 / 1024.0).max(1.0);
         let projected = watts_per_gb * (vram_required as f32 / 1024.0);
         if projected < power_w * 0.5 { 20 } else if projected < power_w * 0.75 { 15 }
-        else if projected < power_w { 10 } else { 5 }
+        else if projected < power_w  { 10 } else { 5 }
     };
     let total = vram_score + thermal_score + wes_score + power_score;
-    let label = if vram_required > vram_mb { "Won't Fit".into() }
-        else if total >= 80 { "Excellent".into() } else if total >= 60 { "Good".into() }
+    let label = if total >= 80 { "Excellent".into() } else if total >= 60 { "Good".into() }
         else if total >= 40 { "Tight".into() } else { "Marginal".into() };
     (total, label)
 }
@@ -3961,8 +3985,15 @@ async fn handle_fleet_model_candidates(
             let mut best_file_mb = 0u64;
 
             for (_filename, quant, file_size) in variants {
-                let (score, label) = cloud_fit_score(*file_size as i64, hw.mem_mb, hw.power_w, &hw.thermal);
-                if score > best_score {
+                let (raw_score, label) = cloud_fit_score(*file_size as i64, hw.mem_mb, hw.power_w, &hw.thermal);
+                // Apply quant quality factor so IQ1/Q2 variants don't win over Q4+
+                // just because they leave more VRAM headroom.
+                let qf = quant_quality_factor(quant);
+                let score = (raw_score as f32 * qf).round() as u8;
+                let label = if qf == 0.0 { "Won't Fit".to_string() } else { label };
+                let effective     = score as u32;
+                let best_effective = (best_score as f32 * quant_quality_factor(&best_quant)).round() as u32;
+                if effective > best_effective {
                     best_score = score;
                     best_label = label;
                     best_quant = quant.clone();
@@ -4090,8 +4121,13 @@ async fn handle_v1_models_discover(
             let mut best_quant = String::new();
             let mut best_label = String::new();
             for (quant, file_size) in &variants {
-                let (score, label) = cloud_fit_score(*file_size, vram, power, thermal);
-                if score > best_score {
+                let (raw_score, label) = cloud_fit_score(*file_size, vram, power, thermal);
+                let qf = quant_quality_factor(quant);
+                let score = (raw_score as f32 * qf).round() as u8;
+                let label = if qf == 0.0 { "Won't Fit".to_string() } else { label };
+                let effective     = score as u32;
+                let best_effective = (best_score as f32 * quant_quality_factor(&best_quant)).round() as u32;
+                if effective > best_effective {
                     best_score = score;
                     best_quant = quant.clone();
                     best_label = label;
