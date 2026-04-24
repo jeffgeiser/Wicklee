@@ -4988,6 +4988,19 @@ async fn fleet_alert_evaluator_task(state: AppState) {
     let mut wes_baselines: HashMap<String, f32> = HashMap::new();
     let mut baseline_refresh_counter: u32 = 0;
 
+    // Hysteresis tick counters — fire only after condition persists for N ticks,
+    // resolve only after condition clears for M ticks. Prevents single-tick noise.
+    //
+    // fleet_load_imbalance: WES-poor condition (no thermal component — that already
+    //   uses consecutive_ticks from the ring buffer). Require 3 ticks firing, 2 clear.
+    //
+    // agent_version_mismatch: Require 5 consecutive mismatch ticks before firing (handles
+    //   rolling updates where each node is briefly the minority version), 2 ticks to resolve.
+    let mut wes_poor_ticks:      HashMap<String, u32> = HashMap::new(); // node_id → consecutive ticks WES-poor
+    let mut ver_mismatch_ticks:  HashMap<String, u32> = HashMap::new(); // node_id → consecutive ticks mismatched
+    let mut wes_poor_clear_ticks: HashMap<String, u32> = HashMap::new(); // node_id → consecutive clear ticks
+    let mut ver_match_ticks:     HashMap<String, u32> = HashMap::new();  // node_id → consecutive match ticks
+
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     interval.tick().await;
     tokio::time::sleep(Duration::from_secs(120)).await;
@@ -5108,6 +5121,11 @@ async fn fleet_alert_evaluator_task(state: AppState) {
         }
 
         // 5. Agent Version Mismatch
+        // Hysteresis: require 5 consecutive mismatch ticks (≈5 min) before firing.
+        // This prevents noise from rolling updates where each node is briefly the
+        // minority version before the rest of the fleet catches up.
+        // Resolution: require 2 consecutive clean ticks so a re-update doesn't flip
+        // the observation immediately.
         {
             let mut version_counts: HashMap<String, u32> = HashMap::new();
             for (_, m) in &snapshot {
@@ -5120,16 +5138,45 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                     for (node_id, m) in &snapshot {
                         let alert_type = "agent_version_mismatch";
                         if let Some(ref node_ver) = m.agent_version {
-                            let is_firing = node_ver != majority;
+                            let is_mismatched = node_ver != majority;
                             let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
-                            if is_firing && !is_open {
-                                to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
-                                    severity: ObsSeverity::Warning, title: "Agent Version Mismatch".into(),
-                                    detail: format!("Running v{} while fleet majority is v{}.", node_ver, majority),
-                                    context: serde_json::json!({"node_version": node_ver, "fleet_majority": majority}),
-                                });
-                            } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
+
+                            if is_mismatched {
+                                // Increment mismatch tick counter, reset clear counter.
+                                let mm = ver_mismatch_ticks.entry(node_id.clone()).or_insert(0);
+                                *mm += 1;
+                                ver_match_ticks.remove(node_id.as_str());
+
+                                // Fire only after sustained mismatch (5 ticks ≈ 5 min).
+                                if *mm >= 5 && !is_open {
+                                    to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
+                                        severity: ObsSeverity::Warning, title: "Agent Version Mismatch".into(),
+                                        detail: format!("Running v{} while fleet majority is v{} ({} nodes). Mismatch persisted for {} min.", node_ver, majority, total_versioned, *mm),
+                                        context: serde_json::json!({"node_version": node_ver, "fleet_majority": majority, "mismatch_ticks": *mm}),
+                                    });
+                                }
+                            } else {
+                                // Reset mismatch counter, increment clear counter.
+                                ver_mismatch_ticks.remove(node_id.as_str());
+                                let mc = ver_match_ticks.entry(node_id.clone()).or_insert(0);
+                                *mc += 1;
+
+                                // Resolve only after 2 clean ticks.
+                                if is_open && *mc >= 2 {
+                                    to_resolve.push((node_id.clone(), alert_type.into()));
+                                }
+                            }
                         }
+                    }
+                } else {
+                    // Fleet dropped to 1 versioned node — clear any open mismatch observations.
+                    for (node_id, _) in &snapshot {
+                        let alert_type = "agent_version_mismatch";
+                        if open_observations.contains_key(&(node_id.clone(), alert_type.into())) {
+                            to_resolve.push((node_id.clone(), alert_type.into()));
+                        }
+                        ver_mismatch_ticks.remove(node_id.as_str());
+                        ver_match_ticks.remove(node_id.as_str());
                     }
                 }
             }
@@ -5139,6 +5186,11 @@ async fn fleet_alert_evaluator_task(state: AppState) {
         // A node is thermally stressed or significantly WES-poor while at least one
         // healthier peer with Normal thermal is available — a routing opportunity exists.
         // Requires ≥2 active nodes. Only fires when the stressed node has active inference.
+        //
+        // Hysteresis (WES-poor leg only):
+        //   Fire:    condition persists for ≥3 consecutive ticks (≈3 min)
+        //   Resolve: condition clear  for ≥2 consecutive ticks (≈2 min)
+        // Thermal-stress leg already requires hot_ticks ≥ 2 from the ring buffer.
         if snapshot.len() >= 2 {
             // Build a fleet-wide WES map for the current tick (live MetricsPayload values).
             let live_wes: HashMap<&str, f32> = snapshot.iter()
@@ -5158,6 +5210,9 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 // Inference must be active to be relevant
                 let is_active = matches!(m.inference_state.as_deref(), Some("live") | Some("idle-spd"));
                 if !is_active {
+                    // Clear tick counters and resolve open observation.
+                    wes_poor_ticks.remove(node_id.as_str());
+                    wes_poor_clear_ticks.remove(node_id.as_str());
                     if open_observations.contains_key(&(node_id.clone(), alert_type.into())) {
                         to_resolve.push((node_id.clone(), alert_type.into()));
                     }
@@ -5188,33 +5243,69 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                     (Some(this), Some(best)) if best > 0.0 => (best - this) / best * 100.0,
                     _ => 0.0,
                 };
-                let is_wes_poor = wes_gap_pct >= 20.0;
+                let is_wes_poor_raw = wes_gap_pct >= 20.0;
 
+                // Update WES-poor hysteresis counters.
+                let wes_poor_sustained = if is_wes_poor_raw {
+                    let ct = wes_poor_ticks.entry(node_id.clone()).or_insert(0);
+                    *ct += 1;
+                    wes_poor_clear_ticks.remove(node_id.as_str());
+                    *ct >= 3  // require 3 consecutive ticks before treating as sustained
+                } else {
+                    wes_poor_ticks.remove(node_id.as_str());
+                    false
+                };
+
+                let is_wes_poor = wes_poor_sustained;
                 let is_firing = best_peer.is_some() && (is_thermally_stressed || is_wes_poor);
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
 
+                // For resolution: require 2 consecutive clean ticks if open (debounce).
+                if !is_firing && is_open {
+                    let cc = wes_poor_clear_ticks.entry(node_id.clone()).or_insert(0);
+                    *cc += 1;
+                    if *cc < 2 {
+                        // Not yet stable — skip this tick, don't resolve yet.
+                        continue;
+                    }
+                    wes_poor_clear_ticks.remove(node_id.as_str());
+                }
+
                 // Build detail + context once, reused for both fire and update paths.
+                let sustained_ticks = wes_poor_ticks.get(node_id.as_str()).copied().unwrap_or(0);
                 let build_detail_ctx = |best_id: &str, best_wes: f32| -> (String, serde_json::Value) {
                     let this_host = m.hostname.as_deref().unwrap_or(node_id.as_str());
                     let best_host = snapshot.iter()
                         .find(|(id, _)| id.as_str() == best_id)
                         .and_then(|(_, bm)| bm.hostname.as_deref().map(|s: &str| s.to_owned()))
                         .unwrap_or_else(|| best_id.to_owned());
+
+                    // Root-cause clause: explain WHY WES is lower, not just that it is.
+                    let why = if is_thermally_stressed {
+                        format!("thermal state is non-Normal for {} min", hot_ticks)
+                    } else if is_wes_poor {
+                        format!("{:.0}% below fleet-peak WES for {} min", wes_gap_pct, sustained_ticks)
+                    } else {
+                        "capacity constrained".to_owned()
+                    };
+
                     let detail = format!(
-                        "{} is {}{}while {} has better capacity (WES {:.1}).",
+                        "{} is routing inference while {} has better capacity (WES {:.1} vs {:.1}). Cause: {}.",
                         this_host,
-                        if is_thermally_stressed { "thermally stressed " } else { "" },
-                        if is_wes_poor { format!("{:.0}% below fleet-peak WES ", wes_gap_pct) } else { String::new() },
                         best_host,
+                        this_wes.unwrap_or(0.0),
                         best_wes,
+                        why,
                     );
                     let ctx = serde_json::json!({
-                        "thermal_state":       m.thermal_state,
-                        "hot_ticks":           hot_ticks,
-                        "current_wes":         this_wes,
-                        "best_peer_wes":       best_wes,
-                        "wes_gap_pct":         wes_gap_pct,
-                        "inference_state":     m.inference_state,
+                        "thermal_state":         m.thermal_state,
+                        "hot_ticks":             hot_ticks,
+                        "current_wes":           this_wes,
+                        "best_peer_wes":         best_wes,
+                        "wes_gap_pct":           wes_gap_pct,
+                        "wes_poor_ticks":        sustained_ticks,
+                        "inference_state":       m.inference_state,
+                        "cause":                 if is_thermally_stressed { "thermal" } else { "wes_gap" },
                     });
                     (detail, ctx)
                 };
