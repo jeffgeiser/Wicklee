@@ -2325,7 +2325,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             <MetricTooltip
               metricId="wes"
               name="WES — Wicklee Efficiency Score"
-              oneLiner="Thermally-honest inference efficiency. tok/watt penalised by heat."
+              oneLiner="(tok/s ÷ watts) × thermal_penalty × pue. Drops near-zero when idle — WES measures active inference efficiency, not standby. Use the 24h baseline in Triage for SLO tracking."
               ranges={[
                 { threshold: '> 10', color: 'emerald', label: 'Excellent · highly efficient inference' },
                 { threshold: '3–10', color: 'green',  label: 'Good · efficient for the power envelope' },
@@ -2357,7 +2357,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             <MetricTooltip
               metricId="w-1k"
               name="W/1K TKN — Accelerator Power Per 1K Tokens"
-              oneLiner="Accelerator watts per 1,000 tok/s. Measures SoC power (Apple), GPU board power (NVIDIA), or CPU package power (x86). Does not include system idle draw — configure a power offset in Settings for full wall-power estimates."
+              oneLiner="Fleet power ÷ fleet throughput × 1,000. Only nodes actively generating tokens are included — idle nodes do not inflate this number. Per-node values in the table below use the same formula. Configure a power offset in Settings to include system idle draw for wall-power estimates."
             >
               Wattage / 1k Tkn
             </MetricTooltip>

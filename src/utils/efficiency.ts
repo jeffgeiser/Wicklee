@@ -11,9 +11,24 @@ import { getNodePowerW, hasPowerData } from './power';
 
 export { computeWES, formatWES, wesColorClass, THERMAL_PENALTY };
 
-/** Canonical hover tooltip shown on every WES value across the UI. */
+/**
+ * Canonical hover tooltip shown on every WES value across the UI.
+ *
+ * Formula: WES = (tok/s ÷ watts) × thermal_penalty × pue_factor
+ *   - tok/s:           live inference throughput (probe or runtime metrics)
+ *   - watts:           accelerator power (Apple SoC / NVIDIA board / CPU package)
+ *   - thermal_penalty: 1.0 at Normal; 0.6 at Serious; 0.3 at Critical
+ *   - pue_factor:      facility overhead (default 1.0 for local/edge deployments)
+ *
+ * WES is intentionally volatile — it reflects the current operating point.
+ * During idle periods (no active inference) WES drops to near-zero: there is no
+ * throughput in the numerator. This is expected behaviour, not a sensor fault.
+ * Use the 24h baseline shown in the Triage tab as the stable SLO reference.
+ */
 export const WES_TOOLTIP =
-  'Wicklee Efficiency Score (WES): Intelligence per Watt normalized for thermal throttling and facility PUE. Higher is better.';
+  'Wicklee Efficiency Score — formula: (tok/s ÷ watts) × thermal_penalty × pue. ' +
+  'Drops near-zero when idle (no throughput to measure — expected). ' +
+  'Use the 24h baseline in Triage for regression detection. Higher is better.';
 
 /**
  * Compute WES from pre-adjusted watts (raw power × PUE already applied by caller).
