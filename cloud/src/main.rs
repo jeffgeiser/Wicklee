@@ -4026,8 +4026,9 @@ async fn handle_fleet_model_candidates(
         }));
     }
 
-    // Default: rank by fleet_best_score.
-    // Per-node view: filter to models the node can run (score > 0) then rank by that node's score.
+    // Per-node view: keep only models the selected node can run (score > 0), ranked by that node's score.
+    // All-nodes view: keep only models EVERY online node can run (intersection), ranked by fleet_best_score.
+    //   This way "All nodes" is the safe overlap — models you can pull to any node without wasted bandwidth.
     if let Some(ref nid) = filter_node_id {
         let node_score = |m: &serde_json::Value| -> u64 {
             m["nodes"].as_array()
@@ -4037,7 +4038,17 @@ async fn handle_fleet_model_candidates(
         };
         models.retain(|m| node_score(m) > 0);
         models.sort_by(|a, b| node_score(b).cmp(&node_score(a)));
+    } else if online_count > 1 {
+        // Intersection: all online nodes must have score > 0.
+        models.retain(|m| {
+            m["nodes"].as_array()
+                .map(|arr| arr.iter().all(|n| n["fit_score"].as_u64().unwrap_or(0) > 0))
+                .unwrap_or(false)
+        });
+        models.sort_by(|a, b| b["fleet_best_score"].as_u64().cmp(&a["fleet_best_score"].as_u64()));
     } else {
+        // Single node in fleet: no intersection needed, just rank by score.
+        models.retain(|m| m["fleet_best_score"].as_u64().unwrap_or(0) > 0);
         models.sort_by(|a, b| b["fleet_best_score"].as_u64().cmp(&a["fleet_best_score"].as_u64()));
     }
 

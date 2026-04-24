@@ -351,12 +351,14 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)
     : null;
 
+  // Count "good fit" models (score ≥60) for the current view.
+  // Per-node: count that node's score. All-nodes: count models in the intersection list (server already filtered).
   const fitCount = focusNodeId
     ? displayModels.filter(m => {
         const n = m.nodes.find(x => x.node_id === focusNodeId);
         return (n?.fit_score ?? 0) >= 60;
       }).length
-    : data?.models.filter(m => m.fleet_best_score >= 60).length ?? 0;
+    : displayModels.filter(m => m.fleet_best_score >= 60).length;
 
   return (
     <div className="space-y-3">
@@ -371,7 +373,9 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
             <span
               title={focusNodeId
                 ? `Models where ${focusNodeLabel} scores ≥60 — VRAM headroom · thermal margin · power efficiency`
-                : 'Models where at least one fleet node scores ≥60 — VRAM headroom (40 pts) · thermal margin (20 pts) · WES history (20 pts) · power efficiency (20 pts)'}
+                : onlineNodes.length > 1
+                  ? 'Models every online node can run — intersection of fleet VRAM budgets. Select a single node to see its full compatible catalog.'
+                  : 'Models this node scores ≥60 — VRAM headroom (40 pts) · thermal margin (20 pts) · WES history (20 pts) · power efficiency (20 pts)'}
               className="text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/15 font-medium cursor-default"
             >
               {fitCount} fit {focusNodeLabel ?? 'your fleet'}
@@ -443,11 +447,13 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
       {data && (
         <div className="text-[10px] text-gray-700">
           {data.is_live_search
-            ? `Live HuggingFace search · each model scored against ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`
+            ? `Live HuggingFace search · scored against ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`
             : `Trending GGUF by downloads · scored across your ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`}
-          {focusNodeId && focusNodeLabel && (
-            <span className="text-cyan-600 ml-1">· filtered for {focusNodeLabel}</span>
-          )}
+          {focusNodeId && focusNodeLabel
+            ? <span className="text-cyan-600 ml-1">· showing {focusNodeLabel} compatible models</span>
+            : onlineNodes.length > 1
+              ? <span className="ml-1">· showing models all nodes can run</span>
+              : null}
         </div>
       )}
 
