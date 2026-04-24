@@ -34,7 +34,7 @@ const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconne
 
   return (
     <div className={`flex items-center font-bold tracking-tight select-none ${className}`} title={cfg.tooltip}>
-      <span className={textCls}>W</span>
+      <span className={textCls}>w</span>
       <span className={`relative inline-block ${textCls}`}>
         ı
         <div className="absolute top-[15%] left-1/2 -translate-x-1/2 flex items-center justify-center">

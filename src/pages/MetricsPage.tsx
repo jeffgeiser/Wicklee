@@ -122,7 +122,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
           Back
         </button>
         <span className="text-gray-700 select-none">·</span>
-        <span className="text-xs font-semibold text-gray-500 tracking-widest uppercase">Wicklee</span>
+        <span className="text-xs font-semibold text-gray-500 tracking-widest uppercase">wicklee</span>
       </div>
 
       {/* ── Page header ──────────────────────────────────────────────────────── */}

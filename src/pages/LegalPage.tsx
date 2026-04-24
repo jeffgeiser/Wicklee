@@ -29,7 +29,7 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
           <button onClick={() => onNavigate('/')} className="text-gray-500 hover:text-white transition-colors">
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <span className="text-white font-bold text-lg cursor-pointer" onClick={() => onNavigate('/')}>Wicklee</span>
+          <span className="text-white font-bold text-lg cursor-pointer" onClick={() => onNavigate('/')}>wicklee</span>
         </div>
       </div>
 
