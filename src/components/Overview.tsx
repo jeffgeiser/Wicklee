@@ -1691,7 +1691,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     : sentinel != null && !localIsInferring && !localIsBusy && !localIsIdleSpeed;
 
   // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
-  const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics);
+  // Total registered nodes (includes offline) for the denominator in cloud mode.
+  // Excludes restricted nodes so the count matches effectiveMetrics' filter.
+  const totalRegisteredNodes = isLocalHost
+    ? (sentinel ? 1 : 0)
+    : nodes.filter(n => !n.restricted).length;
+  const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics, totalRegisteredNodes);
   const fleetHealthCls = fleetHealthPct == null        ? 'text-gray-400 dark:text-gray-600'
     : fleetHealthPct === 100                           ? 'text-green-600 dark:text-green-400'
     : fleetHealthPct >= 75                             ? 'text-amber-600 dark:text-amber-500'
@@ -2125,8 +2130,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             sub={(() => {
               if (fleetHealthPct == null) return 'no nodes';
               const reachable = effectiveMetrics.filter(m => m.thermal_state != null).length;
-              const total = effectiveMetrics.length;
-              const unreachable = total - reachable;
+              const unreachable = totalRegisteredNodes - reachable;
               // Build the thermal breakdown from nodes with data
               const thermalPart = allNormal
                 ? 'All Normal thermal'

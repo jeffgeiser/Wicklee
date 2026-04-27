@@ -47,17 +47,22 @@ export const ELECTRICITY_RATE_USD_PER_KWH = 0.13;
 
 /**
  * Fleet Health Score.
- * Returns 0–100 (% of all known nodes that are reachable AND in Normal/Fair thermal state).
- * Unreachable nodes (no thermal_state) count against fleet health.
- * Returns null only when the metrics array is empty.
+ * Returns 0–100 (% of all registered nodes that are reachable AND in Normal/Fair thermal state).
+ * Unreachable nodes (not in the live metrics map) count against fleet health.
+ * Pass `totalNodes` from the registered node list — it includes offline nodes.
+ * If `totalNodes` is omitted, falls back to metrics.length (live-only count).
  */
-export function calculateFleetHealthPct(metrics: SentinelMetrics[]): number | null {
-  if (metrics.length === 0) return null;
+export function calculateFleetHealthPct(
+  metrics: SentinelMetrics[],
+  totalNodes?: number,
+): number | null {
+  const denominator = totalNodes ?? metrics.length;
+  if (denominator === 0) return null;
   const healthy = metrics.filter(m =>
     m.thermal_state != null &&
     ['normal', 'fair'].includes((m.thermal_state ?? '').toLowerCase())
   );
-  return Math.round((healthy.length / metrics.length) * 100);
+  return Math.round((healthy.length / denominator) * 100);
 }
 
 /**
