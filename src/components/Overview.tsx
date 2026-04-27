@@ -2122,13 +2122,22 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             label="Fleet Health"
             value={fleetHealthPct != null ? `${fleetHealthPct}%` : '—'}
             valueCls={fleetHealthCls}
-            sub={fleetHealthPct != null
-              ? allNormal
+            sub={(() => {
+              if (fleetHealthPct == null) return 'no nodes';
+              const reachable = effectiveMetrics.filter(m => m.thermal_state != null).length;
+              const total = effectiveMetrics.length;
+              const unreachable = total - reachable;
+              // Build the thermal breakdown from nodes with data
+              const thermalPart = allNormal
                 ? 'All Normal thermal'
                 : Object.entries(thermalCounts)
                     .map(([s, n]) => `${n} ${s.charAt(0).toUpperCase() + s.slice(1)}`)
-                    .join(' · ')
-              : 'no thermal data'}
+                    .join(' · ');
+              // Append unreachable count if any
+              return unreachable > 0
+                ? `${thermalPart} · ${unreachable} unreachable`
+                : thermalPart;
+            })()}
             icon={Thermometer}
             iconCls="text-amber-400"
           />

@@ -46,17 +46,18 @@ export function calculateWES(
 export const ELECTRICITY_RATE_USD_PER_KWH = 0.13;
 
 /**
- * Fleet Thermal Health Score.
- * Returns 0–100 (% of nodes whose thermal_state is Normal or Fair).
- * Returns null when no node has thermal data yet.
+ * Fleet Health Score.
+ * Returns 0–100 (% of all known nodes that are reachable AND in Normal/Fair thermal state).
+ * Unreachable nodes (no thermal_state) count against fleet health.
+ * Returns null only when the metrics array is empty.
  */
 export function calculateFleetHealthPct(metrics: SentinelMetrics[]): number | null {
-  const withThermal = metrics.filter(m => m.thermal_state != null);
-  if (withThermal.length === 0) return null;
-  const healthy = withThermal.filter(m =>
+  if (metrics.length === 0) return null;
+  const healthy = metrics.filter(m =>
+    m.thermal_state != null &&
     ['normal', 'fair'].includes((m.thermal_state ?? '').toLowerCase())
   );
-  return Math.round((healthy.length / withThermal.length) * 100);
+  return Math.round((healthy.length / metrics.length) * 100);
 }
 
 /**
