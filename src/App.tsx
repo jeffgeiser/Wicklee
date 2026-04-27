@@ -808,10 +808,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
             )}
           </div>
           <div className="flex items-center gap-4">
-            {/* On localhost: show live agent_version from metrics (always current).
-                On cloud: use VITE_AGENT_VERSION injected by the Rust build script, or
-                package.json version as fallback for dev builds. */}
-            <span className="mono">v{(isLocalHost && localAgentVersion) ? localAgentVersion : ((import.meta.env.VITE_AGENT_VERSION as string | undefined) ?? version)}</span>
+            {/* Version display removed — was unreliable across cloud/agent builds */}
           </div>
         </footer>
       </main>

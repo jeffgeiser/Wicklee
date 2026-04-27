@@ -2166,7 +2166,74 @@ const AIInsights: React.FC<AIInsightsProps> = ({
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'performance' && (
             <>
-              {/* Row 1: WES Leaderboard (cloud) / Model Efficiency (local) + Benchmarks */}
+              {/* Model Fit Analysis — two-dimensional memory + efficiency fit */}
+              {canViewInsight(10) && effectiveNodes.length > 0 ? (
+                <ModelFitAnalysis
+                  node={effectiveNodes[0]}
+                  nodes={effectiveNodes}
+                  fleetView={!isLocalHost && effectiveNodes.length > 1}
+                  onNavigateToPerformance={() => setActiveTab('performance')}
+                  systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
+                />
+              ) : canViewInsight(10) ? (
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                  <Cpu className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Silicon Fit Audit</p>
+                    <p className="text-xs text-gray-700 mt-0.5">No model loaded — load a model to see silicon fit analysis.</p>
+                  </div>
+                </div>
+              ) : (
+                <InsightsTeaseCard
+                  title="Silicon Fit Audit"
+                  icon={<Cpu className="w-3.5 h-3.5" />}
+                  tierRequired="team"
+                  upgradeCopy="View detailed benchmarks on Team →"
+                  liveContent={
+                    <p className="text-xs text-gray-600">
+                      Live efficiency metrics available — load a model to see silicon fit analysis.
+                    </p>
+                  }
+                />
+              )}
+
+              {/* Model Discovery — GGUF models scored against local hardware */}
+              {isLocalHost && <ModelDiscoveryCard isLocalHost={isLocalHost} />}
+
+              {/* Fleet Model Discovery — HF GGUF models scored against each fleet node (cloud only) */}
+              {!isLocalHost && getToken && (
+                <FleetModelDiscovery getToken={getToken} />
+              )}
+
+              {/* Localhost: Performance History from DuckDB (1h window) */}
+              {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}
+
+              {/* Localhost: Inference Profiler — correlated TTFT/KV/Queue/Thermal/Power timeline */}
+              {isLocalHost && <InferenceProfiler />}
+
+              {/* WES Trend Chart (cloud only) */}
+              {!isLocalHost && getToken && (
+                <WESHistoryChart
+                  getToken={getToken}
+                  historyDays={historyDays}
+                  subscriptionTier={subscriptionTier}
+                  selectedNodeId={perfNodeId}
+                  onNodeSelect={setPerfNodeId}
+                />
+              )}
+
+              {/* Performance History — Tok/s · Power · GPU% · Mem% (cloud only) */}
+              {!isLocalHost && getToken && (
+                <MetricsHistoryChart
+                  getToken={getToken}
+                  historyDays={historyDays}
+                  subscriptionTier={subscriptionTier}
+                  selectedNodeId={perfNodeId}
+                  onNodeSelect={setPerfNodeId}
+                />
+              )}
+
+              {/* Bottom row: Model Efficiency / WES Leaderboard + Fleet Benchmarks */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
                 {/* Localhost: Model Efficiency summary (replaces WES Leaderboard) */}
@@ -2262,73 +2329,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
 
               </div>
-
-              {/* Model Fit Analysis — two-dimensional memory + efficiency fit */}
-              {canViewInsight(10) && effectiveNodes.length > 0 ? (
-                <ModelFitAnalysis
-                  node={effectiveNodes[0]}
-                  nodes={effectiveNodes}
-                  fleetView={!isLocalHost && effectiveNodes.length > 1}
-                  onNavigateToPerformance={() => setActiveTab('performance')}
-                  systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
-                />
-              ) : canViewInsight(10) ? (
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
-                  <Cpu className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Silicon Fit Audit</p>
-                    <p className="text-xs text-gray-700 mt-0.5">No model loaded — load a model to see silicon fit analysis.</p>
-                  </div>
-                </div>
-              ) : (
-                <InsightsTeaseCard
-                  title="Silicon Fit Audit"
-                  icon={<Cpu className="w-3.5 h-3.5" />}
-                  tierRequired="team"
-                  upgradeCopy="View detailed benchmarks on Team →"
-                  liveContent={
-                    <p className="text-xs text-gray-600">
-                      Live efficiency metrics available — load a model to see silicon fit analysis.
-                    </p>
-                  }
-                />
-              )}
-
-              {/* Model Discovery — GGUF models scored against local hardware */}
-              {isLocalHost && <ModelDiscoveryCard isLocalHost={isLocalHost} />}
-
-              {/* Fleet Model Discovery — HF GGUF models scored against each fleet node (cloud only) */}
-              {!isLocalHost && getToken && (
-                <FleetModelDiscovery getToken={getToken} />
-              )}
-
-              {/* Localhost: Performance History from DuckDB (1h window) */}
-              {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}
-
-              {/* Localhost: Inference Profiler — correlated TTFT/KV/Queue/Thermal/Power timeline */}
-              {isLocalHost && <InferenceProfiler />}
-
-              {/* WES Trend Chart (cloud only) */}
-              {!isLocalHost && getToken && (
-                <WESHistoryChart
-                  getToken={getToken}
-                  historyDays={historyDays}
-                  subscriptionTier={subscriptionTier}
-                  selectedNodeId={perfNodeId}
-                  onNodeSelect={setPerfNodeId}
-                />
-              )}
-
-              {/* Performance History — Tok/s · Power · GPU% · Mem% (cloud only) */}
-              {!isLocalHost && getToken && (
-                <MetricsHistoryChart
-                  getToken={getToken}
-                  historyDays={historyDays}
-                  subscriptionTier={subscriptionTier}
-                  selectedNodeId={perfNodeId}
-                  onNodeSelect={setPerfNodeId}
-                />
-              )}
 
               {/* Benchmark Report removed — accessible via Fleet Benchmarks hexagon click */}
             </>
