@@ -80,6 +80,7 @@ import WESHistoryChart from './WESHistoryChart';
 import MetricsHistoryChart from './MetricsHistoryChart';
 import ObservationCard from './insights/ObservationCard';
 import AccordionObservationCard from './insights/AccordionObservationCard';
+import FleetObservationCard from './insights/FleetObservationCard';
 import CompactMonitoringStrip from './insights/CompactMonitoringStrip';
 import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
@@ -1849,108 +1850,19 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   {serverObservations
                     .filter(o => showResolved || o.state === 'open')
                     .map(obs => {
-                      const isCritical = obs.severity === 'critical';
-                      const isOpen     = obs.state === 'open';
-                      const isAcked    = obs.state === 'acknowledged';
-                      const nodeHost   = effectiveNodes.find(n => n.node_id === obs.node_id)?.hostname ?? obs.node_id;
-                      let ctx: Record<string, unknown> = {};
-                      try { if (obs.context_json) ctx = JSON.parse(obs.context_json); } catch {}
-
+                      const nodeHost = effectiveNodes.find(n => n.node_id === obs.node_id)?.hostname ?? obs.node_id;
                       return (
-                        <div
+                        <FleetObservationCard
                           key={obs.id}
-                          className={`rounded-2xl border p-4 transition-all ${
-                            !isOpen
-                              ? 'border-gray-800/40 bg-gray-900/30 opacity-60'
-                              : isCritical
-                              ? 'border-red-500/30 bg-red-500/5'
-                              : 'border-amber-500/30 bg-amber-500/5'
-                          }`}
-                        >
-                          {/* Header */}
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${
-                              !isOpen ? 'bg-gray-600' : isCritical ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
-                            }`} />
-                            <span className={`text-[9px] font-bold uppercase tracking-widest ${
-                              !isOpen ? 'text-gray-500' : isCritical ? 'text-red-400/80' : 'text-amber-400/80'
-                            }`}>
-                              {obs.severity}
-                            </span>
-                            <span className="ml-auto text-[9px] text-gray-600 font-mono">
-                              {nodeHost}
-                            </span>
-                            {!isOpen && (
-                              <span className="text-[9px] text-green-500/70 flex items-center gap-1">
-                                <CheckCircle className="w-3 h-3" />
-                                {isAcked ? 'Acknowledged' : 'Resolved'}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Title + Detail */}
-                          <p className={`text-sm font-semibold ${isOpen ? 'text-gray-200' : 'text-gray-500'}`}>
-                            {obs.title}
-                          </p>
-                          <p className={`text-xs mt-1 leading-relaxed ${isOpen ? 'text-gray-400' : 'text-gray-600'}`}>
-                            {obs.detail.replace(/~0 min/g, 'imminent')}
-                          </p>
-
-                          {/* Context chips — formatted, debug fields filtered */}
-                          {Object.keys(ctx).length > 0 && (() => {
-                            const chips = Object.entries(ctx)
-                              .filter(([k, v]) => {
-                                if (v == null) return false;
-                                // Hide internal debug counters when they carry no signal
-                                if (k === 'hot_ticks' && (v === 0 || v === '0')) return false;
-                                return true;
-                              })
-                              .slice(0, 5);
-                            if (chips.length === 0) return null;
-                            return (
-                              <div className="flex flex-wrap gap-1.5 mt-2">
-                                {chips.map(([k, v]) => {
-                                  // Format floats to 1 decimal place
-                                  const raw = String(v);
-                                  const asNum = Number(raw);
-                                  const display = !isNaN(asNum) && raw.includes('.')
-                                    ? asNum.toFixed(1)
-                                    : raw;
-                                  return (
-                                    <span key={k} className="text-[9px] px-1.5 py-0.5 rounded bg-gray-800/80 text-gray-500 font-mono">
-                                      {k.replace(/_/g, ' ')}: {display}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            );
-                          })()}
-
-                          {/* Action row */}
-                          <div className="flex items-center gap-3 mt-3">
-                            {isOpen && (
-                              <button
-                                onClick={() => acknowledgeObs(obs.id)}
-                                className="text-[10px] text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-1"
-                              >
-                                <CheckCircle className="w-3 h-3" />
-                                Acknowledge
-                              </button>
-                            )}
-                            {onNavigateToObservability && (
-                              <button
-                                onClick={() => onNavigateToObservability({ nodeId: obs.node_id, centerMs: obs.fired_at_ms })}
-                                className="text-[10px] text-indigo-400/60 hover:text-indigo-400 transition-colors flex items-center gap-1"
-                              >
-                                <Activity className="w-3 h-3" />
-                                View in Timeline →
-                              </button>
-                            )}
-                            <span className="ml-auto text-[9px] text-gray-700 font-mono">
-                              {new Date(obs.fired_at_ms).toLocaleTimeString()}
-                            </span>
-                          </div>
-                        </div>
+                          obs={obs}
+                          hostname={nodeHost}
+                          onAcknowledge={() => acknowledgeObs(obs.id)}
+                          onViewInTimeline={
+                            onNavigateToObservability
+                              ? () => onNavigateToObservability({ nodeId: obs.node_id, centerMs: obs.fired_at_ms })
+                              : undefined
+                          }
+                        />
                       );
                     })}
                 </div>
