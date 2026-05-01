@@ -3751,6 +3751,13 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
         let Some((model_id, downloads, files)) = task.await.unwrap_or(None) else { continue };
         repo_count += 1;
 
+        // Wipe all existing rows for this model_id before re-inserting.
+        // Required because the refresh logic changed (shards aggregated into
+        // canonical filenames). Old per-shard rows from previous catalog runs
+        // would otherwise persist alongside the new canonical rows.
+        let _ = sqlx::query("DELETE FROM model_catalog WHERE model_id = $1")
+            .bind(&model_id).execute(pool).await;
+
         // Group GGUF files by variant key so multi-part shards
         // (e.g. "model-Q4_K_M-00001-of-00003.gguf", "...00002-of-00003.gguf")
         // are summed into a single catalog entry representing the full model size.
