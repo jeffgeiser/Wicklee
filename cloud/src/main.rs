@@ -6890,25 +6890,22 @@ async fn main() {
     tokio::spawn(nightly_task(pool.clone()));
     // Populate model_catalog on startup so fleet discovery works immediately
     // after a fresh Railway deploy (nightly task only runs at 3 AM UTC).
+    // Always runs — schema/aggregation logic can change between deploys, and the
+    // refresh loop wipes per-repo rows before re-inserting (DELETE + INSERT).
     tokio::spawn({
         let pool2 = pool.clone();
         async move {
             // Short delay so the server is fully up before hitting HF.
             tokio::time::sleep(Duration::from_secs(5)).await;
-            // Only refresh if catalog is empty.
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_catalog")
+            let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_catalog")
                 .fetch_one(&pool2).await.unwrap_or(0);
-            if count == 0 {
-                eprintln!("[startup] model_catalog empty — running initial HF catalog fetch");
-                let inserted = refresh_cloud_model_catalog(&pool2).await;
-                // Retry if no rows were actually written (HF rate-limit or pool contention at startup).
-                if inserted == 0 {
-                    eprintln!("[startup] 0 variants written — retrying catalog fetch in 90s");
-                    tokio::time::sleep(Duration::from_secs(90)).await;
-                    refresh_cloud_model_catalog(&pool2).await;
-                }
-            } else {
-                eprintln!("[startup] model_catalog has {count} entries — skipping initial fetch");
+            eprintln!("[startup] model_catalog has {existing} entries — running refresh to apply latest aggregation logic");
+            let inserted = refresh_cloud_model_catalog(&pool2).await;
+            // Retry if no rows were written (HF rate-limit or pool contention at startup).
+            if inserted == 0 {
+                eprintln!("[startup] 0 variants written — retrying catalog fetch in 90s");
+                tokio::time::sleep(Duration::from_secs(90)).await;
+                refresh_cloud_model_catalog(&pool2).await;
             }
         }
     });
