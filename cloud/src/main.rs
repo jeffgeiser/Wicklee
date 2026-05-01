@@ -3867,6 +3867,9 @@ fn hardware_profile(name: &str) -> Option<(u64, f32)> {
 /// a Q4_K_M with 30 % headroom beats an IQ1_M with 90 % headroom.
 fn quant_quality_factor(quant: &str) -> f32 {
     let q = quant.to_lowercase();
+    // Strip Unsloth's "UD-" (Ultra-Dense) prefix before pattern matching so
+    // "UD-IQ2_M" is penalised the same as "IQ2_M".
+    let q = q.strip_prefix("ud-").unwrap_or(&q);
     if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.0; }  // unusable
     if q.starts_with("iq2") || q.starts_with("q2")      { return 0.4; }  // very lossy
     if q.starts_with("iq3") || q.starts_with("q3")      { return 0.7; }  // lossy
@@ -3925,11 +3928,26 @@ fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, _power_w: f32, thermal: &
 }
 
 /// Parse a quant level from a GGUF filename (mirrors agent-side logic).
+///
+/// Strict matching: prefix alone is not enough — must match a real quant pattern.
+/// This avoids false positives like "FLASH" from `Flash-Heretic` or "QWEN3" from
+/// `Qwen3.5-9B`. Recognised forms:
+///   Q[1-9]            → Q1, Q2, ..., Q8 (with optional _K, _K_M, _0, _XL, _P, etc.)
+///   IQ[1-9]           → IQ1, IQ2, ..., IQ4 (with optional _S, _M, _XS, _XXS, _NL)
+///   F16 | F32         → half / full float
+///   BF16 | BF32       → bfloat
+///   MXFP[0-9]         → MXFP4_MOE, etc.
 fn parse_gguf_quant(filename: &str) -> String {
     let stem = filename.strip_suffix(".gguf").unwrap_or(filename);
-    let is_quant = |s: &str| {
+    let is_quant = |s: &str| -> bool {
         let u = s.to_ascii_uppercase();
-        u.starts_with('Q') || u.starts_with("IQ") || u.starts_with('F') || u.starts_with("BF") || u.starts_with("MXFP")
+        // Strict patterns: prefix MUST be followed by a digit or known marker.
+        if u.starts_with("MXFP") && u.len() > 4 && u.as_bytes()[4].is_ascii_digit() { return true; }
+        if u.starts_with("BF") && u.len() > 2 && u.as_bytes()[2].is_ascii_digit() { return true; }
+        if u.starts_with("IQ") && u.len() > 2 && u.as_bytes()[2].is_ascii_digit() { return true; }
+        if u.starts_with('Q') && u.len() > 1 && u.as_bytes()[1].is_ascii_digit() { return true; }
+        if u == "F16" || u == "F32" { return true; }
+        false
     };
     for seg in stem.rsplit('.') {
         if is_quant(seg) { return seg.to_ascii_uppercase(); }
