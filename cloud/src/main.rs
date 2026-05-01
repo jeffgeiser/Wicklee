@@ -3773,6 +3773,18 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
             if file_size == 0 { continue; }
             let filename = path.rsplit('/').next().unwrap_or(path).to_string();
 
+            // Skip non-model GGUF files: mmproj (vision adapters), tokenizer-only,
+            // imatrix calibration files, draft models for speculative decoding.
+            // These are commonly bundled with multimodal repos but aren't standalone runnable.
+            let lower = filename.to_lowercase();
+            if lower.contains("mmproj")
+                || lower.contains("projector")
+                || lower.contains("imatrix")
+                || lower.starts_with("tokenizer")
+                || lower.contains(".draft.")
+                || lower.contains("-draft-")
+            { continue; }
+
             // Detect shard pattern: "...-NNNNN-of-MMMMM.gguf"
             // Returns Some(canonical_filename_without_shard_suffix) when sharded.
             let canonical = {
@@ -3796,11 +3808,12 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
             let key = canonical.clone().unwrap_or_else(|| filename.clone());
             let canonical_filename = canonical.unwrap_or_else(|| filename.clone());
 
-            let quant_owned = canonical_filename.strip_suffix(".gguf")
-                .and_then(|s| s.rfind('.').map(|i| &s[i+1..]))
-                .filter(|q| q.starts_with('Q') || q.starts_with("IQ") || q.starts_with('F') || q.starts_with("BF"))
-                .unwrap_or("unknown")
-                .to_string();
+            // Use the proper parser that handles BOTH dash- and dot-separated quant names.
+            // The previous inline parser only handled dot-separated (model.Q4_K_M.gguf),
+            // missing the dominant modern HF format (model-Q4_K_M.gguf) — leaving every
+            // entry tagged "unknown" so the quant_quality_factor returned 1.0 (full credit)
+            // and never penalized low-quality quants.
+            let quant_owned = parse_gguf_quant(&canonical_filename);
 
             variants.entry(key)
                 .and_modify(|v| v.total_size += file_size)
