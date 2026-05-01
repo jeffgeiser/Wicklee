@@ -3750,26 +3750,70 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
     for task in tasks {
         let Some((model_id, downloads, files)) = task.await.unwrap_or(None) else { continue };
         repo_count += 1;
+
+        // Group GGUF files by variant key so multi-part shards
+        // (e.g. "model-Q4_K_M-00001-of-00003.gguf", "...00002-of-00003.gguf")
+        // are summed into a single catalog entry representing the full model size.
+        // Single-file variants pass through unchanged.
+        // Variant key = filename with the "-NNNNN-of-MMMMM" suffix stripped.
+        struct VariantAgg { canonical_filename: String, total_size: i64, quant: String }
+        let mut variants: std::collections::HashMap<String, VariantAgg> = std::collections::HashMap::new();
+
         for file in &files {
             let path = file["path"].as_str().unwrap_or("");
             if !path.ends_with(".gguf") { continue; }
             let file_size = file["size"].as_i64().unwrap_or(0);
             if file_size == 0 { continue; }
-            let filename = path.rsplit('/').next().unwrap_or(path);
-            let quant = filename.strip_suffix(".gguf")
+            let filename = path.rsplit('/').next().unwrap_or(path).to_string();
+
+            // Detect shard pattern: "...-NNNNN-of-MMMMM.gguf"
+            // Returns Some(canonical_filename_without_shard_suffix) when sharded.
+            let canonical = {
+                let stem = filename.strip_suffix(".gguf").unwrap_or(&filename);
+                if let Some(of_idx) = stem.rfind("-of-") {
+                    let after_of = &stem[of_idx+4..];
+                    let total_str: String = after_of.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if !total_str.is_empty() {
+                        let before_of = &stem[..of_idx];
+                        if let Some(dash_idx) = before_of.rfind('-') {
+                            let shard_str = &before_of[dash_idx+1..];
+                            if shard_str.chars().all(|c| c.is_ascii_digit()) && !shard_str.is_empty() {
+                                // Strip "-NNNNN-of-MMMMM" → use "<base>.gguf" as canonical
+                                Some(format!("{}.gguf", &before_of[..dash_idx]))
+                            } else { None }
+                        } else { None }
+                    } else { None }
+                } else { None }
+            };
+
+            let key = canonical.clone().unwrap_or_else(|| filename.clone());
+            let canonical_filename = canonical.unwrap_or_else(|| filename.clone());
+
+            let quant_owned = canonical_filename.strip_suffix(".gguf")
                 .and_then(|s| s.rfind('.').map(|i| &s[i+1..]))
                 .filter(|q| q.starts_with('Q') || q.starts_with("IQ") || q.starts_with('F') || q.starts_with("BF"))
-                .unwrap_or("unknown");
+                .unwrap_or("unknown")
+                .to_string();
 
+            variants.entry(key)
+                .and_modify(|v| v.total_size += file_size)
+                .or_insert(VariantAgg {
+                    canonical_filename: canonical_filename.clone(),
+                    total_size: file_size,
+                    quant: quant_owned,
+                });
+        }
+
+        for (_key, v) in variants {
             match sqlx::query(
                 "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (model_id, filename) DO UPDATE SET
                    file_size = EXCLUDED.file_size, downloads = EXCLUDED.downloads, fetched_at = NOW()"
-            ).bind(&model_id).bind(filename).bind(quant).bind(file_size).bind(downloads)
+            ).bind(&model_id).bind(&v.canonical_filename).bind(&v.quant).bind(v.total_size).bind(downloads)
             .execute(pool).await {
                 Ok(_)  => count += 1,
-                Err(e) => eprintln!("[model-catalog] insert failed for {model_id}/{filename}: {e}"),
+                Err(e) => eprintln!("[model-catalog] insert failed for {model_id}/{}: {e}", v.canonical_filename),
             }
         }
     }
