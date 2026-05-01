@@ -814,6 +814,7 @@ fn allowed_patterns_for_tier(tier: &str) -> Vec<String> {
         "power_gpu_decoupling", "bandwidth_saturation", "efficiency_drag",
         "vllm_kv_cache_saturation", "nvidia_thermal_redline",
         "ttft_regression", "latency_spike", "vllm_queue_saturation",
+        "bandwidth_ceiling_reached",
     ];
 
     let mut allowed: Vec<String> = cloud_alerts.into_iter().map(String::from).collect();

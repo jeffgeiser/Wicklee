@@ -9,7 +9,7 @@
 If you are an AI agent or LLM reviewing Wicklee, read these files in order:
 1. **This file** (llms.txt) — overview, API endpoints, key metrics
 2. **[llms-full.txt](https://wicklee.dev/llms-full.txt)** — complete reference with JSON schemas, all endpoints with examples
-3. **[docs.md](https://wicklee.dev/docs.md)** — full documentation: WES formula, inference states, 18 patterns, alerting, MCP tools, proxy, OTel
+3. **[docs.md](https://wicklee.dev/docs.md)** — full documentation: WES formula, inference states, 19 patterns, alerting, MCP tools, proxy, OTel
 4. **[api.md](https://wicklee.dev/api.md)** — API reference with endpoint tables and response examples
 5. **[metrics.md](https://wicklee.dev/metrics.md)** — dashboard metrics, visual indicators, formulas
 6. **[openapi.json](https://wicklee.dev/openapi.json)** — OpenAPI 3.0 spec for structured integration
@@ -27,7 +27,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 
 - `GET /api/metrics` — SSE stream, 1 Hz telemetry
 - `GET /ws` — WebSocket, 1 Hz telemetry (same payload as SSE, fallback transport)
-- `GET /api/observations` — 17 server-side observation patterns (10-min DuckDB buffer)
+- `GET /api/observations` — 18 server-side observation patterns (10-min DuckDB buffer)
 - `GET /api/profile?minutes=60` — Inference Profiler: correlated TTFT/KV/queue/thermal/power timeline
 - `GET /api/cost-by-model?hours=24` — Cost attribution per model (daily breakdown)
 - `GET /api/explain-slowdown?ts_ms=N` — Root cause analysis for slow inference requests
@@ -49,7 +49,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `get_node_status` — Full hardware + inference metrics snapshot
 - `get_inference_state` — Live/idle/busy state with sensor context
 - `get_active_models` — Running models with context_length, parameter_count, quantization, tok/s
-- `get_observations` — 17 patterns with routing_hint (steer_away/reduce_batch/monitor) per observation + node-level aggregate
+- `get_observations` — 18 patterns with routing_hint (steer_away/reduce_batch/monitor) per observation + node-level aggregate
 - `get_metrics_history` — 1-hour rolling telemetry buffer
 
 ### MCP Resources
@@ -105,14 +105,14 @@ Singular fields (ollama_active_model, ollama_tokens_per_second) report most-rece
 - `ollama_ttft_ms`: Time to first token (Ollama probe baseline)
 - `vllm_avg_ttft_ms`: Time to first token (vLLM production histogram)
 
-## 18 Observation Patterns + 5 Fleet Alerts
+## 19 Observation Patterns + 5 Fleet Alerts
 
-Agent-evaluated (17 patterns, 10-min DuckDB buffer, every 10s):
+Agent-evaluated (18 patterns, 10-min DuckDB buffer, every 10s):
 Community (9): thermal_drain, phantom_load, wes_velocity_drop, memory_trajectory,
 power_jitter, swap_io_pressure, clock_drift, nvidia_thermal_redline, vram_overcommit
-Pro (8): power_gpu_decoupling, bandwidth_saturation, efficiency_drag,
+Pro (9): power_gpu_decoupling, bandwidth_saturation, efficiency_drag,
 pcie_lane_degradation, vllm_kv_cache_saturation, ttft_regression, latency_spike,
-vllm_queue_saturation
+vllm_queue_saturation, bandwidth_ceiling_reached
 
 Cloud-evaluated (1 pattern): fleet_load_imbalance (Pro)
 
@@ -128,7 +128,7 @@ wes_cliff, agent_version_mismatch
 ## Pricing
 
 - Community: Free forever, 3 nodes, 24h history, 9 patterns, local MCP, Ollama proxy
-- Pro: $29/mo, 10 nodes, 7-day history, 18 patterns, Slack+Email alerts, custom thresholds
+- Pro: $29/mo, 10 nodes, 7-day history, 19 patterns, Slack+Email alerts, custom thresholds
 - Team: $49/seat/mo, 25 nodes (+$2/node over 25), 90-day history, shared dashboards, PagerDuty, Cloud MCP, OTel+Prometheus
 - Business: $499/mo, unlimited seats, 100 nodes, 365-day history, everything in Team + SSO/SAML + audit logging
 - Enterprise: Contact sales, unlimited nodes, sovereign deployment, custom SLA

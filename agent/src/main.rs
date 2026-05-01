@@ -3340,7 +3340,8 @@ pub(crate) fn routing_hint_for(pattern_id: &str, severity: &str) -> &'static str
         | ("ttft_regression", _) | ("latency_spike", _) | ("power_jitter", _) => "reduce_batch",
         // Patterns that indicate monitoring but node is still usable
         ("wes_velocity_drop", _) | ("memory_trajectory", _) | ("clock_drift", _)
-        | ("efficiency_drag", _) | ("power_gpu_decoupling", _) => "monitor",
+        | ("efficiency_drag", _) | ("power_gpu_decoupling", _)
+        | ("bandwidth_ceiling_reached", _) => "monitor",
         // Everything else (phantom_load, pcie_lane_degradation)
         _ => "monitor",
     }
@@ -4690,6 +4691,171 @@ fn evaluate_vram_overcommit(
         action_id:        "switch_quantization",
         confidence:       "high",
         confidence_ratio: 1.0,
+        first_fired_ms:   now_ms,
+        node_id:          node_id.into(),
+        hostname:         hostname.into(),
+    })
+}
+
+// ── Pattern: Bandwidth Ceiling Reached ───────────────────────────────────────
+// Informational pattern that explains low tok/W as physics rather than
+// pathology.  When a node is decoding at ≥65 % of its theoretical
+// memory-bandwidth ceiling for the loaded model + quant, "Low efficiency"
+// is the expected steady state at batch=1 — fire this so the dashboard
+// stops nagging the user to fix something that isn't broken.
+
+/// Memory bandwidth in GB/s for known hardware.
+/// System (unified) memory bandwidth for Apple Silicon and DGX Spark;
+/// VRAM bandwidth for discrete GPUs.  Returns None on unknown hardware
+/// so the pattern never fires with a guessed ceiling.
+#[cfg(not(target_env = "musl"))]
+fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<&str>) -> Option<f32> {
+    let key = format!(
+        "{} {}",
+        gpu_name.unwrap_or(""),
+        chip_name.unwrap_or(""),
+    ).to_lowercase();
+    if key.trim().is_empty() { return None; }
+    // Match longest names first to avoid e.g. "m4 max" being shadowed by "m4".
+    if key.contains("m3 ultra")  { return Some(819.0); }
+    if key.contains("m2 ultra")  { return Some(800.0); }
+    if key.contains("m4 max")    { return Some(546.0); }
+    if key.contains("m3 max")    { return Some(400.0); }
+    if key.contains("m2 max")    { return Some(400.0); }
+    if key.contains("m1 max")    { return Some(400.0); }
+    if key.contains("m4 pro")    { return Some(273.0); }
+    if key.contains("m3 pro")    { return Some(150.0); }
+    if key.contains("m2 pro")    { return Some(200.0); }
+    if key.contains("m1 pro")    { return Some(200.0); }
+    if key.contains("m4")        { return Some(120.0); }   // base M4
+    if key.contains("m3")        { return Some(100.0); }   // base M3
+    if key.contains("m2")        { return Some(100.0); }   // base M2
+    if key.contains("m1")        { return Some(68.0); }    // base M1
+    if key.contains("gb10") || key.contains("spark") { return Some(273.0); } // DGX Spark
+    if key.contains("h200")      { return Some(4800.0); }
+    if key.contains("h100")      { return Some(3350.0); }
+    if key.contains("a100 80")   { return Some(2039.0); }
+    if key.contains("a100")      { return Some(1555.0); }
+    if key.contains("rtx 5090")  { return Some(1792.0); }
+    if key.contains("rtx 4090")  { return Some(1008.0); }
+    if key.contains("rtx 4080")  { return Some(717.0); }
+    if key.contains("rtx 3090")  { return Some(936.0); }
+    if key.contains("rtx 3080")  { return Some(760.0); }
+    if key.contains("l40s")      { return Some(864.0); }
+    if key.contains("l4")        { return Some(300.0); }
+    None
+}
+
+/// Approximate bytes-per-weight for a given quant string.
+/// Mirrors `quant_quality_factor` in the cloud — strips "UD-" prefix,
+/// handles GGUF (Q*/IQ*) and full-precision tags (FP8/FP16/BF16/F32).
+#[cfg(not(target_env = "musl"))]
+fn bytes_per_weight(quant: &str) -> f32 {
+    let q = quant.to_lowercase();
+    let q = q.strip_prefix("ud-").unwrap_or(&q);
+    if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.25; }
+    if q.starts_with("iq2") || q.starts_with("q2")      { return 0.34; }
+    if q.starts_with("iq3") || q.starts_with("q3")      { return 0.45; }
+    if q.starts_with("q4")  || q.starts_with("iq4")     { return 0.56; }
+    if q.starts_with("q5")  { return 0.69; }
+    if q.starts_with("q6")  { return 0.82; }
+    if q.starts_with("q8") || q == "fp8" || q == "int8" { return 1.0; }
+    if q.starts_with("f16") || q == "bf16" || q.starts_with("fp16") { return 2.0; }
+    if q.starts_with("f32") || q.starts_with("fp32") { return 4.0; }
+    1.0  // conservative default — same as Q8/FP8
+}
+
+#[cfg(not(target_env = "musl"))]
+fn evaluate_bandwidth_ceiling(
+    samples:   &[store::ObsSample],
+    ollama:    &OllamaMetrics,
+    nvidia:    &NvidiaMetrics,
+    apple:     &AppleSiliconMetrics,
+    chip_name: Option<&str>,
+    node_id:   &str,
+    hostname:  &str,
+) -> Option<LocalObservation> {
+    // Need the model context: parameter count + quant (from Ollama enrichment).
+    // vLLM models don't yet carry param_count in payload, so this fires for
+    // Ollama runs today.  Phase 2: extend to vLLM via runtime probe.
+    let param_count = ollama.ollama_parameter_count? as f32;
+    if param_count < 1e9 { return None; }   // tiny models aren't bandwidth-bound on any GPU
+    let quant = ollama.ollama_quantization.as_deref().unwrap_or("q4_k_m");
+    let bpw = bytes_per_weight(quant);
+    let model_size_gb = param_count * bpw / 1e9;
+    if model_size_gb < 0.5 { return None; }
+
+    // Hardware bandwidth.
+    let gpu_name_owned: Option<String> = nvidia
+        .nvidia_gpu_name.clone()
+        .or_else(|| apple.gpu_name.clone());
+    let bandwidth_gbps = hardware_bandwidth_gbps(
+        gpu_name_owned.as_deref(),
+        chip_name,
+    )?;
+    let theoretical_max_tps = bandwidth_gbps / model_size_gb;
+    if theoretical_max_tps <= 0.0 { return None; }
+
+    // Need at least 5 minutes of sustained inference samples to fire confidently.
+    let now_ms = now_ms() as i64;
+    let cutoff = now_ms - 300_000_i64;
+    let live_samples: Vec<&store::ObsSample> = samples.iter()
+        .filter(|s| s.ts_ms >= cutoff)
+        .filter(|s| s.tps.is_some_and(|t| t > 0.5))
+        .collect();
+    if live_samples.len() < 30 { return None; }   // 30 × 10s ~= 5 min
+
+    let tps_vals:  Vec<f64> = live_samples.iter().filter_map(|s| s.tps).collect();
+    let observed_tps_p50 = obs_mean(&tps_vals);
+    if observed_tps_p50 <= 0.0 { return None; }
+
+    let utilization = observed_tps_p50 / theoretical_max_tps as f64;
+    if utilization < 0.65 { return None; }   // not bandwidth-bound — something else limits
+
+    // Confirmation: GPU not pegged at 100% (compute-bound is a different story —
+    // the bandwidth_saturation pattern handles compute-stalled-on-memory cases).
+    let gpu_vals: Vec<f64> = live_samples.iter().filter_map(|s| s.gpu_util_pct).collect();
+    let gpu_p50 = if gpu_vals.is_empty() { 0.0 } else { obs_mean(&gpu_vals) };
+    if gpu_p50 > 95.0 { return None; }
+
+    // Build human-readable strings.
+    let confidence = if utilization >= 0.75 { "high" } else { "moderate" };
+    let confidence_ratio: f64 = utilization.min(1.0);
+    let model_name = ollama.ollama_active_model.clone()
+        .unwrap_or_else(|| "active model".to_string());
+    let hw_label = gpu_name_owned
+        .or_else(|| chip_name.map(str::to_string))
+        .unwrap_or_else(|| "this hardware".to_string());
+
+    Some(LocalObservation {
+        pattern_id:       "bandwidth_ceiling_reached",
+        severity:         "info",
+        title:            "Memory-Bandwidth Ceiling Reached".into(),
+        hook:             format!(
+            "{:.1} tok/s · {:.0}% of {:.1} tok/s ceiling",
+            observed_tps_p50, utilization * 100.0, theoretical_max_tps,
+        ),
+        body:             format!(
+            "{hostname} is decoding {model_name} at {observed_tps_p50:.1} tok/s — \
+             {pct:.0}% of the theoretical memory-bandwidth ceiling for {hw_label} \
+             ({model_size_gb:.1} GB resident weights at {quant}, \
+             {bandwidth_gbps:.0} GB/s memory bandwidth). The 'Low' tok/W reading is \
+             expected: at batch=1, fixed GPU baseline power dominates and efficiency \
+             cannot improve without changing quant or batch size. The node is healthy.",
+            pct = utilization * 100.0,
+        ),
+        recommendation:   "This is normal for batch=1 decode. To increase tok/s: \
+                          drop to a smaller quant (e.g. Q4_K_M). To increase tok/W: \
+                          raise concurrent batch size — fixed power baseline \
+                          amortises across requests.".into(),
+        resolution_steps: vec![
+            "If interactive latency matters: switch to a Q4_K_M GGUF (~2× tok/s, modest quality cost)".into(),
+            "If serving multiple users: raise batch size with vLLM `--max-num-seqs 8` or higher".into(),
+            "If quality is paramount: leave as-is — you are at the physics ceiling for this hardware/quant pair".into(),
+        ],
+        action_id:        "bandwidth_ceiling_info",
+        confidence,
+        confidence_ratio,
         first_fired_ms:   now_ms,
         node_id:          node_id.into(),
         hostname:         hostname.into(),
@@ -6864,6 +7030,9 @@ async fn main() {
                     let apple_clone  = Arc::clone(&apple_metrics);
                     let node_id_clone = config.node_id.clone();
                     let obs_cache = Arc::clone(&observation_cache);
+                    // Cache the Linux CPU model once — never changes at runtime.
+                    // Used by `bandwidth_ceiling_reached` to look up memory bandwidth.
+                    let linux_chip_name_obs = read_linux_chip_name();
                     tokio::spawn(async move {
                         // Wait for DuckDB to accumulate a few samples before first eval.
                         tokio::time::sleep(Duration::from_secs(15)).await;
@@ -6880,12 +7049,23 @@ async fn main() {
                                 link_max_width: nv.pcie_link_max_width,
                             };
                             let hostname = System::host_name().unwrap_or_else(|| nid.clone());
+                            let chip_name_for_obs = linux_chip_name_obs.clone();
                             let result = tokio::task::spawn_blocking(move || {
                                 match st.query_observation_window(&nid, 600_000) {
                                     Ok(samples) => {
                                         let mut obs = evaluate_local_observations(&samples, &pcie, &nid, &hostname);
                                         // Pattern O — VRAM Overcommit (point-in-time, no history needed)
                                         if let Some(o) = evaluate_vram_overcommit(&ol, &nv, &ap, &nid, &hostname) {
+                                            obs.push(o);
+                                        }
+                                        // Pattern: Bandwidth Ceiling Reached — physics-explanation
+                                        // pattern that suppresses the false-positive "Low efficiency"
+                                        // narrative when a node is at its memory-bandwidth ceiling.
+                                        if let Some(o) = evaluate_bandwidth_ceiling(
+                                            &samples, &ol, &nv, &ap,
+                                            chip_name_for_obs.as_deref(),
+                                            &nid, &hostname,
+                                        ) {
                                             obs.push(o);
                                         }
                                         Some(obs)

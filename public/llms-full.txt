@@ -42,7 +42,7 @@ SSE stream. 1 Hz cadence. Returns `data: {MetricsPayload}\n\n` per tick.
 WebSocket. 1 Hz cadence. Same MetricsPayload as SSE. Fallback transport — browser tries WebSocket first, falls back to SSE if unavailable.
 
 ### GET /api/observations
-Returns 17 server-side observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds. Patterns are pushed to the fleet cloud when paired.
+Returns 18 server-side observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds. Patterns are pushed to the fleet cloud when paired.
 ```json
 { "observations": [{ "pattern_id": "thermal_drain", "severity": "warning", ... }] }
 ```
@@ -138,7 +138,7 @@ Tools:
 - `get_node_status` — Full MetricsPayload snapshot (~60 fields: CPU, GPU, memory, power, thermal, inference state, model, WES penalty, tok/s)
 - `get_inference_state` — Current inference state (live/idle-spd/busy/idle) with which detection tier matched and sensor values
 - `get_active_models` — List of loaded models across Ollama (model, size, quantization, tok/s), vLLM (model, requests, cache), llama.cpp (model, tok/s, slots)
-- `get_observations` — 17 patterns with per-observation routing_hint (steer_away/reduce_batch/monitor) + node-level routing_hint + routing_hint_source
+- `get_observations` — 18 patterns with per-observation routing_hint (steer_away/reduce_batch/monitor) + node-level routing_hint + routing_hint_source
 - `get_metrics_history` — 1-hour rolling telemetry (redirects to REST /api/history)
 
 Resources:
@@ -352,9 +352,9 @@ Four states, evaluated once per second as a pure function:
 
 ---
 
-## 18 Observation Patterns + 5 Fleet Alerts
+## 19 Observation Patterns + 5 Fleet Alerts
 
-### Agent-Evaluated (17 patterns)
+### Agent-Evaluated (18 patterns)
 Evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds.
 Pushed to the fleet cloud when paired for fleet-wide visibility.
 
@@ -369,7 +369,7 @@ Community (9):
 - **nvidia_thermal_redline:** GPU temp > 85C sustained or > 90C instant
 - **vram_overcommit:** Model size > 90% of VRAM capacity
 
-Pro (8):
+Pro (9):
 - **power_gpu_decoupling:** High power + low GPU% during inference
 - **bandwidth_saturation:** Low GPU% + high VRAM + dropping WES
 - **efficiency_drag:** WES penalty > 30% with Normal thermal
@@ -378,6 +378,10 @@ Pro (8):
 - **ttft_regression:** TTFT slope > +5 ms/min with mean > 100 ms
 - **latency_spike:** Recent E2E latency > 1.5x baseline and > 500 ms
 - **vllm_queue_saturation:** requests_waiting avg > 3 sustained
+- **bandwidth_ceiling_reached:** *(severity: info)* Sustained tok/s ≥ 65% of theoretical
+  memory-bandwidth ceiling for loaded model+quant with GPU < 95% — explains "Low" tok/W
+  as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/RTX,
+  DGX Spark/GB10). Recommends smaller quant for tok/s gain or larger batch to amortise baseline power.
 
 ### Cloud-Evaluated (1 pattern)
 - **fleet_load_imbalance:** Node WES > 20% below best healthy peer (Pro)

@@ -308,15 +308,17 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 ---
 
-## 18 Observation Patterns + 6 Fleet Alerts
+## 19 Observation Patterns + 6 Fleet Alerts
 
-### Agent-Evaluated (17 patterns, 10-min DuckDB buffer, every 10s)
+### Agent-Evaluated (18 patterns, 10-min DuckDB buffer, every 10s)
 
 **Community (9):** `thermal_drain`, `phantom_load`, `wes_velocity_drop`, `memory_trajectory`, `power_jitter`, `swap_io_pressure`, `clock_drift`, `nvidia_thermal_redline`, `vram_overcommit`
 
-**Pro (8):** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `pcie_lane_degradation`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`
+**Pro (9):** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `pcie_lane_degradation`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`, `bandwidth_ceiling_reached`
 
 > **`pcie_lane_degradation`** — fires when the negotiated PCIe link width (e.g. x8) is below the card's rated maximum (e.g. x16), indicating a wrong-slot installation or failed lane. Detected via NVML `current_pcie_link_width` / `max_pcie_link_width` — **NVIDIA only, no root required**. Returns no data on virtualised GPUs (cloud instances, VMs) where PCIe info is unavailable.
+
+> **`bandwidth_ceiling_reached`** *(severity: info)* — fires when a node sustains ≥65 % of its theoretical memory-bandwidth ceiling for the loaded model + quant, GPU utilisation is below 95 %, and the node has been live for ≥5 min. This explains a "Low" tok/W reading as **physics, not pathology**: at batch=1, fixed GPU baseline power dominates and per-token efficiency cannot improve without changing quant or batch size. Detected via `parameter_count × bytes_per_weight ÷ memory_bandwidth_gbps` per a per-chip lookup table (Apple M-series, NVIDIA H100/H200/A100/RTX, DGX Spark/GB10). The node is healthy — recommendation is informational: switch to a smaller GGUF quant for ~2× tok/s, or raise concurrent batch size to amortise baseline power.
 
 ### Cloud-Evaluated (1 pattern)
 `fleet_load_imbalance` — node WES > 20% below best healthy peer (Pro)
@@ -457,7 +459,7 @@ The agent exposes a local MCP (Model Context Protocol) server for AI agents. Ava
 | get_node_status | Full hardware + inference metrics snapshot |
 | get_inference_state | Live/idle/busy state with sensor context |
 | get_active_models | Running models with context_length, parameter_count, quantization, tok/s |
-| get_observations | 17 patterns with routing_hint per observation + node-level aggregate |
+| get_observations | 18 patterns with routing_hint per observation + node-level aggregate |
 | get_metrics_history | 1-hour rolling telemetry buffer from DuckDB |
 | get_model_fit | Three-dimensional fit analysis for the current model: Memory Fit, WES Efficiency, Context Runway, Quant Sweet Spot, and a plain-English summary |
 

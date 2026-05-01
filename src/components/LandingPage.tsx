@@ -249,7 +249,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                   { icon: <Zap          className="w-4 h-4 text-emerald-400" />, title: 'WES — tok/watt',            desc: 'Thermally-honest efficiency. The metric neither runtime exposes.',            border: 'border-emerald-500/30' },
                   { icon: <Thermometer  className="w-4 h-4 text-amber-400" />,   title: 'Power & Thermal',           desc: 'Real-time watts and thermal state from NVML, IOKit, and RAPL.',               border: 'border-amber-500/30' },
                   { icon: <Route        className="w-4 h-4 text-blue-400" />,    title: 'Fleet Routing',             desc: 'Cross-node routing decisions based on live WES and availability.',             border: 'border-blue-500/30' },
-                  { icon: <ShieldCheck  className="w-4 h-4 text-violet-400" />,  title: '18 Observation Patterns',   desc: 'Correlate signals no single runtime exposes — from TTFT regression to queue saturation.', border: 'border-violet-500/30' },
+                  { icon: <ShieldCheck  className="w-4 h-4 text-violet-400" />,  title: '19 Observation Patterns',   desc: 'Correlate signals no single runtime exposes — from TTFT regression to queue saturation.', border: 'border-violet-500/30' },
                 ] as const).map(item => (
                   <div key={item.title} className={`bg-gray-700/50 border ${item.border} rounded-xl p-4 flex items-start gap-3`}>
                     <span className="shrink-0 mt-0.5">{item.icon}</span>

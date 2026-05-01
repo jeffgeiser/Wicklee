@@ -9,7 +9,7 @@ Auth: None required.
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry with full MetricsPayload |
 | GET | /ws | WebSocket — 1 Hz live telemetry (same payload as SSE, fallback transport) |
-| GET | /api/observations | 17 patterns with routing_hint per observation + node-level routing_hint/routing_hint_source |
+| GET | /api/observations | 18 patterns with routing_hint per observation + node-level routing_hint/routing_hint_source |
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |

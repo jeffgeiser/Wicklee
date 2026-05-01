@@ -1125,11 +1125,11 @@ WES Version:     2
               The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. Each observation includes actionable commands tailored to your platform (macOS, Linux, or NVIDIA).
             </p>
             <p>
-              Wicklee evaluates 18 observation patterns plus 5 fleet health alerts. The Rust agent evaluates 17 patterns locally against a 10-minute DuckDB buffer every 10 seconds. One pattern (<code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code>) requires multi-node fleet context and runs in the cloud evaluator. When paired with wicklee.dev, agent observations are pushed to the cloud automatically for fleet-wide visibility. 9 patterns are available on the Community tier; 9 additional patterns require Pro.
+              Wicklee evaluates 19 observation patterns plus 5 fleet health alerts. The Rust agent evaluates 18 patterns locally against a 10-minute DuckDB buffer every 10 seconds. One pattern (<code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code>) requires multi-node fleet context and runs in the cloud evaluator. When paired with wicklee.dev, agent observations are pushed to the cloud automatically for fleet-wide visibility. 9 patterns are available on the Community tier; 10 additional patterns require Pro.
             </p>
 
             {/* ── Agent-evaluated observations ── */}
-            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Agent Observations (17 patterns)</p>
+            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Agent Observations (18 patterns)</p>
             <p className="text-xs text-gray-500 mb-2">Evaluated by the Rust agent against the local 10-minute DuckDB buffer via <code className="text-gray-400 font-mono text-xs">GET /api/observations</code>. Pushed to the fleet cloud when paired. No fleet connection required for localhost.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -1259,6 +1259,13 @@ WES Version:     2
                     <Td><code className="font-medium text-violet-300">vllm_queue_saturation</code></Td>
                     <Td>vLLM requests_waiting avg &gt; 3 sustained — incoming requests exceed engine capacity, needs horizontal scaling or routing</Td>
                     <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep vllm_num_requests</code></Td>
+                    <Td mono>5 min</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-blue-300">bandwidth_ceiling_reached</code></Td>
+                    <Td><span className="text-blue-300 font-medium">[info]</span> Sustained tok/s ≥ 65% of theoretical memory-bandwidth ceiling for the loaded model + quant, with GPU &lt; 95% — explains "Low" tok/W as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/RTX, DGX Spark/GB10).</Td>
+                    <Td><code className="text-[10px] text-gray-500">Switch to smaller quant or raise batch size</code></Td>
                     <Td mono>5 min</Td>
                     <Td>Pro</Td>
                   </tr>

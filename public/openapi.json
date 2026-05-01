@@ -16,7 +16,7 @@
       "post": {
         "operationId": "mcpJsonRpc",
         "summary": "MCP JSON-RPC 2.0 endpoint",
-        "description": "Model Context Protocol endpoint for AI agents. Supports tools (get_node_status, get_inference_state, get_active_models, get_observations — 17 server-side patterns, get_metrics_history) and resources (wicklee://node/metrics, wicklee://node/thermal). Localhost only, no auth required.",
+        "description": "Model Context Protocol endpoint for AI agents. Supports tools (get_node_status, get_inference_state, get_active_models, get_observations — 18 server-side patterns, get_metrics_history) and resources (wicklee://node/metrics, wicklee://node/thermal). Localhost only, no auth required.",
         "servers": [{ "url": "http://localhost:7700" }],
         "requestBody": {
           "required": true,
