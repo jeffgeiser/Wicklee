@@ -958,7 +958,7 @@ WES Version:     2
 
             <div className="mt-4">
               <p className="font-semibold text-white mb-1">Fit Score (0–100)</p>
-              <p className="text-xs text-gray-500 mb-3">Four weighted components. Score labels: <span className="text-emerald-400">Excellent</span> (80+), <span className="text-green-400">Good</span> (60–79), <span className="text-yellow-400">Tight</span> (40–59), <span className="text-red-400">Won't Fit</span> (&lt;40).</p>
+              <p className="text-xs text-gray-500 mb-3">Four weighted components. Score labels: <span className="text-emerald-400">Excellent</span> (80+), <span className="text-green-400">Good</span> (60–79), <span className="text-yellow-400">Tight</span> (40–59), <span className="text-orange-400">Marginal</span> (&lt;40), <span className="text-red-400">Won't Fit</span> (insufficient VRAM).</p>
               <table className="w-full">
                 <thead>
                   <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
@@ -971,7 +971,7 @@ WES Version:     2
                   <tr>
                     <td className="py-2 pr-4 text-gray-300">VRAM / RAM Headroom</td>
                     <td className="py-2 pr-4 text-gray-400 font-mono">40</td>
-                    <td className="py-2 text-gray-500">Free memory after loading — rewards models with room for KV cache growth. NVIDIA nodes use VRAM; Apple Silicon and CPU-only nodes use 75% of system RAM.</td>
+                    <td className="py-2 text-gray-500">Free memory after loading. Curve: 75%+ → 40, 60% → 36, 45% → 32, 30% → 26, 15% → 20, 5% → 12, 0% → 6, won't fit → 0. NVIDIA nodes use VRAM; Apple Silicon and CPU-only nodes use 75% of system RAM.</td>
                   </tr>
                   <tr>
                     <td className="py-2 pr-4 text-gray-300">Thermal Margin</td>
@@ -984,12 +984,18 @@ WES Version:     2
                     <td className="py-2 text-gray-500">Inference efficiency from similar models you've run. Neutral (10) if no data.</td>
                   </tr>
                   <tr>
-                    <td className="py-2 pr-4 text-gray-300">Power Efficiency</td>
+                    <td className="py-2 pr-4 text-gray-300">Power Fraction</td>
                     <td className="py-2 pr-4 text-gray-400 font-mono">20</td>
-                    <td className="py-2 text-gray-500">Model size as fraction of total memory — larger models relative to hardware are penalized.</td>
+                    <td className="py-2 text-gray-500">Model VRAM as fraction of total: &lt;20% → 20, &lt;35% → 16, &lt;50% → 12, &lt;70% → 8, &lt;90% → 5, ≥90% → 2.</td>
                   </tr>
                 </tbody>
               </table>
+
+              <div className="mt-4 space-y-2 text-xs text-gray-500">
+                <p><strong className="text-gray-300">Quant quality factor:</strong> very low quants (IQ1, Q1, IQ2, Q2) get penalty multipliers (0.0–0.4) so a tiny quant of a huge model doesn't outscore a Q4 of a smaller one just because it leaves more VRAM headroom.</p>
+                <p><strong className="text-gray-300">Multi-part shard aggregation:</strong> large GGUF models published as multi-part shards (e.g. <code className="font-mono text-[11px] text-gray-400">model-Q4_K_M-00001-of-00003.gguf</code> + <code className="font-mono text-[11px] text-gray-400">00002-of-00003</code> + <code className="font-mono text-[11px] text-gray-400">00003-of-00003</code>) are aggregated into a single catalog variant with the <strong className="text-gray-300">total</strong> size summed across all shards.</p>
+                <p><strong className="text-gray-300">Fleet "all nodes" filter:</strong> the trending list defaults to showing only models scoring <strong className="text-green-400">Good (60+)</strong> on every online node. Tight or marginal models are filtered out — users browsing the trending list expect models that will run well, not barely fit.</p>
+              </div>
             </div>
 
             <div className="mt-4">

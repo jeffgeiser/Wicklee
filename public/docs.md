@@ -200,16 +200,24 @@ vLLM's Prometheus endpoint (`/metrics`) reports server-wide aggregate throughput
 
 ### Discovery Fit Score (0–100)
 
+Four components, weighted to favor models that leave significant headroom for context scaling and KV cache growth:
+
 | Component | Max | What it measures |
 |---|---|---|
-| VRAM headroom | 40 | Free VRAM/RAM after loading — rewards models that leave room for KV cache growth |
+| VRAM headroom | 40 | Free VRAM/RAM after loading. Curve: 75%+ free → 40, 60% → 36, 45% → 32, 30% → 26, 15% → 20, 5% → 12, 0% → 6, won't fit → 0 |
 | Thermal margin | 20 | Current thermal state: Normal (20), Fair (10), Serious (5), Critical (0) |
-| Historical WES | 20 | Inference efficiency from similar models; neutral (10) if no data |
-| Power efficiency | 20 | Model size as fraction of total memory — larger models relative to hardware are penalized |
+| Historical WES | 20 | Inference efficiency from similar models on this hardware; neutral (10) if no data |
+| Power fraction | 20 | Model VRAM as fraction of total: <20% → 20, <35% → 16, <50% → 12, <70% → 8, <90% → 5, ≥90% → 2 |
 
-**Labels:** Excellent (80+), Good (60–79), Tight (40–59), Won't Fit (<40).
+**Labels:** Excellent (80+), Good (60–79), Tight (40–59), Marginal (<40), Won't Fit (insufficient VRAM).
 
 **Memory pool:** NVIDIA nodes use VRAM; Apple Silicon and CPU-only nodes use system RAM (75% budget to leave headroom for the OS).
+
+**Quant quality factor:** very low quants (IQ1, Q1, IQ2, Q2) get penalty multipliers (0.0–0.4) so a tiny quant of a huge model doesn't outscore a Q4 of a smaller one just because it leaves more VRAM headroom.
+
+**Multi-part shard aggregation:** Large GGUF models published as multi-part shards (e.g. `model-Q4_K_M-00001-of-00003.gguf` + `00002-of-00003` + `00003-of-00003`) are aggregated into a single catalog variant with the **total** size summed across all shards. Without this, a 30 GB model split into 3 × 10 GB shards would score as three independent 10 GB variants and incorrectly appear to fit small hardware.
+
+**Fleet "all nodes" filter:** the trending list defaults to showing only models scoring **Good (60+) on every online node**. Tight or marginal models are filtered out — users browsing the trending list expect models that will run well, not barely fit.
 
 ### Search behavior
 
