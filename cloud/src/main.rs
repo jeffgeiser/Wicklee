@@ -3817,7 +3817,10 @@ fn quant_quality_factor(quant: &str) -> f32 {
 /// producing scores of 30–40 for models the node literally cannot load.  That
 /// caused `retain(score > 0)` in the per-node filter to keep *all* models,
 /// making the per-node view identical to the fleet-wide view.
-fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, power_w: f32, thermal: &str) -> (u8, String) {
+/// Fit score for a model variant on a given hardware profile.
+/// Mirrors agent's tightened scoring (75% headroom for max VRAM points,
+/// vram_fraction-based power score). Used by fleet matching and Pro simulation.
+fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, _power_w: f32, thermal: &str) -> (u8, String) {
     let vram_required = (file_size_bytes as u64 / (1024 * 1024)) + ((file_size_bytes as u64 / (1024 * 1024)) / 10).max(256);
 
     // Hard gate: model does not fit in the available VRAM pool.
@@ -3829,17 +3832,28 @@ fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, power_w: f32, thermal: &s
         ((vram_mb as f32 - vram_required as f32) / vram_mb as f32 * 100.0).max(0.0)
     } else { 0.0 };
 
-    let vram_score: u8 = if headroom_pct >= 50.0 { 40 }
-        else if headroom_pct >= 30.0 { 35 } else if headroom_pct >= 15.0 { 28 }
-        else if headroom_pct >= 5.0  { 20 } else { 10 }; // 0–5 % still fits, tight
+    // Tightened curve — matches agent: 75%+ for max score, more granular at the top.
+    let vram_score: u8 = if headroom_pct >= 75.0 { 40 }
+        else if headroom_pct >= 60.0 { 36 }
+        else if headroom_pct >= 45.0 { 32 }
+        else if headroom_pct >= 30.0 { 26 }
+        else if headroom_pct >= 15.0 { 20 }
+        else if headroom_pct >= 5.0  { 12 }
+        else { 6 }; // 0–5 % still fits, very tight
+
     let thermal_score: u8 = match thermal { "Normal" => 20, "Fair" => 10, "Serious" => 5, _ => 0 };
     let wes_score: u8 = 10; // neutral — no historical data for simulation
-    let power_score: u8 = if power_w <= 0.1 { 10 } else {
-        let watts_per_gb = power_w / (vram_mb as f32 / 1024.0).max(1.0);
-        let projected = watts_per_gb * (vram_required as f32 / 1024.0);
-        if projected < power_w * 0.5 { 20 } else if projected < power_w * 0.75 { 15 }
-        else if projected < power_w  { 10 } else { 5 }
-    };
+
+    // Power score = VRAM fraction (matches agent). Larger models relative to
+    // hardware get penalized regardless of absolute wattage.
+    let vram_fraction = vram_required as f32 / vram_mb.max(1) as f32;
+    let power_score: u8 = if vram_fraction < 0.2 { 20 }
+        else if vram_fraction < 0.35 { 16 }
+        else if vram_fraction < 0.5 { 12 }
+        else if vram_fraction < 0.7 { 8 }
+        else if vram_fraction < 0.9 { 5 }
+        else { 2 };
+
     let total = vram_score + thermal_score + wes_score + power_score;
     let label = if total >= 80 { "Excellent".into() } else if total >= 60 { "Good".into() }
         else if total >= 40 { "Tight".into() } else { "Marginal".into() };
@@ -4039,16 +4053,18 @@ async fn handle_fleet_model_candidates(
         models.retain(|m| node_score(m) > 0);
         models.sort_by(|a, b| node_score(b).cmp(&node_score(a)));
     } else if online_count > 1 {
-        // Intersection: all online nodes must have score > 0.
+        // Intersection: all online nodes must have score >= 60 (Good or better).
+        // Lower scores indicate "fits but tight" — don't show those in the trending list
+        // since users expect models that will actually run well, not barely fit.
         models.retain(|m| {
             m["nodes"].as_array()
-                .map(|arr| arr.iter().all(|n| n["fit_score"].as_u64().unwrap_or(0) > 0))
+                .map(|arr| arr.iter().all(|n| n["fit_score"].as_u64().unwrap_or(0) >= 60))
                 .unwrap_or(false)
         });
         models.sort_by(|a, b| b["fleet_best_score"].as_u64().cmp(&a["fleet_best_score"].as_u64()));
     } else {
-        // Single node in fleet: no intersection needed, just rank by score.
-        models.retain(|m| m["fleet_best_score"].as_u64().unwrap_or(0) > 0);
+        // Single node in fleet: rank by score, only show models scoring Good or better.
+        models.retain(|m| m["fleet_best_score"].as_u64().unwrap_or(0) >= 60);
         models.sort_by(|a, b| b["fleet_best_score"].as_u64().cmp(&a["fleet_best_score"].as_u64()));
     }
 
