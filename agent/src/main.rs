@@ -4901,6 +4901,53 @@ async fn handle_observations(
 
 // ── Inference Intelligence endpoints (Pro+) ─────────────────────────────────
 
+/// GET /api/sla?window_min=60&model=&target_ttft_ms=500 — Inference SLA Monitor.
+///
+/// Aggregates per-request inference traces from DuckDB into p50/p95/p99/max
+/// percentiles for TTFT, end-to-end latency, and TPOT.  Computes compliance
+/// against a configurable TTFT target and returns the 20 most-recent
+/// violations plus a per-model breakdown.
+///
+/// Window: 1–1440 minutes (24 h hard ceiling — that's the inference_traces
+/// retention).  `model` filters to a specific model name; `target_ttft_ms`
+/// defaults to 500.
+///
+/// Tier policy: localhost endpoint open (local data, local user — same as
+/// `/api/observations`).  The Pro gate sits on the frontend SLA Monitor card.
+#[cfg(not(target_env = "musl"))]
+async fn handle_sla(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> impl IntoResponse {
+    let window_min: i64 = params.get("window_min")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60)
+        .clamp(1, 1440);
+    let target_ttft_ms: i64 = params.get("target_ttft_ms")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(500)
+        .max(1);
+    let model = params.get("model").cloned().filter(|s| !s.is_empty());
+    let node_id = node_id_ext.0.as_str().to_owned();
+
+    let result = tokio::task::spawn_blocking(move || {
+        store.query_sla(&node_id, window_min, model.as_deref(), target_ttft_ms)
+    }).await;
+
+    match result {
+        Ok(Ok(summary)) => Json(summary).into_response(),
+        Ok(Err(e)) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    }
+}
+
 /// GET /api/profile?minutes=60 — correlated inference profiler timeline.
 #[cfg(not(target_env = "musl"))]
 async fn handle_profile(
@@ -7156,6 +7203,7 @@ async fn main() {
              .route("/api/insights/dismissed",  get(handle_dismissed_list))
              .route("/api/observations",        get(handle_observations))
              .route("/api/profile",             get(handle_profile))
+             .route("/api/sla",                 get(handle_sla))
              .route("/api/cost-by-model",       get(handle_cost_by_model))
              .route("/api/explain-slowdown",    get(handle_explain_slowdown))
              .route("/api/model-comparison",    get(handle_model_comparison))

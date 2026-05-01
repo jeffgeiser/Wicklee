@@ -29,6 +29,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `GET /ws` — WebSocket, 1 Hz telemetry (same payload as SSE, fallback transport)
 - `GET /api/observations` — 18 server-side observation patterns (10-min DuckDB buffer)
 - `GET /api/profile?minutes=60` — Inference Profiler: correlated TTFT/KV/queue/thermal/power timeline
+- `GET /api/sla?window_min=60&target_ttft_ms=500` — Inference SLA Monitor: p50/p95/p99 for TTFT/E2E/TPOT, compliance vs target, per-model breakdown, recent violations
 - `GET /api/cost-by-model?hours=24` — Cost attribution per model (daily breakdown)
 - `GET /api/explain-slowdown?ts_ms=N` — Root cause analysis for slow inference requests
 - `GET /api/model-comparison?hours=168` — Side-by-side model efficiency (WES, tok/s, watts, cost)

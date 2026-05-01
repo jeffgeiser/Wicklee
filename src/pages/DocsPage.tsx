@@ -1503,6 +1503,11 @@ WES Version:     2
               <code className="text-gray-300 font-mono text-[10px]">GET /api/profile?minutes=60</code> — A correlated timeline of TTFT, tok/s, KV cache utilization, queue depth, thermal penalty, and power draw on a single time axis. Like Chrome DevTools for inference — see exactly what your hardware was doing at the moment latency spiked. Resolution auto-scales from 1-second raw data (10-minute window) to 60-second buckets (24-hour window). The Performance tab renders this as an interactive multi-series chart with toggleable metrics.
             </p>
 
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Inference SLA Monitor <span className="ml-1.5 text-[9px] text-blue-400 normal-case tracking-normal">Pro</span></p>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              <code className="text-gray-300 font-mono text-[10px]">GET /api/sla?window_min=60&amp;target_ttft_ms=500</code> — p50/p95/p99/max for TTFT, end-to-end latency, and TPOT computed via DuckDB <code className="text-gray-300 font-mono text-[10px]">quantile_cont()</code> over per-request <code className="text-gray-300 font-mono text-[10px]">inference_traces</code>. Compliance percentage against a configurable TTFT target, the 20 most-recent violations, and per-model breakdown. Window: 1–1440 minutes (24h hard ceiling — that's the trace retention). Surfaces on the Performance tab as an SLA Monitor card with 1h / 6h / 24h windows, color-coded compliance pill (≥99% emerald, ≥95% green, ≥90% yellow, &lt;90% red), and recent-violations list. Built for the "is my local inference meeting SLA?" question that operators ask before exposing a Wicklee node as an internal API.
+            </p>
+
             <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Cost Attribution Per Model</p>
             <p className="text-xs text-gray-400 leading-relaxed">
               <code className="text-gray-300 font-mono text-[10px]">GET /api/cost-by-model?hours=24</code> — Breaks down your daily power cost by which model was running. "Llama 3.1 70B cost $0.22 for 6.2 hours of inference. Phi-3 Mini cost $0.13 for 18 hours." Uses DuckDB metrics_raw (per-second model identity + power draw) for the last 24 hours, or metrics_1min rollups for up to 30 days. The Overview tab shows this as a collapsible table sorted by cost.
@@ -1567,6 +1572,10 @@ WES Version:     2
                   <tr>
                     <Td mono>GET /api/profile?minutes=60</Td>
                     <Td>Inference Profiler — correlated TTFT, KV cache, queue depth, thermal penalty, power on a single time axis. Auto-scaling resolution.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/sla?window_min=60&amp;target_ttft_ms=500</Td>
+                    <Td>Inference SLA Monitor — p50/p95/p99/max for TTFT, E2E latency, TPOT. Compliance vs configurable target, per-model breakdown, recent violations. <span className="text-blue-400">Pro</span></Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/cost-by-model?hours=24</Td>

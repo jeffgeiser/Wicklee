@@ -53,6 +53,12 @@ Inference Profiler — correlated timeline of TTFT, tok/s, KV cache %, queue dep
 { "node_id": "WK-XXXX", "range_minutes": 60, "resolution_s": 10, "samples": [{ "ts_ms": 1234, "model": "llama3.1:70b", "tok_s": 42.5, "ttft_ms": 145, "kv_cache_pct": 87, "queue_depth": 2, "power_w": 12.1, "thermal_state": "Normal", "thermal_penalty": 1.0, "gpu_util_pct": 85 }] }
 ```
 
+### GET /api/sla?window_min=60&target_ttft_ms=500&model=
+Inference SLA Monitor — p50/p95/p99/max for TTFT, end-to-end latency, and TPOT, computed via DuckDB `quantile_cont()` over the per-request `inference_traces` table. Compliance percentage against `target_ttft_ms`, recent violations, and per-model breakdown. Window: 1–1440 minutes (24h hard ceiling — that's the trace retention). Optional `model` filter.
+```json
+{ "window_minutes": 60, "request_count": 412, "error_count": 3, "error_rate_pct": 0.7, "ttft": { "p50": 120, "p95": 340, "p99": 1240, "max": 2300 }, "e2e": { "p50": 1850, "p95": 8400, "p99": 15300, "max": 22100 }, "tpot": { "p50": 28, "p95": 45, "p99": 89, "max": 0 }, "sla": { "target_ttft_ms": 500, "compliance_pct": 98.4, "violations_count": 7, "violations": [{ "ts_ms": 1234, "model": "qwen2.5:32b", "ttft_ms": 2300, "latency_ms": 12400 }] }, "by_model": [{ "model": "llama3.1:8b", "count": 374, "p95_ttft_ms": 280, "p95_e2e_ms": 7200 }] }
+```
+
 ### GET /api/cost-by-model?hours=24&kwh_rate=0.12
 Cost attribution per model — daily power cost breakdown by model. Max 720 hours (30 days).
 ```json

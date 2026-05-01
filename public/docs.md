@@ -353,6 +353,11 @@ Wicklee uniquely has hardware telemetry, inference metrics, model identity, and 
 ### Inference Profiler
 `GET /api/profile?minutes=60` — correlated timeline of TTFT, tok/s, KV cache %, queue depth, thermal penalty, and power on a single time axis. Resolution auto-scales (1s raw at 10min, 60s buckets at 24h).
 
+### Inference SLA Monitor (Pro)
+`GET /api/sla?window_min=60&target_ttft_ms=500&model=` — p50/p95/p99/max for TTFT, end-to-end latency, and TPOT computed via DuckDB `quantile_cont()` over the per-request `inference_traces` table. Compliance percentage against a configurable TTFT target, the 20 most-recent violations, and per-model breakdown. Window: 1–1440 minutes (24 h hard ceiling — that's the trace retention). Optional `model` filter narrows percentiles to one model.
+
+Surfaced on the Performance tab as an SLA Monitor card with 1h / 6h / 24h windows, 250 ms / 500 ms / 1 s / 2 s target presets, color-coded compliance pill (≥99% emerald, ≥95% green, ≥90% yellow, <90% red), per-model p95 table, and a recent-violations list.
+
 ### Cost Attribution Per Model
 `GET /api/cost-by-model?hours=24` — per-model daily cost breakdown: model name, hours active, avg watts, cost USD. Uses power draw × model identity from DuckDB.
 
@@ -394,6 +399,7 @@ Auth: None required.
 | GET | /ws | WebSocket — 1 Hz telemetry (same payload as SSE, fallback transport) |
 | GET | /api/observations | 17 observation patterns with per-observation `routing_hint` (steer_away/reduce_batch/monitor) + node-level `routing_hint` + `routing_hint_source` |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
+| GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT/E2E/TPOT, compliance vs target, per-model breakdown, recent violations |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Root cause analysis for slow inference requests |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for all models |

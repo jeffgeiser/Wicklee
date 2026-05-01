@@ -334,6 +334,59 @@ pub struct Dismissal {
     pub note:            Option<String>,
 }
 
+// ── SLA Monitor types ───────────────────────────────────────────────────────
+
+/// p50/p95/p99/max for one latency dimension.  Returned by `query_sla()`.
+#[derive(Debug, Serialize)]
+pub struct SlaPercentiles {
+    pub p50: f64,
+    pub p95: f64,
+    pub p99: f64,
+    pub max: f64,
+}
+
+/// Per-model breakdown row for the SLA summary.
+#[derive(Debug, Serialize)]
+pub struct SlaModelRow {
+    pub model:        String,
+    pub count:        i64,
+    pub p95_ttft_ms:  f64,
+    pub p95_e2e_ms:   f64,
+}
+
+/// One TTFT-violation row for the recent-violations list.
+#[derive(Debug, Serialize)]
+pub struct SlaViolation {
+    pub ts_ms:      i64,
+    pub model:      String,
+    pub ttft_ms:    i64,
+    pub latency_ms: i64,
+}
+
+/// SLA compliance + violations against a configured TTFT target.
+#[derive(Debug, Serialize)]
+pub struct SlaCompliance {
+    pub target_ttft_ms:    i64,
+    pub compliance_pct:    f64,
+    pub violations_count:  i64,
+    pub violations:        Vec<SlaViolation>,
+}
+
+/// Aggregated SLA summary returned by `GET /api/sla`.
+#[derive(Debug, Serialize)]
+pub struct SlaSummary {
+    pub window_minutes:   i64,
+    pub window_start_ms:  i64,
+    pub request_count:    i64,
+    pub error_count:      i64,
+    pub error_rate_pct:   f64,
+    pub ttft:             SlaPercentiles,
+    pub e2e:              SlaPercentiles,
+    pub tpot:             SlaPercentiles,
+    pub sla:              SlaCompliance,
+    pub by_model:         Vec<SlaModelRow>,
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 /// Shared DuckDB metrics store.  Clone-cheap (Arc inside).
@@ -842,6 +895,161 @@ impl Store {
             })?.collect::<Result<_, _>>()?
         };
         Ok(rows)
+    }
+
+    // ── Inference SLA Monitor ───────────────────────────────────────────────
+
+    /// Aggregate SLA percentiles from `inference_traces` over the given window.
+    ///
+    /// `window_min` is clamped to [1, 1440] minutes (24 h hard ceiling — that's the
+    /// retention cap on the table).  `target_ttft_ms` controls compliance + violation
+    /// detection.  When `model` is supplied, results scope to that model only.
+    ///
+    /// Computes p50/p95/p99/max for ttft_ms, latency_ms, tpot_ms via DuckDB's
+    /// `quantile_cont()`.  Per-model breakdown via a second GROUP BY query.
+    /// Violations are the 20 most-recent rows where `ttft_ms > target_ttft_ms`.
+    pub fn query_sla(
+        &self,
+        node_id: &str,
+        window_min: i64,
+        model: Option<&str>,
+        target_ttft_ms: i64,
+    ) -> Result<SlaSummary, duckdb::Error> {
+        let conn = self.0.lock().unwrap();
+        let window_min = window_min.clamp(1, 1440);
+        let window_ms = window_min * 60_000;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let cutoff = now - window_ms;
+
+        // Build base WHERE clause for both queries.
+        // We always scope to node_id (the agent only stores its own node anyway,
+        // but explicit beats implicit).  Model filter is optional.
+        let mut where_clause = "node_id = ? AND ts_ms >= ?".to_string();
+        if model.is_some() { where_clause.push_str(" AND model = ?"); }
+
+        // ── Aggregate query: percentiles + counts in a single round-trip. ──
+        let agg_sql = format!(
+            "SELECT
+                COUNT(*) AS n,
+                COUNT(*) FILTER (WHERE status >= 400 OR status = 0) AS errs,
+                COALESCE(quantile_cont(ttft_ms,    0.5),  0) AS ttft_p50,
+                COALESCE(quantile_cont(ttft_ms,    0.95), 0) AS ttft_p95,
+                COALESCE(quantile_cont(ttft_ms,    0.99), 0) AS ttft_p99,
+                COALESCE(MAX(ttft_ms), 0) AS ttft_max,
+                COALESCE(quantile_cont(latency_ms, 0.5),  0) AS e2e_p50,
+                COALESCE(quantile_cont(latency_ms, 0.95), 0) AS e2e_p95,
+                COALESCE(quantile_cont(latency_ms, 0.99), 0) AS e2e_p99,
+                COALESCE(MAX(latency_ms), 0) AS e2e_max,
+                COALESCE(quantile_cont(tpot_ms,    0.5),  0) AS tpot_p50,
+                COALESCE(quantile_cont(tpot_ms,    0.95), 0) AS tpot_p95,
+                COALESCE(quantile_cont(tpot_ms,    0.99), 0) AS tpot_p99,
+                COUNT(*) FILTER (WHERE ttft_ms > ?) AS violations,
+                COUNT(*) FILTER (WHERE ttft_ms <= ?) AS compliant
+             FROM inference_traces
+             WHERE {where_clause}"
+        );
+
+        let mut stmt = conn.prepare(&agg_sql)?;
+        let mut row = if let Some(m) = model {
+            stmt.query(params![target_ttft_ms, target_ttft_ms, node_id, cutoff, m])?
+        } else {
+            stmt.query(params![target_ttft_ms, target_ttft_ms, node_id, cutoff])?
+        };
+        let r = row.next()?.ok_or_else(|| duckdb::Error::QueryReturnedNoRows)?;
+
+        let n:           i64 = r.get(0)?;
+        let errs:        i64 = r.get(1)?;
+        let ttft_p50:    f64 = r.get(2)?;
+        let ttft_p95:    f64 = r.get(3)?;
+        let ttft_p99:    f64 = r.get(4)?;
+        let ttft_max:    i64 = r.get(5)?;
+        let e2e_p50:     f64 = r.get(6)?;
+        let e2e_p95:     f64 = r.get(7)?;
+        let e2e_p99:     f64 = r.get(8)?;
+        let e2e_max:     i64 = r.get(9)?;
+        let tpot_p50:    f64 = r.get(10)?;
+        let tpot_p95:    f64 = r.get(11)?;
+        let tpot_p99:    f64 = r.get(12)?;
+        let violations:  i64 = r.get(13)?;
+        let compliant:   i64 = r.get(14)?;
+        drop(row); drop(stmt);
+
+        let error_rate_pct = if n > 0 { errs as f64 / n as f64 * 100.0 } else { 0.0 };
+        let compliance_pct = if n > 0 { compliant as f64 / n as f64 * 100.0 } else { 100.0 };
+
+        // ── Per-model breakdown. ──
+        let by_model_sql = format!(
+            "SELECT model, COUNT(*) AS n,
+                    COALESCE(quantile_cont(ttft_ms,    0.95), 0) AS ttft_p95,
+                    COALESCE(quantile_cont(latency_ms, 0.95), 0) AS e2e_p95
+             FROM inference_traces
+             WHERE {where_clause}
+             GROUP BY model
+             ORDER BY n DESC"
+        );
+        let mut stmt = conn.prepare(&by_model_sql)?;
+        let by_model: Vec<SlaModelRow> = if let Some(m) = model {
+            stmt.query_map(params![node_id, cutoff, m], |row| Ok(SlaModelRow {
+                model:        row.get(0)?,
+                count:        row.get(1)?,
+                p95_ttft_ms:  row.get(2)?,
+                p95_e2e_ms:   row.get(3)?,
+            }))?.collect::<Result<_, _>>()?
+        } else {
+            stmt.query_map(params![node_id, cutoff], |row| Ok(SlaModelRow {
+                model:        row.get(0)?,
+                count:        row.get(1)?,
+                p95_ttft_ms:  row.get(2)?,
+                p95_e2e_ms:   row.get(3)?,
+            }))?.collect::<Result<_, _>>()?
+        };
+        drop(stmt);
+
+        // ── Recent violations (last 20 over target). ──
+        let viol_sql = format!(
+            "SELECT ts_ms, model, ttft_ms, latency_ms
+             FROM inference_traces
+             WHERE {where_clause} AND ttft_ms > ?
+             ORDER BY ts_ms DESC
+             LIMIT 20"
+        );
+        let mut stmt = conn.prepare(&viol_sql)?;
+        let recent_violations: Vec<SlaViolation> = if let Some(m) = model {
+            stmt.query_map(params![node_id, cutoff, m, target_ttft_ms], |row| Ok(SlaViolation {
+                ts_ms:      row.get(0)?,
+                model:      row.get(1)?,
+                ttft_ms:    row.get(2)?,
+                latency_ms: row.get(3)?,
+            }))?.collect::<Result<_, _>>()?
+        } else {
+            stmt.query_map(params![node_id, cutoff, target_ttft_ms], |row| Ok(SlaViolation {
+                ts_ms:      row.get(0)?,
+                model:      row.get(1)?,
+                ttft_ms:    row.get(2)?,
+                latency_ms: row.get(3)?,
+            }))?.collect::<Result<_, _>>()?
+        };
+
+        Ok(SlaSummary {
+            window_minutes:  window_min,
+            window_start_ms: cutoff,
+            request_count:   n,
+            error_count:     errs,
+            error_rate_pct,
+            ttft: SlaPercentiles { p50: ttft_p50, p95: ttft_p95, p99: ttft_p99, max: ttft_max as f64 },
+            e2e:  SlaPercentiles { p50: e2e_p50,  p95: e2e_p95,  p99: e2e_p99,  max: e2e_max as f64 },
+            tpot: SlaPercentiles { p50: tpot_p50, p95: tpot_p95, p99: tpot_p99, max: 0.0 },
+            sla: SlaCompliance {
+                target_ttft_ms,
+                compliance_pct,
+                violations_count: violations,
+                violations: recent_violations,
+            },
+            by_model,
+        })
     }
 
     // ── Node Events ─────────────────────────────────────────────────────────

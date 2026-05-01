@@ -653,6 +653,191 @@ const InferenceProfiler: React.FC = () => {
   );
 };
 
+// ── SlaMonitor — TTFT/E2E percentiles + compliance vs target (localhost) ──────
+//
+// Fetches GET /api/sla?window_min=N&target_ttft_ms=M and renders p50/p95/p99
+// for TTFT and end-to-end latency, the compliance percentage against a
+// configurable TTFT target, and a per-model breakdown.  Built for the "is my
+// local inference meeting SLA?" question that operators ask before exposing
+// a Wicklee node as an internal API.
+
+type SlaPercentiles = { p50: number; p95: number; p99: number; max: number };
+type SlaModelRow = { model: string; count: number; p95_ttft_ms: number; p95_e2e_ms: number };
+type SlaViolation = { ts_ms: number; model: string; ttft_ms: number; latency_ms: number };
+type SlaSummary = {
+  window_minutes: number;
+  request_count: number;
+  error_count: number;
+  error_rate_pct: number;
+  ttft: SlaPercentiles;
+  e2e: SlaPercentiles;
+  tpot: SlaPercentiles;
+  sla: {
+    target_ttft_ms: number;
+    compliance_pct: number;
+    violations_count: number;
+    violations: SlaViolation[];
+  };
+  by_model: SlaModelRow[];
+};
+
+const slaCompliancePillClass = (pct: number): string => {
+  if (pct >= 99)   return 'text-emerald-400 bg-emerald-400/10 border border-emerald-400/30';
+  if (pct >= 95)   return 'text-green-300 bg-green-300/10 border border-green-300/30';
+  if (pct >= 90)   return 'text-yellow-400 bg-yellow-400/10 border border-yellow-400/30';
+  return 'text-red-400 bg-red-400/10 border border-red-400/30';
+};
+
+const SlaMonitor: React.FC = () => {
+  const [windowMin, setWindowMin] = React.useState(60);
+  const [targetTtft, setTargetTtft] = React.useState(500);
+  const [data, setData] = React.useState<SlaSummary | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/sla?window_min=${windowMin}&target_ttft_ms=${targetTtft}`);
+      if (r.ok) setData(await r.json());
+    } catch { /* agent may not support this endpoint */ }
+    setLoading(false);
+  }, [windowMin, targetTtft]);
+
+  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => {
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const empty = !data || data.request_count === 0;
+
+  return (
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Inference SLA Monitor</span>
+          <select
+            value={windowMin}
+            onChange={e => setWindowMin(Number(e.target.value))}
+            className="text-[9px] text-gray-400 bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 font-mono"
+          >
+            <option value={60}>1h</option>
+            <option value={360}>6h</option>
+            <option value={1440}>24h</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] uppercase tracking-widest text-gray-600">Target TTFT</span>
+          <select
+            value={targetTtft}
+            onChange={e => setTargetTtft(Number(e.target.value))}
+            className="text-[9px] text-gray-400 bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 font-mono"
+          >
+            <option value={250}>250 ms</option>
+            <option value={500}>500 ms</option>
+            <option value={1000}>1000 ms</option>
+            <option value={2000}>2000 ms</option>
+          </select>
+        </div>
+      </div>
+
+      {loading && !data ? (
+        <p className="text-xs text-gray-700 py-4 text-center">Loading SLA data…</p>
+      ) : empty ? (
+        <p className="text-xs text-gray-700 py-4 text-center">
+          No request traces in the last {windowMin >= 60 ? `${windowMin / 60}h` : `${windowMin}m`}.
+          {' '}Enable the Ollama proxy (Settings → Proxy) to capture per-request percentiles.
+        </p>
+      ) : data && (
+        <>
+          {/* Top stats row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="bg-gray-900 border border-gray-700 rounded-lg p-2.5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-600">Requests</div>
+              <div className="text-lg font-mono text-white">{data.request_count.toLocaleString()}</div>
+              {data.error_count > 0 && (
+                <div className="text-[10px] text-red-400 font-mono mt-0.5">
+                  {data.error_count} err ({data.error_rate_pct.toFixed(1)}%)
+                </div>
+              )}
+            </div>
+            <div className="bg-gray-900 border border-gray-700 rounded-lg p-2.5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-600">SLA Compliance</div>
+              <div className={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-xs font-mono ${slaCompliancePillClass(data.sla.compliance_pct)}`}>
+                {data.sla.compliance_pct.toFixed(1)}%
+              </div>
+              <div className="text-[9px] text-gray-600 mt-1 font-mono">
+                {data.sla.violations_count} over {targetTtft} ms
+              </div>
+            </div>
+            <div className="bg-gray-900 border border-gray-700 rounded-lg p-2.5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-600">TTFT p95 / p99</div>
+              <div className="text-lg font-mono text-amber-300">
+                {data.ttft.p95.toFixed(0)}<span className="text-gray-600 text-sm">/</span>{data.ttft.p99.toFixed(0)}<span className="text-[10px] text-gray-600 ml-0.5">ms</span>
+              </div>
+              <div className="text-[9px] text-gray-600 font-mono">p50 {data.ttft.p50.toFixed(0)} ms</div>
+            </div>
+            <div className="bg-gray-900 border border-gray-700 rounded-lg p-2.5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-600">E2E p95 / p99</div>
+              <div className="text-lg font-mono text-purple-300">
+                {data.e2e.p95.toFixed(0)}<span className="text-gray-600 text-sm">/</span>{data.e2e.p99.toFixed(0)}<span className="text-[10px] text-gray-600 ml-0.5">ms</span>
+              </div>
+              <div className="text-[9px] text-gray-600 font-mono">p50 {data.e2e.p50.toFixed(0)} ms</div>
+            </div>
+          </div>
+
+          {/* Per-model breakdown */}
+          {data.by_model.length > 1 && (
+            <div className="border-t border-gray-700 pt-3">
+              <div className="text-[9px] uppercase tracking-widest text-gray-600 mb-1.5">Per-Model p95</div>
+              <table className="w-full text-[11px] font-mono">
+                <thead>
+                  <tr className="text-[9px] uppercase tracking-widest text-gray-600">
+                    <th className="text-left font-normal py-1">Model</th>
+                    <th className="text-right font-normal py-1">Requests</th>
+                    <th className="text-right font-normal py-1">TTFT p95</th>
+                    <th className="text-right font-normal py-1">E2E p95</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.by_model.map(m => (
+                    <tr key={m.model} className="border-t border-gray-800">
+                      <td className="py-1 text-gray-300 truncate max-w-xs">{m.model}</td>
+                      <td className="py-1 text-right text-gray-500">{m.count}</td>
+                      <td className="py-1 text-right text-amber-300">{m.p95_ttft_ms.toFixed(0)} ms</td>
+                      <td className="py-1 text-right text-purple-300">{m.p95_e2e_ms.toFixed(0)} ms</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Recent violations */}
+          {data.sla.violations.length > 0 && (
+            <div className="border-t border-gray-700 pt-3">
+              <div className="text-[9px] uppercase tracking-widest text-gray-600 mb-1.5">
+                Recent TTFT Violations (over {targetTtft} ms)
+              </div>
+              <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                {data.sla.violations.map((v, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 text-[11px] font-mono">
+                    <span className="text-gray-600 shrink-0">
+                      {new Date(v.ts_ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                    <span className="text-gray-400 truncate flex-1">{v.model}</span>
+                    <span className="text-red-400 shrink-0">{v.ttft_ms} ms</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
 // ── LocalPerformanceHistory — DuckDB-backed multi-metric chart (localhost) ─────
 //
 // Fetches the last 1 hour of raw samples from GET /api/history and renders a
@@ -2122,6 +2307,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Localhost: Inference Profiler — correlated TTFT/KV/Queue/Thermal/Power timeline */}
               {isLocalHost && <InferenceProfiler />}
+
+              {/* Localhost: SLA Monitor — TTFT/E2E p50/p95/p99 + compliance vs target */}
+              {isLocalHost && <SlaMonitor />}
 
               {/* WES Trend Chart (cloud only) */}
               {!isLocalHost && getToken && (
