@@ -97,7 +97,7 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
   const hasObs = activeObsCount > 0;
   return (
     <div className={`w-full px-4 py-2.5 border-b flex items-center gap-3 min-h-[40px] ${
-      hasObs ? 'bg-amber-950/30 border-amber-900/30' : 'bg-gray-900 border-gray-800'
+      hasObs ? 'bg-amber-950/30 border-amber-900/30' : 'bg-gray-800 border-gray-700'
     }`}>
       {/* Status dot */}
       <div className={`w-1.5 h-1.5 rounded-full shrink-0 animate-pulse ${

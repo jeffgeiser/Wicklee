@@ -9,11 +9,11 @@ interface ProfileViewProps {
 const ProfileView: React.FC<ProfileViewProps> = ({ currentUser }) => {
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-500">
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-[32px] p-8 overflow-hidden relative shadow-sm dark:shadow-none transition-colors">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-[32px] p-8 overflow-hidden relative shadow-sm dark:shadow-none transition-colors">
         <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/10 blur-[80px] rounded-full -mr-20 -mt-20"></div>
         
         <div className="flex flex-col md:flex-row items-center gap-8 relative z-10">
-          <div className="w-32 h-32 rounded-3xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-gray-400 text-4xl font-bold shadow-2xl">
+          <div className="w-32 h-32 rounded-3xl bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-gray-400 text-4xl font-bold shadow-2xl">
             {currentUser.fullName.charAt(0)}
           </div>
           <div className="flex-1 text-center md:text-left space-y-2">
@@ -34,7 +34,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({ currentUser }) => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 space-y-6 shadow-sm dark:shadow-none transition-colors">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 space-y-6 shadow-sm dark:shadow-none transition-colors">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <UserIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
             Identity Details
@@ -47,7 +47,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({ currentUser }) => {
               { label: 'Language', value: 'English (US)' },
               { label: 'Timezone', value: 'Pacific Standard Time (PST)' }
             ].map(item => (
-              <div key={item.label} className="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-800/50">
+              <div key={item.label} className="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700/50">
                 <span className="text-sm text-gray-500">{item.label}</span>
                 <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.value}</span>
               </div>
@@ -55,25 +55,25 @@ const ProfileView: React.FC<ProfileViewProps> = ({ currentUser }) => {
           </div>
         </div>
 
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 space-y-6 shadow-sm dark:shadow-none transition-colors">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 space-y-6 shadow-sm dark:shadow-none transition-colors">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <Globe className="w-5 h-5 text-blue-600 dark:text-blue-400" />
             Activity Snapshot
           </h3>
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-gray-50 dark:bg-gray-800/30 p-4 rounded-xl border border-gray-100 dark:border-gray-800">
+            <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
               <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Joined</p>
               <p className="text-lg font-bold text-gray-900 dark:text-white">Jan 2024</p>
             </div>
-            <div className="bg-gray-50 dark:bg-gray-800/30 p-4 rounded-xl border border-gray-100 dark:border-gray-800">
+            <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
               <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Fleet Access</p>
               <p className="text-lg font-bold text-gray-900 dark:text-white">4 Clusters</p>
             </div>
-            <div className="bg-gray-50 dark:bg-gray-800/30 p-4 rounded-xl border border-gray-100 dark:border-gray-800">
+            <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
               <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Deployments</p>
               <p className="text-lg font-bold text-gray-900 dark:text-white">128 Total</p>
             </div>
-            <div className="bg-gray-50 dark:bg-gray-800/30 p-4 rounded-xl border border-gray-100 dark:border-gray-800">
+            <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
               <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Last Active</p>
               <p className="text-lg font-bold text-gray-900 dark:text-white">2m ago</p>
             </div>

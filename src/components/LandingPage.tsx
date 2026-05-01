@@ -9,7 +9,7 @@ interface LandingPageProps {
 }
 
 const FeatureCard: React.FC<{ icon: React.ElementType, title: string, description: string }> = ({ icon: Icon, title, description }) => (
-  <div className="p-6 bg-gray-900 border border-gray-800 rounded-2xl hover:border-blue-500/30 transition-all group">
+  <div className="p-6 bg-gray-800 border border-gray-700 rounded-2xl hover:border-blue-500/30 transition-all group">
     <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
       <Icon className="w-6 h-6 text-cyan-400" />
     </div>
@@ -64,7 +64,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
   const [copiedMac, setCopiedMac] = useState(false);
   const [copiedWin, setCopiedWin] = useState(false);
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-gray-900 text-gray-100 selection:bg-blue-600 selection:text-white">
       {/* Background Decor */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full"></div>
@@ -186,7 +186,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       </section>
 
       {/* Feature Grid */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-32 border-t border-gray-900 relative z-10">
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-32 border-t border-gray-800 relative z-10">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           <FeatureCard
             icon={Cpu}
@@ -222,7 +222,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           {/* 2-column comparison: Runtime vs Wicklee */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
             {/* Left: What your runtime shows */}
-            <div className="bg-gray-900/40 border border-gray-800 rounded-2xl p-6">
+            <div className="bg-gray-800/40 border border-gray-700 rounded-2xl p-6">
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">Your runtime</p>
               <div className="space-y-3">
                 {([
@@ -230,7 +230,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                   { icon: <Database  className="w-4 h-4 text-gray-500" />, title: 'VRAM & Model Size',  desc: 'Which model is loaded and how much memory it uses' },
                   { icon: <BarChart2 className="w-4 h-4 text-gray-500" />, title: 'Queue Depth',        desc: 'How many requests are waiting (vLLM only)' },
                 ] as const).map(item => (
-                  <div key={item.title} className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-4 flex items-start gap-3">
+                  <div key={item.title} className="bg-gray-700/50 border border-gray-700/50 rounded-xl p-4 flex items-start gap-3">
                     <span className="shrink-0 mt-0.5">{item.icon}</span>
                     <div>
                       <p className="text-sm font-semibold text-gray-400">{item.title}</p>
@@ -242,7 +242,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             </div>
 
             {/* Right: What Wicklee adds */}
-            <div className="bg-gray-900/40 border border-gray-800 rounded-2xl p-6">
+            <div className="bg-gray-800/40 border border-gray-700 rounded-2xl p-6">
               <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4">Wicklee adds</p>
               <div className="space-y-3">
                 {([
@@ -251,7 +251,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                   { icon: <Route        className="w-4 h-4 text-blue-400" />,    title: 'Fleet Routing',             desc: 'Cross-node routing decisions based on live WES and availability.',             border: 'border-blue-500/30' },
                   { icon: <ShieldCheck  className="w-4 h-4 text-violet-400" />,  title: '18 Observation Patterns',   desc: 'Correlate signals no single runtime exposes — from TTFT regression to queue saturation.', border: 'border-violet-500/30' },
                 ] as const).map(item => (
-                  <div key={item.title} className={`bg-gray-800/50 border ${item.border} rounded-xl p-4 flex items-start gap-3`}>
+                  <div key={item.title} className={`bg-gray-700/50 border ${item.border} rounded-xl p-4 flex items-start gap-3`}>
                     <span className="shrink-0 mt-0.5">{item.icon}</span>
                     <div>
                       <p className="text-sm font-semibold text-white">{item.title}</p>
@@ -276,7 +276,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {allPatterns.map((p) => (
-              <div key={p.id} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all">
+              <div key={p.id} className="bg-gray-800 border border-gray-700 rounded-2xl p-5 hover:border-gray-700 transition-all">
                 <div className="flex items-center gap-2 mb-3">
                   {p.icon}
                   <div className="flex-1 min-w-0">
@@ -298,7 +298,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
 
         {/* Part 3 — Sovereign by design */}
-        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12">
           <p className="text-xs font-bold text-green-400 uppercase tracking-widest mb-4 text-center">Architecture</p>
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-10 tracking-tight text-center">Sovereign by design.</h2>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-start">
@@ -316,7 +316,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-gray-800">
+                  <tr className="border-b border-gray-700">
                     <th className="text-left text-xs text-gray-500 font-medium pb-3 pr-6 uppercase tracking-wider w-1/2"></th>
                     <th className="text-center text-xs text-gray-500 font-medium pb-3 px-4 uppercase tracking-wider">Others</th>
                     <th className="text-center text-xs text-blue-400 font-bold pb-3 pl-4 uppercase tracking-wider">Wicklee</th>
@@ -362,7 +362,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Observe Without Interfering Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
-        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12">
           <p className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4 text-center">Zero Interference</p>
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Observe without interfering.</h2>
           <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
@@ -395,7 +395,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Multi-Model Intelligence Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
-        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12">
           <p className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4 text-center">Multi-Model</p>
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Every model. Tracked independently.</h2>
           <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
@@ -410,7 +410,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               { label: 'Model Comparison', desc: 'Side-by-side WES, tok/s, watts, TTFT, and cost for every model that has run on your hardware.' },
               { label: 'Automatic Detection', desc: 'No configuration. Wicklee reads all loaded models from Ollama and tracks them as they come and go.' },
             ].map((t) => (
-              <div key={t.label} className="p-4 bg-gray-800/40 border border-gray-700/50 rounded-xl">
+              <div key={t.label} className="p-4 bg-gray-700/40 border border-gray-700/50 rounded-xl">
                 <p className="text-sm font-semibold text-white mb-1">{t.label}</p>
                 <p className="text-[11px] text-gray-500 leading-relaxed">{t.desc}</p>
               </div>
@@ -427,7 +427,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Built for Agents & LLMs Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
-        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12">
           <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">MCP</p>
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Built for agents &amp; LLMs.</h2>
           <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
@@ -443,14 +443,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               { tool: 'get_metrics_history', desc: '1-hour rolling telemetry buffer' },
               { tool: 'wicklee://node/*', desc: 'MCP resources for live metrics' },
             ].map((t) => (
-              <div key={t.tool} className="p-3 bg-gray-800/40 border border-gray-700/50 rounded-xl">
+              <div key={t.tool} className="p-3 bg-gray-700/40 border border-gray-700/50 rounded-xl">
                 <p className="text-xs font-mono text-blue-400 mb-1">{t.tool}</p>
                 <p className="text-[10px] text-gray-500">{t.desc}</p>
               </div>
             ))}
           </div>
           <div className="text-center">
-            <div className="inline-block bg-gray-950 border border-gray-800 rounded-xl px-5 py-3 font-mono text-xs text-gray-400">
+            <div className="inline-block bg-gray-900 border border-gray-700 rounded-xl px-5 py-3 font-mono text-xs text-gray-400">
               <span className="text-cyan-400">POST</span> localhost:7700/mcp
               <span className="text-gray-600 ml-2">// JSON-RPC 2.0 · no auth · all tiers</span>
             </div>
@@ -495,7 +495,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Grows With You Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
-        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12">
           <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-4 text-center">Scale</p>
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Grows with you — from local to enterprise.</h2>
           <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
@@ -503,21 +503,21 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             When your fleet scales or your organization requires enterprise observability, Wicklee becomes the bridge — enriching your existing tools with the hardware context they're missing.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            <div className="p-5 bg-gray-800/40 border border-gray-700/50 rounded-2xl">
+            <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
               <BarChart2 className="w-6 h-6 text-amber-400 mb-3" />
               <h4 className="text-sm font-bold text-white mb-2">OpenTelemetry Export</h4>
               <p className="text-xs text-gray-500 leading-relaxed">
                 Enrich Datadog, Grafana, and New Relic LLM traces with GPU utilization, thermal state, and WES context from every node.
               </p>
             </div>
-            <div className="p-5 bg-gray-800/40 border border-gray-700/50 rounded-2xl">
+            <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
               <Gauge className="w-6 h-6 text-amber-400 mb-3" />
               <h4 className="text-sm font-bold text-white mb-2">Prometheus Endpoint</h4>
               <p className="text-xs text-gray-500 leading-relaxed">
                 Expose WES scores, thermal patterns, and node intelligence as Prometheus metrics for your existing alerting stack.
               </p>
             </div>
-            <div className="p-5 bg-gray-800/40 border border-gray-700/50 rounded-2xl">
+            <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
               <Server className="w-6 h-6 text-amber-400 mb-3" />
               <h4 className="text-sm font-bold text-white mb-2">MCP Server</h4>
               <p className="text-xs text-gray-500 leading-relaxed">
@@ -533,7 +533,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* How it works Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-40 relative z-10">
-        <div className="bg-gray-900/50 border border-gray-800 rounded-[32px] p-6 sm:p-12 overflow-hidden relative">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12 overflow-hidden relative">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-16 items-center">
             <div>
               <h2 className="text-4xl font-bold text-white mb-8 tracking-tight">How it works</h2>
@@ -563,7 +563,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             </div>
 
             <div className="relative">
-              <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 font-mono text-xs text-gray-500 shadow-2xl overflow-x-auto">
+              <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 font-mono text-xs text-gray-500 shadow-2xl overflow-x-auto">
                 <div className="flex items-center gap-2 mb-4">
                   <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
                   <div className="w-3 h-3 rounded-full bg-amber-500/50"></div>
@@ -594,7 +594,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-gray-900 py-16 text-center text-sm text-gray-500">
+      <footer className="border-t border-gray-800 py-16 text-center text-sm text-gray-500">
         <p>&copy; 2026 Wicklee OSS Project. All rights reserved.</p>
         <div className="flex items-center justify-center gap-6 mt-4">
           <button onClick={() => onNavigate('/docs')} className="hover:text-white transition-colors">Documentation</button>

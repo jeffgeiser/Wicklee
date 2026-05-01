@@ -55,7 +55,7 @@ const SustainabilityView: React.FC<SustainabilityViewProps> = ({ nodes }) => {
         </div>
       </div>
 
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-6">
         <div className="flex items-center justify-between mb-8">
           <div>
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">Fleet Sustainability Trends</h3>

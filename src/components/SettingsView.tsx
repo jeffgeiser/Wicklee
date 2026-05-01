@@ -165,8 +165,8 @@ const Section: React.FC<{
   iconCls: string;
   children: React.ReactNode;
 }> = ({ id, title, icon: Icon, iconBg, iconCls, children }) => (
-  <div id={id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden scroll-mt-6">
-    <div className="flex items-center gap-2.5 px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+  <div id={id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden scroll-mt-6">
+    <div className="flex items-center gap-2.5 px-6 py-4 border-b border-gray-100 dark:border-gray-700">
       <span className={`inline-flex items-center justify-center w-5 h-5 rounded ${iconBg} shrink-0`}>
         <Icon size={11} className={iconCls} />
       </span>
@@ -194,7 +194,7 @@ const RadioGroup: React.FC<{
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
             value === opt.value
               ? 'bg-indigo-600 border-indigo-600 text-white'
-              : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-indigo-400/50 hover:text-indigo-400'
+              : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-indigo-400/50 hover:text-indigo-400'
           }`}
         >
           {opt.label}
@@ -207,7 +207,7 @@ const RadioGroup: React.FC<{
 // ── Shared input classes ──────────────────────────────────────────────────────
 
 const INPUT_BASE =
-  'h-9 bg-gray-50 dark:bg-gray-800 border rounded-lg px-3 text-sm font-telin text-gray-900 dark:text-white focus:outline-none focus:ring-1 transition-colors';
+  'h-9 bg-gray-50 dark:bg-gray-700 border rounded-lg px-3 text-sm font-telin text-gray-900 dark:text-white focus:outline-none focus:ring-1 transition-colors';
 
 const inputCls = (dirty: boolean) =>
   dirty
@@ -412,7 +412,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           {/* Reference cost benchmark */}
-          <div className="rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-800 px-4 py-3">
+          <div className="rounded-xl bg-gray-50 dark:bg-gray-700/60 border border-gray-100 dark:border-gray-700 px-4 py-3">
             <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
               Reference Benchmark · 100W node running 24/7
             </p>
@@ -486,7 +486,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         ) : (
           <div>
             {/* Controls bar */}
-            <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-4 flex-wrap border-b border-gray-100 dark:border-gray-800">
+            <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-4 flex-wrap border-b border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-1.5">
                 <span className="text-amber-400 text-[9px]">◆</span>
                 <span className="text-[9px] text-gray-400 dark:text-gray-500">= custom override active</span>
@@ -526,7 +526,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-gray-100 dark:border-gray-800">
+                  <tr className="border-b border-gray-100 dark:border-gray-700">
                     <th className="text-left px-4 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Node ID</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Display Name</th>
@@ -656,7 +656,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <p className="text-xs text-gray-500 leading-relaxed">
               API keys authenticate programmatic access to the Fleet API v1 — routing recommendations, fleet status, WES leaderboard, and intelligence findings.
             </p>
-            <div className="flex items-center gap-3 p-4 rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40">
+            <div className="flex items-center gap-3 p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40">
               <Key size={16} className="text-cyan-400 shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold text-gray-200">Manage API Keys</p>
@@ -759,7 +759,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           })()}
 
           {/* Export */}
-          <div className="flex items-center justify-between py-4 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-between py-4 border-t border-gray-100 dark:border-gray-700">
             <div>
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Export Settings</p>
               <p className="text-[10px] text-gray-500 mt-0.5">Download your fleet and node settings as JSON.</p>
@@ -773,7 +773,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           {/* Danger zone */}
-          <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
+          <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-500/70 mb-3">Danger Zone</p>
             <div className="flex items-center justify-between gap-4">
               <div>
@@ -811,7 +811,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* Saved toast */}
       {savedToast && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-gray-900 border border-gray-700/80 rounded-xl shadow-xl shadow-black/40 animate-in fade-in slide-in-from-bottom-2 duration-200">
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-gray-800 border border-gray-700/80 rounded-xl shadow-xl shadow-black/40 animate-in fade-in slide-in-from-bottom-2 duration-200">
           <Check size={13} className="text-green-400 shrink-0" />
           <span className="text-xs font-semibold text-gray-200">Saved</span>
         </div>
@@ -949,7 +949,7 @@ const AlertsSection: React.FC<{
           </div>
           <div className="space-y-2 opacity-40 pointer-events-none select-none">
             {EVENT_TYPES.map(et => (
-              <div key={et.value} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40">
+              <div key={et.value} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40">
                 <div>
                   <p className="text-xs font-semibold text-gray-300">{et.label}</p>
                 </div>
@@ -997,7 +997,7 @@ const AlertsSection: React.FC<{
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors ${
                 canAddChannel
                   ? 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400'
-                  : 'border-gray-800 text-gray-600 cursor-not-allowed'
+                  : 'border-gray-700 text-gray-600 cursor-not-allowed'
               }`}
               title={canAddChannel ? undefined : 'Pro plan: 1 channel max. Upgrade to Team for unlimited.'}
             >
@@ -1007,7 +1007,7 @@ const AlertsSection: React.FC<{
 
           {/* Add channel form */}
           {showChanForm && (
-            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-4 space-y-3">
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/60 p-4 space-y-3">
               {/* Type toggle */}
               <div className="flex items-center gap-2">
                 {(['slack', 'email', ...(isTeam ? ['pagerduty' as const] : [])] as const).map(t => (
@@ -1081,7 +1081,7 @@ const AlertsSection: React.FC<{
                   ? `…${((cfg.routing_key as string) ?? '').slice(-8)}`
                   : cfg.address ?? '';
                 return (
-                  <div key={ch.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 gap-3">
+                  <div key={ch.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/30 gap-3">
                     <div className="flex items-center gap-2.5 min-w-0">
                       {ch.channel_type === 'slack'
                         ? <Slack size={13} className="text-indigo-400 shrink-0" />
@@ -1139,7 +1139,7 @@ const AlertsSection: React.FC<{
 
           {/* Add rule form */}
           {showRuleForm && (
-            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-4 space-y-3">
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/60 p-4 space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Event type */}
                 <div className="space-y-1">
@@ -1240,7 +1240,7 @@ const AlertsSection: React.FC<{
           ) : (
             <div className="space-y-2">
               {rules.map(rule => (
-                <div key={rule.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 gap-3">
+                <div key={rule.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/30 gap-3">
                   <div className="min-w-0 space-y-0.5">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-semibold text-gray-200">{eventLabel(rule.event_type)}</span>
@@ -1374,7 +1374,7 @@ const NodeOverrideRow: React.FC<{
   );
 
   return (
-    <tr className={`hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors ${eff.hasAnyOverride ? 'border-l-2 border-amber-400/40' : 'border-l-2 border-transparent'}`}>
+    <tr className={`hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors ${eff.hasAnyOverride ? 'border-l-2 border-amber-400/40' : 'border-l-2 border-transparent'}`}>
 
       {/* Node ID */}
       <td className="px-4 py-3">
@@ -1480,7 +1480,7 @@ const NodeOverrideRow: React.FC<{
       {/* Fleet defaults chip */}
       <td className="px-3 py-3 text-right">
         {!eff.hasAnyOverride && (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 whitespace-nowrap">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 whitespace-nowrap">
             Fleet defaults
           </span>
         )}
@@ -1562,7 +1562,7 @@ const OtelExportSection: React.FC<{
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}
               placeholder="https://otel.datadoghq.com"
-              className="mt-1 w-full px-3 py-2 bg-gray-800/60 border border-gray-700 rounded-lg text-xs text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+              className="mt-1 w-full px-3 py-2 bg-gray-700/60 border border-gray-700 rounded-lg text-xs text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
             />
             <p className="mt-1 text-[10px] text-gray-600">The /v1/metrics path is appended automatically.</p>
           </div>
@@ -1574,7 +1574,7 @@ const OtelExportSection: React.FC<{
               value={authHeaders}
               onChange={(e) => setAuthHeaders(e.target.value)}
               placeholder='{"DD-API-KEY": "your-key"}'
-              className="mt-1 w-full px-3 py-2 bg-gray-800/60 border border-gray-700 rounded-lg text-xs text-gray-200 font-mono placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+              className="mt-1 w-full px-3 py-2 bg-gray-700/60 border border-gray-700 rounded-lg text-xs text-gray-200 font-mono placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
             />
           </div>
 
@@ -1587,7 +1587,7 @@ const OtelExportSection: React.FC<{
                 max={300}
                 value={interval}
                 onChange={(e) => setInterval_(Number(e.target.value))}
-                className="w-20 px-3 py-2 bg-gray-800/60 border border-gray-700 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-amber-500/50"
+                className="w-20 px-3 py-2 bg-gray-700/60 border border-gray-700 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-amber-500/50"
               />
               <span className="text-xs text-gray-500">seconds (15–300)</span>
             </div>

@@ -66,7 +66,7 @@ const KeyRevealModal: React.FC<{
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 border border-amber-500/30 rounded-2xl p-8 max-w-lg w-full shadow-2xl space-y-6">
+      <div className="bg-gray-800 border border-amber-500/30 rounded-2xl p-8 max-w-lg w-full shadow-2xl space-y-6">
         <div className="flex items-start justify-between">
           <div>
             <h3 className="text-lg font-bold text-white">API Key Created</h3>
@@ -86,7 +86,7 @@ const KeyRevealModal: React.FC<{
           <label className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-2 block">
             Your API Key
           </label>
-          <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex items-center gap-3">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 flex items-center gap-3">
             <code className="font-mono text-sm text-indigo-300 flex-1 break-all">{result.key}</code>
             <button
               onClick={handleCopy}
@@ -125,7 +125,7 @@ const CreateKeyModal: React.FC<{
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6">
+      <div className="bg-gray-800 border border-gray-700 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-white">New API Key</h3>
           <button onClick={onClose} className="text-gray-600 hover:text-gray-300 transition-colors">
@@ -142,7 +142,7 @@ const CreateKeyModal: React.FC<{
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. GitHub Actions CI"
-              className="w-full bg-gray-950 border border-gray-700 focus:border-indigo-500 text-white text-sm rounded-xl px-4 py-3 outline-none transition-colors placeholder:text-gray-600"
+              className="w-full bg-gray-900 border border-gray-700 focus:border-indigo-500 text-white text-sm rounded-xl px-4 py-3 outline-none transition-colors placeholder:text-gray-600"
             />
             <p className="text-xs text-gray-600 mt-1.5">A label to identify where this key is used.</p>
           </div>
@@ -315,10 +315,10 @@ const APIKeysView: React.FC = () => {
         </div>
 
         {/* Keys table */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
           <table className="w-full text-left">
             <thead>
-              <tr className="bg-gray-950/50 text-[10px] text-gray-500 uppercase tracking-widest font-bold border-b border-gray-800">
+              <tr className="bg-gray-900/50 text-[10px] text-gray-500 uppercase tracking-widest font-bold border-b border-gray-700">
                 <th className="px-6 py-4">Key Name</th>
                 <th className="px-6 py-4">Token</th>
                 <th className="px-6 py-4">Created / Last Used</th>
@@ -356,12 +356,12 @@ const APIKeysView: React.FC = () => {
               {!loading && keys.map(k => (
                 <tr
                   key={k.key_id}
-                  className="hover:bg-gray-800/30 transition-colors group"
+                  className="hover:bg-gray-700/30 transition-colors group"
                   onMouseLeave={() => { if (confirmDelete === k.key_id) setConfirmDelete(null); }}
                 >
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-gray-800 rounded-lg text-indigo-400">
+                      <div className="p-1.5 bg-gray-700 rounded-lg text-indigo-400">
                         <Key className="w-4 h-4" />
                       </div>
                       <span className="text-sm font-semibold text-gray-200">{k.name}</span>
@@ -405,9 +405,9 @@ const APIKeysView: React.FC = () => {
         </div>
 
         {/* Quick Reference */}
-        <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6 space-y-6">
+        <div className="bg-gray-800/50 border border-gray-700 rounded-2xl p-6 space-y-6">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-gray-800 rounded-lg">
+            <div className="p-2 bg-gray-700 rounded-lg">
               <Terminal className="w-4 h-4 text-indigo-400" />
             </div>
             <h3 className="text-sm font-bold text-gray-200 uppercase tracking-wide">Quick Reference</h3>
@@ -420,14 +420,14 @@ const APIKeysView: React.FC = () => {
               <div className="space-y-2">
                 <div>
                   <p className="text-[10px] text-gray-600 mb-1">Base URL</p>
-                  <div className="flex items-center gap-2 bg-gray-950 rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-2 bg-gray-900 rounded-lg px-3 py-2">
                     <code className="font-mono text-xs text-gray-300 flex-1 truncate">{DISPLAY_URL}</code>
                     <CopyButton text={DISPLAY_URL} className="text-gray-600 hover:text-gray-400" />
                   </div>
                 </div>
                 <div>
                   <p className="text-[10px] text-gray-600 mb-1">Request Header</p>
-                  <div className="flex items-center gap-2 bg-gray-950 rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-2 bg-gray-900 rounded-lg px-3 py-2">
                     <code className="font-mono text-xs text-indigo-300 flex-1">X-API-Key: wk_live_…</code>
                     <CopyButton text="X-API-Key: YOUR_KEY_HERE" className="text-gray-600 hover:text-gray-400" />
                   </div>
@@ -463,7 +463,7 @@ const APIKeysView: React.FC = () => {
           {/* curl snippet */}
           <div>
             <h4 className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-2">Example</h4>
-            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex items-start justify-between gap-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 flex items-start justify-between gap-4">
               <pre className="font-mono text-xs text-gray-300 leading-relaxed overflow-x-auto flex-1 whitespace-pre">
 {`curl ${DISPLAY_URL}/api/v1/fleet \\
   -H "X-API-Key: wk_live_YOUR_KEY_HERE"`}

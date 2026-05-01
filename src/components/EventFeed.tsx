@@ -166,9 +166,9 @@ export function eventMeta(ev: FleetEvent): EventMeta {
 
 const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl flex flex-col h-full overflow-hidden shadow-sm dark:shadow-none">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl flex flex-col h-full overflow-hidden shadow-sm dark:shadow-none">
       {/* Header */}
-      <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-gray-50/50 dark:bg-gray-800/20">
+      <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50/50 dark:bg-gray-700/20">
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-blue-600 dark:text-blue-400" />
           <h3 className="font-semibold text-sm text-gray-800 dark:text-gray-200">Live Activity</h3>
@@ -210,7 +210,7 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
               return (
                 <div
                   key={ev.id}
-                  className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                  className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                 >
                   {icon}
                   <div className="min-w-0 flex-1">
@@ -220,7 +220,7 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
                       </span>
                       <span className={`text-xs font-medium ${cls}`}>{label}</span>
                       {count > 1 && (
-                        <span className="text-[9px] font-bold text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded-full tabular-nums">
+                        <span className="text-[9px] font-bold text-gray-500 bg-gray-700 px-1.5 py-0.5 rounded-full tabular-nums">
                           ×{count}
                         </span>
                       )}

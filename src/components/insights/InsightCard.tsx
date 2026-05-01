@@ -61,10 +61,10 @@ const InsightCard: React.FC<InsightCardProps> = ({
 
   return (
     <div
-      className={`bg-gray-900 border border-gray-800 border-l-[3px] ${borderCls} rounded-2xl overflow-hidden`}
+      className={`bg-gray-800 border border-gray-700 border-l-[3px] ${borderCls} rounded-2xl overflow-hidden`}
     >
       {/* ── Title row ───────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-800/60">
+      <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-700/60">
         <div className="flex items-center gap-2 min-w-0">
           <Icon className={`w-3.5 h-3.5 shrink-0 ${iconCls}`} />
           <p className={`text-[10px] font-bold uppercase tracking-widest leading-none ${iconCls}`}>

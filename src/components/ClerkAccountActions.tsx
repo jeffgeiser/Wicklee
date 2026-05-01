@@ -32,10 +32,10 @@ const ClerkAccountActions: React.FC<{
   };
 
   return (
-    <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50 space-y-0.5">
+    <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-700/50 space-y-0.5">
       <button
         onClick={() => { onClose(); openUserProfile(); }}
-        className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+        className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
       >
         <UserCog className="w-4 h-4 text-blue-600 dark:text-blue-400" />
         Manage Account

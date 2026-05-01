@@ -35,15 +35,15 @@ const TeamManagement: React.FC<TeamManagementProps> = () => {
             Manage your organization members, invitations, and roles. All members share the same fleet dashboard.
           </p>
         </div>
-        <div className="rounded-2xl overflow-hidden border border-gray-800 bg-gray-900">
+        <div className="rounded-2xl overflow-hidden border border-gray-700 bg-gray-800">
           <ClerkOrgProfile
             appearance={{
               baseTheme: undefined,
               elements: {
                 rootBox: 'w-full',
                 cardBox: 'shadow-none border-0 bg-transparent',
-                navbar: 'bg-gray-950',
-                pageScrollBox: 'bg-gray-900',
+                navbar: 'bg-gray-900',
+                pageScrollBox: 'bg-gray-800',
               },
             }}
           />

@@ -60,7 +60,7 @@ const InsightsLockedCard: React.FC<InsightsLockedCardProps> = ({
   const style = TIER_STYLE[label] ?? TIER_STYLE.Pro;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden">
 
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
@@ -78,8 +78,8 @@ const InsightsLockedCard: React.FC<InsightsLockedCardProps> = ({
       {/* Blurred placeholder body */}
       <div className="relative py-1">
         <div className="blur-sm select-none pointer-events-none space-y-2" aria-hidden>
-          <div className="h-6 bg-gray-800 rounded-lg w-2/3" />
-          <div className="h-3 bg-gray-800/60 rounded w-1/2" />
+          <div className="h-6 bg-gray-700 rounded-lg w-2/3" />
+          <div className="h-3 bg-gray-700/60 rounded w-1/2" />
         </div>
         <div className="absolute inset-0 flex items-center justify-center">
           <Lock className="w-4 h-4 text-gray-600" />

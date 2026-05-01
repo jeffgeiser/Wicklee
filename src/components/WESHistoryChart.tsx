@@ -176,7 +176,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 shadow-sm dark:shadow-none">
 
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
@@ -198,7 +198,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
             <button
               onClick={handleCsvDownload}
               title="Download CSV export"
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-800 dark:hover:bg-gray-800 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-700 dark:hover:bg-gray-700 transition-colors"
             >
               <FileDown className="w-3.5 h-3.5" />
               CSV
@@ -223,7 +223,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
                       ? 'bg-indigo-600 text-white'
                       : locked
                       ? 'text-gray-600 dark:text-gray-700 cursor-not-allowed'
-                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}
                   `}
                 >
                   {locked && <Lock className="w-2.5 h-2.5" />}
@@ -244,7 +244,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
               onClick={() => setSelectedId(n.node_id)}
               className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
                 n.node_id === selectedId
-                  ? 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+                  ? 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
                   : 'text-gray-500 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-400'
               }`}
             >

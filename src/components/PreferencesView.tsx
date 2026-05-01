@@ -17,10 +17,10 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
       </div>
 
       <div className="grid grid-cols-1 gap-6">
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl divide-y divide-gray-100 dark:divide-gray-800 shadow-sm dark:shadow-none transition-colors">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl divide-y divide-gray-100 dark:divide-gray-800 shadow-sm dark:shadow-none transition-colors">
           <div className="p-6 flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="p-2 bg-gray-800 rounded-lg text-blue-400">
+              <div className="p-2 bg-gray-700 rounded-lg text-blue-400">
                 <Moon className="w-5 h-5" />
               </div>
               <div>
@@ -28,12 +28,12 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
                 <p className="text-xs text-gray-500">Hardware-Centric Dark — optimized for monitoring.</p>
               </div>
             </div>
-            <span className="text-xs text-gray-500 bg-gray-800 px-3 py-1.5 rounded-lg">Dark Mode</span>
+            <span className="text-xs text-gray-500 bg-gray-700 px-3 py-1.5 rounded-lg">Dark Mode</span>
           </div>
 
           <div className="p-6 flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-blue-600 dark:text-blue-400">
+              <div className="p-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-blue-600 dark:text-blue-400">
                 <Bell className="w-5 h-5" />
               </div>
               <div>
@@ -43,13 +43,13 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
             </div>
             <div className="relative inline-flex items-center cursor-pointer">
               <input type="checkbox" className="sr-only peer" defaultChecked />
-              <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 dark:after:border-gray-800 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 dark:after:border-gray-700 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
             </div>
           </div>
 
           <div className="p-6 flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-blue-600 dark:text-blue-400">
+              <div className="p-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-blue-600 dark:text-blue-400">
                 <Layout className="w-5 h-5" />
               </div>
               <div>
@@ -57,14 +57,14 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
                 <p className="text-xs text-gray-500">The tenant loaded initially on login.</p>
               </div>
             </div>
-            <span className="text-xs font-telin text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors">
+            <span className="text-xs font-telin text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors">
               {currentTenant.name}
             </span>
           </div>
 
           <div className="p-6 flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-blue-600 dark:text-blue-400">
+              <div className="p-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-blue-600 dark:text-blue-400">
                 <Cpu className="w-5 h-5" />
               </div>
               <div>
@@ -74,13 +74,13 @@ const PreferencesView: React.FC<PreferencesViewProps> = ({ currentTenant, theme,
             </div>
             <div className="relative inline-flex items-center cursor-pointer">
               <input type="checkbox" className="sr-only peer" />
-              <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:translate-x-full peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 dark:after:border-gray-800 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:translate-x-full peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 dark:after:border-gray-700 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
             </div>
           </div>
         </div>
 
         <div className="flex justify-end gap-3">
-          <button className="px-6 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-bold rounded-xl transition-all border border-gray-200 dark:border-transparent">
+          <button className="px-6 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-bold rounded-xl transition-all border border-gray-200 dark:border-transparent">
             Reset Defaults
           </button>
           <button className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20">

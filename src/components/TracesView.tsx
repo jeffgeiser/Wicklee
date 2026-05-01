@@ -139,12 +139,12 @@ const SovereigntySection: React.FC<{
   ];
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
 
       {/* ── Collapsible header ─────────────────────────────────────────────── */}
       <button
         onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors"
+        className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors"
       >
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex items-center justify-center shrink-0">
@@ -167,13 +167,13 @@ const SovereigntySection: React.FC<{
 
       {/* ── Expandable content ─────────────────────────────────────────────── */}
       {expanded && (
-      <div className="px-5 pb-5 space-y-4 border-t border-gray-100 dark:border-gray-800 pt-4">
+      <div className="px-5 pb-5 space-y-4 border-t border-gray-100 dark:border-gray-700 pt-4">
 
       {/* ── Destination + Manifest ───────────────────────────────────────────── */}
       <div className="grid md:grid-cols-2 gap-4">
 
         {/* Telemetry Destination */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-4">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
             Telemetry Destination
           </p>
@@ -184,7 +184,7 @@ const SovereigntySection: React.FC<{
                 ? 'bg-indigo-500/10 border border-indigo-500/20'
                 : isLocalHost
                   ? 'bg-green-500/10 border border-green-500/20'
-                  : 'bg-gray-800 border border-gray-700'
+                  : 'bg-gray-700 border border-gray-700'
             }`}>
               {isPaired
                 ? <Globe className="w-4 h-4 text-indigo-400" />
@@ -206,7 +206,7 @@ const SovereigntySection: React.FC<{
                     ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-400'
                     : isLocalHost
                       ? 'bg-green-500/10 border border-green-500/20 text-green-400'
-                      : 'bg-gray-800 border border-gray-700 text-gray-500'
+                      : 'bg-gray-700 border border-gray-700 text-gray-500'
                 }`}>
                   {isPaired ? 'Fleet connected' : isLocalHost ? 'Local only' : 'No nodes'}
                 </span>
@@ -225,7 +225,7 @@ const SovereigntySection: React.FC<{
           </div>
 
           {/* What is (and isn't) transmitted */}
-          <div className="border-t border-gray-800 pt-4 space-y-3">
+          <div className="border-t border-gray-700 pt-4 space-y-3">
             <div>
               <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">
                 {isLocalHost ? 'Transmitted to fleet' : 'Each node transmits'}
@@ -264,7 +264,7 @@ const SovereigntySection: React.FC<{
         </div>
 
         {/* Outbound Connection Manifest */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
             Outbound Connection Manifest
           </p>
@@ -295,7 +295,7 @@ const SovereigntySection: React.FC<{
               </div>
             ))}
           </div>
-          <div className="border-t border-gray-800 pt-3">
+          <div className="border-t border-gray-700 pt-3">
             <p className="text-[11px] text-gray-600 leading-relaxed">
               <span className="text-green-400/70 font-semibold">No inference data</span>{' '}
               appears in any outbound connection. The Ollama probe issues 3 tokens to measure throughput — the content is discarded. Prompts and responses are processed entirely on-device.
@@ -305,8 +305,8 @@ const SovereigntySection: React.FC<{
       </div>
 
       {/* ── Connection Event Log ─────────────────────────────────────────────── */}
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
+      <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-700 flex items-center justify-between">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
             Connection Event Log
           </p>
@@ -410,7 +410,7 @@ const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, colo
   })();
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-3 space-y-1">
+    <div className="bg-gray-800 border border-gray-700 rounded-xl p-3 space-y-1">
       <div className="flex items-center justify-between">
         <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">{label}</p>
         {peak != null && (
@@ -521,7 +521,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
 
         {/* Time window selector — localhost only has 1h of DuckDB data */}
-        <div className="flex items-center gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1">
+        <div className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-xl p-1">
           <button
             className="px-3 py-1 rounded-lg text-[10px] font-semibold bg-indigo-600 text-white"
           >
@@ -780,7 +780,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 
         {/* SSE/WS Collection */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Activity className="w-3.5 h-3.5 text-gray-500 shrink-0" />
             <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Collection</p>
@@ -797,7 +797,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
 
         {/* Local Store */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Database className="w-3.5 h-3.5 text-gray-500 shrink-0" />
             <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Local Store</p>
@@ -820,7 +820,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
 
         {/* Last telemetry */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Clock className="w-3.5 h-3.5 text-gray-500 shrink-0" />
             <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-500">Last Frame</p>
@@ -832,7 +832,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       </div>
 
       {/* ── Harvesters list — reflects actual metric availability ─────────────── */}
-      <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 space-y-2">
+      <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-2">
         <div className="flex items-center gap-2 mb-3">
           <Cpu className="w-3 h-3 text-gray-600 shrink-0" />
           <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
@@ -854,7 +854,7 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
             )}
           </div>
         ))}
-        <div className="flex items-center gap-2.5 pt-0.5 border-t border-gray-800 mt-2">
+        <div className="flex items-center gap-2.5 pt-0.5 border-t border-gray-700 mt-2">
           <Zap className="w-3 h-3 text-indigo-400/60 shrink-0" />
           <span className="font-mono text-[10px] text-gray-600">
             cadence: WS 100ms · SSE 1Hz · history 1Hz
@@ -913,7 +913,7 @@ const TraceTable: React.FC<{
             <Database className="w-3.5 h-3.5" />
             Query Local Logs
           </button>
-          <button className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-lg border border-gray-700 hover:bg-gray-700 transition-colors flex items-center gap-2">
+          <button className="px-3 py-1.5 bg-gray-700 text-gray-300 text-xs font-medium rounded-lg border border-gray-700 hover:bg-gray-700 transition-colors flex items-center gap-2">
             <Filter className="w-3.5 h-3.5" />
             Filter Logs
           </button>
@@ -931,10 +931,10 @@ const TraceTable: React.FC<{
         </div>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+      <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
         <table className="w-full text-left">
           <thead>
-            <tr className="bg-gray-950/50 text-[10px] text-gray-500 uppercase tracking-widest font-bold border-b border-gray-800">
+            <tr className="bg-gray-900/50 text-[10px] text-gray-500 uppercase tracking-widest font-bold border-b border-gray-700">
               <th className="px-6 py-4">Timestamp</th>
               <th className="px-6 py-4">Node / Model</th>
               <th className="px-6 py-4">Latency (ms)</th>
@@ -946,7 +946,7 @@ const TraceTable: React.FC<{
           <tbody className="divide-y divide-gray-800 font-telin text-xs">
             {traces.length > 0 ? (
               traces.map(trace => (
-                <tr key={trace.id} className="hover:bg-gray-800/30 transition-colors">
+                <tr key={trace.id} className="hover:bg-gray-700/30 transition-colors">
                   <td className="px-6 py-4 text-gray-500">{trace.timestamp}</td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col">
@@ -956,7 +956,7 @@ const TraceTable: React.FC<{
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
-                      <div className="h-1 w-12 bg-gray-800 rounded-full overflow-hidden">
+                      <div className="h-1 w-12 bg-gray-700 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-blue-600"
                           style={{ width: `${Math.min(100, (trace.latency / 1200) * 100)}%` }}
@@ -989,7 +989,7 @@ const TraceTable: React.FC<{
                         <span className="font-mono text-gray-400">:{proxyListenPort ?? 11434}</span>{' → '}
                         <span className="font-mono text-gray-400">:{proxyTargetPort ?? 11435}</span>.
                       </p>
-                      <div className="bg-gray-800/50 border border-white/5 rounded-lg px-4 py-3 w-full text-left">
+                      <div className="bg-gray-700/50 border border-white/5 rounded-lg px-4 py-3 w-full text-left">
                         <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-1.5">Test it</p>
                         <code className="text-[11px] font-mono text-gray-400 leading-relaxed block whitespace-pre-wrap break-all">
 {`curl http://localhost:${proxyListenPort ?? 11434}/api/generate \\
@@ -1000,28 +1000,28 @@ const TraceTable: React.FC<{
                   ) : (
                     /* Proxy not active — onboarding guide */
                     <div className="flex flex-col items-center justify-center max-w-lg mx-auto text-left">
-                      <div className="w-12 h-12 bg-gray-800/50 rounded-2xl flex items-center justify-center mb-4 border border-white/5">
+                      <div className="w-12 h-12 bg-gray-700/50 rounded-2xl flex items-center justify-center mb-4 border border-white/5">
                         <Activity className="w-6 h-6 text-gray-500" />
                       </div>
                       <h3 className="text-sm font-bold text-white mb-1 text-center">Inference Traces require the Wicklee Proxy</h3>
                       <p className="text-xs text-gray-500 leading-relaxed mb-4 text-center">
                         The proxy intercepts Ollama requests and logs latency, TTFT, and TPOT for every inference. Without it, the agent uses a lightweight probe for tok/s only.
                       </p>
-                      <div className="bg-gray-800/30 border border-white/5 rounded-xl p-4 w-full space-y-3">
+                      <div className="bg-gray-700/30 border border-white/5 rounded-xl p-4 w-full space-y-3">
                         <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold">Setup (3 steps)</p>
                         <div className="space-y-2.5 text-xs text-gray-400">
                           <div className="flex gap-2.5">
                             <span className="text-gray-600 font-mono shrink-0">1.</span>
                             <div>
                               <span className="text-gray-300">Move Ollama to a different port:</span>
-                              <code className="block font-mono text-[11px] text-gray-500 mt-1 bg-gray-900/50 rounded px-2 py-1">OLLAMA_HOST=127.0.0.1:11435 ollama serve</code>
+                              <code className="block font-mono text-[11px] text-gray-500 mt-1 bg-gray-800/50 rounded px-2 py-1">OLLAMA_HOST=127.0.0.1:11435 ollama serve</code>
                             </div>
                           </div>
                           <div className="flex gap-2.5">
                             <span className="text-gray-600 font-mono shrink-0">2.</span>
                             <div>
                               <span className="text-gray-300">Enable the proxy in config:</span>
-                              <code className="block font-mono text-[11px] text-gray-500 mt-1 bg-gray-900/50 rounded px-2 py-1 whitespace-pre">{`[ollama_proxy]\nenabled = true\nollama_port = 11435`}</code>
+                              <code className="block font-mono text-[11px] text-gray-500 mt-1 bg-gray-800/50 rounded px-2 py-1 whitespace-pre">{`[ollama_proxy]\nenabled = true\nollama_port = 11435`}</code>
                               <p className="text-[10px] text-gray-600 mt-1">
                                 Config: <span className="font-mono">/Library/Application Support/Wicklee/config.toml</span> (macOS) or <span className="font-mono">/etc/wicklee/config.toml</span> (Linux)
                               </p>
@@ -1033,12 +1033,12 @@ const TraceTable: React.FC<{
                           </div>
                         </div>
                       </div>
-                      <div className="bg-gray-800/20 border border-white/5 rounded-xl p-4 w-full mt-3">
+                      <div className="bg-gray-700/20 border border-white/5 rounded-xl p-4 w-full mt-3">
                         <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">Non-default runtime port?</p>
                         <p className="text-[11px] text-gray-500 leading-relaxed mb-2">
                           If your inference runtime uses a custom port, add it to config so the agent connects to the right endpoint:
                         </p>
-                        <code className="block font-mono text-[11px] text-gray-500 bg-gray-900/50 rounded px-2 py-1 whitespace-pre">{`[runtime_ports]\nvllm = 18010      # or ollama = 11435`}</code>
+                        <code className="block font-mono text-[11px] text-gray-500 bg-gray-800/50 rounded px-2 py-1 whitespace-pre">{`[runtime_ports]\nvllm = 18010      # or ollama = 11435`}</code>
                       </div>
                     </div>
                   )}
@@ -1184,11 +1184,11 @@ const DismissalLogPanel: React.FC = () => {
 
       {/* ── Table ───────────────────────────────────────────────────────────── */}
       {!error && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
           {rows.length > 0 ? (
             <table className="w-full text-left">
               <thead>
-                <tr className="bg-gray-950/50 text-[10px] text-gray-500 uppercase tracking-widest font-bold border-b border-gray-800">
+                <tr className="bg-gray-900/50 text-[10px] text-gray-500 uppercase tracking-widest font-bold border-b border-gray-700">
                   <th className="px-5 py-3">Pattern</th>
                   <th className="px-5 py-3">Scope</th>
                   <th className="px-5 py-3">Dismissed</th>
@@ -1204,7 +1204,7 @@ const DismissalLogPanel: React.FC = () => {
                   return (
                     <tr
                       key={`${row.pattern_id}::${row.node_id}`}
-                      className="hover:bg-gray-800/30 transition-colors"
+                      className="hover:bg-gray-700/30 transition-colors"
                     >
                       {/* Pattern */}
                       <td className="px-5 py-3">
@@ -1323,7 +1323,7 @@ const EventHistoryPanel: React.FC = () => {
   const { events, loading, error, hasMore, loadMore, refresh } = useEventHistory({ limit: 30 });
 
   return (
-    <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-5">
+    <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
@@ -1335,7 +1335,7 @@ const EventHistoryPanel: React.FC = () => {
           <a
             href="/api/export?format=csv"
             download=""
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
             title="Download audit log as CSV"
           >
             <Download className="w-3 h-3" />
@@ -1344,7 +1344,7 @@ const EventHistoryPanel: React.FC = () => {
           <a
             href="/api/export?format=json"
             download=""
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
             title="Download audit log as JSON"
           >
             <Download className="w-3 h-3" />
@@ -1352,7 +1352,7 @@ const EventHistoryPanel: React.FC = () => {
           </a>
           <button
             onClick={refresh}
-            className="p-1 rounded hover:bg-gray-800 transition-colors"
+            className="p-1 rounded hover:bg-gray-700 transition-colors"
             title="Refresh"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
@@ -1395,7 +1395,7 @@ const EventHistoryPanel: React.FC = () => {
             }, [])
             .map(({ event: ev, count }, i) => (
               <div key={`${ev.ts_ms}-${i}`}
-                className="flex items-start gap-2.5 py-1.5 px-2 rounded hover:bg-gray-800/50 transition-colors"
+                className="flex items-start gap-2.5 py-1.5 px-2 rounded hover:bg-gray-700/50 transition-colors"
               >
                 {/* Level dot */}
                 <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${LEVEL_DOT[ev.level] ?? 'bg-gray-500'}`} />
@@ -1405,7 +1405,7 @@ const EventHistoryPanel: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-gray-300 leading-snug truncate">{ev.message}</p>
                     {count > 1 && (
-                      <span className="shrink-0 text-[9px] font-mono text-gray-600 bg-gray-800 px-1 py-0.5 rounded">
+                      <span className="shrink-0 text-[9px] font-mono text-gray-600 bg-gray-700 px-1 py-0.5 rounded">
                         ×{count}
                       </span>
                     )}
@@ -1430,7 +1430,7 @@ const EventHistoryPanel: React.FC = () => {
         <button
           onClick={loadMore}
           disabled={loading}
-          className="mt-3 w-full text-[11px] text-gray-500 hover:text-gray-400 py-1.5 rounded border border-gray-800 hover:border-gray-700 transition-colors"
+          className="mt-3 w-full text-[11px] text-gray-500 hover:text-gray-400 py-1.5 rounded border border-gray-700 hover:border-gray-700 transition-colors"
         >
           {loading ? 'Loading…' : 'Load older events'}
         </button>
@@ -1489,12 +1489,12 @@ const NodeFieldInspector: React.FC<{ metrics: SentinelMetrics }> = ({ metrics })
   }, [metrics]);
 
   return (
-    <div className="px-5 py-4 bg-gray-950/50">
+    <div className="px-5 py-4 bg-gray-900/50">
       <div className="flex items-center justify-between mb-3">
         <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-500">Telemetry Fields</span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
         >
           {copied ? <><Check size={10} className="text-green-400" /> Copied</> : <><Copy size={10} /> Copy JSON</>}
         </button>
@@ -1570,9 +1570,9 @@ const FleetSovereigntyGuard: React.FC<{
   const now = Date.now();
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <Shield className="w-4 h-4 text-emerald-400" />
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Sovereignty</h3>
@@ -1601,7 +1601,7 @@ const FleetSovereigntyGuard: React.FC<{
       ) : (
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-100 dark:border-gray-800">
+            <tr className="border-b border-gray-100 dark:border-gray-700">
               <th className="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-8" />
               <th className="text-left px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">Hostname</th>
               <th className="text-left px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">Node ID</th>
@@ -1620,7 +1620,7 @@ const FleetSovereigntyGuard: React.FC<{
               return (
                 <React.Fragment key={m.node_id}>
                   <tr
-                    className="hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors cursor-pointer"
+                    className="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors cursor-pointer"
                     onClick={() => setExpandedNode(isExpanded ? null : m.node_id)}
                   >
                     <td className="px-4 py-2.5"><span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} /></td>
@@ -1756,13 +1756,13 @@ const FleetEventTimeline: React.FC<{
   }, [nodes, getNodeSettings]);
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-indigo-400" />
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet Event Timeline</h3>
-          <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
+          <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
             node_events · 30d
           </span>
           {events.length > 0 && (
@@ -1774,30 +1774,30 @@ const FleetEventTimeline: React.FC<{
         <div className="flex items-center gap-2">
           <button
             onClick={() => handleExport('csv')}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
             title="Export events as CSV"
           >
             <FileDown className="w-3 h-3" /> CSV
           </button>
           <button
             onClick={() => handleExport('json')}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
             title="Export events as JSON"
           >
             <FileDown className="w-3 h-3" /> JSON
           </button>
-          <button onClick={refresh} className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors">
+          <button onClick={refresh} className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors">
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="px-5 py-3 flex items-center gap-3 flex-wrap border-b border-gray-100 dark:border-gray-800">
+      <div className="px-5 py-3 flex items-center gap-3 flex-wrap border-b border-gray-100 dark:border-gray-700">
         <select
           value={selectedNode}
           onChange={e => setSelectedNode(e.target.value)}
-          className="text-xs bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-300 cursor-pointer focus:border-cyan-500/40 focus:outline-none [&>option]:bg-gray-900 [&>option]:text-gray-300"
+          className="text-xs bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-300 cursor-pointer focus:border-cyan-500/40 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-gray-300"
         >
           <option value="">All Nodes</option>
           {nodes.map(n => <option key={n.id} value={n.id}>{n.hostname || n.id}</option>)}
@@ -1810,7 +1810,7 @@ const FleetEventTimeline: React.FC<{
               className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
                 selectedType === t
                   ? EVENT_TYPE_BADGE[t] ?? 'text-gray-300 bg-gray-700'
-                  : 'text-gray-500 hover:text-gray-300 bg-gray-100 dark:bg-gray-800'
+                  : 'text-gray-500 hover:text-gray-300 bg-gray-100 dark:bg-gray-700'
               }`}
             >
               {t.replaceAll('_', ' ')}
@@ -1835,7 +1835,7 @@ const FleetEventTimeline: React.FC<{
           const dotCls = EVENT_LEVEL_DOT[ev.level] ?? 'bg-gray-500';
           const badgeCls = EVENT_TYPE_BADGE[ev.event_type ?? ''] ?? 'text-gray-400 bg-gray-500/10';
           return (
-            <div key={`${ev.ts_ms}-${i}`} className="flex items-start gap-3 px-5 py-2.5 hover:bg-gray-50/50 dark:hover:bg-gray-800/20 transition-colors border-b border-gray-50 dark:border-gray-800/50 last:border-0">
+            <div key={`${ev.ts_ms}-${i}`} className="flex items-start gap-3 px-5 py-2.5 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors border-b border-gray-50 dark:border-gray-700/50 last:border-0">
               <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${dotCls}`} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1859,7 +1859,7 @@ const FleetEventTimeline: React.FC<{
 
       {/* Pagination */}
       {hasMore && events.length > 0 && !loading && (
-        <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-800">
+        <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700">
           <button onClick={loadMore} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
             Load older events
           </button>
@@ -1992,9 +1992,9 @@ const FleetMetricsMini: React.FC<{
   }, [chartPoints, range, selectedNode]);
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <Database className="w-4 h-4 text-blue-400" />
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet Metric History</h3>
@@ -2013,7 +2013,7 @@ const FleetMetricsMini: React.FC<{
                     range === r
                       ? 'text-indigo-400 bg-indigo-500/10'
                       : allowed
-                        ? 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+                        ? 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
                         : 'text-gray-600 opacity-40 cursor-not-allowed'
                   }`}
                 >
@@ -2028,7 +2028,7 @@ const FleetMetricsMini: React.FC<{
             <button
               onClick={() => setSelectedNode('')}
               className={`px-2.5 py-1 rounded-lg text-[10px] font-medium whitespace-nowrap transition-colors ${
-                !selectedNode ? 'bg-gray-800 text-white' : 'text-gray-600 hover:text-gray-400'
+                !selectedNode ? 'bg-gray-700 text-white' : 'text-gray-600 hover:text-gray-400'
               }`}
             >
               All Nodes
@@ -2038,7 +2038,7 @@ const FleetMetricsMini: React.FC<{
                 key={n.id}
                 onClick={() => setSelectedNode(n.id)}
                 className={`px-2.5 py-1 rounded-lg text-[10px] font-medium whitespace-nowrap transition-colors ${
-                  selectedNode === n.id ? 'bg-gray-800 text-white' : 'text-gray-600 hover:text-gray-400'
+                  selectedNode === n.id ? 'bg-gray-700 text-white' : 'text-gray-600 hover:text-gray-400'
                 }`}
               >
                 {n.hostname || n.id}
@@ -2047,11 +2047,11 @@ const FleetMetricsMini: React.FC<{
           </div>
           {/* CSV export */}
           {chartPoints.length > 0 && (
-            <button onClick={handleCsvExport} className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors" title="Export CSV">
+            <button onClick={handleCsvExport} className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors" title="Export CSV">
               <FileDown className="w-3 h-3" /> CSV
             </button>
           )}
-          <button onClick={() => fetchData(range)} className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors">
+          <button onClick={() => fetchData(range)} className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors">
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>

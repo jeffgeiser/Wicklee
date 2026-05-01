@@ -32,7 +32,7 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
 // ── Code block ────────────────────────────────────────────────────────────────
 
 const Code: React.FC<{ children: string; lang?: string }> = ({ children, lang }) => (
-  <div className="relative group bg-gray-950 border border-gray-800 rounded-xl overflow-hidden my-4">
+  <div className="relative group bg-gray-900 border border-gray-700 rounded-xl overflow-hidden my-4">
     {lang && (
       <span className="absolute top-3 left-4 text-[10px] font-mono text-gray-600 uppercase tracking-wider">
         {lang}
@@ -92,7 +92,7 @@ const Th: React.FC<{ children: React.ReactNode; className?: string }> = ({ child
 );
 
 const Td: React.FC<{ children: React.ReactNode; mono?: boolean; className?: string }> = ({ children, mono, className }) => (
-  <td className={`py-2.5 pr-6 text-sm border-b border-gray-800/60 text-gray-300 ${mono ? 'font-mono text-xs' : ''} ${className ?? ''}`}>
+  <td className={`py-2.5 pr-6 text-sm border-b border-gray-700/60 text-gray-300 ${mono ? 'font-mono text-xs' : ''} ${className ?? ''}`}>
     {children}
   </td>
 );
@@ -127,10 +127,10 @@ const NAV = [
 
 const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
+    <div className="min-h-screen bg-gray-900 text-white">
 
       {/* ── Top nav ── */}
-      <nav className="sticky top-0 z-30 bg-gray-950/90 backdrop-blur border-b border-gray-800/60">
+      <nav className="sticky top-0 z-30 bg-gray-900/90 backdrop-blur border-b border-gray-700/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-8 py-4 flex items-center justify-between">
           <button
             onClick={() => onNavigate?.('/')}
@@ -165,7 +165,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               </a>
             ))}
           </nav>
-          <div className="mt-8 pt-6 border-t border-gray-800 space-y-2">
+          <div className="mt-8 pt-6 border-t border-gray-700 space-y-2">
             <a
               href="https://github.com/jeffgeiser/Wicklee"
               target="_blank"
@@ -205,7 +205,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
             accent="border-blue-500/20"
             title="Quick Start"
           >
-            <p>Install the Wicklee agent with a single command. No account required — the agent runs a full local dashboard at <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">localhost:7700</code>.</p>
+            <p>Install the Wicklee agent with a single command. No account required — the agent runs a full local dashboard at <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">localhost:7700</code>.</p>
 
             {/* Option 1 — Try it */}
             <div className="space-y-3">
@@ -309,7 +309,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
                 <thead>
-                  <tr className="border-b border-gray-800">
+                  <tr className="border-b border-gray-700">
                     <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-64">Command</th>
                     <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">What it does</th>
                   </tr>
@@ -317,7 +317,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
                 <tbody className="divide-y divide-gray-800/60">
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee</td>
-                    <td className="py-3 text-gray-400 align-top">Start the agent. Dashboard at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. Runs in the foreground — press <kbd className="text-xs bg-gray-800 text-gray-300 px-1.5 py-0.5 rounded">Ctrl+C</kbd> to stop.</td>
+                    <td className="py-3 text-gray-400 align-top">Start the agent. Dashboard at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. Runs in the foreground — press <kbd className="text-xs bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded">Ctrl+C</kbd> to stop.</td>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --pair</td>
@@ -353,7 +353,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border-collapse">
                   <thead>
-                    <tr className="border-b border-gray-800">
+                    <tr className="border-b border-gray-700">
                       <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-48">Variable</th>
                       <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-24">Default</th>
                       <th className="text-left py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Effect</th>
@@ -394,7 +394,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
           >
             <p>WES is the primary efficiency metric in Wicklee. It measures how many tokens a node generates per watt of board power, adjusted for thermal throttle state.</p>
 
-            <div className="bg-gray-950 border border-indigo-500/20 rounded-xl p-5">
+            <div className="bg-gray-900 border border-indigo-500/20 rounded-xl p-5">
               <p className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-3">Formula (v2)</p>
               <pre className="font-mono text-sm text-white leading-loose">
 {`WES = tok/s ÷ (Watts × ThermalPenalty)`}
@@ -520,7 +520,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
               <p className="text-xs text-gray-400 leading-relaxed mb-2">
                 When thermal throttling is active, Wicklee shows a <code className="text-amber-300 font-mono">-N% thermal</code> badge below the WES score in the Fleet Status table. This is the Thermal Cost %: the fraction of potential efficiency lost to throttle state.
               </p>
-              <pre className="font-mono text-xs text-gray-300 bg-gray-950 rounded-lg px-4 py-3">
+              <pre className="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-4 py-3">
 {`Thermal Cost % = (Raw WES − Penalized WES) / Raw WES × 100`}
               </pre>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
@@ -530,7 +530,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
 
 
             {/* WES Alerting Behavior */}
-            <div className="bg-gray-950 border border-gray-800 rounded-xl p-5">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-5">
               <p className="text-xs font-bold text-white uppercase tracking-wider mb-3">WES Cliff — Efficiency Collapse Alert</p>
               <p className="text-xs text-gray-400 leading-relaxed mb-3">
                 The cloud evaluator monitors WES across your fleet and fires a <strong className="text-gray-300">WES Cliff</strong> observation when a node's efficiency collapses. To avoid noise from natural fluctuations, the alert has strict gating:
@@ -547,7 +547,7 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
             </div>
 
             {/* tok/W */}
-            <div className="bg-gray-950 border border-blue-500/20 rounded-xl p-5">
+            <div className="bg-gray-900 border border-blue-500/20 rounded-xl p-5">
               <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-3">tok/W — Tokens Per Watt</p>
               <pre className="font-mono text-sm text-white leading-loose">
 {`tok/W = tok/s ÷ Watts`}</pre>
@@ -662,7 +662,7 @@ WES Version:     2
 ---
 *Generated by Wicklee v0.4.36 · https://wicklee.dev*`}</Code>
               <p>
-                Reports are available as <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">.md</code> (human-readable) and <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">.json</code> (machine-readable). The JSON format includes all fields above plus a full provenance record — runtime, quantization, thermal source, and WES version — so comparisons across hardware remain unambiguous.
+                Reports are available as <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">.md</code> (human-readable) and <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">.json</code> (machine-readable). The JSON format includes all fields above plus a full provenance record — runtime, quantization, thermal source, and WES version — so comparisons across hardware remain unambiguous.
               </p>
               <p>
                 The WES Trend chart (Mission Control, Pro+) also includes a per-node <strong className="text-white">Export</strong> button that snapshots the most recent history point from the selected time window.
@@ -678,7 +678,7 @@ WES Version:     2
             title="Node States — Inference Detection"
           >
             <p>
-              Every Wicklee node reports an <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">inference_state</code> field that classifies what the hardware is doing right now. This field is computed once per second by the agent's state machine and is the <strong className="text-white">single source of truth</strong> — the dashboard displays it directly and never re-computes it.
+              Every Wicklee node reports an <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">inference_state</code> field that classifies what the hardware is doing right now. This field is computed once per second by the agent's state machine and is the <strong className="text-white">single source of truth</strong> — the dashboard displays it directly and never re-computes it.
             </p>
 
             <div className="overflow-x-auto">
@@ -720,7 +720,7 @@ WES Version:     2
               </table>
             </div>
 
-            <div className="bg-gray-950 border border-emerald-500/20 rounded-xl p-5">
+            <div className="bg-gray-900 border border-emerald-500/20 rounded-xl p-5">
               <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-3">How inference is detected — three-tier hierarchy</p>
               <p className="text-xs text-gray-400 leading-relaxed mb-3">
                 The agent evaluates three tiers of evidence every second. The first tier that fires wins — higher tiers are more precise and take priority.
@@ -874,7 +874,7 @@ WES Version:     2
             <div className="mt-4">
               <p className="font-semibold text-white mb-3">How it works</p>
               <p className="text-sm text-gray-400 leading-relaxed">
-                When the optional proxy is enabled, Wicklee intercepts every request flowing to Ollama and extracts per-request metrics from the response stream — model name, tokens generated, time to first token, end-to-end latency. These are accumulated per model, not globally. The harvester also reads Ollama's <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">/api/ps</code> endpoint every 2 seconds to detect all loaded models and their individual VRAM allocations.
+                When the optional proxy is enabled, Wicklee intercepts every request flowing to Ollama and extracts per-request metrics from the response stream — model name, tokens generated, time to first token, end-to-end latency. These are accumulated per model, not globally. The harvester also reads Ollama's <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">/api/ps</code> endpoint every 2 seconds to detect all loaded models and their individual VRAM allocations.
               </p>
               <p className="text-sm text-gray-400 leading-relaxed mt-2">
                 When two or more models are loaded simultaneously, the dashboard shows a per-model breakdown with independent tok/s, VRAM usage, average TTFT, average latency, and request count for each model. The primary model (used for WES and headline metrics) is automatically selected as the most-recently-active model — the one that last completed a request.
@@ -885,7 +885,7 @@ WES Version:     2
               <p className="font-semibold text-white mb-3">What you see per model</p>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Metric</th>
                     <th className="pb-2 pr-4">Source</th>
                     <th className="pb-2">Notes</th>
@@ -929,14 +929,14 @@ WES Version:     2
             <div className="mt-4">
               <p className="font-semibold text-white mb-3">Without the proxy</p>
               <p className="text-sm text-gray-400 leading-relaxed">
-                When the proxy is disabled, Wicklee still detects all loaded models and their VRAM via <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">/api/ps</code>, but tok/s and latency come from the 30-second synthetic probe which targets a single model. Enable the proxy for full per-model production metrics.
+                When the proxy is disabled, Wicklee still detects all loaded models and their VRAM via <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">/api/ps</code>, but tok/s and latency come from the 30-second synthetic probe which targets a single model. Enable the proxy for full per-model production metrics.
               </p>
             </div>
 
             <div className="mt-4">
               <p className="font-semibold text-white mb-3">API access</p>
               <p className="text-sm text-gray-400 leading-relaxed">
-                The <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">active_models</code> array is included in the SSE payload, WebSocket stream, and fleet telemetry when two or more models are loaded. Single-model deployments omit the field entirely — zero overhead. The existing <code className="text-gray-300 font-mono text-xs">ollama_active_model</code> and <code className="text-gray-300 font-mono text-xs">ollama_tokens_per_second</code> fields continue to report the primary (most active) model for backwards compatibility.
+                The <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">active_models</code> array is included in the SSE payload, WebSocket stream, and fleet telemetry when two or more models are loaded. Single-model deployments omit the field entirely — zero overhead. The existing <code className="text-gray-300 font-mono text-xs">ollama_active_model</code> and <code className="text-gray-300 font-mono text-xs">ollama_tokens_per_second</code> fields continue to report the primary (most active) model for backwards compatibility.
               </p>
             </div>
 
@@ -961,7 +961,7 @@ WES Version:     2
               <p className="text-xs text-gray-500 mb-3">Four weighted components. Score labels: <span className="text-emerald-400">Excellent</span> (80+), <span className="text-green-400">Good</span> (60–79), <span className="text-yellow-400">Tight</span> (40–59), <span className="text-red-400">Won't Fit</span> (&lt;40).</p>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Component</th>
                     <th className="pb-2 pr-4">Max</th>
                     <th className="pb-2">What it measures</th>
@@ -1010,7 +1010,7 @@ WES Version:     2
               <p className="font-semibold text-white mb-3">Tiered access</p>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Tier</th>
                     <th className="pb-2 pr-4">Feature</th>
                     <th className="pb-2">Endpoint</th>
@@ -1057,7 +1057,7 @@ WES Version:     2
               <p className="font-semibold text-white mb-2">Memory Fit</p>
               <p className="text-xs text-gray-500 mb-3">Headroom remaining in the memory pool after the active model is loaded.</p>
               <table className="w-full">
-                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800"><th className="pb-2 pr-4">Score</th><th className="pb-2">Condition</th></tr></thead>
+                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700"><th className="pb-2 pr-4">Score</th><th className="pb-2">Condition</th></tr></thead>
                 <tbody className="text-xs divide-y divide-gray-800/50">
                   <tr><td className="py-2 pr-4 text-emerald-400">Good</td><td className="py-2 text-gray-500">≥ 20% of pool free — comfortable room for context growth</td></tr>
                   <tr><td className="py-2 pr-4 text-yellow-400">Fair</td><td className="py-2 text-gray-500">8–20% free — manageable, but monitor under long context</td></tr>
@@ -1070,7 +1070,7 @@ WES Version:     2
               <p className="font-semibold text-white mb-2">WES Efficiency</p>
               <p className="text-xs text-gray-500 mb-2">WES = <code className="text-gray-400 font-mono text-xs">tok/s ÷ (watts × thermal_penalty)</code>. Measures how economically this model uses the hardware.</p>
               <table className="w-full">
-                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800"><th className="pb-2 pr-4">Level</th><th className="pb-2 pr-4">WES</th><th className="pb-2">Meaning</th></tr></thead>
+                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700"><th className="pb-2 pr-4">Level</th><th className="pb-2 pr-4">WES</th><th className="pb-2">Meaning</th></tr></thead>
                 <tbody className="text-xs divide-y divide-gray-800/50">
                   <tr><td className="py-2 pr-4 text-emerald-400">Excellent</td><td className="py-2 pr-4 text-gray-400 font-mono">&gt; 10</td><td className="py-2 text-gray-500">Exceptional throughput per watt</td></tr>
                   <tr><td className="py-2 pr-4 text-green-400">Good</td><td className="py-2 pr-4 text-gray-400 font-mono">3–10</td><td className="py-2 text-gray-500">Solid efficiency for this hardware class</td></tr>
@@ -1092,7 +1092,7 @@ WES Version:     2
             <div className="mt-4">
               <p className="font-semibold text-white mb-2">Quant Sweet Spot</p>
               <table className="w-full">
-                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800"><th className="pb-2 pr-4">Kind</th><th className="pb-2">Meaning</th></tr></thead>
+                <thead><tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700"><th className="pb-2 pr-4">Kind</th><th className="pb-2">Meaning</th></tr></thead>
                 <tbody className="text-xs divide-y divide-gray-800/50">
                   <tr><td className="py-2 pr-4 text-cyan-400 font-mono">sweet-spot</td><td className="py-2 text-gray-500">Q4–Q6 — optimal balance of quality, speed, and memory</td></tr>
                   <tr><td className="py-2 pr-4 text-green-400 font-mono">lossless</td><td className="py-2 text-gray-500">Q8 with headroom — minimal quality loss vs FP16. Note: Q8 is ~40% slower than Q4 on memory-bandwidth-bound hardware</td></tr>
@@ -1314,7 +1314,7 @@ WES Version:     2
               </table>
             </div>
 
-            <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2 mt-4">
+            <div className="bg-gray-900 border border-violet-500/20 rounded-xl p-4 space-y-2 mt-4">
               <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Alert lifecycle</p>
               <p className="text-xs text-gray-400 leading-relaxed">
                 <strong className="text-white">Onset gate (15 s):</strong> tier-1 alert cards (Thermal Degradation, Power Anomaly, Memory Exhaustion, Thermal Cost) require the condition to be continuously true for 15 seconds before rendering. This prevents single-frame metric spikes from flashing on screen.
@@ -1327,7 +1327,7 @@ WES Version:     2
               </p>
             </div>
 
-            <div className="bg-gray-950 border border-violet-500/20 rounded-xl p-4 space-y-2">
+            <div className="bg-gray-900 border border-violet-500/20 rounded-xl p-4 space-y-2">
               <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Action commands</p>
               <p className="text-xs text-gray-400 leading-relaxed">
                 Each observation includes one or two actionable commands you can copy and run. Commands are platform-aware — <code className="text-gray-300">vram_overcommit</code> shows <code className="text-gray-300">sysctl iogpu.wired_limit_mb</code> on Apple Silicon and <code className="text-gray-300">nvidia-smi --query-gpu=memory.total,memory.used,memory.free</code> on NVIDIA. Latency patterns (<code className="text-gray-300">ttft_regression</code>, <code className="text-gray-300">latency_spike</code>, <code className="text-gray-300">vllm_queue_saturation</code>) leverage TTFT and queue depth metrics from vLLM Prometheus, the Ollama proxy, and probe responses. All commands target the local agent or runtime and never send data externally.
@@ -1519,7 +1519,7 @@ WES Version:     2
           >
             <p>Every Wicklee agent exposes a local API at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. No authentication required. No internet connection needed. All endpoints return JSON.</p>
 
-            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
               <div>
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Base URL</p>
                 <code className="font-mono text-sm text-emerald-300">http://localhost:7700</code>
@@ -1639,7 +1639,7 @@ curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | lengt
           >
             <p>The Fleet API provides cross-node intelligence, routing recommendations, and fleet-wide telemetry. Authenticate with an API key — create one in <strong className="text-white">Settings → API Keys</strong> in your fleet dashboard.</p>
 
-            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
               <div>
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Base URL</p>
                 <code className="font-mono text-sm text-cyan-300">https://wicklee.dev</code>
@@ -1704,7 +1704,7 @@ curl https://wicklee.dev/api/v1/fleet \\
               </table>
             </div>
 
-            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
               <p className="text-xs font-bold text-white mb-2">Route response shape</p>
               <Code lang="json">{`{
   "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
@@ -1713,7 +1713,7 @@ curl https://wicklee.dev/api/v1/fleet \\
 }`}</Code>
             </div>
 
-            <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
               <p className="text-xs font-bold text-white mb-2">Insights response shape</p>
               <Code lang="json">{`{
   "generated_at_ms": 1774624251478,
@@ -1807,10 +1807,10 @@ curl https://wicklee.dev/api/v1/fleet \\
             <div>
               <p className="font-semibold text-white mb-2">Endpoints</p>
               <table className="w-full text-xs">
-                <thead><tr className="border-b border-gray-800"><Th>Method</Th><Th>Path</Th><Th>Description</Th></tr></thead>
+                <thead><tr className="border-b border-gray-700"><Th>Method</Th><Th>Path</Th><Th>Description</Th></tr></thead>
                 <tbody>
-                  <tr className="border-b border-gray-800"><Td>POST</Td><Td>/mcp</Td><Td>JSON-RPC 2.0 MCP endpoint</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>GET</Td><Td>/.well-known/mcp.json</Td><Td>MCP server discovery manifest</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>POST</Td><Td>/mcp</Td><Td>JSON-RPC 2.0 MCP endpoint</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>GET</Td><Td>/.well-known/mcp.json</Td><Td>MCP server discovery manifest</Td></tr>
                 </tbody>
               </table>
             </div>
@@ -1818,14 +1818,14 @@ curl https://wicklee.dev/api/v1/fleet \\
             <div>
               <p className="font-semibold text-white mb-2">Tools</p>
               <table className="w-full text-xs">
-                <thead><tr className="border-b border-gray-800"><Th>Tool</Th><Th>Description</Th></tr></thead>
+                <thead><tr className="border-b border-gray-700"><Th>Tool</Th><Th>Description</Th></tr></thead>
                 <tbody>
-                  <tr className="border-b border-gray-800"><Td>get_node_status</Td><Td>Full hardware + inference metrics snapshot</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_inference_state</Td><Td>Live/idle/busy state with sensor context and tier match</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_active_models</Td><Td>Running models across Ollama, vLLM, llama.cpp</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_observations</Td><Td>Server-side pattern evaluation — 17 agent-evaluated observations</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_metrics_history</Td><Td>1-hour rolling telemetry buffer from DuckDB</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_model_fit</Td><Td>Memory Fit, WES Efficiency, Context Runway, and Quant Sweet Spot for the currently loaded model</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_node_status</Td><Td>Full hardware + inference metrics snapshot</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_inference_state</Td><Td>Live/idle/busy state with sensor context and tier match</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_active_models</Td><Td>Running models across Ollama, vLLM, llama.cpp</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_observations</Td><Td>Server-side pattern evaluation — 17 agent-evaluated observations</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_metrics_history</Td><Td>1-hour rolling telemetry buffer from DuckDB</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_model_fit</Td><Td>Memory Fit, WES Efficiency, Context Runway, and Quant Sweet Spot for the currently loaded model</Td></tr>
                 </tbody>
               </table>
             </div>
@@ -1833,10 +1833,10 @@ curl https://wicklee.dev/api/v1/fleet \\
             <div>
               <p className="font-semibold text-white mb-2">Resources</p>
               <table className="w-full text-xs">
-                <thead><tr className="border-b border-gray-800"><Th>URI</Th><Th>Description</Th></tr></thead>
+                <thead><tr className="border-b border-gray-700"><Th>URI</Th><Th>Description</Th></tr></thead>
                 <tbody>
-                  <tr className="border-b border-gray-800"><Td>wicklee://node/metrics</Td><Td>Live MetricsPayload JSON</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>wicklee://node/thermal</Td><Td>Thermal state + WES penalty values</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>wicklee://node/metrics</Td><Td>Live MetricsPayload JSON</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>wicklee://node/thermal</Td><Td>Thermal state + WES penalty values</Td></tr>
                 </tbody>
               </table>
               <p className="text-xs text-gray-500 mt-2">
@@ -1847,7 +1847,7 @@ curl https://wicklee.dev/api/v1/fleet \\
             <div>
               <p className="font-semibold text-white mb-2">Claude Desktop</p>
               <p className="mb-2">Add <code>wicklee</code> to <code>mcpServers</code> in your Claude Desktop config. Open it with:</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`# macOS
 nano "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 
@@ -1858,7 +1858,7 @@ nano ~/.config/Claude/claude_desktop_config.json
 notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
               </pre>
               <p className="mb-2 text-xs text-gray-400">Add the <code>wicklee</code> entry inside <code>mcpServers</code> (create the file if it doesn't exist):</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`{
   "mcpServers": {
     "wicklee": {
@@ -1877,7 +1877,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
 
             <div>
               <p className="font-semibold text-white mb-2">Claude Code (CLI)</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto">
 {`claude mcp add -s user wicklee -- npx -y mcp-remote http://localhost:7700/mcp`}
               </pre>
             </div>
@@ -1885,11 +1885,11 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             <div>
               <p className="font-semibold text-white mb-2">Cursor</p>
               <p className="mb-2">Open the global config (or use <code>.cursor/mcp.json</code> for project-scoped):</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`nano ~/.cursor/mcp.json`}
               </pre>
               <p className="mb-2 text-xs text-gray-400">Add the <code>wicklee</code> entry (create the file if it doesn't exist):</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`{
   "mcpServers": {
     "wicklee": {
@@ -1905,11 +1905,11 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             <div>
               <p className="font-semibold text-white mb-2">Windsurf</p>
               <p className="mb-2">Open the config:</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`nano ~/.codeium/windsurf/mcp_config.json`}
               </pre>
               <p className="mb-2 text-xs text-gray-400">Add the <code>wicklee</code> entry (create the file if it doesn't exist):</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2">
 {`{
   "mcpServers": {
     "wicklee": {
@@ -1923,7 +1923,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
 
             <div>
               <p className="font-semibold text-white mb-1">Test with curl</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto">
 {`curl -X POST http://localhost:7700/mcp \\
   -H "Content-Type: application/json" \\
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}'`}
@@ -1940,17 +1940,17 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             <div>
               <p className="font-semibold text-white mb-2">Cloud MCP Tools (9)</p>
               <table className="w-full text-xs">
-                <thead><tr className="border-b border-gray-800"><Th>Tool</Th><Th>Description</Th></tr></thead>
+                <thead><tr className="border-b border-gray-700"><Th>Tool</Th><Th>Description</Th></tr></thead>
                 <tbody>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_status</Td><Td>All nodes with online status, inference state, WES, tok/s, thermal</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_wes</Td><Td>Compact WES scores for all fleet nodes</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_node_detail</Td><Td>Full MetricsPayload for a specific node (requires node_id)</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_best_route</Td><Td>Routing recommendation — best node by throughput and efficiency</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_insights</Td><Td>Fleet health summary — online/total, avg WES, fleet tok/s, observation count</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_observations</Td><Td>Active and resolved observations across the fleet (tier-filtered)</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_inference_profile</Td><Td>Correlated profiler snapshot — TTFT, KV cache, thermal, power</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>explain_slowdown</Td><Td>Hardware context for root cause analysis of slow requests</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>get_fleet_model_fit</Td><Td>Score a HuggingFace GGUF model against every online fleet node — Memory Fit, WES Efficiency, Context Runway, Quant Sweet Spot per node</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_fleet_status</Td><Td>All nodes with online status, inference state, WES, tok/s, thermal</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_fleet_wes</Td><Td>Compact WES scores for all fleet nodes</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_node_detail</Td><Td>Full MetricsPayload for a specific node (requires node_id)</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_best_route</Td><Td>Routing recommendation — best node by throughput and efficiency</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_fleet_insights</Td><Td>Fleet health summary — online/total, avg WES, fleet tok/s, observation count</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_fleet_observations</Td><Td>Active and resolved observations across the fleet (tier-filtered)</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_inference_profile</Td><Td>Correlated profiler snapshot — TTFT, KV cache, thermal, power</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>explain_slowdown</Td><Td>Hardware context for root cause analysis of slow requests</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>get_fleet_model_fit</Td><Td>Score a HuggingFace GGUF model against every online fleet node — Memory Fit, WES Efficiency, Context Runway, Quant Sweet Spot per node</Td></tr>
                 </tbody>
               </table>
             </div>
@@ -1958,17 +1958,17 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             <div className="mt-3">
               <p className="font-semibold text-white mb-2">Cloud MCP Resources (2)</p>
               <table className="w-full text-xs">
-                <thead><tr className="border-b border-gray-800"><Th>URI</Th><Th>Description</Th></tr></thead>
+                <thead><tr className="border-b border-gray-700"><Th>URI</Th><Th>Description</Th></tr></thead>
                 <tbody>
-                  <tr className="border-b border-gray-800"><Td>wicklee://fleet/status</Td><Td>Fleet summary: online count, total nodes, avg WES</Td></tr>
-                  <tr className="border-b border-gray-800"><Td>wicklee://fleet/thermal</Td><Td>Per-node thermal states + WES penalty values</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>wicklee://fleet/status</Td><Td>Fleet summary: online count, total nodes, avg WES</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>wicklee://fleet/thermal</Td><Td>Per-node thermal states + WES penalty values</Td></tr>
                 </tbody>
               </table>
             </div>
 
             <div className="mt-3">
               <p className="font-semibold text-white mb-2">Example: Reading a Resource</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto">
 {`curl -X POST https://wicklee.dev/mcp \\
   -H "Authorization: Bearer <jwt>" \\
   -H "Content-Type: application/json" \\
@@ -1983,7 +1983,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
 
             <div className="mt-3">
               <p className="font-semibold text-white mb-2">Example: Calling a Tool</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto">
 {`curl -X POST https://wicklee.dev/mcp \\
   -H "Authorization: Bearer <jwt>" \\
   -H "Content-Type: application/json" \\
@@ -2026,7 +2026,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
 
             <div>
               <p className="font-semibold text-white mb-2">How it works</p>
-              <p>The proxy binds to <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">localhost:11434</code> (Ollama's default port). Ollama is moved to a different port. All requests flow through Wicklee transparently — the proxy extracts timing metrics from Ollama's done packets and forwards everything unmodified. Your clients (Cursor, Open WebUI, etc.) don't need any configuration changes.</p>
+              <p>The proxy binds to <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">localhost:11434</code> (Ollama's default port). Ollama is moved to a different port. All requests flow through Wicklee transparently — the proxy extracts timing metrics from Ollama's done packets and forwards everything unmodified. Your clients (Cursor, Open WebUI, etc.) don't need any configuration changes.</p>
             </div>
 
             <div>
@@ -2037,7 +2037,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
                   <div>
                     <p className="text-sm text-white font-medium">Move Ollama to a different port</p>
                     <p className="mt-0.5">Set <code className="text-gray-300 font-mono text-xs">OLLAMA_HOST</code> so Ollama listens on a different port:</p>
-                    <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+                    <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
 {`# macOS (Ollama desktop app — most common)
 launchctl setenv OLLAMA_HOST 127.0.0.1:11435
 # Quit Ollama from menu bar, then reopen it.
@@ -2060,7 +2060,7 @@ sudo systemctl restart ollama`}
                   <span className="shrink-0 w-5 h-5 rounded-full bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-[10px] font-bold text-purple-400">2</span>
                   <div>
                     <p className="text-sm text-white font-medium">Enable the proxy in Wicklee config</p>
-                    <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+                    <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
 {`# Open the config:
 # macOS: sudo nano "/Library/Application Support/Wicklee/config.toml"
 # Linux: sudo nano /etc/wicklee/config.toml
@@ -2076,7 +2076,7 @@ ollama_port = 11435   # port where Ollama now listens`}
                   <span className="shrink-0 w-5 h-5 rounded-full bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-[10px] font-bold text-purple-400">3</span>
                   <div>
                     <p className="text-sm text-white font-medium">Restart the Wicklee agent</p>
-                    <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+                    <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
 {`curl -fsSL https://wicklee.dev/install.sh | bash
 # or manually:
 # macOS: sudo launchctl kickstart -k system/dev.wicklee.agent
@@ -2094,7 +2094,7 @@ ollama_port = 11435   # port where Ollama now listens`}
 
             <div>
               <p className="font-semibold text-white mb-2">Why Ollama only?</p>
-              <p>vLLM already exposes production latency histograms natively via its <code className="text-gray-300 font-mono text-xs bg-gray-900 px-1.5 py-0.5 rounded">/metrics</code> Prometheus endpoint — no proxy needed. Ollama doesn't expose request-level timing, so the proxy fills that gap.</p>
+              <p>vLLM already exposes production latency histograms natively via its <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">/metrics</code> Prometheus endpoint — no proxy needed. Ollama doesn't expose request-level timing, so the proxy fills that gap.</p>
             </div>
           </Section>
 
@@ -2116,7 +2116,7 @@ ollama_port = 11435   # port where Ollama now listens`}
             <div>
               <p className="font-semibold text-white mb-2">Prometheus Endpoint</p>
               <p>Pull-based scrape endpoint at <code>GET /metrics</code> with X-API-Key authentication. Returns standard Prometheus text format with the same 7 gauges, labeled by node_id and hostname.</p>
-              <pre className="bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
+              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
 {`curl -H "X-API-Key: wk_live_..." https://wicklee.dev/metrics`}
               </pre>
             </div>
@@ -2230,7 +2230,7 @@ ollama_port = 11435   # port where Ollama now listens`}
               <p className="font-semibold text-white mb-3">What is transmitted to the fleet</p>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Data</th>
                     <th className="pb-2 pr-4">Destination</th>
                     <th className="pb-2">Transmitted</th>
@@ -2252,7 +2252,7 @@ ollama_port = 11435   # port where Ollama now listens`}
               <p className="text-xs text-gray-500 mb-2">Everything the agent does on your machine, how often, and why.</p>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Subsystem</th>
                     <th className="pb-2 pr-4">Cadence</th>
                     <th className="pb-2 pr-4">What it reads</th>
@@ -2328,7 +2328,7 @@ ollama_port = 11435   # port where Ollama now listens`}
               <p className="font-semibold text-white mb-3">Outbound connections</p>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Connection</th>
                     <th className="pb-2 pr-4">Endpoint</th>
                     <th className="pb-2">Data</th>
@@ -2366,7 +2366,7 @@ ollama_port = 11435   # port where Ollama now listens`}
               <p className="font-semibold text-white mb-3">Transport paths</p>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-800">
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Path</th>
                     <th className="pb-2 pr-4">Protocol</th>
                     <th className="pb-2 pr-4">Rate</th>
@@ -2421,7 +2421,7 @@ ollama_port = 11435   # port where Ollama now listens`}
               </p>
             </div>
 
-            <div className="mt-4 p-3 rounded-lg border border-gray-800 bg-gray-900/60">
+            <div className="mt-4 p-3 rounded-lg border border-gray-700 bg-gray-800/60">
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Data path diagram</p>
               <pre className="text-[11px] text-gray-400 font-mono leading-relaxed whitespace-pre overflow-x-auto">{`Hardware sensors (1 Hz)
   └─▶ Broadcast loop (1 Hz) ──▶ MetricsPayload JSON
@@ -2568,7 +2568,7 @@ ollama_port = 11435   # port where Ollama now listens`}
           </Section>
 
           {/* Footer */}
-          <div className="pt-8 border-t border-gray-800 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between text-xs text-gray-600">
+          <div className="pt-8 border-t border-gray-700 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between text-xs text-gray-600">
             <span>&copy; 2026 Wicklee. All rights reserved.</span>
             <div className="flex items-center gap-6">
               <button onClick={() => onNavigate?.('/blog')} className="hover:text-gray-300 transition-colors">Blog</button>

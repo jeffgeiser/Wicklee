@@ -34,7 +34,7 @@ export const SentinelCard: React.FC<{
   icon: React.ElementType;
   accent: string;
 }> = ({ label, value, sub, icon: Icon, accent }) => (
-  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex items-center gap-3 min-w-0">
+  <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 flex items-center gap-3 min-w-0">
     <div className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-lg ${accent}/10`}>
       <Icon size={16} className={accent.replace('bg-', 'text-')} />
     </div>
@@ -57,7 +57,7 @@ const VitalStat: React.FC<{ label: string; value: string; valueCls?: string; tit
 
 // ── Internal: compact tile for hardware cluster columns ────────────────────────
 const HudTile: React.FC<{ label: string; value: string; sub?: string; dim?: boolean }> = ({ label, value, sub, dim = false }) => (
-  <div className="border border-gray-100 dark:border-gray-800 rounded-lg px-3 py-2.5 bg-gray-100 dark:bg-gray-800 min-h-[52px] flex flex-col justify-center">
+  <div className="border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2.5 bg-gray-100 dark:bg-gray-700 min-h-[52px] flex flex-col justify-center">
     <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest font-semibold leading-none mb-1">{label}</p>
     <p className={`text-sm font-bold font-telin leading-tight ${dim ? 'text-gray-400 dark:text-gray-600' : 'text-gray-900 dark:text-gray-100'}`}>{value}</p>
     {sub && <p className="text-[9px] text-gray-400 dark:text-gray-500 font-telin mt-0.5 leading-tight">{sub}</p>}
@@ -152,10 +152,10 @@ export const HardwareDetailPanel: React.FC<{
 
       {/* ── Inference Band ─────────────────────────────────────────────────── */}
       {m.ollama_running ? (
-        <div className="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden">
+        <div className="border border-gray-100 dark:border-gray-700 rounded-xl overflow-hidden">
 
           {/* Model identity row — WES badge inline on right */}
-          <div className="flex items-center gap-3 px-4 pt-3 pb-2.5 border-b border-gray-100 dark:border-gray-800 flex-wrap">
+          <div className="flex items-center gap-3 px-4 pt-3 pb-2.5 border-b border-gray-100 dark:border-gray-700 flex-wrap">
             <BotMessageSquare size={11} className="text-indigo-400 shrink-0" />
             <span className="text-xs font-semibold text-indigo-400 uppercase tracking-widest leading-none">Ollama</span>
             {m.ollama_active_model ? (

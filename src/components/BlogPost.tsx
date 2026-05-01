@@ -91,7 +91,7 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate, onSignIn, onSignU
   }, [slug]);
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-gray-900 text-gray-100 selection:bg-blue-600 selection:text-white">
       {/* Background decor */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
@@ -146,12 +146,12 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate, onSignIn, onSignU
 
         {loading && !notFound && (
           <div className="animate-pulse space-y-4">
-            <div className="h-9 bg-gray-800 rounded w-3/4" />
-            <div className="h-4 bg-gray-800 rounded w-1/4" />
+            <div className="h-9 bg-gray-700 rounded w-3/4" />
+            <div className="h-4 bg-gray-700 rounded w-1/4" />
             <div className="mt-8 space-y-3">
-              <div className="h-4 bg-gray-800 rounded w-full" />
-              <div className="h-4 bg-gray-800 rounded w-5/6" />
-              <div className="h-4 bg-gray-800 rounded w-4/5" />
+              <div className="h-4 bg-gray-700 rounded w-full" />
+              <div className="h-4 bg-gray-700 rounded w-5/6" />
+              <div className="h-4 bg-gray-700 rounded w-4/5" />
             </div>
           </div>
         )}
@@ -196,14 +196,14 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate, onSignIn, onSignU
               )}
             </div>
 
-            <hr className="border-gray-800 mb-10" />
+            <hr className="border-gray-700 mb-10" />
 
             <div
               className="blog-content"
               dangerouslySetInnerHTML={{ __html: html }}
             />
 
-            <hr className="border-gray-800 mt-16 mb-8" />
+            <hr className="border-gray-700 mt-16 mb-8" />
 
             <p className="text-sm text-gray-600">
               Written by Jeff Geiser · Wicklee

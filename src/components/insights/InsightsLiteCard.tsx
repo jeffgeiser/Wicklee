@@ -58,7 +58,7 @@ const InsightsLiteCard: React.FC<InsightsLiteCardProps> = ({
   const style = TIER_STYLE[label] ?? TIER_STYLE.Pro;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
 
       {/* Header */}
       <div className="flex items-center justify-between gap-2">

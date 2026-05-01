@@ -78,7 +78,7 @@ const Tip: React.FC<TipProps> = ({ text, children, side = 'top', width = 'w-56' 
             'absolute z-50 pointer-events-none',
             width,
             side === 'top' ? 'bottom-full left-0 mb-1.5' : 'top-full left-0 mt-1.5',
-            'bg-gray-900 border border-gray-700/50 rounded-xl',
+            'bg-gray-800 border border-gray-700/50 rounded-xl',
             'shadow-2xl shadow-black/50 px-3 py-2.5',
             'text-[11px] text-gray-400 font-sans leading-relaxed whitespace-normal',
           ].join(' ')}
@@ -372,7 +372,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
     const goodCount = rows.length - poorCount - fairCount;
 
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+      <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
 
         {/* Header */}
         <div className="flex items-center justify-between gap-2">
@@ -410,7 +410,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-[11px]">
               <thead>
-                <tr className="text-[9px] uppercase tracking-widest text-gray-600 border-b border-gray-800">
+                <tr className="text-[9px] uppercase tracking-widest text-gray-600 border-b border-gray-700">
                   <th className="text-left pb-1.5 font-semibold pr-4">Node</th>
                   <th className="text-left pb-1.5 font-semibold pr-4">Model</th>
                   <th className="text-left pb-1.5 font-semibold pr-4">Quant</th>
@@ -442,7 +442,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   const effCfg = EFF_CONFIG[row.entry.effLevel];
                   const memCfg = row.memScore ? MEM_CONFIG[row.memScore] : null;
                   return (
-                    <tr key={`${row.nodeId}-${row.entry.modelName}-${i}`} className="hover:bg-gray-800/30 transition-colors">
+                    <tr key={`${row.nodeId}-${row.entry.modelName}-${i}`} className="hover:bg-gray-700/30 transition-colors">
                       <td className="py-2 pr-4 font-mono text-gray-400 whitespace-nowrap">{row.hostname}</td>
                       <td className="py-2 pr-4 whitespace-nowrap">
                         <span className="text-gray-200">{row.entry.base}</span>
@@ -452,7 +452,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                         {row.entry.quant ? (
                           <span
                             title={QUANT_DESCRIPTION[row.entry.family] ?? ''}
-                            className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400"
+                            className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-700 border border-gray-700 text-cyan-400"
                           >
                             {row.entry.quant}
                           </span>
@@ -540,7 +540,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 
   if (entries.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+      <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <Cpu className="w-3.5 h-3.5 text-gray-600 shrink-0" />
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
@@ -561,7 +561,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   )) : 0;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
 
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
@@ -593,7 +593,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 className={`text-[9px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
                   isSelected
                     ? 'bg-gray-700 border-gray-600 text-gray-200'
-                    : 'bg-transparent border-gray-800 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+                    : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
                 }`}
               >
                 {n.hostname ?? n.node_id}
@@ -609,7 +609,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         const memCfg = memFit ? MEM_CONFIG[memFit.score] : null;
 
         return (
-          <div key={e.modelName} className={entries.length > 1 && i > 0 ? 'pt-3 border-t border-gray-800/50' : ''}>
+          <div key={e.modelName} className={entries.length > 1 && i > 0 ? 'pt-3 border-t border-gray-700/50' : ''}>
 
             {/* Identity row: model name + quant badge */}
             <div className="flex items-center gap-2 flex-wrap mb-2.5">
@@ -621,7 +621,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               {e.quant && (
                 <span
                   title={QUANT_DESCRIPTION[e.family] ?? ''}
-                  className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-cyan-400"
+                  className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-gray-700 border border-gray-700 text-cyan-400"
                 >
                   {e.quant}
                 </span>
@@ -687,7 +687,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   )}
                 </div>
                 {/* Stacked bar: model (indigo) · other used (gray) · free (dark bg) */}
-                <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden flex mb-1">
+                <div className="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden flex mb-1">
                   <div
                     className="h-full bg-indigo-500/80"
                     style={{ width: `${modelBarPct}%` }}
@@ -788,7 +788,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                           <span className={`text-[9px] font-mono w-9 shrink-0 text-right ${isMax ? 'text-gray-400 font-semibold' : 'text-gray-600'}`}>
                             {fmtCtx(pt.tokens)}
                           </span>
-                          <div className="flex-1 h-1 bg-gray-800 rounded-full overflow-hidden">
+                          <div className="flex-1 h-1 bg-gray-700 rounded-full overflow-hidden">
                             <div className={`h-full rounded-full ${fitsColor}`} style={{ width: `${barPct}%` }} />
                           </div>
                           <span className={`text-[9px] font-mono w-14 shrink-0 text-right ${labelColor}`}>
@@ -830,7 +830,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               const headlineColor = kindColor[rec.kind] ?? 'text-gray-400';
 
               return (
-                <div className="pt-2 border-t border-gray-800/50">
+                <div className="pt-2 border-t border-gray-700/50">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-[9px] text-gray-600 uppercase tracking-widest">
                       <Tip text="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio. Quality deltas from llama.cpp perplexity benchmarks." side="top">

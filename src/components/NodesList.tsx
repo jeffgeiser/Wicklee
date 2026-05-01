@@ -114,11 +114,11 @@ const MgmtTile: React.FC<{
   tooltip?: string;
 }> = ({ label, children, icon: Icon, iconCls, onClick, active, tooltip }) => (
   <div
-    className={`bg-white dark:bg-gray-900 border rounded-2xl p-5 flex flex-col justify-between h-[116px] transition-colors ${
+    className={`bg-white dark:bg-gray-800 border rounded-2xl p-5 flex flex-col justify-between h-[116px] transition-colors ${
       onClick ? 'cursor-pointer hover:border-indigo-500/40' : ''
     } ${active
       ? 'border-indigo-500/50 bg-indigo-500/5 dark:bg-indigo-500/5'
-      : 'border-gray-200 dark:border-gray-800'
+      : 'border-gray-200 dark:border-gray-700'
     }`}
     onClick={onClick}
     title={tooltip}
@@ -146,10 +146,10 @@ const MgmtTableHeader: React.FC<{
     'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
   return (
     <div
-      className={`${MGMT_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}
+      className={`${MGMT_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-700/60`}
     >
       <div
-        className="flex items-center justify-center cursor-pointer sticky left-4 bg-white dark:bg-gray-900"
+        className="flex items-center justify-center cursor-pointer sticky left-4 bg-white dark:bg-gray-800"
         onClick={() => onToggleSelectAll(filteredIds)}
       >
         {allSelected
@@ -157,7 +157,7 @@ const MgmtTableHeader: React.FC<{
           : <Square className="w-3 h-3 text-gray-500" />
         }
       </div>
-      <p className={`${COL} sticky left-[68px] bg-white dark:bg-gray-900`}>Node</p>
+      <p className={`${COL} sticky left-[68px] bg-white dark:bg-gray-800`}>Node</p>
       <p className={COL}>Identity</p>
       <p className={COL}>OS</p>
       <p className={COL}>Memory</p>
@@ -201,7 +201,7 @@ const DetailBand: React.FC<{
   const llamacppDetected = m?.llamacpp_running   === true;
 
   return (
-    <div className="border-t border-gray-100 dark:border-gray-800 grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-800 min-[860px]:grid-cols-3 min-[860px]:divide-y-0 min-[860px]:divide-x">
+    <div className="border-t border-gray-100 dark:border-gray-700 grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-800 min-[860px]:grid-cols-3 min-[860px]:divide-y-0 min-[860px]:divide-x">
 
       {/* A — CONNECTIVITY */}
       <div className="px-4 py-4 space-y-3">
@@ -320,7 +320,7 @@ const DetailBand: React.FC<{
               </div>
             </div>
           ) : isOnline ? (
-            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gray-800/50">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gray-700/50">
               <div className="w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0" />
               <p className="text-[10px] text-gray-500">No model loaded</p>
             </div>
@@ -487,13 +487,13 @@ const MgmtRow: React.FC<{
     >
       {/* Collapsed row */}
       <div
-        className={`group ${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors cursor-pointer`}
+        className={`group ${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors cursor-pointer`}
         onClick={() => setOpen(o => !o)}
       >
         {/* Checkbox (sticky) */}
         <div
           onClick={e => { e.stopPropagation(); onToggleSelect(); }}
-          className="flex items-center justify-center overflow-hidden sticky left-4 bg-white dark:bg-gray-900 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/40"
+          className="flex items-center justify-center overflow-hidden sticky left-4 bg-white dark:bg-gray-800 group-hover:bg-gray-50 dark:group-hover:bg-gray-700/40"
         >
           {isSelected
             ? <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
@@ -502,7 +502,7 @@ const MgmtRow: React.FC<{
         </div>
 
         {/* Status + Node ID (sticky) */}
-        <div className="flex items-center gap-2 overflow-hidden sticky left-[68px] bg-white dark:bg-gray-900 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/40">
+        <div className="flex items-center gap-2 overflow-hidden sticky left-[68px] bg-white dark:bg-gray-800 group-hover:bg-gray-50 dark:group-hover:bg-gray-700/40">
           <span className={`shrink-0 w-2 h-2 rounded-full ${dotCls}`} title={dotTooltip} />
           <div className="min-w-0">
             {hostname ? (
@@ -572,7 +572,7 @@ const MgmtRow: React.FC<{
             const pct = totalMb > 0 ? Math.round((usedMb / totalMb) * 100) : 0;
             const barCls = pct > 80 ? 'bg-red-400' : pct > 60 ? 'bg-amber-400' : 'bg-indigo-400';
             return (
-              <div className="w-full h-[3px] bg-gray-800 rounded-full mt-1 overflow-hidden" title={`${pct}% used`}>
+              <div className="w-full h-[3px] bg-gray-700 rounded-full mt-1 overflow-hidden" title={`${pct}% used`}>
                 <div className={`h-full ${barCls} rounded-full transition-all`} style={{ width: `${pct}%` }} />
               </div>
             );
@@ -677,7 +677,7 @@ const TelemetryRelayStatus: React.FC<{ pairingInfo: PairingInfo | null | undefin
   const isRelaying = pairingInfo?.status === 'connected';
   const isPending  = pairingInfo?.status === 'pending';
   return (
-    <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+    <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
       <Radio className={`w-3.5 h-3.5 shrink-0 ${isRelaying ? 'text-green-400' : isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
       {isRelaying ? (
         <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
@@ -752,8 +752,8 @@ const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metric
   ];
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden">
-      <div className="px-5 py-2.5 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl overflow-hidden">
+      <div className="px-5 py-2.5 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2">
         <Activity className="w-3.5 h-3.5 text-gray-400" />
         <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-widest">Harvester Health</h3>
       </div>
@@ -1013,7 +1013,7 @@ const NodesList: React.FC<NodesListProps> = ({
           <MgmtTile label="Hardware Mix" icon={Cpu} iconCls="text-indigo-400">
             <div className="flex items-center gap-1.5 flex-wrap">
               {os !== 'Unknown'
-                ? <span className="text-[10px] font-telin text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">{os}</span>
+                ? <span className="text-[10px] font-telin text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{os}</span>
                 : <span className="text-[10px] text-gray-600">—</span>
               }
             </div>
@@ -1042,7 +1042,7 @@ const NodesList: React.FC<NodesListProps> = ({
         </div>
 
         {/* Node table */}
-        <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-x-auto bg-white dark:bg-gray-900">
+        <div className="border border-gray-200 dark:border-gray-700 rounded-2xl overflow-x-auto bg-white dark:bg-gray-800">
           <MgmtTableHeader
             filteredIds={[localNode.id]}
             selectedNodes={selectedNodes}
@@ -1205,7 +1205,7 @@ const NodesList: React.FC<NodesListProps> = ({
               ? osPills.map(([os, count]) => (
                   <span
                     key={os}
-                    className="text-[10px] font-telin text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded"
+                    className="text-[10px] font-telin text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded"
                   >
                     {os}{count > 1 ? ` ×${count}` : ''}
                   </span>
@@ -1250,7 +1250,7 @@ const NodesList: React.FC<NodesListProps> = ({
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search nodes…"
-            className="w-full pl-8 pr-8 py-2 text-sm bg-gray-900 border border-gray-700 rounded-xl text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="w-full pl-8 pr-8 py-2 text-sm bg-gray-800 border border-gray-700 rounded-xl text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-colors"
           />
           {search && (
             <button
@@ -1264,7 +1264,7 @@ const NodesList: React.FC<NodesListProps> = ({
         <div className="relative shrink-0" ref={sortRef}>
           <button
             onClick={() => setSortOpen(o => !o)}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-medium bg-gray-900 border border-gray-700 rounded-xl text-gray-300 hover:border-indigo-500 transition-colors focus:outline-none"
+            className="flex items-center gap-2 px-4 py-2 text-xs font-medium bg-gray-800 border border-gray-700 rounded-xl text-gray-300 hover:border-indigo-500 transition-colors focus:outline-none"
           >
             <ArrowUpDown className="w-3.5 h-3.5 text-gray-500" />
             <span>
@@ -1276,7 +1276,7 @@ const NodesList: React.FC<NodesListProps> = ({
             <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${sortOpen ? 'rotate-180' : ''}`} />
           </button>
           {sortOpen && (
-            <div className="absolute right-0 top-full mt-1.5 w-44 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 py-1">
+            <div className="absolute right-0 top-full mt-1.5 w-44 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl z-20 py-1">
               {(['registered', 'nodeId', 'hostname', 'location'] as SortKey[]).map(key => (
                 <button
                   key={key}
@@ -1284,7 +1284,7 @@ const NodesList: React.FC<NodesListProps> = ({
                   className={`w-full text-left px-3 py-2 text-xs transition-colors ${
                     sortKey === key
                       ? 'text-indigo-300 bg-indigo-500/10'
-                      : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                      : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
                   }`}
                 >
                   {key === 'registered' ? 'Registration order'
@@ -1309,7 +1309,7 @@ const NodesList: React.FC<NodesListProps> = ({
               onClick={() => setStatusFilter(f)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[9px] font-semibold uppercase tracking-widest transition-all ${
                 active
-                  ? 'text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800'
+                  ? 'text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-700'
                   : 'text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
               }`}
             >
@@ -1349,7 +1349,7 @@ const NodesList: React.FC<NodesListProps> = ({
       </div>
 
       {/* ── Node table ────────────────────────────────────────────────────── */}
-      <div className="border border-gray-200 dark:border-gray-800 rounded-2xl overflow-x-auto bg-white dark:bg-gray-900">
+      <div className="border border-gray-200 dark:border-gray-700 rounded-2xl overflow-x-auto bg-white dark:bg-gray-800">
         <MgmtTableHeader
           filteredIds={filteredIds}
           selectedNodes={selectedNodes}
@@ -1396,7 +1396,7 @@ const NodesList: React.FC<NodesListProps> = ({
 
       {/* ── Bulk Actions bar ─────────────────────────────────────────────── */}
       {selectedNodes.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 bg-gray-950 border border-gray-700/80 rounded-2xl shadow-2xl shadow-black/60 backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 bg-gray-900 border border-gray-700/80 rounded-2xl shadow-2xl shadow-black/60 backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
           <span className="text-xs font-semibold text-gray-200 tabular-nums">
             {selectedNodes.size} node{selectedNodes.size !== 1 ? 's' : ''} selected
           </span>

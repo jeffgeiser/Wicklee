@@ -86,7 +86,7 @@ const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeade
     <>
       {/* ── Fleet mode header: node ID + hostname ─────────────────────────── */}
       {showNodeHeader && (
-        <div className="px-5 py-2.5 border-b border-gray-800 bg-gray-800/40 flex items-center justify-between gap-3">
+        <div className="px-5 py-2.5 border-b border-gray-700 bg-gray-700/40 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-telin font-semibold text-gray-300 truncate leading-none">
               {node.node_id}
@@ -145,7 +145,7 @@ const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeade
 
           {/* Segmented bar:  ██ model (indigo) · ▒▒ used (gray) · ░░ free (dark) */}
           <div
-            className="h-2 w-full bg-gray-800 rounded-full overflow-hidden flex"
+            className="h-2 w-full bg-gray-700 rounded-full overflow-hidden flex"
             title={`Model: ${result.modelSizeGb.toFixed(1)} GB · Used: ${usedGb.toFixed(1)} GB · Free: ${result.headroomGb.toFixed(1)} GB`}
           >
             {/* Segment 1: model loaded (indigo/purple) */}
@@ -160,7 +160,7 @@ const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeade
                 style={{ width: `${usedBarPct}%` }}
               />
             )}
-            {/* Segment 3: free headroom — fills remaining width via bg-gray-800 base */}
+            {/* Segment 3: free headroom — fills remaining width via bg-gray-700 base */}
           </div>
 
           {/* Legend row */}
@@ -198,7 +198,7 @@ const ModelFitCard: React.FC<ModelFitCardProps> = ({ result, node, showNodeHeade
   if (bare) return innerContent;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
       {innerContent}
     </div>
   );

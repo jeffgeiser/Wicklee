@@ -140,7 +140,7 @@ async fn main() {
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                 activeHardware === hw 
                   ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' 
-                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-700'
               }`}
             >
               {HARDWARE_CONFIGS[hw].icon}
@@ -148,12 +148,12 @@ async fn main() {
             </button>
           ))}
         </div>
-        <div className="bg-gray-950 p-6 rounded-2xl border border-white/5 font-mono text-xs text-cyan-400 relative group overflow-hidden">
+        <div className="bg-gray-900 p-6 rounded-2xl border border-white/5 font-mono text-xs text-cyan-400 relative group overflow-hidden">
           <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
           <pre className="relative z-10">{HARDWARE_CONFIGS[activeHardware].setup}</pre>
           <button 
             onClick={() => handleCopy(HARDWARE_CONFIGS[activeHardware].setup, 'hw')}
-            className="absolute right-4 top-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="absolute right-4 top-4 p-2 bg-gray-700 hover:bg-gray-700 rounded-lg text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity"
           >
             {copied === 'hw' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
@@ -173,18 +173,18 @@ async fn main() {
           <div className="relative group">
             <button 
               onClick={() => handleCopy(RBAC_RS, 'rbac')}
-              className="absolute right-4 top-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 transition-all opacity-0 group-hover:opacity-100"
+              className="absolute right-4 top-4 p-2 bg-gray-700 hover:bg-gray-700 rounded-lg text-gray-400 transition-all opacity-0 group-hover:opacity-100"
             >
               {copied === 'rbac' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
-            <div className="font-mono text-[10px] text-gray-400 bg-gray-950 p-6 rounded-2xl border border-white/5 overflow-x-auto max-h-[300px] relative">
+            <div className="font-mono text-[10px] text-gray-400 bg-gray-900 p-6 rounded-2xl border border-white/5 overflow-x-auto max-h-[300px] relative">
               <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
               <pre className="relative z-10">{RBAC_RS}</pre>
             </div>
           </div>
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl p-6">
           <div className="mb-4">
             <div className="flex items-center gap-3">
               <ShieldCheck className="w-5 h-5 text-cyan-400" />
@@ -199,11 +199,11 @@ async fn main() {
           <div className="relative group">
             <button 
               onClick={() => handleCopy(MAIN_RS, 'main')}
-              className="absolute right-4 top-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 transition-all opacity-0 group-hover:opacity-100"
+              className="absolute right-4 top-4 p-2 bg-gray-700 hover:bg-gray-700 rounded-lg text-gray-400 transition-all opacity-0 group-hover:opacity-100"
             >
               {copied === 'main' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
-            <div className="font-mono text-[10px] text-gray-400 bg-gray-950 p-6 rounded-2xl border border-white/5 overflow-x-auto max-h-[300px] relative">
+            <div className="font-mono text-[10px] text-gray-400 bg-gray-900 p-6 rounded-2xl border border-white/5 overflow-x-auto max-h-[300px] relative">
               <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
               <pre className="relative z-10">{MAIN_RS}</pre>
             </div>
@@ -228,7 +228,7 @@ async fn main() {
             {copied === 'toml' ? 'Manifest Copied' : 'Copy Manifest'}
           </button>
         </div>
-        <div className="flex-1 font-mono text-sm text-gray-400 bg-gray-950 p-6 rounded-2xl border border-white/5 whitespace-pre overflow-y-auto max-h-[600px] relative">
+        <div className="flex-1 font-mono text-sm text-gray-400 bg-gray-900 p-6 rounded-2xl border border-white/5 whitespace-pre overflow-y-auto max-h-[600px] relative">
           <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
           <div className="relative z-10">{CARGO_TOML}</div>
         </div>

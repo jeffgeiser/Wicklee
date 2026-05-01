@@ -15,7 +15,7 @@ const tabs = [
 ];
 
 const MobileTabBar: React.FC<MobileTabBarProps> = ({ activeTab, setActiveTab }) => (
-  <nav className="md:hidden fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex items-center justify-around h-16 safe-area-inset-bottom">
+  <nav className="md:hidden fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex items-center justify-around h-16 safe-area-inset-bottom">
     {tabs.map(({ id, icon: Icon, label }) => {
       const isActive = activeTab === id;
       return (

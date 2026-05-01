@@ -71,7 +71,7 @@ const InsightsTeaseCard: React.FC<InsightsTeaseCardProps> = ({
   const style = TIER_STYLE[label] ?? TIER_STYLE.Team;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden">
 
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
@@ -92,7 +92,7 @@ const InsightsTeaseCard: React.FC<InsightsTeaseCardProps> = ({
       {/* Blurred trend placeholder — represents historical chart area */}
       <div className="relative mt-1">
         <div
-          className="h-16 bg-gray-800/40 rounded-lg blur-sm select-none pointer-events-none"
+          className="h-16 bg-gray-700/40 rounded-lg blur-sm select-none pointer-events-none"
           aria-hidden
         />
         <div className="absolute inset-0 flex items-center justify-center">

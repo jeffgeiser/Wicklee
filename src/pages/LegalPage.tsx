@@ -22,9 +22,9 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
   ];
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-300">
+    <div className="min-h-screen bg-gray-900 text-gray-300">
       {/* Header */}
-      <div className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-md sticky top-0 z-20">
+      <div className="border-b border-gray-700 bg-gray-900/80 backdrop-blur-md sticky top-0 z-20">
         <div className="max-w-4xl mx-auto px-4 sm:px-8 py-4 flex items-center gap-4">
           <button onClick={() => onNavigate('/')} className="text-gray-500 hover:text-white transition-colors">
             <ArrowLeft className="w-5 h-5" />
@@ -35,7 +35,7 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
 
       {/* Tab nav */}
       <div className="max-w-4xl mx-auto px-4 sm:px-8 pt-8">
-        <div className="flex gap-1 border-b border-gray-800 mb-8">
+        <div className="flex gap-1 border-b border-gray-700 mb-8">
           {tabs.map(t => (
             <button
               key={t.id}

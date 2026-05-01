@@ -111,7 +111,7 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-gray-900 text-gray-100 selection:bg-blue-600 selection:text-white">
       {/* Background decor */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
@@ -166,11 +166,11 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
         {loading ? (
           <div className="space-y-6">
             {[1, 2].map(i => (
-              <div key={i} className="animate-pulse bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <div className="h-5 bg-gray-800 rounded w-2/3 mb-3" />
-                <div className="h-3 bg-gray-800 rounded w-1/4 mb-4" />
-                <div className="h-3 bg-gray-800 rounded w-full mb-2" />
-                <div className="h-3 bg-gray-800 rounded w-4/5" />
+              <div key={i} className="animate-pulse bg-gray-800 border border-gray-700 rounded-2xl p-6">
+                <div className="h-5 bg-gray-700 rounded w-2/3 mb-3" />
+                <div className="h-3 bg-gray-700 rounded w-1/4 mb-4" />
+                <div className="h-3 bg-gray-700 rounded w-full mb-2" />
+                <div className="h-3 bg-gray-700 rounded w-4/5" />
               </div>
             ))}
           </div>
@@ -183,7 +183,7 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
             {posts.map(post => (
               <article
                 key={post.slug}
-                className="bg-gray-900 border border-gray-800 rounded-2xl p-6 hover:border-blue-500/30 transition-all group cursor-pointer"
+                className="bg-gray-800 border border-gray-700 rounded-2xl p-6 hover:border-blue-500/30 transition-all group cursor-pointer"
                 onClick={() => onNavigate(`/blog/${post.slug}`)}
               >
                 <h2 className="text-xl font-bold text-white mb-2 group-hover:text-blue-400 transition-colors">

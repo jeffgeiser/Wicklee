@@ -116,7 +116,7 @@ const IdleResourceCard: React.FC<Props> = ({
             </p>
           )}
 
-          <div className="pt-1 border-t border-gray-800">
+          <div className="pt-1 border-t border-gray-700">
             <p className="text-xs text-gray-500">
               Consider suspending{' '}
               <span className="text-gray-400">{suspendLabel}</span>
@@ -159,7 +159,7 @@ const IdleResourceCard: React.FC<Props> = ({
           </p>
         )}
 
-        <div className="pt-1 border-t border-gray-800">
+        <div className="pt-1 border-t border-gray-700">
           <p className="text-xs text-gray-500">
             Consider suspending{' '}
             <span className="text-gray-400">{suspendLabel}</span>

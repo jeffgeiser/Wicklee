@@ -131,7 +131,7 @@ const ModelEvictionCard: React.FC<Props> = ({
                 keepWarmState === 'success'
                   ? 'bg-green-900/40 border border-green-700/50 text-green-400 cursor-default'
                   : keepWarmState === 'loading'
-                  ? 'bg-gray-800 border border-gray-700 text-gray-400 cursor-wait'
+                  ? 'bg-gray-700 border border-gray-700 text-gray-400 cursor-wait'
                   : 'bg-amber-500/10 border border-amber-500/25 text-amber-400 hover:bg-amber-500/20 cursor-pointer'
               }`}
             >
@@ -146,7 +146,7 @@ const ModelEvictionCard: React.FC<Props> = ({
           ) : (
             <button
               disabled
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-700 text-gray-500 text-xs font-semibold cursor-not-allowed"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-700 border border-gray-700 text-gray-500 text-xs font-semibold cursor-not-allowed"
             >
               <Lock className="w-3 h-3" />
               Keep Warm

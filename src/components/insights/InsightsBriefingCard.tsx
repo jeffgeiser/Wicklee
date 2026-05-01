@@ -195,7 +195,7 @@ const FleetPulseStrip: React.FC<{ pulse: FleetPulse }> = ({ pulse }) => {
   } = pulse;
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2 bg-gray-950/40 border-t border-gray-800/60 flex-wrap text-[10px]">
+    <div className="flex items-center gap-3 px-4 py-2 bg-gray-900/40 border-t border-gray-700/60 flex-wrap text-[10px]">
       {/* Online count */}
       <div className="flex items-center gap-1.5">
         <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
@@ -243,7 +243,7 @@ const HeadToHeadRow: React.FC<{ pulse: FleetPulse }> = ({ pulse }) => {
   if (!topNode || !bottomNode || efficiencyRatio == null) return null;
 
   return (
-    <div className="flex items-start gap-2 py-2.5 border-b border-gray-800/50">
+    <div className="flex items-start gap-2 py-2.5 border-b border-gray-700/50">
       <BarChart2 className="w-3.5 h-3.5 text-blue-400/70 shrink-0 mt-0.5" />
       <p className="text-[10px] text-gray-500 leading-relaxed">
         <span className="font-semibold text-gray-300">{topNode.hostname}</span>
@@ -281,7 +281,7 @@ const TopFindingSection: React.FC<{ event: InsightRecentEvent }> = ({ event }) =
   const actionColor = ACTION_ID_COLORS[event.action_id] ?? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20';
 
   return (
-    <div className="py-3 border-b border-gray-800/60 space-y-2">
+    <div className="py-3 border-b border-gray-700/60 space-y-2">
       <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 mb-1">
         Top Finding
       </p>
@@ -325,7 +325,7 @@ const TopFindingSection: React.FC<{ event: InsightRecentEvent }> = ({ event }) =
           <span className="text-[9px] text-gray-600">machine directive</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <pre className="flex-1 font-mono text-[9px] text-gray-500 bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 overflow-x-auto whitespace-pre min-w-0">
+          <pre className="flex-1 font-mono text-[9px] text-gray-500 bg-gray-900 border border-gray-700 rounded-lg px-2.5 py-1.5 overflow-x-auto whitespace-pre min-w-0">
             {curlText}
           </pre>
           <InlineCopyButton text={curlText} />
@@ -386,7 +386,7 @@ const OnsetRow: React.FC<OnsetRowProps> = ({ event, count, nodeStatus, nodeTherm
   const hasBestNode = !!event.best_node_id;
 
   return (
-    <div className="border-b border-gray-800/50 last:border-0">
+    <div className="border-b border-gray-700/50 last:border-0">
       {/* Collapsed header — always visible */}
       <button
         onClick={() => setExpanded(v => !v)}
@@ -397,7 +397,7 @@ const OnsetRow: React.FC<OnsetRowProps> = ({ event, count, nodeStatus, nodeTherm
           {event.title}
         </span>
         {count > 1 && (
-          <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700">
+          <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-gray-700 text-gray-400 border border-gray-700">
             ×{count} in 24h
           </span>
         )}
@@ -406,7 +406,7 @@ const OnsetRow: React.FC<OnsetRowProps> = ({ event, count, nodeStatus, nodeTherm
             WES {event.wes_at_onset.toFixed(0)} at onset
           </span>
         )}
-        <span className="shrink-0 text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
+        <span className="shrink-0 text-[10px] text-gray-500 bg-gray-700 px-1.5 py-0.5 rounded">
           {event.hostname}
         </span>
         <span className="shrink-0 text-[10px] text-gray-600">{fmtEventAge(event.ts)}</span>
@@ -447,7 +447,7 @@ const OnsetRow: React.FC<OnsetRowProps> = ({ event, count, nodeStatus, nodeTherm
 // ── ResolvedRow ───────────────────────────────────────────────────────────────
 
 const ResolvedRow: React.FC<{ event: InsightRecentEvent }> = ({ event }) => (
-  <div className="flex items-start gap-3 py-2.5 border-b border-gray-800/50 last:border-0 opacity-70">
+  <div className="flex items-start gap-3 py-2.5 border-b border-gray-700/50 last:border-0 opacity-70">
     <CheckCircle className="w-3.5 h-3.5 text-green-400/70 mt-0.5 shrink-0" />
     <div className="flex-1 min-w-0">
       <p className="text-xs text-gray-400 truncate">{event.title}</p>
@@ -549,7 +549,7 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
 
   if (total === 0) {
     return (
-      <div className="bg-gray-900/60 border border-gray-800 rounded-2xl overflow-hidden">
+      <div className="bg-gray-800/60 border border-gray-700 rounded-2xl overflow-hidden">
         <div className="flex items-center gap-3 px-4 h-10">
           <History className="w-3.5 h-3.5 text-gray-600 shrink-0" />
           <span className="text-xs text-gray-600 flex-1">24h Briefing</span>
@@ -574,12 +574,12 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
   ].filter(Boolean) as string[];
 
   return (
-    <div className="bg-gray-900/60 border border-gray-800 rounded-2xl overflow-hidden">
+    <div className="bg-gray-800/60 border border-gray-700 rounded-2xl overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <button
         onClick={toggle}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-800/30 transition-colors"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors"
       >
         <History className="w-3.5 h-3.5 text-indigo-400/70 shrink-0" />
         <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 flex-1 text-left">
@@ -589,7 +589,7 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
           {chips.map(chip => (
             <span
               key={chip}
-              className="text-[9px] font-semibold px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700"
+              className="text-[9px] font-semibold px-2 py-0.5 rounded-full bg-gray-700 text-gray-400 border border-gray-700"
             >
               {chip}
             </span>
@@ -607,7 +607,7 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
 
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       {!collapsed && (
-        <div className="px-4 pb-3 pt-1 border-t border-gray-800/60 space-y-0">
+        <div className="px-4 pb-3 pt-1 border-t border-gray-700/60 space-y-0">
 
           {/* Top Finding — highest-confidence active pattern */}
           {topFinding && <TopFindingSection event={topFinding} />}
@@ -651,7 +651,7 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
 
           {/* Dismissed summary — count only, no individual rows */}
           {dismissed.length > 0 && (
-            <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-gray-800/40">
+            <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-gray-700/40">
               <X className="w-3 h-3 text-gray-600 shrink-0" />
               <p className="text-[10px] text-gray-600">
                 {dismissed.length} observation{dismissed.length > 1 ? 's' : ''} dismissed
@@ -664,7 +664,7 @@ const InsightsBriefingCard: React.FC<InsightsBriefingCardProps> = ({
           {events.length > 0 && (() => {
             const oldest = events[events.length - 1];
             return (
-              <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-gray-800/40">
+              <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-gray-700/40">
                 <Clock className="w-3 h-3 text-gray-700 shrink-0" />
                 <p className="text-[9px] text-gray-700">
                   Earliest event {fmtEventAge(oldest.ts)} · showing last 24h

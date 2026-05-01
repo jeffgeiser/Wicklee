@@ -55,7 +55,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
 }) => (
   <div
     id={id}
-    className="bg-gray-900 border border-gray-800 rounded-2xl p-6 scroll-mt-24"
+    className="bg-gray-800 border border-gray-700 rounded-2xl p-6 scroll-mt-24"
   >
     <h3 className="text-sm font-semibold text-gray-100 font-sans mb-3 leading-snug">{name}</h3>
 
@@ -83,7 +83,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
     )}
 
     {action && (
-      <div className="border-t border-gray-800/70 pt-4">
+      <div className="border-t border-gray-700/70 pt-4">
         <p className="text-[9px] font-semibold uppercase tracking-widest text-gray-600 mb-1.5">If this is low / high</p>
         <p className="font-sans text-xs text-gray-400 leading-relaxed">{action}</p>
       </div>
@@ -110,10 +110,10 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
+    <div className="min-h-screen bg-gray-900 text-gray-100">
 
       {/* ── Top nav ──────────────────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-40 bg-gray-950/90 backdrop-blur-sm border-b border-gray-800/50 px-6 py-3 flex items-center gap-4">
+      <div className="sticky top-0 z-40 bg-gray-900/90 backdrop-blur-sm border-b border-gray-700/50 px-6 py-3 flex items-center gap-4">
         <button
           onClick={handleBack}
           className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
@@ -149,7 +149,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
             title="How Wicklee Works: Synchronous Observation"
             description="A sovereign Rust binary that observes your inference fleet without ever touching your private data."
           />
-          <div className="bg-gray-900 border border-indigo-500/20 rounded-2xl p-6 space-y-5">
+          <div className="bg-gray-800 border border-indigo-500/20 rounded-2xl p-6 space-y-5">
             {([
               {
                 label: 'Hardware Harvester (1 Hz)',
@@ -185,7 +185,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
             title="Throughput Measurement"
             description="How Wicklee measures tok/s without synthetic traffic or request interception."
           />
-          <div className="bg-gray-900 border border-indigo-500/20 rounded-2xl p-6 space-y-6">
+          <div className="bg-gray-800 border border-indigo-500/20 rounded-2xl p-6 space-y-6">
 
             {/* Ollama */}
             <div className="flex gap-3">
@@ -206,7 +206,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
               </div>
             </div>
 
-            <div className="border-t border-gray-800/60" />
+            <div className="border-t border-gray-700/60" />
 
             {/* vLLM */}
             <div className="flex gap-3">
@@ -222,7 +222,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
               </div>
             </div>
 
-            <div className="border-t border-gray-800/60" />
+            <div className="border-t border-gray-700/60" />
 
             {/* Estimation Gap */}
             <div className="flex gap-3">

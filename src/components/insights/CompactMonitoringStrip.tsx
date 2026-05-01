@@ -22,7 +22,7 @@ const CompactMonitoringStrip: React.FC<CompactMonitoringStripProps> = ({ items }
   if (items.length === 0) return null;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl px-3 py-2.5">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl px-3 py-2.5">
       <div className="grid grid-cols-4 gap-2">
         {items.map(item => (
           <div key={item.key} className="flex items-center gap-2 min-w-0">

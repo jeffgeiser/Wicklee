@@ -7,7 +7,7 @@ interface SignUpPageProps {
 
 const SignUpPage: React.FC<SignUpPageProps> = () => {
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
       <SignUp
         routing="path"
         path="/sign-up"

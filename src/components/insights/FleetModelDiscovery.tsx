@@ -124,11 +124,11 @@ const FleetModelRow: React.FC<{
   const pullNode = focusedNode ?? model.nodes[0];
 
   return (
-    <div className="border border-gray-800/60 rounded-xl overflow-hidden">
+    <div className="border border-gray-700/60 rounded-xl overflow-hidden">
       {/* Summary row */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-800/20 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-700/20 transition-colors text-left"
       >
         <div className={`w-2 h-2 rounded-full ${best.dot} shrink-0`} />
 
@@ -174,7 +174,7 @@ const FleetModelRow: React.FC<{
 
       {/* Expanded: per-node breakdown */}
       {open && (
-        <div className="px-3 pb-3 border-t border-gray-800/40 space-y-3 pt-3">
+        <div className="px-3 pb-3 border-t border-gray-700/40 space-y-3 pt-3">
           {/* HF link */}
           <a
             href={`https://huggingface.co/${model.model_id}`}
@@ -198,7 +198,7 @@ const FleetModelRow: React.FC<{
               return (
                 <div
                   key={node.node_id}
-                  className={`flex items-center gap-2 py-2 border-t border-gray-800/20 first:border-t-0 transition-opacity ${focusNodeId && !isFocused ? 'opacity-40' : ''}`}
+                  className={`flex items-center gap-2 py-2 border-t border-gray-700/20 first:border-t-0 transition-opacity ${focusNodeId && !isFocused ? 'opacity-40' : ''}`}
                 >
                   <Server className="w-3 h-3 text-gray-600 shrink-0" />
                   <span className={`text-[11px] w-24 shrink-0 truncate ${isFocused ? 'text-gray-200 font-semibold' : 'text-gray-400'}`} title={displayName}>
@@ -236,7 +236,7 @@ const FleetModelRow: React.FC<{
               <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
                 {focusedNode ? `${focusedNode.hostname ?? focusedNode.node_id}` : 'Best node'} · {pullNode.hostname ?? pullNode.node_id} · {pullNode.best_quant}
               </div>
-              <div className="flex items-center gap-1.5 bg-gray-950/60 border border-gray-800/60 rounded-lg px-2.5 py-1.5">
+              <div className="flex items-center gap-1.5 bg-gray-900/60 border border-gray-700/60 rounded-lg px-2.5 py-1.5">
                 <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">
                   {pullNode.pull_cmd}
                 </code>
@@ -398,7 +398,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
             className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
               focusNodeId == null
                 ? 'bg-gray-700 border-gray-600 text-gray-200'
-                : 'bg-transparent border-gray-800 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
             }`}
           >
             All nodes
@@ -410,7 +410,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
               className={`text-[10px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
                 focusNodeId === n.node_id
                   ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
-                  : 'bg-transparent border-gray-800 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+                  : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
               }`}
             >
               {n.hostname ?? n.node_id}
@@ -431,13 +431,13 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
             value={pendingSearch}
             onChange={e => handleChange(e.target.value)}
             placeholder="Search HuggingFace GGUF across your fleet (e.g. llama, qwen, mistral)…"
-            className="w-full pl-8 pr-3 py-2 bg-gray-800/60 border border-gray-700/50 rounded-lg text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-cyan-500/40"
+            className="w-full pl-8 pr-3 py-2 bg-gray-700/60 border border-gray-700/50 rounded-lg text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-cyan-500/40"
           />
         </div>
         <button
           type="submit"
           disabled={loading}
-          className="px-3 py-2 bg-gray-800 border border-gray-700/50 rounded-lg text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors disabled:opacity-40"
+          className="px-3 py-2 bg-gray-700 border border-gray-700/50 rounded-lg text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors disabled:opacity-40"
         >
           Search
         </button>

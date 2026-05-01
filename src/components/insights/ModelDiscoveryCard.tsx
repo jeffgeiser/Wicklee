@@ -129,7 +129,7 @@ const VariantTable: React.FC<{ variants: VariantResult[]; modelId: string; pullC
         {displayed.map(v => {
           const vc = fitColors(v.fit_score);
           return (
-            <div key={v.filename} className="flex items-center gap-2 py-1 border-t border-gray-800/20 first:border-t-0">
+            <div key={v.filename} className="flex items-center gap-2 py-1 border-t border-gray-700/20 first:border-t-0">
               <div className={`w-1.5 h-1.5 rounded-full ${vc.dot} shrink-0`} />
               <span className="text-[11px] text-gray-400 font-mono shrink-0 w-[72px] truncate" title={v.filename}>
                 {quantLabel(v)}
@@ -160,7 +160,7 @@ const VariantTable: React.FC<{ variants: VariantResult[]; modelId: string; pullC
 
       {/* Pull command — inline, no recommendation paragraph */}
       {pullCmd && (
-        <div className="flex items-center gap-1 mt-1.5 bg-gray-950/60 border border-gray-800/60 rounded px-2 py-1">
+        <div className="flex items-center gap-1 mt-1.5 bg-gray-900/60 border border-gray-700/60 rounded px-2 py-1">
           <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">{pullCmd}</code>
           <CopyButton text={pullCmd} />
         </div>
@@ -178,11 +178,11 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
   const colors = fitColors(best.fit_score);
 
   return (
-    <div className="border border-gray-800/60 rounded-lg overflow-hidden">
+    <div className="border border-gray-700/60 rounded-lg overflow-hidden">
       {/* Summary row */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800/20 transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700/20 transition-colors text-left"
       >
         <div className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
 
@@ -222,7 +222,7 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
 
       {/* Expanded: variants + pull command, no separate HF link row */}
       {open && (
-        <div className="px-3 pb-2 border-t border-gray-800/40">
+        <div className="px-3 pb-2 border-t border-gray-700/40">
           <VariantTable variants={model.variants} modelId={model.model_id} pullCmd={best.pull_cmd || undefined} />
         </div>
       )}
@@ -328,13 +328,13 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
             value={pendingSearch}
             onChange={e => handleSearchChange(e.target.value)}
             placeholder="Search HuggingFace GGUF (e.g. llama, qwen, phi)…"
-            className="w-full pl-8 pr-3 py-2 bg-gray-800/60 border border-gray-700/50 rounded-lg text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-cyan-500/40"
+            className="w-full pl-8 pr-3 py-2 bg-gray-700/60 border border-gray-700/50 rounded-lg text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-cyan-500/40"
           />
         </div>
         <button
           type="submit"
           disabled={loading}
-          className="px-3 py-2 bg-gray-800 border border-gray-700/50 rounded-lg text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors disabled:opacity-40"
+          className="px-3 py-2 bg-gray-700 border border-gray-700/50 rounded-lg text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors disabled:opacity-40"
         >
           Search
         </button>

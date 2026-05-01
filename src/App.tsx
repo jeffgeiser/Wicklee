@@ -762,7 +762,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
           </div>
         </div>
 
-        <footer className="h-8 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-4 flex items-center justify-between text-xs text-gray-500 transition-colors">
+        <footer className="h-8 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 flex items-center justify-between text-xs text-gray-500 transition-colors">
           <div className="flex items-center gap-4">
             {isLocalHost ? (
               <span className="flex items-center gap-1.5">

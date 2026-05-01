@@ -37,7 +37,7 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
     // z-index is therefore evaluated at the root level where z-40 > z-30.
     // The logo lives here — in the content-area header — and is never inside
     // the nav rail. Nav expand/collapse cannot obscure it.
-    <header className="h-16 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40 transition-colors">
+    <header className="h-16 border-b border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-800/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40 transition-colors">
       {/* Left: logo + page title */}
       <div className="flex items-center gap-4">
         <Logo className="text-xl" connectionState={connectionState} theme={theme} />

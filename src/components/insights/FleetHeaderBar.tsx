@@ -50,7 +50,7 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
   isSingleNode = false,
 }) => {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl px-4 py-2.5 flex items-center gap-4 flex-wrap">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl px-4 py-2.5 flex items-center gap-4 flex-wrap">
 
       {/* ── Left: Pulse Stats ─────────────────────────────────────────── */}
       <div className="flex items-center gap-4 flex-wrap">

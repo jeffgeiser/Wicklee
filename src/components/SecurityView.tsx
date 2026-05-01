@@ -45,8 +45,8 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
 
       <div className="grid grid-cols-1 gap-6">
         {/* BYOK Section */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-glow">
-          <div className="p-6 border-b border-gray-800 flex items-center justify-between bg-gradient-to-r from-blue-600/5 to-transparent">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden shadow-glow">
+          <div className="p-6 border-b border-gray-700 flex items-center justify-between bg-gradient-to-r from-blue-600/5 to-transparent">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-blue-600/10 rounded-lg"><Key className="w-5 h-5 text-cyan-400" /></div>
               <div>
@@ -54,7 +54,7 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
                 <p className="text-xs text-gray-500">Choose between Wicklee-Hosted or your own Local Model instance.</p>
               </div>
             </div>
-            <div className="flex items-center bg-gray-800 p-1 rounded-xl border border-gray-700">
+            <div className="flex items-center bg-gray-700 p-1 rounded-xl border border-gray-700">
               <button 
                 onClick={() => setByokMode(false)}
                 className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${!byokMode ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-gray-500 hover:text-gray-300'}`}
@@ -85,13 +85,13 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
                           setValidationStatus('idle');
                         }}
                         placeholder="e.g., http://localhost:11434"
-                        className="w-full bg-gray-950 border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-200 focus:outline-none focus:border-blue-600 transition-colors"
+                        className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-200 focus:outline-none focus:border-blue-600 transition-colors"
                       />
                     </div>
                     <button 
                       onClick={validateKey}
                       disabled={isValidating || !userApiKey}
-                      className="px-4 py-3 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-sm font-bold rounded-xl transition-all flex items-center gap-2 border border-gray-700"
+                      className="px-4 py-3 bg-gray-700 hover:bg-gray-700 disabled:opacity-50 text-white text-sm font-bold rounded-xl transition-all flex items-center gap-2 border border-gray-700"
                     >
                       {isValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                       Test Connection
@@ -128,7 +128,7 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
                     </a>
                   </div>
 
-                  <div className="p-4 bg-gray-950 border border-gray-800 rounded-xl space-y-2">
+                  <div className="p-4 bg-gray-900 border border-gray-700 rounded-xl space-y-2">
                     <div className="flex items-center gap-2 text-gray-400">
                       <Lock className="w-4 h-4" />
                       <h4 className="text-xs font-bold uppercase tracking-wider">Security Disclosure</h4>
@@ -140,8 +140,8 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
                 </div>
               </div>
             ) : (
-              <div className="p-8 border border-dashed border-gray-800 rounded-2xl flex flex-col items-center text-center space-y-3">
-                <div className="p-3 bg-gray-800 rounded-full text-gray-500"><Shield className="w-6 h-6" /></div>
+              <div className="p-8 border border-dashed border-gray-700 rounded-2xl flex flex-col items-center text-center space-y-3">
+                <div className="p-3 bg-gray-700 rounded-full text-gray-500"><Shield className="w-6 h-6" /></div>
                 <div>
                   <h4 className="text-sm font-bold text-gray-300">Wicklee-Hosted Mode Active</h4>
                   <p className="text-xs text-gray-500 max-w-xs mx-auto">
@@ -153,8 +153,8 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
           </div>
         </div>
         {/* Fleet Connection section */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-          <div className="p-6 border-b border-gray-800 flex items-center justify-between bg-gradient-to-r from-indigo-600/5 to-transparent">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
+          <div className="p-6 border-b border-gray-700 flex items-center justify-between bg-gradient-to-r from-indigo-600/5 to-transparent">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-indigo-600/10 rounded-lg">
                 {pairingInfo?.status === 'connected'
@@ -228,8 +228,8 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
           </div>
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-          <div className="p-6 border-b border-gray-800 flex items-center justify-between">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
+          <div className="p-6 border-b border-gray-700 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-blue-600/10 rounded-lg"><Smartphone className="w-5 h-5 text-cyan-400" /></div>
               <div>
@@ -242,14 +242,14 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
             </span>
           </div>
           <div className="p-6 space-y-4">
-            <button className="w-full flex items-center justify-between p-4 bg-gray-800/30 hover:bg-gray-800/50 border border-gray-800 rounded-xl transition-all group">
+            <button className="w-full flex items-center justify-between p-4 bg-gray-700/30 hover:bg-gray-700/50 border border-gray-700 rounded-xl transition-all group">
               <div className="flex items-center gap-3">
                 <Shield className="w-4 h-4 text-cyan-400" />
                 <span className="text-sm font-medium text-gray-300">Authenticator App (TOTP)</span>
               </div>
               <ChevronRight className="w-4 h-4 text-gray-600 group-hover:text-gray-300" />
             </button>
-            <button className="w-full flex items-center justify-between p-4 bg-gray-800/30 hover:bg-gray-800/50 border border-gray-800 rounded-xl transition-all group">
+            <button className="w-full flex items-center justify-between p-4 bg-gray-700/30 hover:bg-gray-700/50 border border-gray-700 rounded-xl transition-all group">
               <div className="flex items-center gap-3">
                 <Key className="w-4 h-4 text-cyan-400" />
                 <span className="text-sm font-medium text-gray-300">Change Account Password</span>
@@ -259,8 +259,8 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
           </div>
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-          <div className="p-6 border-b border-gray-800">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
+          <div className="p-6 border-b border-gray-700">
             <h3 className="font-bold text-white">Active Sessions</h3>
             <p className="text-xs text-gray-500">Devices currently logged into your account.</p>
           </div>
@@ -270,9 +270,9 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
               { device: 'iPhone 15 Pro', location: 'Palo Alto, US', active: '2 hours ago', icon: Smartphone },
               { device: 'Linux Workstation', location: 'Seattle, US', active: '1 day ago', icon: Monitor }
             ].map((session, i) => (
-              <div key={i} className="p-6 flex items-center justify-between hover:bg-gray-800/20 transition-colors">
+              <div key={i} className="p-6 flex items-center justify-between hover:bg-gray-700/20 transition-colors">
                 <div className="flex items-center gap-4">
-                  <div className="p-2 bg-gray-800 rounded-lg text-gray-400"><session.icon className="w-5 h-5" /></div>
+                  <div className="p-2 bg-gray-700 rounded-lg text-gray-400"><session.icon className="w-5 h-5" /></div>
                   <div>
                     <h4 className="text-sm font-bold text-gray-200">{session.device}</h4>
                     <p className="text-xs text-gray-500">{session.location} • {session.active}</p>
@@ -286,7 +286,7 @@ const SecurityView: React.FC<SecurityViewProps> = ({ byokMode, setByokMode, user
               </div>
             ))}
           </div>
-          <div className="p-4 bg-gray-950/50 border-t border-gray-800 text-center">
+          <div className="p-4 bg-gray-900/50 border-t border-gray-700 text-center">
             <button className="text-xs font-bold text-red-400 hover:text-red-300">Sign Out of All Devices</button>
           </div>
         </div>

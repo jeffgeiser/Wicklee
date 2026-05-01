@@ -192,7 +192,7 @@ const MetricTooltip: React.FC<{
   const p95  = payload.find(p => p.name === 'p95');
   if (!main?.value) return null;
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs shadow-xl">
+    <div className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-xs shadow-xl">
       <p className="text-gray-500 mb-1">{label}</p>
       <p className="font-telin text-white font-semibold">
         {main.value.toFixed(cfg.decimals)} <span className="text-gray-500">{cfg.unit}</span>
@@ -305,10 +305,10 @@ const MetricsHistoryChart: React.FC<Props> = ({
   }, [node, range]);
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
 
       {/* ── Header ───────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 gap-4 flex-wrap">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 gap-4 flex-wrap">
         <div className="flex items-center gap-2">
           <Activity className="w-3.5 h-3.5 text-gray-500 shrink-0" />
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
@@ -322,7 +322,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
 
         {/* Time range + refresh */}
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-gray-950/60 rounded-lg p-0.5">
+          <div className="flex items-center gap-1 bg-gray-900/60 rounded-lg p-0.5">
             {RANGES.map(r => {
               const locked = isRangeLocked(r);
               return (
@@ -335,7 +335,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
                     locked
                       ? 'text-gray-700 cursor-not-allowed'
                       : range === r
-                      ? 'bg-gray-800 text-white'
+                      ? 'bg-gray-700 text-white'
                       : 'text-gray-500 hover:text-gray-300'
                   }`}
                 >
@@ -351,7 +351,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
             <button
               onClick={handleCsvDownload}
               title="Download CSV"
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
             >
               <FileDown className="w-3.5 h-3.5" />
               CSV
@@ -359,7 +359,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
           )}
           <button
             onClick={() => fetchHistory(range)}
-            className="p-1.5 rounded-lg text-gray-600 hover:text-gray-400 hover:bg-gray-800 transition-colors"
+            className="p-1.5 rounded-lg text-gray-600 hover:text-gray-400 hover:bg-gray-700 transition-colors"
             aria-label="Refresh"
           >
             <RefreshCw className="w-3 h-3" />
@@ -397,7 +397,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
               onClick={() => setSelectedId(n.node_id)}
               className={`px-2.5 py-1 rounded-lg text-[10px] font-medium whitespace-nowrap transition-colors ${
                 selectedId === n.node_id
-                  ? 'bg-gray-800 text-white'
+                  ? 'bg-gray-700 text-white'
                   : 'text-gray-600 hover:text-gray-400'
               }`}
             >

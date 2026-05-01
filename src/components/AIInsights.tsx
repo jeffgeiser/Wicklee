@@ -148,7 +148,7 @@ const InlineCopyButton: React.FC<{ text: string }> = ({ text }) => {
   return (
     <button
       onClick={handleCopy}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-[10px] font-medium text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700 border border-gray-700 text-[10px] font-medium text-gray-400 hover:text-gray-200 transition-colors shrink-0"
     >
       {copied
         ? <><Check className="w-3 h-3 text-green-400" />Copied</>
@@ -170,7 +170,7 @@ const InlineCopyAction: React.FC<{ text: string; label: string }> = ({ text, lab
   return (
     <button
       onClick={handleCopy}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700
                  border border-gray-700 hover:border-gray-600 transition-colors group"
     >
       <code className="text-[10px] font-mono text-gray-300 group-hover:text-white truncate max-w-[180px]">
@@ -367,9 +367,9 @@ const AlertDormantRow: React.FC<{
 }> = ({ icon, label, reading, isFirst, isLast }) => (
   <div
     className={`
-      flex items-center gap-3 px-4 h-10 bg-gray-900 border-x border-gray-800
+      flex items-center gap-3 px-4 h-10 bg-gray-800 border-x border-gray-700
       ${isFirst ? 'border-t rounded-t-2xl' : ''}
-      ${isLast  ? 'border-b rounded-b-2xl' : 'border-b border-gray-800/60'}
+      ${isLast  ? 'border-b rounded-b-2xl' : 'border-b border-gray-700/60'}
     `}
   >
     <span className="text-gray-600 shrink-0">{icon}</span>
@@ -399,7 +399,7 @@ const Section2NominalRow: React.FC<{
     ? ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`
     : null;
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 flex items-center gap-3">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl px-4 py-3 flex items-center gap-3">
       <span className="text-gray-600 shrink-0">{icon}</span>
       <div className="flex-1 min-w-0">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">{label}</p>
@@ -487,7 +487,7 @@ const InsightsTabBar: React.FC<{
     { id: 'forensics',   label: 'Forensics', locked: !hasForensicsUnlocked },
   ];
   return (
-    <div className="flex items-center gap-1 px-6 pt-4 pb-0 border-b border-gray-800/60">
+    <div className="flex items-center gap-1 px-6 pt-4 pb-0 border-b border-gray-700/60">
       {tabs.map(t => (
         <button
           key={t.id}
@@ -577,14 +577,14 @@ const InferenceProfiler: React.FC = () => {
     .map(s => ({ ts: s.ts_ms, v: s[metric], tps: s.tok_s }));
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 space-y-3">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Inference Profiler</span>
           <select
             value={minutes}
             onChange={e => setMinutes(Number(e.target.value))}
-            className="text-[9px] text-gray-400 bg-gray-950 border border-gray-800 rounded px-1.5 py-0.5 font-mono"
+            className="text-[9px] text-gray-400 bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 font-mono"
           >
             <option value={10}>10m</option>
             <option value={30}>30m</option>
@@ -593,14 +593,14 @@ const InferenceProfiler: React.FC = () => {
             <option value={1440}>24h</option>
           </select>
         </div>
-        <div className="flex items-center gap-1 bg-gray-950 border border-gray-800 rounded-lg p-0.5">
+        <div className="flex items-center gap-1 bg-gray-900 border border-gray-700 rounded-lg p-0.5">
           {PROFILE_METRICS.map(m => (
             <button
               key={m.key}
               onClick={() => setMetric(m.key)}
               className={`px-2 py-1 rounded text-[9px] font-semibold transition-colors ${
                 metric === m.key
-                  ? 'bg-gray-800 text-white'
+                  ? 'bg-gray-700 text-white'
                   : 'text-gray-600 hover:text-gray-400'
               }`}
             >
@@ -708,21 +708,21 @@ const LocalPerformanceHistory: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     .filter(d => d.v !== undefined);
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 space-y-3">
+    <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <BarChart2 className="w-3.5 h-3.5 text-gray-500 shrink-0" />
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Performance History</span>
           <span className="text-[9px] text-gray-700 font-mono">1h</span>
         </div>
-        <div className="flex items-center gap-1 bg-gray-950 border border-gray-800 rounded-lg p-0.5">
+        <div className="flex items-center gap-1 bg-gray-900 border border-gray-700 rounded-lg p-0.5">
           {PERF_METRICS.map(m => (
             <button
               key={m.key}
               onClick={() => setMetric(m.key)}
               className={`px-2 py-1 rounded text-[9px] font-semibold transition-colors ${
                 metric === m.key
-                  ? 'bg-gray-800 text-white'
+                  ? 'bg-gray-700 text-white'
                   : 'text-gray-600 hover:text-gray-400'
               }`}
             >
@@ -1716,7 +1716,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   Collapsed to one compact row — 3 individual ghost cards consumed
                   ~240 px of vertical space for essentially the same CTA repeated. */}
               {isLocalHost && (
-                <div className="rounded-2xl border border-gray-800/30 bg-gray-900/20 px-4 py-3 flex items-start gap-3">
+                <div className="rounded-2xl border border-gray-700/30 bg-gray-800/20 px-4 py-3 flex items-start gap-3">
                   <Globe className="w-3.5 h-3.5 text-gray-700 shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
@@ -1887,7 +1887,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       </div>
                     )
                   : (
-                      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                      <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                         <Target className="w-4 h-4 text-gray-600 shrink-0" />
                         <div>
                           <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Model Fit Score</p>
@@ -1984,13 +1984,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </div>
 
                   {logExpanded && (
-                    <div className="rounded-2xl border border-gray-800 overflow-hidden">
+                    <div className="rounded-2xl border border-gray-700 overflow-hidden">
                       {alertLog.map((entry, i) => (
                         <div
                           key={entry.id}
                           className={`flex items-center gap-3 px-4 py-2.5 ${
-                            i < alertLog.length - 1 ? 'border-b border-gray-800/60' : ''
-                          } bg-gray-900`}
+                            i < alertLog.length - 1 ? 'border-b border-gray-700/60' : ''
+                          } bg-gray-800`}
                         >
                           <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                             entry.severity === 'red'
@@ -2034,7 +2034,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       <CheckCircle className="w-3.5 h-3.5 text-green-400" />
                       Resolved — Last 24h ({resolved.length})
                     </div>
-                    <div className="rounded-2xl border border-gray-800 overflow-hidden">
+                    <div className="rounded-2xl border border-gray-700 overflow-hidden">
                       {resolved.map((obs, i) => {
                         const durationMs = (obs.resolved_at_ms ?? 0) - obs.fired_at_ms;
                         const ago = Date.now() - (obs.resolved_at_ms ?? Date.now());
@@ -2042,8 +2042,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                           <div
                             key={obs.id}
                             className={`flex items-center gap-3 px-4 py-2.5 ${
-                              i < resolved.length - 1 ? 'border-b border-gray-800/60' : ''
-                            } bg-gray-900`}
+                              i < resolved.length - 1 ? 'border-b border-gray-700/60' : ''
+                            } bg-gray-800`}
                           >
                             <div className="w-1.5 h-1.5 rounded-full shrink-0 bg-green-500/50" />
                             <div className="flex-1 min-w-0">
@@ -2088,7 +2088,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
                 />
               ) : canViewInsight(10) ? (
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                   <Cpu className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Silicon Fit Audit</p>
@@ -2150,7 +2150,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
                 {/* Localhost: Model Efficiency summary (replaces WES Leaderboard) */}
                 {isLocalHost ? (
-                  <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+                  <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
                     <div className="flex items-center gap-2">
                       <Activity className="w-3.5 h-3.5 text-gray-500 shrink-0" />
                       <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Model Efficiency</span>
@@ -2181,7 +2181,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       return (
                         <div className="space-y-3">
                           {models.map((m, i) => (
-                            <div key={m.name} className={i > 0 ? 'pt-2 border-t border-gray-800/40' : ''}>
+                            <div key={m.name} className={i > 0 ? 'pt-2 border-t border-gray-700/40' : ''}>
                               <p className="text-xs font-telin text-gray-300 truncate mb-1">{m.name}</p>
                               <div className="grid grid-cols-3 gap-2">
                                 <div>
@@ -2212,7 +2212,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     })()}
                   </div>
                 ) : canViewInsight(7) ? (
-                  <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+                  <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
                     <div className="flex items-center gap-2">
                       <BarChart2 className="w-3.5 h-3.5 text-gray-500 shrink-0" />
                       <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">WES Leaderboard</span>
@@ -2231,7 +2231,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 )}
 
                 {/* Fleet Benchmarks — live HexHive + benchmark trigger */}
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
+                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 flex-1">
                       {isLocalHost ? 'Node Benchmark' : 'Fleet Benchmarks'}
@@ -2255,7 +2255,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               {/* Efficiency Regression — Team tease: shows live WES */}
               {canViewInsight(8) ? (
                 // Full team card — pending build; placeholder until implemented
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                   <TrendingDown className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Efficiency Regression</p>
@@ -2291,7 +2291,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               {/* Memory Forecast — Team tease: shows live memory pressure */}
               {canViewInsight(9) ? (
                 // Full team card — pending build
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                   <Database className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Memory Forecast</p>
@@ -2338,7 +2338,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               {/* Hardware Cold Start — Team tease: shows last known model state */}
               {canViewInsight(11) ? (
                 // Full team card — pending build
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                   <Activity className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Hardware Cold Start</p>
@@ -2377,7 +2377,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               {/* Fleet Thermal Diversity — Team tease: shows live state counts */}
               {canViewInsight(12) ? (
                 // Full team card — pending build
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center gap-3">
+                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                   <Globe className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Fleet Thermal Diversity</p>

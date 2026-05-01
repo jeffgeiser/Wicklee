@@ -141,7 +141,7 @@ export const CopyButton: React.FC<{ text: string; label: string }> = ({ text, la
   return (
     <button
       onClick={handleCopy}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700
                  border border-gray-700 hover:border-gray-600 transition-colors group"
     >
       <code className="text-[10px] font-mono text-gray-300 group-hover:text-white truncate max-w-[180px]">
@@ -163,14 +163,14 @@ export function ConfidenceBar({ insight }: { insight: DetectedInsight }) {
   const pct         = Math.round(insight.confidenceRatio * 100);
 
   return (
-    <div className="mt-3 pt-3 border-t border-gray-800">
+    <div className="mt-3 pt-3 border-t border-gray-700">
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px] text-gray-500 font-mono">
           Observing: {observedMin}m of {requiredMin}m required
         </span>
         <span className="text-[10px] text-gray-500">{pct}%</span>
       </div>
-      <div className="h-0.5 bg-gray-800 rounded-full overflow-hidden">
+      <div className="h-0.5 bg-gray-700 rounded-full overflow-hidden">
         <div
           className="h-full bg-indigo-500/60 rounded-full transition-all duration-500"
           style={{ width: `${pct}%` }}
@@ -238,8 +238,8 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
   return (
     <div className={`border rounded-2xl p-4 space-y-3 transition-opacity ${
       isResolved
-        ? 'bg-gray-900/30 border-gray-800/50 opacity-70'
-        : 'bg-gray-900/60 border-gray-800'
+        ? 'bg-gray-800/30 border-gray-700/50 opacity-70'
+        : 'bg-gray-800/60 border-gray-700'
     }`}>
 
       {/* Header row */}
@@ -278,7 +278,7 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
             onClick={handleDismiss}
             title="Dismiss for 1 hour"
             className="mt-0.5 p-1 rounded-lg text-gray-600 hover:text-gray-400
-                       hover:bg-gray-800 transition-colors"
+                       hover:bg-gray-700 transition-colors"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -290,7 +290,7 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
 
       {/* Recommendation row — prescriptive 1–2 sentence operator action */}
       {insight.recommendation && !isResolved && (
-        <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+        <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
           <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
           <div className="min-w-0 space-y-1.5">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400/70">
@@ -304,7 +304,7 @@ const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHead
 
       {/* Resolution steps — numbered step-by-step playbook, collapsed if resolved */}
       {insight.resolution_steps && insight.resolution_steps.length > 0 && !isResolved && (
-        <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+        <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
           <ListChecks className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />
           <div className="min-w-0 space-y-1.5">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">

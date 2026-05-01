@@ -40,7 +40,7 @@ const ModelFitMiniTile: React.FC<ModelFitMiniTileProps> = ({ result, node, showN
   const usedBarPct  = Math.min((otherUsedGb / result.totalGb) * 100, 100 - modelBarPct);
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl px-3 py-2.5 space-y-1.5">
+    <div className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 space-y-1.5">
       {/* Row 1: model name + fit indicator */}
       <div className="flex items-center gap-2 min-w-0">
         <span className={`shrink-0 w-2 h-2 rounded-full ${DOT_COLOR[result.score]}`} />
@@ -59,7 +59,7 @@ const ModelFitMiniTile: React.FC<ModelFitMiniTileProps> = ({ result, node, showN
 
       {/* Row 3: thin VRAM bar */}
       <div className="flex items-center gap-2">
-        <div className="h-[3px] flex-1 bg-gray-800 rounded-full overflow-hidden flex">
+        <div className="h-[3px] flex-1 bg-gray-700 rounded-full overflow-hidden flex">
           <div
             className="h-full bg-indigo-500/80"
             style={{ width: `${modelBarPct}%` }}

@@ -62,8 +62,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
         'w-16 hover:w-64',
         'transition-[width] duration-200 ease-out',
         'overflow-hidden',
-        'border-r border-gray-200 dark:border-gray-800',
-        'bg-white dark:bg-gray-900',
+        'border-r border-gray-200 dark:border-gray-700',
+        'bg-white dark:bg-gray-800',
         'group/nav',
       ].join(' ')}>
 
@@ -76,7 +76,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
             className={`w-full flex items-center justify-center group-hover/nav:justify-start group-hover/nav:gap-3 group-hover/nav:px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === item.id
                 ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 border border-blue-600/20'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50 border border-transparent'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/50 border border-transparent'
             }`}
           >
             <item.icon className="w-4 h-4 shrink-0" />
@@ -87,14 +87,14 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
         ))}
       </nav>
 
-      <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-1">
+      <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-1">
         {/* Avatar / profile — dropdown opens upward; only reachable when nav is expanded.
             Collapsed state: avatar centered in the rail (justify-center, no gap/px).
             Expanded state:  left-aligned with gap + px-3 padding (group-hover/nav variants). */}
         <div className="relative" ref={avatarMenuRef}>
           <button
             onClick={() => setIsAvatarMenuOpen(v => !v)}
-            className="w-full flex items-center justify-center group-hover/nav:justify-start group-hover/nav:gap-3 group-hover/nav:px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
+            className="w-full flex items-center justify-center group-hover/nav:justify-start group-hover/nav:gap-3 group-hover/nav:px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
           >
             <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0 overflow-hidden">
               <UserIcon className="w-4 h-4 text-gray-600 dark:text-gray-300" />
@@ -106,9 +106,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
 
           {/* Upward dropdown */}
           {isAvatarMenuOpen && (
-            <div className="absolute bottom-full left-0 mb-2 w-[240px] bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-2xl z-50 p-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="absolute bottom-full left-0 mb-2 w-[240px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl z-50 p-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
               {/* User info */}
-              <div className="px-3 py-3 mb-1 border-b border-gray-100 dark:border-gray-800/50 flex items-center gap-3">
+              <div className="px-3 py-3 mb-1 border-b border-gray-100 dark:border-gray-700/50 flex items-center gap-3">
                 <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0">
                   <UserIcon className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                 </div>
@@ -125,7 +125,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
               <div className="space-y-0.5">
                 <button
                   onClick={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                 >
                   <Settings className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   Settings
@@ -133,7 +133,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 {!isLocalHost && (
                   <button
                     onClick={() => { setActiveTab(DashboardTab.BILLING); setIsAvatarMenuOpen(false); }}
-                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                   >
                     <CreditCard className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     Billing
@@ -151,14 +151,14 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                     }
                     setIsAvatarMenuOpen(false);
                   }}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                 >
                   <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   Documentation
                 </button>
                 <button
                   onClick={() => { onNavigate?.('/blog'); setIsAvatarMenuOpen(false); }}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                 >
                   <Newspaper className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   Blog
@@ -168,7 +168,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={() => setIsAvatarMenuOpen(false)}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-white transition-colors flex items-center gap-2"
                 >
                   <Github className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   GitHub
@@ -178,7 +178,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
               {/* Manage Account + Sign out — cloud build only (ClerkProvider present) */}
               {!IS_AGENT && !isLocalHost && (
                 <Suspense fallback={
-                  <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/50 space-y-0.5">
+                  <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-700/50 space-y-0.5">
                     <div className="px-3 py-2 h-9" />
                     <div className="px-3 py-2 h-9" />
                   </div>

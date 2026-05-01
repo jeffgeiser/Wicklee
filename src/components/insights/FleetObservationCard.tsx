@@ -137,7 +137,7 @@ const FleetObservationCard: React.FC<FleetObservationCardProps> = ({
 
   // Outer container: severity-tinted border when open, muted when resolved/acked.
   const containerCls = !isOpen
-    ? 'border-gray-800/40 bg-gray-900/30 opacity-70'
+    ? 'border-gray-700/40 bg-gray-800/30 opacity-70'
     : isCritical
     ? 'border-red-500/30 bg-red-500/5'
     : 'border-amber-500/30 bg-amber-500/5';
@@ -165,7 +165,7 @@ const FleetObservationCard: React.FC<FleetObservationCardProps> = ({
         {/* Hostname pill — promoted from tiny upper-right label.
             This is what the operator scans for first when several cards
             are stacked: "which node?" */}
-        <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-mono text-gray-300 bg-gray-800/80 border border-gray-700/60 px-2 py-0.5 rounded-md">
+        <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-mono text-gray-300 bg-gray-700/80 border border-gray-700/60 px-2 py-0.5 rounded-md">
           <Cpu className="w-2.5 h-2.5 text-gray-500" />
           {hostname}
         </span>
@@ -198,7 +198,7 @@ const FleetObservationCard: React.FC<FleetObservationCardProps> = ({
 
       {/* ── Expanded body ────────────────────────────────────────────── */}
       {expanded && (
-        <div className="px-4 pb-4 space-y-3 border-t border-gray-800/50">
+        <div className="px-4 pb-4 space-y-3 border-t border-gray-700/50">
           {/* Detail */}
           <p className={`text-xs leading-relaxed pt-3 ${isOpen ? 'text-gray-300' : 'text-gray-500'}`}>
             {obs.detail.replace(/~0 min/g, 'imminent')}
@@ -206,7 +206,7 @@ const FleetObservationCard: React.FC<FleetObservationCardProps> = ({
 
           {/* Recommendation — if the agent supplied one in context_json */}
           {recommendation && isOpen && (
-            <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+            <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
               <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
               <div className="min-w-0 space-y-1">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400/70">
@@ -219,7 +219,7 @@ const FleetObservationCard: React.FC<FleetObservationCardProps> = ({
 
           {/* Resolution Steps — proper numbered list, not a stringified chip */}
           {resolution_steps && resolution_steps.length > 0 && isOpen && (
-            <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+            <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
               <ListChecks className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />
               <div className="min-w-0 space-y-1.5 flex-1">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -243,7 +243,7 @@ const FleetObservationCard: React.FC<FleetObservationCardProps> = ({
           {chips.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {chips.map(([k, v]) => (
-                <span key={k} className="text-[9px] px-1.5 py-0.5 rounded bg-gray-800/60 text-gray-500 font-mono">
+                <span key={k} className="text-[9px] px-1.5 py-0.5 rounded bg-gray-700/60 text-gray-500 font-mono">
                   {k}: {v}
                 </span>
               ))}

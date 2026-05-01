@@ -123,7 +123,7 @@ interface InsightTileProps {
   iconCls?: string;
 }
 const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, valueTitle, sub, sub2 }) => (
-  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 flex flex-col justify-between h-[116px]">
+  <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-5 flex flex-col justify-between h-[116px]">
     <div className="flex items-start justify-between gap-2">
       <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 leading-tight">{label}</div>
     </div>
@@ -167,8 +167,8 @@ const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400
 
 // ── Column header row ─────────────────────────────────────────────────────────
 const FleetStatusHeader: React.FC = () => (
-  <div className={`${FLEET_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-800/60`}>
-    <p className={`${FS_HDR} sticky left-4 bg-white dark:bg-gray-900`}>NODE</p>
+  <div className={`${FLEET_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-700/60`}>
+    <p className={`${FS_HDR} sticky left-4 bg-white dark:bg-gray-800`}>NODE</p>
     <p className={`${FS_HDR} hidden md:block`}>MEMORY</p>
     <p className={`${FS_HDR} hidden md:block`}>VRAM</p>
     <p className={FS_HDR}>MODEL</p>
@@ -527,10 +527,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     <>
     <div
       onClick={() => setExpanded(e => !e)}
-      className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors cursor-pointer${dotState === 'offline' ? ' opacity-50' : ''}`}
+      className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors cursor-pointer${dotState === 'offline' ? ' opacity-50' : ''}`}
     >
       {/* 1. NODE — status dot + ID + hostname (sticky) */}
-      <div className="flex items-center gap-2 overflow-hidden sticky left-4 bg-white dark:bg-gray-900 group-hover:bg-gray-50/50 dark:group-hover:bg-gray-800/30" title={nodeTooltip || undefined}>
+      <div className="flex items-center gap-2 overflow-hidden sticky left-4 bg-white dark:bg-gray-800 group-hover:bg-gray-50/50 dark:group-hover:bg-gray-700/30" title={nodeTooltip || undefined}>
         <span className="relative flex h-2 w-2 shrink-0" title={dotTooltip}>
           {dotState === 'online' ? (
             <>
@@ -769,7 +769,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       <div className="hidden sm:block min-w-0 overflow-hidden">
         {isOnline && thermalStr ? (
           <span
-            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-800 ${thermalCls} whitespace-nowrap`}
+            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-700 ${thermalCls} whitespace-nowrap`}
             title="Hardware thermal state. Serious or Critical means active clock throttling is underway."
           >
             {thermalStr}
@@ -800,7 +800,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         : 'None detected';
 
       return (
-        <div className="px-6 py-3 bg-gray-950/40 border-b border-gray-800/60">
+        <div className="px-6 py-3 bg-gray-900/40 border-b border-gray-700/60">
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-2 text-xs">
             {/* Runtime + agent version — always first */}
             <DetailCell label="Runtime" value={runtimeLabel}
@@ -855,7 +855,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             const usedVram = m.active_models!.reduce((s, am) => s + (am.vram_mb ?? 0), 0);
             const VRAM_COLORS = ['bg-cyan-500', 'bg-indigo-500', 'bg-amber-500', 'bg-emerald-500', 'bg-rose-500', 'bg-violet-500'];
             return (
-            <div className="mt-3 pt-3 border-t border-gray-800/40">
+            <div className="mt-3 pt-3 border-t border-gray-700/40">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
                 Active Models ({m.active_models!.length})
               </p>
@@ -877,7 +877,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
                     <span>VRAM Budget</span>
                     <span className="font-mono tabular-nums">{(usedVram / 1024).toFixed(1)}G / {(totalVramBudget / 1024).toFixed(0)}G ({totalVramBudget > 0 ? Math.round(usedVram / totalVramBudget * 100) : 0}%)</span>
                   </div>
-                  <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden flex">
+                  <div className="h-2.5 bg-gray-700 rounded-full overflow-hidden flex">
                     {m.active_models!.map((am, i) => {
                       const pct = am.vram_mb ? (am.vram_mb / totalVramBudget * 100) : 0;
                       return pct > 0 ? (
@@ -922,7 +922,7 @@ const DetailCell: React.FC<{
   <div className="flex flex-col relative" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
     <span className="text-[9px] text-gray-600 uppercase tracking-wider">{label}</span>
     {showTip && tooltip && (
-      <div className="absolute bottom-full left-0 mb-1.5 z-50 w-56 bg-gray-900 border border-gray-700/50 rounded-xl shadow-2xl shadow-black/50 p-3 pointer-events-none">
+      <div className="absolute bottom-full left-0 mb-1.5 z-50 w-56 bg-gray-800 border border-gray-700/50 rounded-xl shadow-2xl shadow-black/50 p-3 pointer-events-none">
         <p className="text-xs font-semibold text-gray-100 leading-snug mb-1">{label}</p>
         <p className="text-[11px] text-gray-400 leading-snug">{tooltip}</p>
       </div>
@@ -985,7 +985,7 @@ const FleetCard: React.FC<{
   sub?: React.ReactNode;
   className?: string;
 }> = ({ label, children, sub, className = '' }) => (
-  <div className={`bg-gray-800/50 border border-gray-700/40 rounded-xl p-4 flex flex-col gap-2 ${className}`}>
+  <div className={`bg-gray-700/50 border border-gray-700/40 rounded-xl p-4 flex flex-col gap-2 ${className}`}>
     <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-500 leading-none">{label}</div>
     <div className="flex-1">{children}</div>
     {sub && <div className="mt-auto">{sub}</div>}
@@ -1004,7 +1004,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
         {
           step: '1', icon: Download, title: 'Install the agent',
           body: (
-            <code className="block mt-2 text-[11px] font-mono bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-blue-300 whitespace-pre-wrap break-all">
+            <code className="block mt-2 text-[11px] font-mono bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-blue-300 whitespace-pre-wrap break-all">
               curl -fsSL https://wicklee.dev/install.sh | bash
             </code>
           ),
@@ -1018,7 +1018,7 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
           body: <p className="mt-2 text-xs text-gray-500">Click <span className="text-gray-300">"+ Add Node"</span> below and enter the 6-digit code.</p>,
         },
       ].map(({ step, icon: Icon, title, body }) => (
-        <div key={step} className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-1">
+        <div key={step} className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-1">
           <div className="flex items-center gap-2 mb-2">
             <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600/20 border border-blue-500/30 text-[11px] font-bold text-blue-400">{step}</span>
             <Icon className="w-4 h-4 text-gray-500" />
@@ -1057,9 +1057,9 @@ const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, b
   const handleEnter = () => { if (tooltip && window.matchMedia('(hover: hover)').matches) timerRef.current = setTimeout(() => setShowTip(true), 400); };
   const handleLeave = () => { if (timerRef.current) clearTimeout(timerRef.current); setShowTip(false); };
   return (
-  <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-800 last:border-0 relative" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
+  <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-700 last:border-0 relative" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
     {showTip && tooltip && (
-      <div className="absolute bottom-full left-5 mb-1.5 z-50 w-60 bg-gray-900 border border-gray-700/50 rounded-xl shadow-2xl shadow-black/50 p-3 pointer-events-none">
+      <div className="absolute bottom-full left-5 mb-1.5 z-50 w-60 bg-gray-800 border border-gray-700/50 rounded-xl shadow-2xl shadow-black/50 p-3 pointer-events-none">
         <p className="text-xs font-semibold text-gray-100 leading-snug mb-1">{label}</p>
         <p className="text-[11px] text-gray-400 leading-snug">{tooltip}</p>
       </div>
@@ -1074,7 +1074,7 @@ const RailRow: React.FC<RailRowProps> = ({ label, value, pct, textCls, barCls, b
       )}
     </div>
     {pct != null && (
-      <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden">
+      <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
         <div
           className={`h-full ${barCls} rounded-full transition-all duration-100`}
           style={{ width: `${Math.min(pct, 100)}%` }}
@@ -1187,7 +1187,7 @@ const DiagnosticRail: React.FC<{
     } else if (isIdleSpeed) {
       items.push(<RailRow key="tps" label="Tok/s" value={tps?.toFixed(1) ?? '—'} textCls="text-gray-400 dark:text-gray-500" barCls="bg-gray-500" badge="idle-spd" badgeCls="text-gray-600" />);
     } else {
-      items.push(<RailRow key="tps" label="Tok/s" value="—" textCls="text-gray-600" barCls="bg-gray-800" />);
+      items.push(<RailRow key="tps" label="Tok/s" value="—" textCls="text-gray-600" barCls="bg-gray-700" />);
     }
   }
 
@@ -2461,10 +2461,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
       {/* ── Cost by Model (Pro+, localhost only) ──────────────────────────────── */}
       {isLocalMode && costByModel.length > 0 && (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
           <button
             onClick={() => setCostByModelOpen(o => !o)}
-            className="flex items-center justify-between w-full px-5 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors"
+            className="flex items-center justify-between w-full px-5 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors"
           >
             <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Cost by Model (24h)</span>
             <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform ${costByModelOpen ? 'rotate-180' : ''}`} />
@@ -2473,7 +2473,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             <div className="px-5 pb-4">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-[9px] uppercase tracking-wider text-gray-500 border-b border-gray-100 dark:border-gray-800">
+                  <tr className="text-[9px] uppercase tracking-wider text-gray-500 border-b border-gray-100 dark:border-gray-700">
                     <th className="text-left py-2 font-semibold">Model</th>
                     <th className="text-right py-2 font-semibold">Hours</th>
                     <th className="text-right py-2 font-semibold">Avg W</th>
@@ -2483,7 +2483,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 </thead>
                 <tbody>
                   {costByModel.map((m, i) => (
-                    <tr key={i} className="border-b border-gray-50 dark:border-gray-800/50">
+                    <tr key={i} className="border-b border-gray-50 dark:border-gray-700/50">
                       <td className="py-2 text-gray-300 font-mono text-[11px]">{m.model ?? '(idle)'}</td>
                       <td className="py-2 text-right text-gray-400">{m.hours_active?.toFixed(1) ?? '—'}</td>
                       <td className="py-2 text-right text-gray-400">{m.avg_watts?.toFixed(1) ?? '—'}</td>
@@ -2505,9 +2505,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       )}
 
       {/* ── Fleet Status (cloud) / Diagnostic Rail (agent) ───────────────────── */}
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
         {/* Section header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-gray-400" />
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
@@ -2523,7 +2523,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 </span>
               )}
             </>) : (
-              <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
+              <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
                 {isLocalHost ? (sentinel ? '1' : '0') : counts.total} node{(isLocalHost ? (sentinel ? 1 : 0) : counts.total) !== 1 ? 's' : ''}
               </span>
             )}
@@ -2573,7 +2573,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             const usedVram = s.active_models!.reduce((sum, am) => sum + (am.vram_mb ?? 0), 0);
             const VRAM_COLORS = ['bg-cyan-500', 'bg-indigo-500', 'bg-amber-500', 'bg-emerald-500', 'bg-rose-500', 'bg-violet-500'];
             return (
-            <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800/60">
+            <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-700/60">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-2">
                 Active Models ({s.active_models!.length})
               </p>
@@ -2594,7 +2594,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     <span>VRAM Budget</span>
                     <span className="font-mono tabular-nums">{(usedVram / 1024).toFixed(1)}G / {(totalVramBudget / 1024).toFixed(0)}G ({totalVramBudget > 0 ? Math.round(usedVram / totalVramBudget * 100) : 0}%)</span>
                   </div>
-                  <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden flex">
+                  <div className="h-2.5 bg-gray-700 rounded-full overflow-hidden flex">
                     {s.active_models!.map((am, i) => {
                       const pct = am.vram_mb ? (am.vram_mb / totalVramBudget * 100) : 0;
                       return pct > 0 ? (
@@ -2622,7 +2622,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           nodeRows.length > 0 ? (
             <div className="overflow-x-auto">
               {/* Active Only toggle */}
-              <div className="flex items-center justify-end px-4 py-1.5 border-b border-gray-100 dark:border-gray-800/60">
+              <div className="flex items-center justify-end px-4 py-1.5 border-b border-gray-100 dark:border-gray-700/60">
                 <button
                   onClick={() => setShowActiveOnly(v => !v)}
                   className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest
@@ -2637,7 +2637,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               </div>
               {/* Restricted node banners — shown above the table for nodes 4+ */}
               {nodeRows.filter(r => r.restricted).length > 0 && (
-                <div className="px-4 py-3 space-y-2 border-b border-gray-100 dark:border-gray-800/60">
+                <div className="px-4 py-3 space-y-2 border-b border-gray-100 dark:border-gray-700/60">
                   {nodeRows.filter(r => r.restricted).map(r => (
                     <RestrictedNodeBanner
                       key={r.nodeId}
@@ -2688,7 +2688,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         return (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm dark:shadow-none">
+            <div className="lg:col-span-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 shadow-sm dark:shadow-none">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
                 <div>
                   <h3 className="font-semibold text-gray-800 dark:text-gray-200">
@@ -2704,7 +2704,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 <div ref={metricDropdownRef} className="relative">
                   <button
                     onClick={() => setMetricOpen(o => !o)}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 transition-colors select-none"
+                    className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 transition-colors select-none"
                   >
                     <span className="font-medium">
                       {{ gpu: 'GPU Util', cpu: 'CPU', mem: 'Mem Pressure', power: 'Board Power', tps: 'Tok/s' }[selectedMetric]}
@@ -2713,7 +2713,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                   </button>
 
                   {metricOpen && (
-                    <div className="absolute right-0 top-full mt-1.5 z-30 min-w-[172px] bg-gray-900 border border-gray-700/80 rounded-xl shadow-2xl shadow-black/50 py-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                    <div className="absolute right-0 top-full mt-1.5 z-30 min-w-[172px] bg-gray-800 border border-gray-700/80 rounded-xl shadow-2xl shadow-black/50 py-1 animate-in fade-in slide-in-from-top-1 duration-150">
                       {(
                         [
                           { key: 'gpu'   as MetricKey, label: 'GPU Util',     na: settled && !hasGpu,   naLabel: ''          },
@@ -2733,7 +2733,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                               ? 'text-gray-600 cursor-default'
                               : selectedMetric === key
                               ? 'bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/25'
-                              : 'text-gray-300 hover:bg-gray-800'
+                              : 'text-gray-300 hover:bg-gray-700'
                           }`}
                         >
                           <span className="w-3.5 shrink-0">
@@ -2805,7 +2805,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         // ── Cockpit Intelligence — Fleet Preview CTA + Silicon Fit Audit
         <div className="space-y-4">
           {pairingInfo?.status !== 'connected' && (
-            <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="bg-gray-800/60 border border-gray-700 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold text-gray-200">
                   Monitor from anywhere
@@ -3037,7 +3037,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                       );
                     })}
                     {idle.length > 0 && (
-                      <div className={`${active.length > 0 ? 'border-t border-gray-800 pt-1.5 mt-1' : ''} space-y-1`}>
+                      <div className={`${active.length > 0 ? 'border-t border-gray-700 pt-1.5 mt-1' : ''} space-y-1`}>
                         {idle.map(e => (
                           <div key={e.nodeId} className="flex items-center gap-2 min-w-0">
                             <span className="text-[9px] uppercase tracking-widest text-gray-700 w-4 shrink-0">—</span>
@@ -3101,7 +3101,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
       {/* ── Fleet Connect status bar — localhost only, always at bottom ──────── */}
       {isLocalHost && (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-gray-800 bg-gray-900/50 text-[11px] flex-wrap">
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-gray-700 bg-gray-800/50 text-[11px] flex-wrap">
 
           {/* Left: identity + state label */}
           {(!pairingInfo || pairingInfo.status === 'unpaired') && (

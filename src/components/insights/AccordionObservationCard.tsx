@@ -91,8 +91,8 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
   return (
     <div className={`border rounded-2xl transition-opacity ${
       isResolved
-        ? 'bg-gray-900/30 border-gray-800/50 opacity-70'
-        : 'bg-gray-900/60 border-gray-800'
+        ? 'bg-gray-800/30 border-gray-700/50 opacity-70'
+        : 'bg-gray-800/60 border-gray-700'
     }`}>
       {/* ── Collapsed header — always visible ─────────────────────────── */}
       <button
@@ -119,7 +119,7 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
 
         {/* Node hostname */}
         {showNodeHeader && !isGrouped && (
-          <span className="shrink-0 text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
+          <span className="shrink-0 text-[10px] text-gray-500 bg-gray-700 px-1.5 py-0.5 rounded">
             {insight.hostname}
           </span>
         )}
@@ -150,13 +150,13 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
 
       {/* ── Expanded body ─────────────────────────────────────────────── */}
       {expanded && (
-        <div className="px-4 pb-4 space-y-3 border-t border-gray-800/50">
+        <div className="px-4 pb-4 space-y-3 border-t border-gray-700/50">
 
           {/* Grouped nodes list */}
           {isGrouped && (
             <div className="flex flex-wrap gap-1.5 pt-3">
               {groupedNodes!.map(n => (
-                <span key={n.nodeId} className="text-[10px] text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
+                <span key={n.nodeId} className="text-[10px] text-gray-400 bg-gray-700 px-2 py-0.5 rounded">
                   {n.hostname || n.nodeId}
                 </span>
               ))}
@@ -168,7 +168,7 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
 
           {/* Recommendation */}
           {insight.recommendation && !isResolved && (
-            <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+            <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
               <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
               <div className="min-w-0 space-y-1.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400/70">
@@ -182,7 +182,7 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
 
           {/* Resolution steps */}
           {insight.resolution_steps && insight.resolution_steps.length > 0 && !isResolved && (
-            <div className="flex gap-2 p-3 rounded-xl bg-gray-950/60 border border-gray-800/60">
+            <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
               <ListChecks className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />
               <div className="min-w-0 space-y-1.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">

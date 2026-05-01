@@ -87,7 +87,7 @@ const MetricTooltip: React.FC<MetricTooltipProps> = ({
         <div
           className={[
             'absolute top-full left-0 mt-1.5 z-50',
-            'w-60 bg-gray-900 border border-gray-700/50 rounded-xl',
+            'w-60 bg-gray-800 border border-gray-700/50 rounded-xl',
             'shadow-2xl shadow-black/50 p-3',
             'pointer-events-none',
           ].join(' ')}

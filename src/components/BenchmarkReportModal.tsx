@@ -39,7 +39,7 @@ const CopyBtn: React.FC<{ text: string; label: string }> = ({ text, label }) => 
   return (
     <button
       onClick={handle}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700/60 text-xs font-medium text-gray-300 hover:text-white transition-colors"
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700 border border-gray-700/60 text-xs font-medium text-gray-300 hover:text-white transition-colors"
     >
       {copied
         ? <Check className="w-3.5 h-3.5 text-green-400" />
@@ -63,10 +63,10 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
+      <div className="w-full max-w-2xl bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
 
         {/* ── Header ───────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 shrink-0">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-400 mb-0.5">
               Benchmark Report
@@ -88,7 +88,7 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
         </div>
 
         {/* ── WES summary strip ────────────────────────────────────────────── */}
-        <div className="grid grid-cols-3 divide-x divide-gray-800 border-b border-gray-800 shrink-0">
+        <div className="grid grid-cols-3 divide-x divide-gray-800 border-b border-gray-700 shrink-0">
           <div className="px-5 py-3 text-center">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Raw WES</p>
             <p className="font-telin text-lg text-white">
@@ -121,7 +121,7 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
               onClick={() => setView(id)}
               className={`px-3 py-1.5 text-xs font-semibold rounded-t-lg transition-colors ${
                 view === id
-                  ? 'bg-gray-800 text-white'
+                  ? 'bg-gray-700 text-white'
                   : 'text-gray-500 hover:text-gray-300'
               }`}
             >
@@ -132,13 +132,13 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
 
         {/* ── Report content ───────────────────────────────────────────────── */}
         <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-3">
-          <pre className="bg-gray-950 border border-gray-800 rounded-b-xl rounded-tr-xl p-4 text-xs font-mono text-gray-300 whitespace-pre overflow-x-auto leading-relaxed">
+          <pre className="bg-gray-900 border border-gray-700 rounded-b-xl rounded-tr-xl p-4 text-xs font-mono text-gray-300 whitespace-pre overflow-x-auto leading-relaxed">
             {activeText}
           </pre>
         </div>
 
         {/* ── Actions ──────────────────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-t border-gray-800 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-t border-gray-700 shrink-0">
           <div className="flex flex-wrap gap-2">
             <CopyBtn
               text={activeText}
@@ -155,7 +155,7 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
             </button>
             <button
               onClick={() => downloadReport(jsonContent, reportFilename(report, 'json'))}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700/60 text-xs font-medium text-gray-300 hover:text-white transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700 border border-gray-700/60 text-xs font-medium text-gray-300 hover:text-white transition-colors"
             >
               <FileJson className="w-3.5 h-3.5" />
               Download .json

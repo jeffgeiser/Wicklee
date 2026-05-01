@@ -146,7 +146,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-gray-950 border border-gray-800 w-full max-w-md rounded-[28px] overflow-hidden shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 duration-200">
+      <div className="bg-gray-900 border border-gray-700 w-full max-w-md rounded-[28px] overflow-hidden shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 duration-200">
         <div className="p-8">
 
           {/* Header */}
@@ -189,7 +189,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
               <button
                 type="button"
                 onClick={() => setStep(2)}
-                className="w-full text-left p-4 bg-gray-800/40 border border-gray-700/50 rounded-2xl hover:bg-gray-800/60 hover:border-gray-700 transition-all group"
+                className="w-full text-left p-4 bg-gray-700/40 border border-gray-700/50 rounded-2xl hover:bg-gray-700/60 hover:border-gray-700 transition-all group"
               >
                 <div className="flex items-center gap-3">
                   <Terminal className="w-5 h-5 text-gray-400 shrink-0" />
@@ -245,7 +245,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                 <button
                   type="button"
                   onClick={() => setStep(1)}
-                  className="flex-1 py-3 border border-gray-800 hover:border-gray-700 text-gray-400 hover:text-white font-medium rounded-2xl transition-all text-sm"
+                  className="flex-1 py-3 border border-gray-700 hover:border-gray-700 text-gray-400 hover:text-white font-medium rounded-2xl transition-all text-sm"
                 >
                   ← Back
                 </button>
@@ -296,7 +296,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                         autoFocus={i === 0}
                         onChange={e => handleDigit(i, e.target.value)}
                         onKeyDown={e => handleKeyDown(i, e)}
-                        className="w-11 h-14 text-center text-2xl font-bold font-mono bg-gray-900 border border-gray-700 rounded-xl text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-colors"
+                        className="w-11 h-14 text-center text-2xl font-bold font-mono bg-gray-800 border border-gray-700 rounded-xl text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-colors"
                       />
                     ))}
                   </div>
@@ -313,7 +313,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                   <button
                     type="button"
                     onClick={() => setStep(1)}
-                    className="flex-1 py-3 border border-gray-800 hover:border-gray-700 text-gray-400 hover:text-white font-medium rounded-2xl transition-all text-sm"
+                    className="flex-1 py-3 border border-gray-700 hover:border-gray-700 text-gray-400 hover:text-white font-medium rounded-2xl transition-all text-sm"
                   >
                     ← Back
                   </button>

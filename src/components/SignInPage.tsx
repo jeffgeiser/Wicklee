@@ -7,7 +7,7 @@ interface SignInPageProps {
 
 const SignInPage: React.FC<SignInPageProps> = () => {
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
       <SignIn
         routing="path"
         path="/sign-in"

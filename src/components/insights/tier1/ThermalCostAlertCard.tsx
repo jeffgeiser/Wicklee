@@ -122,7 +122,7 @@ const ThermalCostAlertCard: React.FC<Props> = ({
         )}
 
         {/* ── Recommendations ──────────────────────────────────────────────── */}
-        <div className="pt-1 border-t border-gray-800">
+        <div className="pt-1 border-t border-gray-700">
           <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-1.5">
             Recommended
           </p>

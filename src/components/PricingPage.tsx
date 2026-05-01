@@ -149,7 +149,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-gray-950">
+    <div className="min-h-screen bg-gray-900">
       {/* ── Navigation — only shown on standalone /pricing route, hidden when embedded in dashboard ── */}
       {!embedded && <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <button onClick={() => onNavigate?.('/')} className="cursor-pointer">
@@ -217,7 +217,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
                 className={`relative flex flex-col rounded-2xl border p-6 transition-all duration-300 ${
                   tier.highlight
                     ? `${tier.accent} ${tier.accentBg} shadow-[0_0_30px_rgba(59,130,246,0.08)] md:scale-[1.03] z-10`
-                    : `border-gray-800 bg-gray-950 hover:border-gray-700`
+                    : `border-gray-700 bg-gray-900 hover:border-gray-700`
                 }`}
               >
                 {/* Badge */}
@@ -257,14 +257,14 @@ const PricingPage: React.FC<PricingPageProps> = ({
                   disabled={disabled}
                   className={`mt-auto w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
                     isCurrent
-                      ? 'bg-gray-800 text-gray-500 cursor-default'
+                      ? 'bg-gray-700 text-gray-500 cursor-default'
                       : disabled
-                        ? 'bg-gray-900 text-gray-600 cursor-default border border-gray-800'
+                        ? 'bg-gray-800 text-gray-600 cursor-default border border-gray-700'
                         : tier.highlight
                           ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20'
                           : tier.id === 'team'
                             ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-600/20'
-                            : 'bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800'
+                            : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700'
                   }`}
                 >
                   {ctaLabel(tier)}
@@ -314,7 +314,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
         </div>
 
         {/* ── Enterprise — contact only ──────────────────────────── */}
-        <div className="rounded-2xl border border-gray-800 bg-gray-900/40 p-6 sm:p-8 flex flex-col sm:flex-row items-center justify-between gap-6">
+        <div className="rounded-2xl border border-gray-700 bg-gray-800/40 p-6 sm:p-8 flex flex-col sm:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/20">
               <Shield className="w-6 h-6 text-purple-400" />
@@ -345,7 +345,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
             { icon: <Server className="w-5 h-5 text-emerald-400" />, title: 'Agent API v1', desc: 'Full API access on every tier. /route/best, /health, /metrics.' },
             { icon: <Lock className="w-5 h-5 text-amber-400" />, title: 'Sovereignty First', desc: 'Your hardware, your data. Cloud relay is optional — Enterprise goes fully airgapped.' },
           ].map(item => (
-            <div key={item.title} className="rounded-xl border border-gray-800 bg-gray-900/30 p-5 space-y-2">
+            <div key={item.title} className="rounded-xl border border-gray-700 bg-gray-800/30 p-5 space-y-2">
               <div className="flex justify-center">{item.icon}</div>
               <p className="text-sm font-bold text-white">{item.title}</p>
               <p className="text-xs text-gray-500 leading-relaxed">{item.desc}</p>
