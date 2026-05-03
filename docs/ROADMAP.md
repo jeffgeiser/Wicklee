@@ -74,6 +74,12 @@ Four DuckDB-backed intelligence endpoints on the agent + Cloud MCP tools. Infere
 
 ## Planned
 
+### Fleet SLA Aggregation (Pro/Team)
+`GET /api/v1/fleet/sla` — fleet-wide aggregation of the per-node SLA Monitor. Cloud backend pulls each node's `inference_traces` via the existing telemetry path and computes fleet-wide p95/p99 across all requests, plus a per-node breakdown ranked by p95 TTFT. Surfaces on `wicklee.dev` as the fleet-level companion to the Performance tab's SLA Monitor card. Pro for single-node SLA on the cloud dashboard; Team for the fleet roll-up + cross-node compliance reporting.
+
+### vLLM Native Histogram Source
+Read percentiles directly from vLLM's Prometheus `/metrics` endpoint (`vllm_request_latency_seconds_bucket`, `vllm_time_to_first_token_seconds_bucket`) instead of relying on the Ollama proxy's per-request traces. Lets users running vLLM directly (no proxy) get accurate p95/p99 SLA data without enabling proxy mode. The SLA endpoint chooses source per-runtime: proxy traces for Ollama, native histograms for vLLM, both for mixed deployments.
+
 ### Model-Hardware Fit Score
 "Is this model right for this hardware?" Auto-computed from VRAM headroom, tok/s vs model size ratio, thermal behavior under load, swap pressure. Returns score + recommendation (e.g., "62/100 — VRAM tight, consider Q3_K_M or smaller variant").
 
