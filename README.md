@@ -237,4 +237,7 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Contributing
 
-Issues and PRs welcome. See the [roadmap](docs/ROADMAP.md) for what's planned. Full documentation at [wicklee.dev/docs](https://wicklee.dev/docs).
+> **Contributing:** Issues and bug reports welcome.
+> Pull requests are not accepted at this time.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details, the [roadmap](docs/ROADMAP.md) for what's planned, and full documentation at [wicklee.dev/docs](https://wicklee.dev/docs).
