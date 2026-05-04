@@ -5,6 +5,7 @@ import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWE
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW, hasPowerData } from '../utils/power';
+import { pushAndGetSmoothed, pruneBuffers } from '../utils/sharedSmoothing';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
@@ -366,7 +367,12 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // Smoothed probe reading, then apply throughput estimation. When the probe
   // is depressed (background inference) or null (lockup), estimateTps fills
   // the gap using the session peak × GPU utilisation.
-  const smoothedTps  = pushOne('tps', rawTps, tsMs);
+  // Write into the shared smoothing store so MFA + Strip see the same
+  // value, then prefer that smoothed value if a fresh sample exists.
+  // Falls back to the row-local pushOne for the rare case where this row
+  // mounts before any shared-store consumer.
+  const smoothedTpsShared = pushAndGetSmoothed(nodeId, 'tps', rawTps);
+  const smoothedTps       = smoothedTpsShared ?? pushOne('tps', rawTps, tsMs);
   const inferenceActive = m?.ollama_inference_active ?? null;
   // For estimation: override inferenceActive when inference_state signals an active runtime.
   // During 'idle-spd', ollama_inference_active may be false (no /api/ps trigger seen) even
@@ -410,7 +416,9 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // Power — hasPower is an availability flag (raw); totalPowerW is smoothed for display
   const hasPower    = m ? hasPowerData(m) : false;
   const rawTotalW   = m ? getNodePowerW(m) : null;
-  const totalPowerW = pushOne('watts', hasPower ? rawTotalW : null, tsMs) ?? 0;
+  // Same shared-store pattern for watts.
+  const sharedWatts = pushAndGetSmoothed(nodeId, 'watts', hasPower ? rawTotalW : null);
+  const totalPowerW = sharedWatts ?? pushOne('watts', hasPower ? rawTotalW : null, tsMs) ?? 0;
 
   // WES — only when actively inferencing
   const wes    = isActive ? computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue) : null;
@@ -1632,6 +1640,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const effectiveMetrics: SentinelMetrics[] = isLocalHost
     ? (sentinel ? [sentinel] : [])
     : liveMetrics.filter(m => !restrictedIds.has(m.node_id));
+
+  // Prune the shared smoothing-store buffers when the fleet roster shrinks.
+  // App-level lifecycle owner — bounds memory across long sessions where
+  // nodes come and go.
+  React.useEffect(() => {
+    pruneBuffers(effectiveMetrics.map(m => m.node_id));
+  }, [effectiveMetrics]);
 
   // Tile 1 — THROUGHPUT: ∑ estimated tok/s across inference-active nodes (Ollama + vLLM).
   // Both runtimes are not mutually exclusive — a node can run both simultaneously.

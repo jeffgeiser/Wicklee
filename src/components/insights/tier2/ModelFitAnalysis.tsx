@@ -34,7 +34,7 @@
  *     reasoning, enabling AI agents to answer "can I run this model safely?"
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { Cpu, Activity } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
 import { computeModelFitScore } from '../../../utils/modelFit';
@@ -44,7 +44,7 @@ import { getNodePowerW } from '../../../utils/power';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../../utils/kvCache';
 import { computeQuantRecommendation } from '../../../utils/quantSweet';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE, type QualityCost } from '../../../utils/perplexity';
-import { FLEET_ROW_ROLLING_WINDOW } from '../../../hooks/useRollingMetrics';
+import { pushAndGetSmoothed } from '../../../utils/sharedSmoothing';
 
 // ── Styled hover tooltip ──────────────────────────────────────────────────────
 // Lightweight version of MetricTooltip — no metricId/link needed for labels.
@@ -322,61 +322,31 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 }) => {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  // ── Per-node rolling buffers (mirror Overview's Fleet Status row) ─────────
-  // The Fleet Status row on the Intelligence tab smooths watts and tok/s
-  // through `useNodeRollingMetrics(FLEET_ROW_ROLLING_WINDOW)` — a 4-sample
-  // moving average that dampens probe-residency spikes (Apple Silicon idle
-  // power can read 0.2–5W within a single probe cycle).  MFA used to read
-  // raw values, which is why its WES diverged from the row WES (e.g.
-  // macmini showed Efficiency 27.3 here while the Fleet Status row showed
-  // 17.5).  We now smooth here with the same window so the values match
-  // exactly.  Buffers are keyed by node_id and live across renders via a
-  // ref — no React state churn.
-  const buffersRef = useRef<Record<string, { watts: number[]; tps: number[] }>>({});
-
-  // Drop buffers for nodes no longer in the roster — bounds memory on
-  // fleets that churn (offline → removed → replaced) over long sessions.
-  useEffect(() => {
-    const live = new Set(nodes.map(n => n.node_id));
-    live.add(defaultNode.node_id);
-    for (const k of Object.keys(buffersRef.current)) {
-      if (!live.has(k)) delete buffersRef.current[k];
-    }
-  }, [nodes, defaultNode.node_id]);
-
-  function pushAndAvg(nodeId: string, key: 'watts' | 'tps', value: number | null): number | null {
-    const node = buffersRef.current[nodeId] ?? (buffersRef.current[nodeId] = { watts: [], tps: [] });
-    if (value != null && isFinite(value)) {
-      const buf = node[key];
-      buf.push(value);
-      if (buf.length > FLEET_ROW_ROLLING_WINDOW) buf.shift();
-    }
-    const buf = node[key];
-    return buf.length > 0 ? buf.reduce((a, c) => a + c, 0) / buf.length : null;
-  }
-
-  // ── Canonical WES + W/1K math ─────────────────────────────────────────────
-  // Aligned with the Overview Fleet Status row:
-  //   WES   = tok/s ÷ (smoothed_watts × PUE × thermal_penalty)
-  //   W/1K  = (smoothed_watts / tok/s) × 1000
-  // Both watts and tps are smoothed via 4-sample rolling buffer so values
-  // match the Fleet Status row exactly. systemIdleW deliberately NOT
-  // subtracted — that knob is for active-inference cost displays.
+  // ── Canonical WES + W/1K math (shared smoothing store) ────────────────────
+  // All telemetry surfaces — Fleet Status row, MFA, Summary Strip — read
+  // and write the same module-level ring buffers in src/utils/sharedSmoothing.
+  // That guarantees identical smoothed values regardless of which tab the
+  // user has open or which component mounted first.
+  //
+  //   WES  = tok/s ÷ (smoothed_watts × PUE × thermal_penalty)
+  //   W/1K = (smoothed_watts / tok/s) × 1000
+  //
+  // systemIdleW deliberately NOT subtracted — that knob is for active-
+  // inference cost displays, not WES.
   function wattsFor(n: SentinelMetrics): number | null {
-    return pushAndAvg(n.node_id, 'watts', getNodePowerW(n));
+    return pushAndGetSmoothed(n.node_id, 'watts', getNodePowerW(n));
   }
   function pueFor(n: SentinelMetrics): number {
     return getNodeSettings?.(n.node_id)?.pue ?? 1.0;
   }
   // Combine Ollama + vLLM tok/s when both runtimes are reporting non-null
   // values on the same node — same convention as Overview.estimateTps's
-  // `rawCombined`. Single-runtime nodes get the one value. Smoothed via
-  // the same 4-sample rolling buffer as watts.
+  // `rawCombined`.  Single-runtime nodes get the one value.
   function combinedTpsFor(n: SentinelMetrics): number | null {
     const o = n.ollama_tokens_per_second ?? null;
     const v = n.vllm_tokens_per_sec      ?? null;
     const raw = (o != null && v != null) ? o + v : (o ?? v);
-    return pushAndAvg(n.node_id, 'tps', raw);
+    return pushAndGetSmoothed(n.node_id, 'tps', raw);
   }
 
   function buildEntries(n: SentinelMetrics): ModelEntry[] {
@@ -435,14 +405,29 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
     }
 
     const activeNodeCount = new Set(rows.map(r => r.nodeId)).size;
-    const poorCount = rows.filter(r =>
-      r.memScore === 'poor' || (r.entry.effLevel === 'low' && r.entry.wes != null)
+
+    // Separate memory issues (genuinely actionable — risk of OOM /
+    // swapping) from efficiency-low (often physics-bound on big-iron
+    // hardware running smaller workloads where idle baseline power
+    // dominates). Rolling them into a single "needs attention" bucket
+    // misled users into thinking a Spark with naturally low WES needed
+    // a fix when it's just doing what big GPUs do at batch=1.
+    const memPoorCount = rows.filter(r => r.memScore === 'poor').length;
+    const memFairCount = rows.filter(r => r.memScore === 'fair').length;
+    const effLowCount  = rows.filter(r =>
+      r.memScore !== 'poor' && r.entry.effLevel === 'low' && r.entry.wes != null
     ).length;
-    const fairCount = rows.filter(r =>
-      (r.memScore === 'fair' || r.entry.effLevel === 'acceptable') &&
-      r.memScore !== 'poor' && !(r.entry.effLevel === 'low' && r.entry.wes != null)
+    const effFairCount = rows.filter(r =>
+      r.memScore !== 'poor' && r.memScore !== 'fair' &&
+      r.entry.effLevel === 'acceptable' && r.entry.wes != null
     ).length;
-    const goodCount = rows.length - poorCount - fairCount;
+
+    // "Needs attention" = ONLY memory-poor rows. Everything else is
+    // informational. Fair count combines memory-fair + efficiency-acceptable
+    // as a soft signal worth a glance but not urgent.
+    const poorCount = memPoorCount;
+    const fairCount = memFairCount + effFairCount;
+    const goodCount = rows.length - poorCount - fairCount - effLowCount;
 
     return (
       <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
@@ -467,31 +452,45 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           </span>
         </div>
 
-        {/* Plain-English fleet verdict sentence */}
+        {/* Plain-English fleet verdict sentence — "needs attention" is
+            reserved for genuine memory risk (OOM / swap pressure). Low
+            WES alone is a planning observation, not a fix-now signal:
+            big-iron GPUs running batch=1 small workloads will always
+            show low WES because their idle baseline power dominates,
+            and the bandwidth_ceiling_reached pattern explains why. */}
         {rows.length > 0 && (() => {
           const total       = rows.length;
           const dominantTone =
             poorCount > 0 ? 'text-red-400'
-            : fairCount > goodCount ? 'text-amber-400'
+            : fairCount > 0 ? 'text-amber-400'
             : 'text-green-400';
-          const dominantWord =
-            poorCount > 0 ? `${poorCount} of ${total} models need attention`
-            : fairCount > goodCount ? `${fairCount} of ${total} models in the fair range`
-            : `all ${total} models running optimally`;
+          const memNote =
+            poorCount > 0 ? `${poorCount} of ${total} model${total !== 1 ? 's' : ''} need attention`
+            : fairCount > 0 ? `${fairCount} of ${total} model${total !== 1 ? 's' : ''} fit but warrant a check`
+            : `all ${total} model${total !== 1 ? 's' : ''} fit comfortably`;
+          // Footnote when efficiency is low but memory is fine —
+          // "this is hardware/workload mismatch, not a problem you can
+          // 'fix' from this view." Linked to bandwidth_ceiling_reached.
+          const effNote = effLowCount > 0
+            ? ` ${effLowCount} model${effLowCount !== 1 ? 's run' : ' runs'} below efficiency baseline (often expected at batch=1 on large GPUs).`
+            : '';
           const drillHint =
-            poorCount > 0 ? 'Click any Poor row below to see per-model breakdown for that node.'
-            : fairCount > 0 ? 'Click any row to see per-model breakdown for that node.'
-            : 'No fit issues across the fleet. Click any row for per-model breakdown.';
+            poorCount > 0 ? 'Click any Poor row below for per-model breakdown.'
+            : fairCount > 0 ? 'Click any row for per-model breakdown.'
+            : 'Click any row for per-model breakdown.';
           return (
             <p className="text-xs text-gray-400 leading-relaxed">
-              <span className={`font-semibold ${dominantTone}`}>{dominantWord}</span>
+              <span className={`font-semibold ${dominantTone}`}>{memNote}</span>
               <span className="text-gray-500"> across {activeNodeCount} active node{activeNodeCount !== 1 ? 's' : ''}.</span>
+              {effNote && <span className="text-gray-500">{effNote}</span>}
               {' '}<span className="text-gray-500">{drillHint}</span>
             </p>
           );
         })()}
 
-        {/* Fleet headline */}
+        {/* Fleet headline counts. Memory-poor is the only "needs
+            attention" bucket; efficiency-low gets a softer tone since
+            it's often expected (batch=1 on large GPUs). */}
         <div className="flex items-center gap-3 text-[10px] flex-wrap">
           <span className="text-gray-500">
             {activeNodeCount} node{activeNodeCount !== 1 ? 's' : ''} · {rows.length} model{rows.length !== 1 ? 's' : ''}
@@ -499,6 +498,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           {goodCount > 0 && <span className="text-green-400 font-semibold">● {goodCount} optimal</span>}
           {fairCount > 0 && <span className="text-amber-400 font-semibold">● {fairCount} fair</span>}
           {poorCount > 0 && <span className="text-red-400 font-semibold">● {poorCount} needs attention</span>}
+          {effLowCount > 0 && <span className="text-gray-400" title="Low WES is often expected at batch=1 on large GPUs — see the bandwidth_ceiling_reached pattern.">○ {effLowCount} low efficiency (informational)</span>}
         </div>
 
         {rows.length === 0 ? (

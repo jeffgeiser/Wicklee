@@ -15,14 +15,14 @@
  * to the full ModelFitAnalysis card lower on the page.
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Cpu, Gauge, Layers, ArrowRight, Server } from 'lucide-react';
 import type { SentinelMetrics } from '../../types';
 import { computeModelFitScore } from '../../utils/modelFit';
 import { computeQuantRecommendation } from '../../utils/quantSweet';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../utils/kvCache';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE } from '../../utils/perplexity';
-import { FLEET_ROW_ROLLING_WINDOW } from '../../hooks/useRollingMetrics';
+import { pushAndGetSmoothed } from '../../utils/sharedSmoothing';
 
 // ── Score → colour helpers ──────────────────────────────────────────────────
 
@@ -137,30 +137,14 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
     ? (candidateNodes.find(n => n.node_id === selectedNodeId) ?? defaultNode)
     : defaultNode;
 
-  // ── Per-node rolling buffer (mirror ModelFitAnalysis + Fleet Status row) ──
-  // Without this, the Sweet Spot tile's "estimated tok/s after upgrade"
-  // would scale off a noisy single-sample reading rather than the smoothed
-  // value users see elsewhere on the page.
-  const tpsBuffersRef = useRef<Record<string, number[]>>({});
-  // Drop buffers for nodes that have left the candidate roster — prevents
-  // unbounded growth on fleets where nodes churn.
-  useEffect(() => {
-    const live = new Set([defaultNode.node_id, ...(nodes ?? []).map(n => n.node_id)]);
-    for (const k of Object.keys(tpsBuffersRef.current)) {
-      if (!live.has(k)) delete tpsBuffersRef.current[k];
-    }
-  }, [defaultNode.node_id, nodes]);
-
+  // Smoothing reads from the module-level shared store
+  // (src/utils/sharedSmoothing) so values match Fleet Status row + MFA
+  // exactly, regardless of tab-mount order.
   function smoothedCombinedTps(n: SentinelMetrics): number | null {
     const o = n.ollama_tokens_per_second ?? null;
     const v = n.vllm_tokens_per_sec      ?? null;
     const raw = (o != null && v != null) ? o + v : (o ?? v);
-    const buf = tpsBuffersRef.current[n.node_id] ?? (tpsBuffersRef.current[n.node_id] = []);
-    if (raw != null && isFinite(raw)) {
-      buf.push(raw);
-      if (buf.length > FLEET_ROW_ROLLING_WINDOW) buf.shift();
-    }
-    return buf.length > 0 ? buf.reduce((a, c) => a + c, 0) / buf.length : null;
+    return pushAndGetSmoothed(n.node_id, 'tps', raw);
   }
 
   const fit = computeModelFitScore(node);
