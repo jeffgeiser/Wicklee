@@ -44,6 +44,7 @@ import { getNodePowerW } from '../../../utils/power';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../../utils/kvCache';
 import { computeQuantRecommendation } from '../../../utils/quantSweet';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE, type QualityCost } from '../../../utils/perplexity';
+import { FLEET_ROW_ROLLING_WINDOW } from '../../../hooks/useRollingMetrics';
 
 // ── Styled hover tooltip ──────────────────────────────────────────────────────
 // Lightweight version of MetricTooltip — no metricId/link needed for labels.
@@ -321,26 +322,51 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 }) => {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // ── Per-node rolling buffers (mirror Overview's Fleet Status row) ─────────
+  // The Fleet Status row on the Intelligence tab smooths watts and tok/s
+  // through `useNodeRollingMetrics(FLEET_ROW_ROLLING_WINDOW)` — a 4-sample
+  // moving average that dampens probe-residency spikes (Apple Silicon idle
+  // power can read 0.2–5W within a single probe cycle).  MFA used to read
+  // raw values, which is why its WES diverged from the row WES (e.g.
+  // macmini showed Efficiency 27.3 here while the Fleet Status row showed
+  // 17.5).  We now smooth here with the same window so the values match
+  // exactly.  Buffers are keyed by node_id and live across renders via a
+  // ref — no React state churn.
+  const buffersRef = useRef<Record<string, { watts: number[]; tps: number[] }>>({});
+
+  function pushAndAvg(nodeId: string, key: 'watts' | 'tps', value: number | null): number | null {
+    const node = buffersRef.current[nodeId] ?? (buffersRef.current[nodeId] = { watts: [], tps: [] });
+    if (value != null && isFinite(value)) {
+      const buf = node[key];
+      buf.push(value);
+      if (buf.length > FLEET_ROW_ROLLING_WINDOW) buf.shift();
+    }
+    const buf = node[key];
+    return buf.length > 0 ? buf.reduce((a, c) => a + c, 0) / buf.length : null;
+  }
+
   // ── Canonical WES + W/1K math ─────────────────────────────────────────────
-  // Aligned with the Overview tile: WES = tok/s ÷ (raw_watts × PUE × penalty);
-  // W/1K = (raw_watts / tok/s) × 1000.  We deliberately do NOT subtract
-  // systemIdleW here even when configured — that knob is for active-inference
-  // cost displays.  The frozen WES color scale was calibrated against raw
-  // watts; subtracting idle would silently shift every node's score.
+  // Aligned with the Overview Fleet Status row:
+  //   WES   = tok/s ÷ (smoothed_watts × PUE × thermal_penalty)
+  //   W/1K  = (smoothed_watts / tok/s) × 1000
+  // Both watts and tps are smoothed via 4-sample rolling buffer so values
+  // match the Fleet Status row exactly. systemIdleW deliberately NOT
+  // subtracted — that knob is for active-inference cost displays.
   function wattsFor(n: SentinelMetrics): number | null {
-    return getNodePowerW(n);
+    return pushAndAvg(n.node_id, 'watts', getNodePowerW(n));
   }
   function pueFor(n: SentinelMetrics): number {
     return getNodeSettings?.(n.node_id)?.pue ?? 1.0;
   }
   // Combine Ollama + vLLM tok/s when both runtimes are reporting non-null
   // values on the same node — same convention as Overview.estimateTps's
-  // `rawCombined`.  Single-runtime nodes get the one value.
+  // `rawCombined`. Single-runtime nodes get the one value. Smoothed via
+  // the same 4-sample rolling buffer as watts.
   function combinedTpsFor(n: SentinelMetrics): number | null {
     const o = n.ollama_tokens_per_second ?? null;
     const v = n.vllm_tokens_per_sec      ?? null;
-    if (o != null && v != null) return o + v;
-    return o ?? v;
+    const raw = (o != null && v != null) ? o + v : (o ?? v);
+    return pushAndAvg(n.node_id, 'tps', raw);
   }
 
   function buildEntries(n: SentinelMetrics): ModelEntry[] {
