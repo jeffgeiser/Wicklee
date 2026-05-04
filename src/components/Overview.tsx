@@ -9,7 +9,6 @@ import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
 import type { FleetObservation } from '../hooks/useFleetObservations';
-import ModelFitAnalysis from './insights/tier2/ModelFitAnalysis';
 import ModelFitSummaryStrip from './insights/ModelFitSummaryStrip';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
@@ -96,6 +95,13 @@ interface OverviewProps {
   getToken?: () => Promise<string | null>;
   /** Cross-nav to Observability tab with optional node pre-filter. */
   onNavigateToObservability?: (params?: ObservabilityNavParams) => void;
+  /**
+   * Cross-tab navigation into the AI Insights view.  When a user clicks
+   * the Model Fit summary strip the strip fires this with
+   * ('performance', 'model-fit-analysis') so they land on Insights →
+   * Performance and the page scrolls to the full ModelFitAnalysis card.
+   */
+  onNavigateToInsights?: (tab: 'triage' | 'performance' | 'forensics', scrollTo?: string) => void;
 }
 
 const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
@@ -1284,7 +1290,7 @@ const DiagnosticRail: React.FC<{
 };
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = 0.12, getToken, onNavigateToObservability }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = 0.12, getToken, onNavigateToObservability, onNavigateToInsights }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -2827,17 +2833,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             </div>
           )}
           {sentinel && (
-            <>
-              {/* First-fold model-fit verdict — three condensed tiles that
-                  scroll-to the full ModelFitAnalysis section below. */}
-              <ModelFitSummaryStrip node={sentinel} getNodeSettings={getNodeSettings} anchorId="model-fit-analysis" />
-              <div id="model-fit-analysis">
-                <ModelFitAnalysis
-                  node={sentinel}
-                  nodes={[sentinel]}
-                />
-              </div>
-            </>
+            // First-fold model-fit verdict — three condensed tiles that
+            // deep-link to Insights → Performance for the full analysis.
+            // We deliberately do NOT render the full ModelFitAnalysis here
+            // anymore: it duplicated the same component on Insights and
+            // the deep-link to Insights gives users the right neighbours
+            // (Inference Profiler, SLA Monitor, Model Discovery) for
+            // active investigation.
+            <ModelFitSummaryStrip
+              node={sentinel}
+              getNodeSettings={getNodeSettings}
+              onNavigate={onNavigateToInsights
+                ? () => onNavigateToInsights('performance', 'model-fit-analysis')
+                : undefined
+              }
+            />
           )}
         </div>
       ) : (
@@ -2963,7 +2973,17 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                (a.ollama_tokens_per_second ?? a.vllm_tokens_per_sec ?? 0))
             )[0];
           return fitCandidate
-            ? <ModelFitSummaryStrip node={fitCandidate} nodes={effectiveMetrics} getNodeSettings={getNodeSettings} anchorId="model-fit-analysis" />
+            ? (
+              <ModelFitSummaryStrip
+                node={fitCandidate}
+                nodes={effectiveMetrics}
+                getNodeSettings={getNodeSettings}
+                onNavigate={onNavigateToInsights
+                  ? () => onNavigateToInsights('performance', 'model-fit-analysis')
+                  : undefined
+                }
+              />
+            )
             : null;
         })()}
 
@@ -3082,16 +3102,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           )}
         </div>
 
-        {/* ═══ Row 3 — Model Fit Analysis (full width, fleet table) ═══════════ */}
-        {effectiveMetrics.length > 0 && (
-          <div id="model-fit-analysis">
-            <ModelFitAnalysis
-              node={effectiveMetrics[0]}
-              nodes={effectiveMetrics}
-              fleetView={effectiveMetrics.length > 1}
-            />
-          </div>
-        )}
+        {/* Row 3 — Model Fit Analysis was here; removed in favour of the
+            summary strip + deep-link into Insights → Performance, where
+            the full ModelFitAnalysis lives alongside its natural
+            neighbours (Inference Profiler, SLA Monitor, Model Discovery).
+            See ROADMAP entry "Model Fit canonical home: Insights →
+            Performance" for the rationale. */}
 
         {/* ═══ Row 4 — Idle Fleet Cost (conditional) ══════════════════════════ */}
         {(() => {

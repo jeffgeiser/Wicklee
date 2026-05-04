@@ -150,6 +150,15 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
   const [observabilityNav, setObservabilityNav] = useState<ObservabilityNavParams | undefined>(undefined);
+  /**
+   * Deep-link target for cross-tab navigation into Insights.
+   * Shape: { tab: 'triage' | 'performance' | 'forensics'; scrollTo?: string }
+   * Set when a user clicks something on Overview that should land on a
+   * specific Insights sub-tab + scroll to a specific anchor (e.g. the
+   * Model Fit summary strip → Insights → Performance → ModelFitAnalysis).
+   * Consumed by AIInsights on mount, then cleared.
+   */
+  const [insightsDeepLink, setInsightsDeepLink] = useState<{ tab: 'triage' | 'performance' | 'forensics'; scrollTo?: string } | undefined>(undefined);
   const [nodes, setNodes] = useState<NodeAgent[]>([]);
   // True until the first /api/fleet fetch settles (or Clerk hasn't loaded yet).
   // Prevents EmptyFleetState from flashing on page refresh while auth resolves.
@@ -471,7 +480,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} getToken={isLocalHost ? undefined : getToken} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} getToken={isLocalHost ? undefined : getToken} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} cloudUrl={isLocalHost ? undefined : CLOUD_URL} onNodesRemoved={handleNodeAdded} />;
       case DashboardTab.TRACES:
@@ -491,6 +500,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
               setObservabilityNav(params);
               setActiveTab(DashboardTab.TRACES);
             }}
+            deepLink={insightsDeepLink}
+            onDeepLinkConsumed={() => setInsightsDeepLink(undefined)}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>

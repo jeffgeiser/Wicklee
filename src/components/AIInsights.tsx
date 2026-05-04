@@ -530,6 +530,18 @@ interface AIInsightsProps {
    * Only meaningful in Cockpit (localhost) mode where /api/history is available.
    */
   onNavigateToObservability?: (params?: ObservabilityNavParams) => void;
+  /**
+   * Cross-tab deep-link target.  Set when the user clicked something on
+   * Overview that should land on a specific Insights sub-tab and scroll
+   * to a specific anchor (e.g. Model Fit summary strip → 'performance' +
+   * 'model-fit-analysis').  Consumed once on mount: switches activeTab
+   * to `tab`, scrolls to `scrollTo` (when provided), then fires
+   * `onDeepLinkConsumed` so the parent can clear the state and not
+   * re-trigger on subsequent renders.
+   */
+  deepLink?: { tab: 'triage' | 'performance' | 'forensics'; scrollTo?: string };
+  /** Called by AIInsights once it has handled the deep-link target. */
+  onDeepLinkConsumed?: () => void;
 }
 
 // ── InferenceProfiler — correlated multi-signal timeline (localhost) ────────────
@@ -980,6 +992,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   subscriptionTier = 'community',
   onFleetEvent,
   onNavigateToObservability,
+  deepLink,
+  onDeepLinkConsumed,
 }) => {
 
   // ── Hooks — all unconditional ──────────────────────────────────────────────
@@ -987,6 +1001,30 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
   const [now, setNow]                     = useState(() => Date.now());
   const [activeTab, setActiveTab]         = useState<InsightsTab>('triage');
+
+  /**
+   * Consume a cross-tab deep-link target on mount or when one becomes
+   * available.  Switches to the requested tab synchronously, then scrolls
+   * to the named anchor on the next animation frame (after React commits
+   * the new tab's children).  Fires the consumed callback so the parent
+   * clears its state and the same target doesn't re-fire on every render.
+   */
+  React.useEffect(() => {
+    if (!deepLink) return;
+    setActiveTab(deepLink.tab);
+    if (deepLink.scrollTo) {
+      const target = deepLink.scrollTo;
+      // Two rAF — one for activeTab to commit, one for the new tab body to mount.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const el = document.getElementById(target);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      });
+    }
+    onDeepLinkConsumed?.();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLink]);
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
   /** Shared node selection for WES + Metrics history charts */
   const [perfNodeId, setPerfNodeId] = useState<string | null>(null);
@@ -2263,15 +2301,18 @@ const AIInsights: React.FC<AIInsightsProps> = ({
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'performance' && (
             <>
-              {/* Model Fit Analysis — two-dimensional memory + efficiency fit */}
+              {/* Model Fit Analysis — canonical home (Overview's summary
+                  strip deep-links here via id="model-fit-analysis"). */}
               {canViewInsight(10) && effectiveNodes.length > 0 ? (
-                <ModelFitAnalysis
-                  node={effectiveNodes[0]}
-                  nodes={effectiveNodes}
-                  fleetView={!isLocalHost && effectiveNodes.length > 1}
-                  onNavigateToPerformance={() => setActiveTab('performance')}
-                  systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
-                />
+                <div id="model-fit-analysis">
+                  <ModelFitAnalysis
+                    node={effectiveNodes[0]}
+                    nodes={effectiveNodes}
+                    fleetView={!isLocalHost && effectiveNodes.length > 1}
+                    onNavigateToPerformance={() => setActiveTab('performance')}
+                    systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
+                  />
+                </div>
               ) : canViewInsight(10) ? (
                 <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                   <Cpu className="w-3.5 h-3.5 text-gray-600 shrink-0" />

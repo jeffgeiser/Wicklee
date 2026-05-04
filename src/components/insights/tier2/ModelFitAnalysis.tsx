@@ -340,7 +340,11 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   }
 
   // ── Fleet view ─────────────────────────────────────────────────────────────
-  if (fleetView) {
+  // Drop into detail view when the operator has clicked a row — preserves
+  // the back-to-fleet affordance via the `cameFromFleet` flag rendered in
+  // the detail view header.
+  const cameFromFleet = fleetView && selectedNodeId != null;
+  if (fleetView && !selectedNodeId) {
     const rows: FleetRow[] = [];
     for (const n of nodes) {
       const entries = buildEntries(n);
@@ -407,9 +411,9 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
             : fairCount > goodCount ? `${fairCount} of ${total} models in the fair range`
             : `all ${total} models running optimally`;
           const drillHint =
-            poorCount > 0 ? 'Drill into the Poor rows below to see which node and why.'
-            : fairCount > 0 ? 'Fair rows below show why each model lost headroom.'
-            : 'No fit issues across the fleet.';
+            poorCount > 0 ? 'Click any Poor row below to see per-model breakdown for that node.'
+            : fairCount > 0 ? 'Click any row to see per-model breakdown for that node.'
+            : 'No fit issues across the fleet. Click any row for per-model breakdown.';
           return (
             <p className="text-xs text-gray-400 leading-relaxed">
               <span className={`font-semibold ${dominantTone}`}>{dominantWord}</span>
@@ -467,7 +471,12 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   const effCfg = EFF_CONFIG[row.entry.effLevel];
                   const memCfg = row.memScore ? MEM_CONFIG[row.memScore] : null;
                   return (
-                    <tr key={`${row.nodeId}-${row.entry.modelName}-${i}`} className="hover:bg-gray-700/30 transition-colors">
+                    <tr
+                      key={`${row.nodeId}-${row.entry.modelName}-${i}`}
+                      onClick={() => setSelectedNodeId(row.nodeId)}
+                      className="hover:bg-gray-700/30 transition-colors cursor-pointer"
+                      title="Click to drill into this node"
+                    >
                       <td className="py-2 pr-4 font-mono text-gray-400 whitespace-nowrap">{row.hostname}</td>
                       <td className="py-2 pr-4 whitespace-nowrap">
                         <span className="text-gray-200">{row.entry.base}</span>
@@ -591,6 +600,16 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
+          {cameFromFleet && (
+            <button
+              type="button"
+              onClick={() => setSelectedNodeId(null)}
+              className="text-[10px] font-semibold uppercase tracking-widest text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1"
+              title="Back to fleet view"
+            >
+              ← Fleet
+            </button>
+          )}
           <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
           <span
             className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate"

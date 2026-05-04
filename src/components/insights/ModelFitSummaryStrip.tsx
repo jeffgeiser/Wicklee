@@ -96,8 +96,14 @@ interface Props {
    * names match the rest of the page (KPI hero, Best Route, Cost tiles).
    */
   getNodeSettings?: (nodeId: string) => { locationLabel?: string | null } | undefined;
-  /** Anchor id of the full ModelFitAnalysis section to scroll to. */
-  anchorId?: string;
+  /**
+   * Click handler invoked when the user activates any tile.  Wired by
+   * Overview to `onNavigateToInsights('performance', 'model-fit-analysis')`,
+   * cross-tabbing to the full ModelFitAnalysis section in Insights where
+   * it lives alongside the other deep-dive tools.  When undefined the
+   * tiles still render but are not interactive.
+   */
+  onNavigate?: () => void;
 }
 
 /** Resolve a node's display label using the same chain as other Overview tiles. */
@@ -119,7 +125,7 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
   node: defaultNode,
   nodes,
   getNodeSettings,
-  anchorId = 'model-fit-analysis',
+  onNavigate,
 }) => {
   // Eligible-for-picker nodes: those with a loaded model.
   const candidateNodes = (nodes ?? []).filter(hasLoadedModel);
@@ -153,11 +159,13 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
   const hostLabel = nodeLabelFor(node, getNodeSettings);
   const chipLabel = node.chip_name ?? node.gpu_name ?? null;
 
-  const scrollToFullAnalysis = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const el = document.getElementById(anchorId);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  // Tile-click handler — wired to the Insights deep-link callback when
+  // provided.  When `onNavigate` is undefined the tiles render as
+  // non-interactive divs (no onClick, no hover-cursor) so the user
+  // never sees a button shape that does nothing.
+  const handleTileClick = onNavigate
+    ? (e: React.MouseEvent) => { e.preventDefault(); onNavigate(); }
+    : undefined;
 
   return (
     <div className="space-y-2">
@@ -203,10 +211,10 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
       {/* ── Tile 1 — Model Fit ───────────────────────────────────────────── */}
-      <a
-        href={`#${anchorId}`}
-        onClick={scrollToFullAnalysis}
-        className={`group bg-gray-800 border ${FIT_BORDER[fit.score]} rounded-2xl p-4 transition-colors block`}
+      <button type="button" disabled={!onNavigate}
+        
+        onClick={handleTileClick}
+        className={`group bg-gray-800 border ${FIT_BORDER[fit.score]} rounded-2xl p-4 transition-colors block text-left w-full disabled:cursor-default cursor-pointer`}
       >
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-1.5">
@@ -239,13 +247,13 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
         <p className="text-[10px] text-gray-600 mt-1.5 font-mono">
           {fit.modelSizeGb.toFixed(1)} GB model · {fit.totalGb.toFixed(0)} GB total
         </p>
-      </a>
+      </button>
 
       {/* ── Tile 2 — Quant Sweet Spot ─────────────────────────────────────── */}
-      <a
-        href={`#${anchorId}`}
-        onClick={scrollToFullAnalysis}
-        className="group bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-2xl p-4 transition-colors block"
+      <button type="button" disabled={!onNavigate}
+        
+        onClick={handleTileClick}
+        className="group bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-2xl p-4 transition-colors block text-left w-full disabled:cursor-default cursor-pointer"
       >
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-1.5">
@@ -315,13 +323,13 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
             </p>
           </>
         )}
-      </a>
+      </button>
 
       {/* ── Tile 3 — Context Runway ───────────────────────────────────────── */}
-      <a
-        href={`#${anchorId}`}
-        onClick={scrollToFullAnalysis}
-        className="group bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-2xl p-4 transition-colors block"
+      <button type="button" disabled={!onNavigate}
+        
+        onClick={handleTileClick}
+        className="group bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-2xl p-4 transition-colors block text-left w-full disabled:cursor-default cursor-pointer"
       >
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-1.5">
@@ -354,7 +362,7 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
             </p>
           </>
         )}
-      </a>
+      </button>
       </div>
     </div>
   );
