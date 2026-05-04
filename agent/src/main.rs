@@ -4774,6 +4774,18 @@ fn bytes_per_weight(quant: &str) -> f32 {
     if q.starts_with("q8") || q == "fp8" || q == "int8" { return 1.0; }
     if q.starts_with("f16") || q == "bf16" || q.starts_with("fp16") { return 2.0; }
     if q.starts_with("f32") || q.starts_with("fp32") { return 4.0; }
+    // Production vLLM/HF quant tags — mirror src/utils/quantSize.ts.
+    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights ≈ 0.56 B/W like Q4_K_M.
+    // GPTQ-int8 / BNB-8bit: 8-bit weights ≈ 1.0 B/W like Q8_0/FP8.
+    // AQLM / HQQ-2bit: 2-bit aggressive quants ≈ 0.34 B/W like Q2_K.
+    if q == "awq" || q.starts_with("awq-int4") || q == "awq-4bit"     { return 0.56; }
+    if q == "gptq" || q.starts_with("gptq-int4") || q == "gptq-4bit"  { return 0.56; }
+    if q == "gptq-int8" || q == "gptq-8bit"                            { return 1.0; }
+    if q == "aqlm" || q.starts_with("aqlm-2bit")                       { return 0.34; }
+    if q == "hqq" || q.starts_with("hqq-4bit")                         { return 0.56; }
+    if q == "hqq-2bit"                                                 { return 0.34; }
+    if q == "bnb-4bit" || q == "nf4" || q == "fp4"                     { return 0.56; }
+    if q == "bnb-8bit"                                                 { return 1.0; }
     1.0  // conservative default — same as Q8/FP8
 }
 

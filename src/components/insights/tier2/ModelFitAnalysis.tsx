@@ -34,7 +34,7 @@
  *     reasoning, enabling AI agents to answer "can I run this model safely?"
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Cpu, Activity } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
 import { computeModelFitScore } from '../../../utils/modelFit';
@@ -333,6 +333,16 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   // exactly.  Buffers are keyed by node_id and live across renders via a
   // ref — no React state churn.
   const buffersRef = useRef<Record<string, { watts: number[]; tps: number[] }>>({});
+
+  // Drop buffers for nodes no longer in the roster — bounds memory on
+  // fleets that churn (offline → removed → replaced) over long sessions.
+  useEffect(() => {
+    const live = new Set(nodes.map(n => n.node_id));
+    live.add(defaultNode.node_id);
+    for (const k of Object.keys(buffersRef.current)) {
+      if (!live.has(k)) delete buffersRef.current[k];
+    }
+  }, [nodes, defaultNode.node_id]);
 
   function pushAndAvg(nodeId: string, key: 'watts' | 'tps', value: number | null): number | null {
     const node = buffersRef.current[nodeId] ?? (buffersRef.current[nodeId] = { watts: [], tps: [] });
