@@ -358,7 +358,7 @@ Four states, evaluated once per second as a pure function:
 
 ---
 
-## 19 Observation Patterns + 5 Fleet Alerts
+## 20 Observation Patterns + 5 Fleet Alerts
 
 ### Agent-Evaluated (18 patterns)
 Evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds.
@@ -389,8 +389,9 @@ Pro (9):
   as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/RTX,
   DGX Spark/GB10). Recommends smaller quant for tok/s gain or larger batch to amortise baseline power.
 
-### Cloud-Evaluated (1 pattern)
+### Cloud-Evaluated (2 patterns)
 - **fleet_load_imbalance:** Node WES > 20% below best healthy peer (Pro)
+- **wes_long_term_drift:** *(Pro, severity warning)* recent 24h avg WES ≥15% below 6-day baseline. Detects gradual degradation (dust, thermal paste, driver regression, background process creep). Evaluated every 6h against the 7-day Postgres rollup. Cooldown 24h. Mirror chart annotation in WESHistoryChart when 7d range is selected.
 
 ### Fleet Alerts (5, all tiers)
 Evaluated by the cloud backend every 60 seconds.

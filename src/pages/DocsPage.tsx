@@ -1141,7 +1141,7 @@ WES Version:     2
               The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. Each observation includes actionable commands tailored to your platform (macOS, Linux, or NVIDIA).
             </p>
             <p>
-              Wicklee evaluates 19 observation patterns plus 5 fleet health alerts. The Rust agent evaluates 18 patterns locally against a 10-minute DuckDB buffer every 10 seconds. One pattern (<code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code>) requires multi-node fleet context and runs in the cloud evaluator. When paired with wicklee.dev, agent observations are pushed to the cloud automatically for fleet-wide visibility. 9 patterns are available on the Community tier; 10 additional patterns require Pro.
+              Wicklee evaluates 20 observation patterns plus 5 fleet health alerts. The Rust agent evaluates 18 patterns locally against a 10-minute DuckDB buffer every 10 seconds. Two patterns (<code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code>, <code className="text-gray-400 font-mono text-xs">wes_long_term_drift</code>) require multi-node fleet context or 7-day historical data and run in the cloud evaluator. When paired with wicklee.dev, agent observations are pushed to the cloud automatically for fleet-wide visibility. 9 patterns are available on the Community tier; 11 additional patterns require Pro.
             </p>
 
             {/* ── Agent-evaluated observations ── */}
@@ -1307,6 +1307,12 @@ WES Version:     2
                     <Td><code className="font-medium text-sky-400">fleet_load_imbalance</code></Td>
                     <Td>Node thermally stressed or WES &gt; 20% below best healthy peer while a cooler node has spare capacity</Td>
                     <Td>2+ thermal ticks or 20% WES gap</Td>
+                    <Td>Pro</Td>
+                  </tr>
+                  <tr>
+                    <Td><code className="font-medium text-indigo-300">wes_long_term_drift</code></Td>
+                    <Td>Penalized WES has drifted ≥15% between the prior 6-day baseline and the most recent 24h. Detects gradual degradation: dust, thermal paste aging, driver regression, background process creep. The 7-day WES history chart shows a matching drift annotation when this fires.</Td>
+                    <Td>≥15% drop · 6h evaluation cadence · ≥100 baseline samples + ≥30 recent · 24h cooldown</Td>
                     <Td>Pro</Td>
                   </tr>
                   <tr>

@@ -84,6 +84,9 @@ Three condensed first-fold tiles under the KPI hero row — Model Fit, Quant Swe
 ### vLLM `/v1/models` Metadata Capture
 Agent harvester now fetches `/v1/models` on each model change and exposes `vllm_max_model_len` on the wire. Replaces the conservative 8 192-token Context Runway floor with the engine's actual context window for vLLM-backed nodes. Cached per (model_name, port) — fetched once per model change rather than every 2-second tick. Three-way wire-format sync (agent → cloud → frontend type).
 
+### WES Long-Term Drift Pattern (Pro, #20)
+20th observation pattern, cloud-evaluated. Detects gradual WES degradation by comparing the most recent 24-hour rolling average against the 6-day baseline (days 1–6 of the 7-day Pro Postgres history). Fires when the drop exceeds 15% with ≥100 baseline samples and ≥30 recent samples; cooldown 24h. Surfaces in the existing observation flow with severity `warning`. The Insights → Performance WES history chart shows a matching drift annotation when 7d range is selected, so chart and observation card stay in agreement. Extends `wes_velocity_drop` (10-minute window) into a 7-day analysis that catches dust accumulation, thermal paste aging, driver regression, and background process creep — degradations the short-window pattern misses.
+
 ### Model Fit Score: vLLM KV-Cache Reservation Fix
 `computeModelFitScore()` previously used `nvidia_vram_used_mb` as a proxy for both model size *and* occupied memory. vLLM eagerly reserves ~90% of VRAM for KV cache (its `gpu_memory_utilization` default), so the proxy reflected engine reservation rather than weights — scoring nodes "Poor" for models that actually fit comfortably. New `src/utils/quantSize.ts` adds `bytesPerWeight()` + `parseQuantFromAnyModelName()` (handles GGUF tags AND full-precision tags FP8/BF16/F16) and an `estimateModelSizeGbFromName()` composer. The fit calculator now picks model size from a priority chain: ollama_model_size_gb → params×BPW from name → vram_used → system memory delta. For vLLM/llama.cpp the "used" baseline becomes model_size + 10%, answering "does my model fit with room for context?" instead of "how much has the engine pre-allocated?"
 
@@ -111,9 +114,6 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 
 ### Quantization Advisor
 "Switching from Q8_0 to Q4_K_M would: free 4.2GB VRAM, reduce power ~15%, improve WES from 8.2 to 11.4." Based on observed metrics for the same model family at different quantizations across fleet nodes.
-
-### WES Long-Term Trending
-Weekly/monthly WES trend line per node. Detects gradual degradation: thermal paste aging, dust accumulation, driver regression, background process creep. Extends Pattern C (short-term velocity drop) to 7d/90d timeframes.
 
 ### Cross-Node Model Migration
 "Llama 3.1 70B on WK-A1B2 has WES 8.2, VRAM at 89%. WK-C3D4 has WES 12.1, VRAM at 52%. Recommend migrating for 47% efficiency gain." Fleet-wide model placement optimization based on measured performance.

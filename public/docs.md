@@ -333,20 +333,23 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 ---
 
-## 19 Observation Patterns + 6 Fleet Alerts
+## 20 Observation Patterns + 6 Fleet Alerts
 
 ### Agent-Evaluated (18 patterns, 10-min DuckDB buffer, every 10s)
 
 **Community (9):** `thermal_drain`, `phantom_load`, `wes_velocity_drop`, `memory_trajectory`, `power_jitter`, `swap_io_pressure`, `clock_drift`, `nvidia_thermal_redline`, `vram_overcommit`
 
-**Pro (9):** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `pcie_lane_degradation`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`, `bandwidth_ceiling_reached`
+**Pro (9 agent-evaluated):** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `pcie_lane_degradation`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`, `bandwidth_ceiling_reached`
 
 > **`pcie_lane_degradation`** — fires when the negotiated PCIe link width (e.g. x8) is below the card's rated maximum (e.g. x16), indicating a wrong-slot installation or failed lane. Detected via NVML `current_pcie_link_width` / `max_pcie_link_width` — **NVIDIA only, no root required**. Returns no data on virtualised GPUs (cloud instances, VMs) where PCIe info is unavailable.
 
 > **`bandwidth_ceiling_reached`** *(severity: info)* — fires when a node sustains ≥65 % of its theoretical memory-bandwidth ceiling for the loaded model + quant, GPU utilisation is below 95 %, and the node has been live for ≥5 min. This explains a "Low" tok/W reading as **physics, not pathology**: at batch=1, fixed GPU baseline power dominates and per-token efficiency cannot improve without changing quant or batch size. Detected via `parameter_count × bytes_per_weight ÷ memory_bandwidth_gbps` per a per-chip lookup table (Apple M-series, NVIDIA H100/H200/A100/RTX, DGX Spark/GB10). The node is healthy — recommendation is informational: switch to a smaller GGUF quant for ~2× tok/s, or raise concurrent batch size to amortise baseline power.
 
-### Cloud-Evaluated (1 pattern)
-`fleet_load_imbalance` — node WES > 20% below best healthy peer (Pro)
+### Cloud-Evaluated (2 patterns)
+
+`fleet_load_imbalance` (Pro) — node WES > 20% below best healthy peer.
+
+> **`wes_long_term_drift`** *(Pro, severity: warning)* — fires when penalized WES drops ≥15 % between the prior 6-day baseline and the most recent 24 hours. Detects gradual degradation that short-window patterns miss: dust accumulation in fans / heatsinks, thermal paste degradation on long-deployed hardware, driver / firmware regression after an OS update, or new background process load. Evaluated every 6 hours per Pro+ node against the 7-day Postgres rollup (`metrics_5min`). Requires ≥100 baseline samples (~8 h) and ≥30 recent samples (~2.5 h) before firing — sparse fleets won't trip false positives. Cooldown: 24 h. The 7-day WES history chart in Insights → Performance shows a matching drift annotation when the same condition is detected client-side, so chart and observation card stay in agreement.
 
 ### Fleet Alerts (6, all tiers, cloud, 60s cadence)
 `zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`, `fleet_load_imbalance`

@@ -153,6 +153,30 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     p => p.raw_wes != null && p.penalized_wes != null && p.raw_wes > p.penalized_wes + 0.001
   );
 
+  // ── 7-day drift annotation (Pro+) ──────────────────────────────────────────
+  // When viewing the 7d range, compare the recent 24h average against the
+  // baseline (days 1–6). Mirrors the cloud-side wes_long_term_drift evaluator
+  // exactly so the chart annotation and the observation card agree.
+  const driftAnalysis = (() => {
+    if (range !== '7d' || !selectedNode || selectedNode.points.length === 0) return null;
+    const now = Date.now();
+    const day = 86_400_000;
+    const baselinePts = selectedNode.points.filter(p =>
+      p.penalized_wes != null && p.penalized_wes > 0
+      && p.ts_ms >= now - 7 * day && p.ts_ms < now - day
+    );
+    const recentPts = selectedNode.points.filter(p =>
+      p.penalized_wes != null && p.penalized_wes > 0
+      && p.ts_ms >= now - day
+    );
+    if (baselinePts.length < 6 || recentPts.length < 3) return null;
+    const baseAvg = baselinePts.reduce((a, p) => a + (p.penalized_wes ?? 0), 0) / baselinePts.length;
+    const recentAvg = recentPts.reduce((a, p) => a + (p.penalized_wes ?? 0), 0) / recentPts.length;
+    if (baseAvg <= 0) return null;
+    const dropPct = ((baseAvg - recentAvg) / baseAvg) * 100;
+    return { baseAvg, recentAvg, dropPct, alarming: dropPct >= 15 };
+  })();
+
   // ── CSV export — build from in-memory chart data ────────────────────────
 
   const handleCsvDownload = useCallback(() => {
@@ -301,6 +325,38 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
               <span className="text-indigo-400 font-semibold">Pro</span>
               {' '}unlocks 7-day historical trends.
             </p>
+          )}
+        </div>
+      )}
+
+      {/* 7-day drift annotation — when 7d range is selected and data is
+          dense enough to compute a baseline. Mirrors the server-side
+          wes_long_term_drift evaluator: ≥15% drop vs 6-day baseline →
+          alarming red callout; smaller drift → neutral note. */}
+      {!loading && !error && hasData && driftAnalysis && (
+        <div className={`mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2 flex-wrap ${
+          driftAnalysis.alarming
+            ? 'bg-red-500/10 border border-red-500/30 text-red-300'
+            : 'bg-gray-900 border border-gray-700 text-gray-400'
+        }`}>
+          <span className="font-semibold uppercase tracking-widest text-[9px] opacity-70">
+            7-day drift
+          </span>
+          <span className="font-mono">
+            baseline {driftAnalysis.baseAvg.toFixed(2)} → recent {driftAnalysis.recentAvg.toFixed(2)}
+          </span>
+          <span className={`font-mono font-bold ${
+            driftAnalysis.dropPct >= 15  ? 'text-red-400'
+            : driftAnalysis.dropPct >= 5 ? 'text-amber-400'
+            : driftAnalysis.dropPct >= 0 ? 'text-gray-400'
+            : 'text-emerald-400'
+          }`}>
+            {driftAnalysis.dropPct >= 0 ? '↓' : '↑'} {Math.abs(driftAnalysis.dropPct).toFixed(0)}%
+          </span>
+          {driftAnalysis.alarming && (
+            <span className="text-[10px]">
+              · long-term degradation detected — see <code className="text-red-200 font-mono">wes_long_term_drift</code> observation
+            </span>
           )}
         </div>
       )}

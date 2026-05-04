@@ -816,7 +816,7 @@ fn allowed_patterns_for_tier(tier: &str) -> Vec<String> {
         "power_gpu_decoupling", "bandwidth_saturation", "efficiency_drag",
         "vllm_kv_cache_saturation", "nvidia_thermal_redline",
         "ttft_regression", "latency_spike", "vllm_queue_saturation",
-        "bandwidth_ceiling_reached",
+        "bandwidth_ceiling_reached", "wes_long_term_drift",
     ];
 
     let mut allowed: Vec<String> = cloud_alerts.into_iter().map(String::from).collect();
@@ -5253,6 +5253,128 @@ impl ObsSeverity {
     }
 }
 
+/// WES Long-Term Drift Evaluator (Pattern #20, Pro+).
+///
+/// Extends `wes_velocity_drop` (10-minute window) into a 7-day analysis that
+/// detects gradual degradation: thermal paste aging, dust accumulation,
+/// driver regression, background process creep. Runs every 6 hours per node.
+///
+/// Logic:
+///   baseline_avg = AVG(wes_penalized_avg) over [now-7d .. now-24h]
+///   recent_avg   = AVG(wes_penalized_avg) over [now-24h .. now]
+///   drop_pct     = (baseline_avg - recent_avg) / baseline_avg * 100
+///   if drop_pct >= 15% AND baseline samples >= 100 AND recent samples >= 30:
+///     fire `wes_long_term_drift` observation (severity: warning)
+///
+/// Cooldown: 24h via the existing fleet_observations open-state check.
+async fn wes_long_term_drift_evaluator_task(state: AppState) {
+    // Wait 60s after boot so the rollup task has a chance to populate
+    // metrics_5min before the first pass — avoids no-data false negatives.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let mut interval = tokio::time::interval(Duration::from_secs(6 * 3600));
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        let now = now_ms();
+
+        // All Pro+ nodes that have telemetry in the last 24h.
+        let nodes: Vec<(String, String)> = sqlx::query_as(
+            "SELECT n.wk_id, n.user_id
+             FROM nodes n
+             JOIN users u ON n.user_id = u.id
+             WHERE u.subscription_tier IN ('pro', 'team', 'business', 'enterprise')
+               AND n.last_seen >= $1"
+        ).bind((now.saturating_sub(86_400_000) as i64))
+         .fetch_all(&state.pool).await.unwrap_or_default();
+
+        for (node_id, user_id) in &nodes {
+            // Baseline: 6-day window ending 24h ago.
+            let baseline: Option<(Option<f64>, i64)> = sqlx::query_as(
+                "SELECT AVG(wes_penalized_avg)::DOUBLE PRECISION, COUNT(*)::BIGINT
+                 FROM metrics_5min
+                 WHERE node_id = $1
+                   AND ts >= NOW() - INTERVAL '7 days'
+                   AND ts <  NOW() - INTERVAL '24 hours'
+                   AND wes_penalized_avg IS NOT NULL
+                   AND wes_penalized_avg > 0"
+            ).bind(node_id).fetch_one(&state.pool).await.ok();
+
+            // Recent: last 24 hours.
+            let recent: Option<(Option<f64>, i64)> = sqlx::query_as(
+                "SELECT AVG(wes_penalized_avg)::DOUBLE PRECISION, COUNT(*)::BIGINT
+                 FROM metrics_5min
+                 WHERE node_id = $1
+                   AND ts >= NOW() - INTERVAL '24 hours'
+                   AND wes_penalized_avg IS NOT NULL
+                   AND wes_penalized_avg > 0"
+            ).bind(node_id).fetch_one(&state.pool).await.ok();
+
+            let (Some((Some(b_avg), b_n)), Some((Some(r_avg), r_n))) = (baseline, recent) else { continue };
+            // Need at least 100 baseline samples (~8h of 5-min buckets) and
+            // 30 recent samples (~2.5h of 5-min buckets) before firing.
+            // Avoids false positives on sparse intermittent fleets.
+            if b_n < 100 || r_n < 30 { continue; }
+            if b_avg <= 0.0 { continue; }
+            let drop_pct = (b_avg - r_avg) / b_avg * 100.0;
+            if drop_pct < 15.0 { continue; }
+
+            // Tenant scope — pull tenant_id consistent with how observations
+            // are inserted elsewhere (matches the user's id for solo, or org
+            // id for Clerk-org-shared fleets).
+            let tenant_id: String = sqlx::query_scalar(
+                "SELECT COALESCE(org_id, user_id) FROM users WHERE id = $1"
+            ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| user_id.clone());
+
+            // 24h cooldown: skip if an open `wes_long_term_drift` already
+            // exists for this node, OR if any was fired+resolved within 24h.
+            let recent_open: Option<i64> = sqlx::query_scalar(
+                "SELECT fired_at_ms FROM fleet_observations
+                 WHERE tenant_id = $1 AND node_id = $2 AND alert_type = 'wes_long_term_drift'
+                   AND fired_at_ms >= $3
+                 ORDER BY fired_at_ms DESC LIMIT 1"
+            ).bind(&tenant_id).bind(node_id).bind((now.saturating_sub(86_400_000)) as i64)
+              .fetch_optional(&state.pool).await.ok().flatten();
+            if recent_open.is_some() { continue; }
+
+            let id = uuid::Uuid::new_v4().to_string();
+            let title = "WES Long-Term Drift".to_string();
+            let detail = format!(
+                "Penalized WES has drifted from a 7-day baseline of {b_avg:.2} \
+                 to a 24-hour average of {r_avg:.2} — a {drop_pct:.0}% degradation. \
+                 Common causes (in rough order of likelihood): dust accumulation \
+                 in fans / heatsinks, thermal paste degradation on long-deployed \
+                 hardware, driver / firmware regression after an OS update, or \
+                 a new background process crowding the GPU. Inspect thermal \
+                 history first — sustained Fair-or-worse since the drift began \
+                 points to cooling. If thermal looks normal, suspect a software change."
+            );
+            let context = serde_json::json!({
+                "baseline_avg":  b_avg,
+                "baseline_n":    b_n,
+                "recent_avg":    r_avg,
+                "recent_n":      r_n,
+                "drop_pct":      drop_pct,
+                "window_days":   7,
+                "recommendation":   "Inspect thermal history for the past 48-72h. If thermal_state shows persistent Fair/Serious since the drift began, check fans + thermal paste. If thermal is unchanged, audit recent driver / OS / background process changes.",
+                "action_id":        "investigate_wes_drift",
+            });
+
+            let _ = sqlx::query(
+                "INSERT INTO fleet_observations
+                 (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms, source)
+                 VALUES ($1, $2, $3, 'wes_long_term_drift', 'warning', 'open', $4, $5, $6::jsonb, $7, 'cloud')
+                 ON CONFLICT (id) DO NOTHING"
+            )
+            .bind(&id).bind(&tenant_id).bind(node_id)
+            .bind(&title).bind(&detail).bind(context.to_string())
+            .bind(now as i64)
+            .execute(&state.pool).await;
+
+            println!("[wes-drift] fired wes_long_term_drift for {node_id}: baseline={b_avg:.2} recent={r_avg:.2} drop={drop_pct:.0}%");
+        }
+    }
+}
+
 async fn fleet_alert_evaluator_task(state: AppState) {
     let mut ring_buffers: HashMap<String, NodeRingBuffer> = HashMap::new();
     let mut open_observations: HashMap<(String, String), String> = HashMap::new();
@@ -7068,6 +7190,7 @@ async fn main() {
     });
     tokio::spawn(node_offline_alert_task(state.clone()));
     tokio::spawn(fleet_alert_evaluator_task(state.clone()));
+    tokio::spawn(wes_long_term_drift_evaluator_task(state.clone()));
     tokio::spawn(otel_exporter_task(state.clone()));
 
     // Refresh JWKS every 6 hours.
