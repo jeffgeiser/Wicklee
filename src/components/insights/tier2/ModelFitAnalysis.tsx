@@ -394,6 +394,30 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           </span>
         </div>
 
+        {/* Plain-English fleet verdict sentence */}
+        {rows.length > 0 && (() => {
+          const total       = rows.length;
+          const dominantTone =
+            poorCount > 0 ? 'text-red-400'
+            : fairCount > goodCount ? 'text-amber-400'
+            : 'text-green-400';
+          const dominantWord =
+            poorCount > 0 ? `${poorCount} of ${total} models need attention`
+            : fairCount > goodCount ? `${fairCount} of ${total} models in the fair range`
+            : `all ${total} models running optimally`;
+          const drillHint =
+            poorCount > 0 ? 'Drill into the Poor rows below to see which node and why.'
+            : fairCount > 0 ? 'Fair rows below show why each model lost headroom.'
+            : 'No fit issues across the fleet.';
+          return (
+            <p className="text-xs text-gray-400 leading-relaxed">
+              <span className={`font-semibold ${dominantTone}`}>{dominantWord}</span>
+              <span className="text-gray-500"> across {activeNodeCount} active node{activeNodeCount !== 1 ? 's' : ''}.</span>
+              {' '}<span className="text-gray-500">{drillHint}</span>
+            </p>
+          );
+        })()}
+
         {/* Fleet headline */}
         <div className="flex items-center gap-3 text-[10px] flex-wrap">
           <span className="text-gray-500">
@@ -578,6 +602,42 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           Live
         </span>
       </div>
+
+      {/* Plain-English verdict sentence — the first thing the user reads. */}
+      {(() => {
+        if (!memFit) return null;
+        const primary    = entries[0];
+        const fitLabel   = memFit.score === 'good' ? 'Good fit' : memFit.score === 'fair' ? 'Fair fit' : 'Poor fit';
+        const fitTone    =
+          memFit.score === 'good' ? 'text-green-400'
+          : memFit.score === 'fair' ? 'text-amber-400'
+          : 'text-red-400';
+        const tpsStr     = primary.tps != null ? `${primary.tps.toFixed(0)} tok/s` : 'idle';
+        const quantStr   = primary.quant ?? 'unknown quant';
+        const headroomStr = `${memFit.headroomPct.toFixed(0)}% memory headroom`;
+        const rec        = primary.tps != null && primary.family !== 'Unknown'
+          ? computeQuantRecommendation(primary.family, memFit.modelSizeGb, memFit.headroomGb, primary.tps, node)
+          : null;
+        const recTail    = (() => {
+          if (!rec) return null;
+          if (rec.kind === 'upgrade')   return `${rec.targetFamily ? `Recommend ${rec.targetFamily}` : 'Quality is degraded'} — ${rec.headline.toLowerCase()}`;
+          if (rec.kind === 'consider')  return rec.targetFamily ? `Consider ${rec.targetFamily} for near-lossless quality (+${(rec.vramDeltaGb ?? 0).toFixed(1)} GB).` : null;
+          if (rec.kind === 'sweet-spot') return rec.headline;
+          if (rec.kind === 'downgrade') return rec.headline;
+          if (rec.kind === 'lossless')  return rec.headline;
+          return null;
+        })();
+        return (
+          <p className="text-xs text-gray-400 leading-relaxed">
+            <span className="text-gray-200 font-medium">{chipName}</span> is running{' '}
+            <span className="text-gray-200 font-medium">{primary.base}</span>
+            {primary.quant ? <> at <span className="text-gray-200 font-mono">{quantStr}</span></> : null}
+            {' '}— <span className={`font-semibold ${fitTone}`}>{fitLabel}</span>
+            {primary.tps != null ? <>, {tpsStr}</> : null}, {headroomStr}.
+            {recTail && <> <span className="text-gray-500">{recTail}</span></>}
+          </p>
+        );
+      })()}
 
       {/* Node picker — multi-node detail mode (Insights / Performance tab) */}
       {nodes.length > 1 && (

@@ -10,6 +10,7 @@ import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from 
 import { useFleetObservations } from '../hooks/useFleetObservations';
 import type { FleetObservation } from '../hooks/useFleetObservations';
 import ModelFitAnalysis from './insights/tier2/ModelFitAnalysis';
+import ModelFitSummaryStrip from './insights/ModelFitSummaryStrip';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
@@ -2826,10 +2827,17 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             </div>
           )}
           {sentinel && (
-            <ModelFitAnalysis
-              node={sentinel}
-              nodes={[sentinel]}
-            />
+            <>
+              {/* First-fold model-fit verdict — three condensed tiles that
+                  scroll-to the full ModelFitAnalysis section below. */}
+              <ModelFitSummaryStrip node={sentinel} anchorId="model-fit-analysis" />
+              <div id="model-fit-analysis">
+                <ModelFitAnalysis
+                  node={sentinel}
+                  nodes={[sentinel]}
+                />
+              </div>
+            </>
           )}
         </div>
       ) : (
@@ -2938,6 +2946,26 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             )}
           </FleetCard>
         </div>
+
+        {/* ═══ Model Fit Summary Strip — first-fold verdict ══════════════════
+              Picks the highest-throughput active node to summarise.  The full
+              fleet table renders later as Row 3 with id="model-fit-analysis"
+              so the summary tiles can scroll-to it. */}
+        {(() => {
+          const fitCandidate = effectiveMetrics
+            .filter(n =>
+              n.ollama_active_model
+              || n.vllm_model_name
+              || n.llamacpp_model_name
+            )
+            .sort((a, b) =>
+              ((b.ollama_tokens_per_second ?? b.vllm_tokens_per_sec ?? 0) -
+               (a.ollama_tokens_per_second ?? a.vllm_tokens_per_sec ?? 0))
+            )[0];
+          return fitCandidate
+            ? <ModelFitSummaryStrip node={fitCandidate} anchorId="model-fit-analysis" />
+            : null;
+        })()}
 
         {/* ═══ Row 2 — Best Route Now + Node Cost / 1M Tokens ═════════════════ */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -3056,11 +3084,13 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
         {/* ═══ Row 3 — Model Fit Analysis (full width, fleet table) ═══════════ */}
         {effectiveMetrics.length > 0 && (
-          <ModelFitAnalysis
-            node={effectiveMetrics[0]}
-            nodes={effectiveMetrics}
-            fleetView={effectiveMetrics.length > 1}
-          />
+          <div id="model-fit-analysis">
+            <ModelFitAnalysis
+              node={effectiveMetrics[0]}
+              nodes={effectiveMetrics}
+              fleetView={effectiveMetrics.length > 1}
+            />
+          </div>
         )}
 
         {/* ═══ Row 4 — Idle Fleet Cost (conditional) ══════════════════════════ */}
