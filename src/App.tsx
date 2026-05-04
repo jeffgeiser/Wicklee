@@ -191,6 +191,12 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
+  // Warm the Perplexity Tax baseline cache on app startup.  Failure is
+  // non-fatal — tiles fall back to the existing heuristic copy.
+  useEffect(() => {
+    void import('./utils/perplexity').then(m => m.loadPerplexityBaseline());
+  }, []);
+
 
   // Called after a node is successfully paired via AddNodeModal; fetch updated fleet list.
   const handleNodeAdded = useCallback(async () => {

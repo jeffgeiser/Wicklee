@@ -25,6 +25,10 @@ hmac           = "0.12"
 hex            = "0.4"
 # Constant-time byte comparison for auth tokens — prevents timing side-channel attacks.
 subtle         = "2.6"
+# Lazy-initialised statics (Perplexity Tax baseline parsed once at startup).
+once_cell      = "1.19"
+# Regex used by model-family normalisation in quant_quality_factor.
+regex          = "1.10"
 
 [profile.release]
 opt-level     = 3

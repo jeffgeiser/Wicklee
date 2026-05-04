@@ -40,6 +40,7 @@
  */
 
 import type { SentinelMetrics } from '../types';
+import { lookupPerplexity, QUALITY_BAND_LABEL } from './perplexity';
 
 // ── Chip bandwidth lookup ──────────────────────────────────────────────────────
 
@@ -119,8 +120,12 @@ const COMPRESSION_RATIO: Record<string, number> = {
 };
 
 /**
- * Conservative perplexity delta vs FP16 (as a readable description).
- * Used verbatim in the recommendation.
+ * Conservative perplexity delta vs FP16 (heuristic fallback).
+ *
+ * Used only when the empirical Perplexity Tax baseline data is unavailable
+ * (e.g. JSON failed to load, or the model + quant pair has no entry).
+ * Successful lookups via `lookupPerplexity()` produce sharper per-family
+ * strings; this fallback is a floor.
  */
 const QUALITY_DELTA: Record<string, string> = {
   Q2: '15–25% perplexity increase vs FP16 — severe degradation',
@@ -131,6 +136,61 @@ const QUALITY_DELTA: Record<string, string> = {
   Q8: '<0.1% vs FP16 — effectively lossless',
   F16: 'Full FP16 precision — maximum quality',
 };
+
+/**
+ * Empirical quality-delta string — overrides the QUALITY_DELTA heuristic
+ * when a perplexity baseline entry exists for this (model, quant) pair.
+ *
+ * Falls back to QUALITY_DELTA when no entry is available. Returns the
+ * empirical value with the band label, e.g.
+ *   "+0.4% perplexity vs FP16 (KLD 0.0034) — Imperceptible"
+ *
+ * The (model, quant) pair is the *target* we want to describe — not always
+ * the currently-loaded one. e.g. when recommending Q6 from Q4, we want to
+ * describe Q6 quality in this family.
+ */
+function qualityDeltaFor(modelName: string | null, quant: string | null, family: string): string {
+  if (modelName && quant) {
+    const cost = lookupPerplexity(modelName, quant);
+    if (cost) {
+      const band = QUALITY_BAND_LABEL[cost.band];
+      const ppl  = cost.pplDeltaPct === 0
+        ? 'lossless'
+        : cost.pplDeltaPct < 0.1
+        ? `<0.1% perplexity vs FP16`
+        : `+${cost.pplDeltaPct.toFixed(cost.pplDeltaPct < 1 ? 2 : 1)}% perplexity vs FP16`;
+      const familyTag = cost.isExactFamily ? '' : ' (generic baseline)';
+      return `${ppl} (KLD ${cost.kld.toExponential(1)}) — ${band}${familyTag}`;
+    }
+  }
+  return QUALITY_DELTA[family] ?? '';
+}
+
+/**
+ * Map a quant *family* (Q4) to its most common quant *variant* (Q4_K_M).
+ * Used to look up empirical perplexity data when only the family is known.
+ */
+function representativeQuantForFamily(family: string): string {
+  switch (family) {
+    case 'Q2': return 'Q2_K';
+    case 'Q3': return 'Q3_K_M';
+    case 'Q4': return 'Q4_K_M';
+    case 'Q5': return 'Q5_K_M';
+    case 'Q6': return 'Q6_K';
+    case 'Q8': return 'Q8_0';
+    case 'F16': return 'F16';
+    case 'F32': return 'F32';
+    default: return family;
+  }
+}
+
+/** Active model name extractor — used for the empirical perplexity lookup. */
+function activeModelName(node: SentinelMetrics): string | null {
+  return node.ollama_active_model
+      ?? node.vllm_model_name
+      ?? node.llamacpp_model_name
+      ?? null;
+}
 
 // ── Recommendation output ─────────────────────────────────────────────────────
 
@@ -188,7 +248,9 @@ export function computeQuantRecommendation(
 ): QuantRecommendation {
   const bw             = chipBandwidthGbs(node);
   const currentRatio   = COMPRESSION_RATIO[currentFamily] ?? 0.5;
-  const currentQuality = QUALITY_DELTA[currentFamily] ?? '';
+  const modelName      = activeModelName(node);
+  const currentQuality = qualityDeltaFor(modelName, representativeQuantForFamily(currentFamily), currentFamily);
+  const qFor = (family: string) => qualityDeltaFor(modelName, representativeQuantForFamily(family), family);
 
   // Estimate FP16 baseline size from observed model size + current quant ratio.
   // This anchors all subsequent size estimates to the actual loaded model.
@@ -233,7 +295,7 @@ export function computeQuantRecommendation(
       vramDeltaGb:   vramDelta,
       targetFits,
       estimatedTps:  eTps,
-      targetQuality: QUALITY_DELTA[targetFamily],
+      targetQuality: qFor(targetFamily),
       headline:      `Quality is significantly degraded at ${currentFamily}.`,
       detail: targetFits
         ? `Upgrading to Q4_K_M (~${targetSizeGb.toFixed(1)} GB, +${vramDelta.toFixed(1)} GB) fits within headroom${eTps != null ? ` at ~${eTps.toFixed(0)} tok/s` : ''}. Strongly recommended.`
@@ -262,9 +324,9 @@ export function computeQuantRecommendation(
         vramDeltaGb:   vramDelta,
         targetFits,
         estimatedTps:  eTps,
-        targetQuality: QUALITY_DELTA[targetFamily],
+        targetQuality: qFor(targetFamily),
         headline:      `Q6_K fits in headroom (+${vramDelta.toFixed(1)} GB) with near-lossless quality.`,
-        detail:        `${QUALITY_DELTA[targetFamily]}.${tpsNote}${bwNote} Worth considering if output quality matters more than maximum throughput.`,
+        detail:        `${qFor(targetFamily)}.${tpsNote}${bwNote} Worth considering if output quality matters more than maximum throughput.`,
       };
     }
 
@@ -279,7 +341,7 @@ export function computeQuantRecommendation(
       estimatedTps:  null,
       targetQuality: null,
       headline:      `Q4_K_M is the right choice for this headroom.`,
-      detail:        `Q6_K would need ~${targetSizeGb.toFixed(1)} GB (+${vramDelta.toFixed(1)} GB beyond the ${headroomGb.toFixed(1)} GB available). ${QUALITY_DELTA['Q4']}.`,
+      detail:        `Q6_K would need ~${targetSizeGb.toFixed(1)} GB (+${vramDelta.toFixed(1)} GB beyond the ${headroomGb.toFixed(1)} GB available). ${qFor('Q4')}.`,
     };
   }
 
@@ -301,9 +363,9 @@ export function computeQuantRecommendation(
         vramDeltaGb:   -vramFreed,
         targetFits:    true,
         estimatedTps:  estTps(q4SizeGb),
-        targetQuality: QUALITY_DELTA['Q4'],
+        targetQuality: qFor('Q4'),
         headline:      `Headroom is tight. Q4_K_M frees ~${vramFreed.toFixed(1)} GB for longer contexts.`,
-        detail:        `${currentFamily} quality (${QUALITY_DELTA[currentFamily]}). Dropping to Q4_K_M trades ~2% perplexity for ${vramFreed.toFixed(1)} GB more KV cache room.`,
+        detail:        `${currentFamily} quality (${qFor(currentFamily)}). Dropping to Q4_K_M trades ~2% perplexity for ${vramFreed.toFixed(1)} GB more KV cache room.`,
       };
     }
 
@@ -317,7 +379,7 @@ export function computeQuantRecommendation(
       estimatedTps:  null,
       targetQuality: null,
       headline:      `${currentFamily} is the sweet spot for quality on this hardware.`,
-      detail:        `${QUALITY_DELTA[currentFamily]}. No upgrade needed — you're in the near-lossless range.`,
+      detail:        `${qFor(currentFamily)}. No upgrade needed — you're in the near-lossless range.`,
     };
   }
 
@@ -338,9 +400,9 @@ export function computeQuantRecommendation(
         vramDeltaGb:   -vramFreed,
         targetFits:    true,
         estimatedTps:  eTps,
-        targetQuality: QUALITY_DELTA[targetFamily],
+        targetQuality: qFor(targetFamily),
         headline:      `${targetFamily} frees ~${vramFreed.toFixed(1)} GB${eTps != null && observedTps != null ? ` and gains ~${((eTps / observedTps - 1) * 100).toFixed(0)}% tok/s` : ''} with minimal quality loss.`,
-        detail:        `${QUALITY_DELTA[targetFamily]}. Current ${currentFamily} maximizes quality but limits context runway. ${targetFamily} is near-lossless and frees headroom.`,
+        detail:        `${qFor(targetFamily)}. Current ${currentFamily} maximizes quality but limits context runway. ${targetFamily} is near-lossless and frees headroom.`,
       };
     }
 
@@ -354,7 +416,7 @@ export function computeQuantRecommendation(
       estimatedTps:  null,
       targetQuality: null,
       headline:      `${currentFamily} — maximum quality, no action needed.`,
-      detail:        `${QUALITY_DELTA[currentFamily]}. Headroom is healthy — no reason to drop quant.`,
+      detail:        `${qFor(currentFamily)}. Headroom is healthy — no reason to drop quant.`,
     };
   }
 

@@ -98,9 +98,27 @@ A bandwidth-aware quantization recommendation computed from:
 - Node chip memory bandwidth (from a chip lookup table)
 - Model size in GB (from Ollama/vLLM metadata)
 - Estimated speed change: scales tok/s by the inverse size ratio (memory-bandwidth-bound assumption)
-- Quality delta: perplexity benchmarks from llama.cpp (conservative estimates ±10%)
+- Quality delta: empirical KL divergence + perplexity data via the **Perplexity Tax** baseline (see below)
 
 The recommendation upgrades quality when headroom allows, or downgrades when the node is memory-constrained.
+
+### Perplexity Tax
+
+Empirical quality cost for a given (model family, quant) pair, displayed alongside speed and memory tradeoffs in Model Fit Analysis. Replaces the hand-tuned quality-delta strings with measured KL divergence and perplexity data sourced from Unsloth Dynamic GGUF benchmarks and the llama.cpp perplexity discussions.
+
+Single source of truth: `public/perplexity_baseline.json`. The cloud Rust binary embeds the same file at compile time so cloud-side fleet matching and frontend tiles agree on quality cost. Bands keyed off KLD:
+
+| KLD | Band | Meaning |
+|---|---|---|
+| < 0.001 | Imperceptible | Empirically indistinguishable from FP16 in blind A/B tests |
+| 0.001–0.01 | Mild | Small but measurable quality cost |
+| 0.01–0.05 | Noticeable | Acceptable for many tasks; inspect output if quality matters |
+| 0.05–0.15 | Severe | Substantial quality cost — coherence issues likely |
+| > 0.15 | Unusable | Empirically unreliable for production |
+
+`quant_quality_factor()` (cloud-side fleet score) and the Quant Sweet Spot recommender now read from this baseline, falling back to the legacy hand-tuned heuristic only when no entry exists. Curated coverage: Llama 3.1/3.2 (1B-70B), Qwen 2.5 (7B-72B), Mistral 7B, Mixtral 8x7B, Gemma 2 (9B-27B), Phi-3 Mini, DeepSeek-R1 distills.
+
+**Source:** `public/perplexity_baseline.json` · `src/utils/perplexity.ts` · `cloud/src/main.rs :: lookup_kld()`
 
 ### Context Runway
 

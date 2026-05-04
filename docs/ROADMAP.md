@@ -70,6 +70,17 @@ Four DuckDB-backed intelligence endpoints on the agent + Cloud MCP tools. Infere
 ### Bandwidth Ceiling Reached Pattern (Pro)
 19th observation pattern (info severity). Detects when a node sustains ≥65% of its theoretical memory-bandwidth ceiling for the loaded model+quant with GPU < 95% — explains "Low" tok/W as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/L40S/RTX, DGX Spark/GB10).
 
+### Perplexity Tax — Empirical Quant Quality Cost
+Replaces the hand-tuned `QUALITY_DELTA` heuristics in `quantSweet.ts` and the coarse `quant_quality_factor()` multiplier in `cloud/main.rs` with empirical KL divergence + perplexity-delta data sourced from Unsloth Dynamic GGUF benchmarks and llama.cpp perplexity discussions. Single source of truth in `public/perplexity_baseline.json`; cloud embeds it via `include_str!` so frontend Quant Sweet Spot tiles and cloud-side fleet-discovery scoring agree.
+
+Curated coverage for ~15 model families (Llama 3.1/3.2 8B-70B, Qwen 2.5 7B-72B, Mistral 7B, Mixtral 8x7B, Gemma 2 9B-27B, Phi-3 Mini, DeepSeek-R1 distills) with a "default" generic baseline as fallback. Lookup falls back: exact family → default → legacy heuristic. `quant_quality_factor()` becomes a continuous KLD-derived multiplier (0.0 at KLD=0.15, 1.0 at KLD=0). New "Perplexity Tax" block on ModelFitAnalysis detail view shows band label (Imperceptible / Mild / Noticeable / Severe / Unusable), KLD, and PPL delta. Quant Sweet Spot summary strip tile gains a Quality: line.
+
+### Model Fit Summary Strip (Overview)
+Three condensed first-fold tiles under the KPI hero row — Model Fit, Quant Sweet Spot, Context Runway — promoting the existing analysis to first-glance visibility without disrupting Diagnostics/Inference layout. Each tile click-throughs to the full ModelFitAnalysis section. Localhost: per-node strip. Fleet: highest-throughput active node with a chip-row picker when multiple nodes have models loaded. ModelFitAnalysis detail view also gains a plain-English verdict sentence; fleet-aggregate sentence summarises *"X of Y models need attention across N nodes"*.
+
+### Context Runway for vLLM / llama.cpp
+`computeContextRunway` previously required Ollama `/api/show` enrichment fields (num_layers, kv_heads, embedding_dim) or `ollama_parameter_count` — both Ollama-only. New `parseParamCountFromModelName()` extracts size from the model name itself (handles `qwen2.5-32b`, `Mixtral-8x7B`, `deepseek-coder-6.7b`) so vLLM and llama.cpp nodes get a ±30% architecture estimate instead of "Awaiting architecture."
+
 ---
 
 ## Planned

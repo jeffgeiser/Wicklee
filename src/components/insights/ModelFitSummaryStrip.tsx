@@ -21,6 +21,7 @@ import type { SentinelMetrics } from '../../types';
 import { computeModelFitScore } from '../../utils/modelFit';
 import { computeQuantRecommendation } from '../../utils/quantSweet';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../utils/kvCache';
+import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE } from '../../utils/perplexity';
 
 // ── Score → colour helpers ──────────────────────────────────────────────────
 
@@ -266,6 +267,27 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
             {rec.estimatedTps == null && rec.vramDeltaGb == null && (
               <p className="text-[10px] text-gray-600 mt-1.5 font-mono">{rec.currentQuality}</p>
             )}
+
+            {/* Perplexity Tax footer — empirical quality cost of the
+                CURRENT quant on this model family. Shown alongside the
+                speed/headroom delta so users see all three dimensions
+                (speed, memory, quality) at a glance. */}
+            {(() => {
+              const cost = lookupPerplexity(modelName, node.ollama_quantization);
+              if (!cost) return null;
+              const ppl = cost.pplDeltaPct === 0
+                ? 'lossless'
+                : cost.pplDeltaPct < 0.1
+                ? '<0.1% PPL'
+                : `+${cost.pplDeltaPct.toFixed(cost.pplDeltaPct < 1 ? 2 : 1)}% PPL`;
+              return (
+                <p className="text-[10px] mt-1 font-mono">
+                  <span className="text-gray-600">Quality: </span>
+                  <span className={QUALITY_BAND_TONE[cost.band]}>{QUALITY_BAND_LABEL[cost.band]}</span>
+                  <span className="text-gray-600"> · {ppl}</span>
+                </p>
+              );
+            })()}
           </>
         ) : (
           <>

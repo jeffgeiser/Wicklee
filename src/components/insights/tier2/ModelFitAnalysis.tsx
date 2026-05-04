@@ -43,6 +43,7 @@ import { computeWES, formatWES, wesColorClass } from '../../../utils/wes';
 import { getNodePowerW } from '../../../utils/power';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../../utils/kvCache';
 import { computeQuantRecommendation } from '../../../utils/quantSweet';
+import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE, type QualityCost } from '../../../utils/perplexity';
 
 // ── Styled hover tooltip ──────────────────────────────────────────────────────
 // Lightweight version of MetricTooltip — no metricId/link needed for labels.
@@ -893,7 +894,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 <div className="pt-2 border-t border-gray-700/50">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-[9px] text-gray-600 uppercase tracking-widest">
-                      <Tip text="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio. Quality deltas from llama.cpp perplexity benchmarks." side="top">
+                      <Tip text="Bandwidth-aware quantization recommendation. Speed estimates scale observed tok/s by inverse size ratio. Quality deltas now sourced from empirical Perplexity Tax data when available." side="top">
                         Quant Sweet Spot
                       </Tip>
                     </p>
@@ -911,6 +912,60 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                   </p>
                   <p className="text-[10px] text-gray-500 leading-relaxed mt-0.5">
                     {rec.detail}
+                  </p>
+                </div>
+              );
+            })()}
+
+            {/* Perplexity Tax — empirical quality cost vs FP16 baseline.
+                Renders only when the loaded quant has an entry in the
+                bundled perplexity_baseline.json. Falls back silently
+                otherwise so we never display fabricated numbers. */}
+            {i === 0 && e.quant != null && (() => {
+              const cost: QualityCost | null = lookupPerplexity(
+                node.ollama_active_model
+                  ?? node.vllm_model_name
+                  ?? node.llamacpp_model_name
+                  ?? null,
+                e.quant,
+              );
+              if (!cost) return null;
+
+              const bandLabel = QUALITY_BAND_LABEL[cost.band];
+              const bandTone  = QUALITY_BAND_TONE[cost.band];
+              const pplStr = cost.pplDeltaPct === 0
+                ? 'lossless'
+                : cost.pplDeltaPct < 0.1
+                ? '< 0.1%'
+                : `+${cost.pplDeltaPct.toFixed(cost.pplDeltaPct < 1 ? 2 : 1)}%`;
+
+              return (
+                <div className="pt-2 border-t border-gray-700/50">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-[9px] text-gray-600 uppercase tracking-widest">
+                      <Tip
+                        text={`Empirical KL divergence vs FP16 baseline from Unsloth Dynamic GGUF benchmarks and llama.cpp perplexity discussions. KLD < 0.001 = empirically indistinguishable from FP16 in blind A/B tests. ${cost.isExactFamily ? `Match: ${cost.matchedFamily}.` : 'No exact family match — using generic baseline (conservative; tends to overstate cost for larger models).'}`}
+                        side="top"
+                        width="w-72"
+                      >
+                        Perplexity Tax
+                      </Tip>
+                    </p>
+                    <span className="text-[9px] text-gray-700 font-mono">
+                      {cost.isExactFamily ? cost.matchedFamily : 'generic baseline'}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-3 flex-wrap">
+                    <span className={`text-[14px] font-bold ${bandTone}`}>{bandLabel}</span>
+                    <span className="text-[11px] font-mono text-gray-300">{pplStr} <span className="text-gray-600">PPL vs FP16</span></span>
+                    <span className="text-[10px] font-mono text-gray-600">KLD {cost.kld.toExponential(1)}</span>
+                  </div>
+                  <p className="text-[10px] text-gray-500 leading-relaxed mt-1">
+                    {cost.band === 'imperceptible' && `${e.quant} on this model family is empirically indistinguishable from FP16 in blind A/B tests.`}
+                    {cost.band === 'mild'          && `${e.quant} adds a small but measurable quality cost. Most users won't notice on general-purpose tasks.`}
+                    {cost.band === 'noticeable'    && `${e.quant} is a noticeable quality drop vs FP16. Acceptable for many tasks; inspect output if quality matters.`}
+                    {cost.band === 'severe'        && `${e.quant} carries a substantial quality cost — output may show coherence issues. Consider Q4_K_M or higher if headroom allows.`}
+                    {cost.band === 'unusable'      && `${e.quant} is empirically unreliable for production use — strongly consider a larger quant.`}
                   </p>
                 </div>
               );

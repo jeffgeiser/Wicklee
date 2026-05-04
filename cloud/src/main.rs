@@ -3862,19 +3862,137 @@ fn hardware_profile(name: &str) -> Option<(u64, f32)> {
     }
 }
 
-/// Quality factor for a GGUF quantisation level.
-/// Penalises extremely lossy quants (IQ1/Q2) that are rarely useful for real inference.
-/// Applied as a multiplier on the raw fit score during variant selection so that
-/// a Q4_K_M with 30 % headroom beats an IQ1_M with 90 % headroom.
-fn quant_quality_factor(quant: &str) -> f32 {
+// ── Perplexity Tax — empirical quality lookup ────────────────────────────────
+//
+// Single source of truth for quant quality cost.  The same JSON file ships
+// to the frontend as a static asset and is embedded here at compile time,
+// so cloud-side fleet matching and frontend Quant Sweet Spot tiles agree.
+//
+// Data is curated empirical KL divergence + perplexity delta vs FP16 from
+// Unsloth Dynamic GGUF benchmarks and the llama.cpp perplexity discussions.
+// Lookup falls back: exact family → "default" generic baseline → coarse
+// hand-tuned heuristic when even the JSON failed to parse.
+
+const PERPLEXITY_BASELINE_JSON: &str = include_str!("../../public/perplexity_baseline.json");
+
+#[derive(Debug, serde::Deserialize)]
+struct PerplexityEntry {
+    kld: f64,
+    #[allow(dead_code)]
+    ppl_delta_pct: f64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PerplexityFamilyJson {
+    quants: HashMap<String, PerplexityEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PerplexityBaselineJson {
+    families: HashMap<String, PerplexityFamilyJson>,
+}
+
+static PERPLEXITY_BASELINE: once_cell::sync::Lazy<Option<PerplexityBaselineJson>> =
+    once_cell::sync::Lazy::new(|| {
+        match serde_json::from_str::<PerplexityBaselineJson>(PERPLEXITY_BASELINE_JSON) {
+            Ok(b)  => Some(b),
+            Err(e) => {
+                eprintln!("[perplexity] failed to parse baseline JSON: {e}");
+                None
+            }
+        }
+    });
+
+/// Map a free-form model id (e.g. "bartowski/Llama-3.1-8B-Instruct-GGUF") to a
+/// canonical family key matching `perplexity_baseline.json`.  Mirrors the
+/// frontend `normalizeModelFamily()` — both must agree to keep cloud + UI in
+/// sync.  Returns None when no family token can be extracted.
+fn normalize_model_family(name: &str) -> Option<String> {
+    let stripped = name.split('/').next_back().unwrap_or(name);
+    let lower    = stripped.to_lowercase().replace(".gguf", "");
+
+    // Phi
+    if lower.contains("phi-3-mini")   || lower.contains("phi3-mini")   || lower.starts_with("phi3:mini") { return Some("phi-3-mini".into()); }
+    if lower.contains("phi-3-medium") || lower.contains("phi3-medium") { return Some("phi-3-medium".into()); }
+    if lower.contains("phi-3-small")  || lower.contains("phi3-small")  { return Some("phi-3-small".into()); }
+
+    // DeepSeek-R1 distill carries underlying model size.
+    let dsr1_re = regex::Regex::new(r"deepseek-r1-distill-(llama|qwen)-(\d+(?:\.\d+)?)b").ok()?;
+    if let Some(c) = dsr1_re.captures(&lower) {
+        return Some(format!("deepseek-r1-distill-{}-{}b", &c[1], &c[2]));
+    }
+
+    // Mixtral MoE
+    let mixtral_re = regex::Regex::new(r"mixtral-(\d+x\d+(?:\.\d+)?)b").ok()?;
+    if let Some(c) = mixtral_re.captures(&lower) {
+        return Some(format!("mixtral-{}b", &c[1]));
+    }
+
+    // <family>-<version>-<size>b
+    let generic_re = regex::Regex::new(r"(llama|qwen|mistral|gemma|deepseek|yi|cohere|phi)[-_]?(\d+(?:\.\d+)?)[-_]?(\d+(?:\.\d+)?)b").ok()?;
+    if let Some(c) = generic_re.captures(&lower) {
+        return Some(format!("{}-{}-{}b", &c[1], &c[2], &c[3]));
+    }
+
+    // <family>-<size>b
+    let family_size_re = regex::Regex::new(r"(llama|qwen|mistral|gemma|deepseek|yi|cohere|phi)[-_]?(\d+(?:\.\d+)?)b").ok()?;
+    if let Some(c) = family_size_re.captures(&lower) {
+        return Some(format!("{}-{}b", &c[1], &c[2]));
+    }
+    None
+}
+
+/// Canonical quant key matching `perplexity_baseline.json`.
+fn normalize_quant_key(quant: &str) -> String {
+    let mut q = quant.to_uppercase().replace(".GGUF", "");
+    if q.starts_with("UD-") { q = q[3..].to_string(); }
+    if q == "FP16" { q = "F16".into(); }
+    if q == "FP32" { q = "F32".into(); }
+    q
+}
+
+/// Look up empirical KLD for (model_id, quant). Falls back to the "default"
+/// family. Returns None when no entry exists in either path.
+fn lookup_kld(model_id: &str, quant: &str) -> Option<f64> {
+    let baseline = PERPLEXITY_BASELINE.as_ref()?;
+    let q = normalize_quant_key(quant);
+    if let Some(family) = normalize_model_family(model_id) {
+        if let Some(fam) = baseline.families.get(&family) {
+            if let Some(e) = fam.quants.get(&q) { return Some(e.kld); }
+        }
+    }
+    // Default family fallback.
+    if let Some(def) = baseline.families.get("default") {
+        if let Some(e) = def.quants.get(&q) { return Some(e.kld); }
+    }
+    None
+}
+
+/// Quality factor for a GGUF quantisation level — empirical when possible.
+///
+/// Maps KL divergence to a [0.0, 1.0] multiplier:
+///   KLD = 0     → 1.0   (no penalty)
+///   KLD = 0.15  → 0.0   (unusable)
+///   linear in between, clamped.
+///
+/// When perplexity data is unavailable for this (model, quant) pair, falls
+/// back to the prior coarse hand-tuned heuristic so we never regress on
+/// model families the baseline doesn't cover yet.
+///
+/// Applied as a multiplier on the raw fit score during variant selection so
+/// that a Q4_K_M with 30% headroom beats an IQ1_M with 90% headroom.
+fn quant_quality_factor(model_id: &str, quant: &str) -> f32 {
+    if let Some(kld) = lookup_kld(model_id, quant) {
+        let mult = (1.0 - (kld / 0.15)).clamp(0.0, 1.0) as f32;
+        return mult;
+    }
+    // Heuristic fallback (legacy behaviour).
     let q = quant.to_lowercase();
-    // Strip Unsloth's "UD-" (Ultra-Dense) prefix before pattern matching so
-    // "UD-IQ2_M" is penalised the same as "IQ2_M".
     let q = q.strip_prefix("ud-").unwrap_or(&q);
-    if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.0; }  // unusable
-    if q.starts_with("iq2") || q.starts_with("q2")      { return 0.4; }  // very lossy
-    if q.starts_with("iq3") || q.starts_with("q3")      { return 0.7; }  // lossy
-    1.0 // Q4 and above: full score
+    if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.0; }
+    if q.starts_with("iq2") || q.starts_with("q2")      { return 0.4; }
+    if q.starts_with("iq3") || q.starts_with("q3")      { return 0.7; }
+    1.0
 }
 
 /// Compute fit score (mirrors agent logic).
@@ -4085,11 +4203,11 @@ async fn handle_fleet_model_candidates(
                 let (raw_score, label) = cloud_fit_score(*file_size as i64, hw.mem_mb, hw.power_w, &hw.thermal);
                 // Apply quant quality factor so IQ1/Q2 variants don't win over Q4+
                 // just because they leave more VRAM headroom.
-                let qf = quant_quality_factor(quant);
+                let qf = quant_quality_factor(model_id, quant);
                 let score = (raw_score as f32 * qf).round() as u8;
                 let label = if qf == 0.0 { "Won't Fit".to_string() } else { label };
                 let effective     = score as u32;
-                let best_effective = (best_score as f32 * quant_quality_factor(&best_quant)).round() as u32;
+                let best_effective = (best_score as f32 * quant_quality_factor(model_id, &best_quant)).round() as u32;
                 if effective > best_effective {
                     best_score = score;
                     best_label = label;
@@ -4232,11 +4350,11 @@ async fn handle_v1_models_discover(
             let mut best_label = String::new();
             for (quant, file_size) in &variants {
                 let (raw_score, label) = cloud_fit_score(*file_size, vram, power, thermal);
-                let qf = quant_quality_factor(quant);
+                let qf = quant_quality_factor(&model_id, quant);
                 let score = (raw_score as f32 * qf).round() as u8;
                 let label = if qf == 0.0 { "Won't Fit".to_string() } else { label };
                 let effective     = score as u32;
-                let best_effective = (best_score as f32 * quant_quality_factor(&best_quant)).round() as u32;
+                let best_effective = (best_score as f32 * quant_quality_factor(&model_id, &best_quant)).round() as u32;
                 if effective > best_effective {
                     best_score = score;
                     best_quant = quant.clone();
