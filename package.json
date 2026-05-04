@@ -4,11 +4,13 @@
   "version": "0.6.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/sync-perplexity.mjs && vite",
+    "prebuild": "node scripts/sync-perplexity.mjs",
     "build": "tsc && vite build",
     "build:agent": "tsc && vite build --mode agent",
     "lint": "eslint .",
-    "preview": "vite preview --host 0.0.0.0 --port ${PORT:-3000}"
+    "preview": "vite preview --host 0.0.0.0 --port ${PORT:-3000}",
+    "check:perplexity-sync": "node scripts/sync-perplexity.mjs --check"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.3",

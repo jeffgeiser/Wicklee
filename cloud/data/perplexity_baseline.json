@@ -1,0 +1,206 @@
+{
+  "version": "2026-05-04",
+  "source": "Unsloth Dynamic GGUF benchmarks (https://unsloth.ai) + llama.cpp perplexity discussions (github.com/ggerganov/llama.cpp/discussions/406)",
+  "notes": "KLD = KL divergence vs FP16 baseline (Wikitext-2). ppl_delta_pct = perplexity increase vs FP16. Larger models (>30B) tolerate quantization better; smaller models (<3B) suffer more. Lookup falls back: exact family → size_class → default.",
+  "size_class_thresholds_b": {
+    "tiny":   2,
+    "small":  9,
+    "medium": 30
+  },
+  "families": {
+    "default": {
+      "size_class": "small",
+      "quants": {
+        "IQ1_S":  { "kld": 0.250,   "ppl_delta_pct": 30.0 },
+        "IQ1_M":  { "kld": 0.180,   "ppl_delta_pct": 22.0 },
+        "IQ2_XXS":{ "kld": 0.120,   "ppl_delta_pct": 15.0 },
+        "IQ2_XS": { "kld": 0.080,   "ppl_delta_pct": 10.0 },
+        "IQ2_M":  { "kld": 0.055,   "ppl_delta_pct": 7.0  },
+        "Q2_K":   { "kld": 0.045,   "ppl_delta_pct": 5.8  },
+        "Q2_K_L": { "kld": 0.041,   "ppl_delta_pct": 5.4  },
+        "IQ3_XXS":{ "kld": 0.025,   "ppl_delta_pct": 3.5  },
+        "IQ3_XS": { "kld": 0.018,   "ppl_delta_pct": 2.5  },
+        "IQ3_M":  { "kld": 0.014,   "ppl_delta_pct": 1.8  },
+        "Q3_K_S": { "kld": 0.020,   "ppl_delta_pct": 2.6  },
+        "Q3_K_M": { "kld": 0.014,   "ppl_delta_pct": 1.5  },
+        "Q3_K_L": { "kld": 0.011,   "ppl_delta_pct": 1.2  },
+        "IQ4_XS": { "kld": 0.008,   "ppl_delta_pct": 1.0  },
+        "IQ4_NL": { "kld": 0.006,   "ppl_delta_pct": 0.7  },
+        "Q4_0":   { "kld": 0.005,   "ppl_delta_pct": 0.6  },
+        "Q4_K_S": { "kld": 0.0042,  "ppl_delta_pct": 0.5  },
+        "Q4_K_M": { "kld": 0.0034,  "ppl_delta_pct": 0.4  },
+        "Q5_K_S": { "kld": 0.0012,  "ppl_delta_pct": 0.3  },
+        "Q5_K_M": { "kld": 0.0008,  "ppl_delta_pct": 0.2  },
+        "Q6_K":   { "kld": 0.00020, "ppl_delta_pct": 0.1  },
+        "Q8_0":   { "kld": 0.00006, "ppl_delta_pct": 0.05 },
+        "F16":    { "kld": 0.0,     "ppl_delta_pct": 0.0  },
+        "BF16":   { "kld": 0.0,     "ppl_delta_pct": 0.0  },
+        "FP8":    { "kld": 0.0001,  "ppl_delta_pct": 0.08 },
+        "F32":    { "kld": 0.0,     "ppl_delta_pct": 0.0  }
+      }
+    },
+    "llama-3.1-8b": {
+      "size_class": "small",
+      "quants": {
+        "Q2_K":   { "kld": 0.041,   "ppl_delta_pct": 5.4 },
+        "Q3_K_M": { "kld": 0.014,   "ppl_delta_pct": 1.5 },
+        "IQ4_XS": { "kld": 0.0064,  "ppl_delta_pct": 0.85 },
+        "Q4_K_M": { "kld": 0.0034,  "ppl_delta_pct": 0.42 },
+        "Q5_K_M": { "kld": 0.0008,  "ppl_delta_pct": 0.19 },
+        "Q6_K":   { "kld": 0.00020, "ppl_delta_pct": 0.08 },
+        "Q8_0":   { "kld": 0.00006, "ppl_delta_pct": 0.04 }
+      }
+    },
+    "llama-3.1-70b": {
+      "size_class": "medium",
+      "quants": {
+        "IQ2_XXS":{ "kld": 0.058,   "ppl_delta_pct": 7.5 },
+        "IQ2_M":  { "kld": 0.026,   "ppl_delta_pct": 3.4 },
+        "Q2_K":   { "kld": 0.020,   "ppl_delta_pct": 2.6 },
+        "IQ3_M":  { "kld": 0.0072,  "ppl_delta_pct": 0.95 },
+        "Q3_K_M": { "kld": 0.0066,  "ppl_delta_pct": 0.72 },
+        "IQ4_XS": { "kld": 0.0028,  "ppl_delta_pct": 0.38 },
+        "Q4_K_M": { "kld": 0.0014,  "ppl_delta_pct": 0.18 },
+        "Q5_K_M": { "kld": 0.00032, "ppl_delta_pct": 0.08 },
+        "Q6_K":   { "kld": 0.000080,"ppl_delta_pct": 0.03 },
+        "Q8_0":   { "kld": 0.000022,"ppl_delta_pct": 0.015 }
+      }
+    },
+    "llama-3.2-3b": {
+      "size_class": "tiny",
+      "quants": {
+        "Q2_K":   { "kld": 0.080,   "ppl_delta_pct": 10.0 },
+        "Q3_K_M": { "kld": 0.028,   "ppl_delta_pct": 3.1 },
+        "Q4_K_M": { "kld": 0.0070,  "ppl_delta_pct": 0.85 },
+        "Q5_K_M": { "kld": 0.0017,  "ppl_delta_pct": 0.40 },
+        "Q6_K":   { "kld": 0.00040, "ppl_delta_pct": 0.16 },
+        "Q8_0":   { "kld": 0.00012, "ppl_delta_pct": 0.08 }
+      }
+    },
+    "llama-3.2-1b": {
+      "size_class": "tiny",
+      "quants": {
+        "Q2_K":   { "kld": 0.140,   "ppl_delta_pct": 17.0 },
+        "Q3_K_M": { "kld": 0.045,   "ppl_delta_pct": 5.4 },
+        "Q4_K_M": { "kld": 0.012,   "ppl_delta_pct": 1.5 },
+        "Q5_K_M": { "kld": 0.0030,  "ppl_delta_pct": 0.70 },
+        "Q6_K":   { "kld": 0.00072, "ppl_delta_pct": 0.30 },
+        "Q8_0":   { "kld": 0.00021, "ppl_delta_pct": 0.14 }
+      }
+    },
+    "qwen2.5-7b": {
+      "size_class": "small",
+      "quants": {
+        "Q2_K":   { "kld": 0.044,   "ppl_delta_pct": 5.8 },
+        "Q3_K_M": { "kld": 0.015,   "ppl_delta_pct": 1.6 },
+        "Q4_K_M": { "kld": 0.0036,  "ppl_delta_pct": 0.45 },
+        "Q5_K_M": { "kld": 0.0009,  "ppl_delta_pct": 0.21 },
+        "Q6_K":   { "kld": 0.00022, "ppl_delta_pct": 0.09 },
+        "Q8_0":   { "kld": 0.00007, "ppl_delta_pct": 0.05 }
+      }
+    },
+    "qwen2.5-14b": {
+      "size_class": "small",
+      "quants": {
+        "Q2_K":   { "kld": 0.030,   "ppl_delta_pct": 4.0 },
+        "Q3_K_M": { "kld": 0.010,   "ppl_delta_pct": 1.1 },
+        "Q4_K_M": { "kld": 0.0024,  "ppl_delta_pct": 0.30 },
+        "Q5_K_M": { "kld": 0.0006,  "ppl_delta_pct": 0.14 },
+        "Q6_K":   { "kld": 0.00015, "ppl_delta_pct": 0.06 },
+        "Q8_0":   { "kld": 0.00005, "ppl_delta_pct": 0.03 }
+      }
+    },
+    "qwen2.5-32b": {
+      "size_class": "medium",
+      "quants": {
+        "IQ2_M":  { "kld": 0.034,   "ppl_delta_pct": 4.4 },
+        "Q2_K":   { "kld": 0.026,   "ppl_delta_pct": 3.4 },
+        "Q3_K_M": { "kld": 0.0086,  "ppl_delta_pct": 0.94 },
+        "IQ4_XS": { "kld": 0.0036,  "ppl_delta_pct": 0.49 },
+        "Q4_K_M": { "kld": 0.0018,  "ppl_delta_pct": 0.23 },
+        "Q5_K_M": { "kld": 0.00042, "ppl_delta_pct": 0.10 },
+        "Q6_K":   { "kld": 0.00010, "ppl_delta_pct": 0.04 },
+        "Q8_0":   { "kld": 0.00003, "ppl_delta_pct": 0.02 },
+        "FP8":    { "kld": 0.00006, "ppl_delta_pct": 0.04 }
+      }
+    },
+    "qwen2.5-72b": {
+      "size_class": "large",
+      "quants": {
+        "IQ2_M":  { "kld": 0.022,   "ppl_delta_pct": 2.9 },
+        "Q2_K":   { "kld": 0.017,   "ppl_delta_pct": 2.2 },
+        "Q3_K_M": { "kld": 0.0058,  "ppl_delta_pct": 0.62 },
+        "Q4_K_M": { "kld": 0.0012,  "ppl_delta_pct": 0.15 },
+        "Q5_K_M": { "kld": 0.00028, "ppl_delta_pct": 0.07 },
+        "Q6_K":   { "kld": 0.00007, "ppl_delta_pct": 0.025},
+        "Q8_0":   { "kld": 0.000018,"ppl_delta_pct": 0.013}
+      }
+    },
+    "mistral-7b": {
+      "size_class": "small",
+      "quants": {
+        "Q2_K":   { "kld": 0.046,   "ppl_delta_pct": 6.1 },
+        "Q3_K_M": { "kld": 0.016,   "ppl_delta_pct": 1.7 },
+        "Q4_K_M": { "kld": 0.0040,  "ppl_delta_pct": 0.50 },
+        "Q5_K_M": { "kld": 0.0010,  "ppl_delta_pct": 0.23 },
+        "Q6_K":   { "kld": 0.00024, "ppl_delta_pct": 0.10 },
+        "Q8_0":   { "kld": 0.00008, "ppl_delta_pct": 0.05 }
+      }
+    },
+    "mixtral-8x7b": {
+      "size_class": "medium",
+      "quants": {
+        "Q2_K":   { "kld": 0.024,   "ppl_delta_pct": 3.1 },
+        "Q3_K_M": { "kld": 0.0078,  "ppl_delta_pct": 0.85 },
+        "Q4_K_M": { "kld": 0.0017,  "ppl_delta_pct": 0.21 },
+        "Q5_K_M": { "kld": 0.00040, "ppl_delta_pct": 0.10 },
+        "Q6_K":   { "kld": 0.00010, "ppl_delta_pct": 0.04 },
+        "Q8_0":   { "kld": 0.00003, "ppl_delta_pct": 0.02 }
+      }
+    },
+    "phi-3-mini": {
+      "size_class": "tiny",
+      "quants": {
+        "Q2_K":   { "kld": 0.110,   "ppl_delta_pct": 13.5 },
+        "Q3_K_M": { "kld": 0.034,   "ppl_delta_pct": 4.1 },
+        "Q4_K_M": { "kld": 0.0090,  "ppl_delta_pct": 1.1 },
+        "Q5_K_M": { "kld": 0.0022,  "ppl_delta_pct": 0.50 },
+        "Q6_K":   { "kld": 0.00056, "ppl_delta_pct": 0.22 },
+        "Q8_0":   { "kld": 0.00017, "ppl_delta_pct": 0.10 }
+      }
+    },
+    "gemma-2-9b": {
+      "size_class": "small",
+      "quants": {
+        "Q2_K":   { "kld": 0.043,   "ppl_delta_pct": 5.6 },
+        "Q3_K_M": { "kld": 0.014,   "ppl_delta_pct": 1.5 },
+        "Q4_K_M": { "kld": 0.0034,  "ppl_delta_pct": 0.42 },
+        "Q5_K_M": { "kld": 0.0009,  "ppl_delta_pct": 0.20 },
+        "Q6_K":   { "kld": 0.00021, "ppl_delta_pct": 0.09 },
+        "Q8_0":   { "kld": 0.00007, "ppl_delta_pct": 0.05 }
+      }
+    },
+    "gemma-2-27b": {
+      "size_class": "medium",
+      "quants": {
+        "Q2_K":   { "kld": 0.028,   "ppl_delta_pct": 3.7 },
+        "Q3_K_M": { "kld": 0.0094,  "ppl_delta_pct": 1.0 },
+        "Q4_K_M": { "kld": 0.0021,  "ppl_delta_pct": 0.27 },
+        "Q5_K_M": { "kld": 0.00050, "ppl_delta_pct": 0.12 },
+        "Q6_K":   { "kld": 0.00012, "ppl_delta_pct": 0.05 },
+        "Q8_0":   { "kld": 0.00004, "ppl_delta_pct": 0.025}
+      }
+    },
+    "deepseek-r1-distill-llama-8b": {
+      "size_class": "small",
+      "quants": {
+        "Q2_K":   { "kld": 0.042,   "ppl_delta_pct": 5.5 },
+        "Q3_K_M": { "kld": 0.014,   "ppl_delta_pct": 1.5 },
+        "Q4_K_M": { "kld": 0.0035,  "ppl_delta_pct": 0.43 },
+        "Q5_K_M": { "kld": 0.0008,  "ppl_delta_pct": 0.19 },
+        "Q6_K":   { "kld": 0.00020, "ppl_delta_pct": 0.09 },
+        "Q8_0":   { "kld": 0.00006, "ppl_delta_pct": 0.04 }
+      }
+    }
+  }
+}

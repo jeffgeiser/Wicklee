@@ -3875,7 +3875,12 @@ fn hardware_profile(name: &str) -> Option<(u64, f32)> {
 // Lookup falls back: exact family → "default" generic baseline → coarse
 // hand-tuned heuristic when even the JSON failed to parse.
 
-const PERPLEXITY_BASELINE_JSON: &str = include_str!("../../public/perplexity_baseline.json");
+// Canonical perplexity baseline lives inside the cloud build context so
+// the Railway Docker build can reach it (build context = cloud/, so
+// ../../public/... is outside).  A pre-`npm run build` script in the
+// frontend mirrors this file to public/perplexity_baseline.json so the
+// browser receives the same data via static asset.  See `scripts/sync-perplexity.mjs`.
+const PERPLEXITY_BASELINE_JSON: &str = include_str!("../data/perplexity_baseline.json");
 
 #[derive(Debug, serde::Deserialize)]
 struct PerplexityEntry {

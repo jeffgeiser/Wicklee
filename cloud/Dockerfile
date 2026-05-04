@@ -16,6 +16,11 @@ RUN rm -f target/release/deps/wicklee_cloud*
 
 # Now bring in real source and rebuild only that.
 COPY src ./src
+# Static data files embedded into the binary via include_str! at compile time.
+# Currently: perplexity_baseline.json — empirical KLD/PPL data for the
+# Perplexity Tax fit-score multiplier.  Mirror at public/ for browser delivery
+# is kept in sync by scripts/sync-perplexity.mjs at frontend build time.
+COPY data ./data
 RUN cargo build --release
 
 # ── Stage 2: minimal runtime image ────────────────────────────────────────────
