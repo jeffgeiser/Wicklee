@@ -31,9 +31,23 @@ Dashboard opens at **http://localhost:7700**. Auto-starts on boot as a system se
 
 ## WES Score
 
-**WES = tok/s / (Watts x ThermalPenalty)**
+**Canonical formula:**
 
-Wicklee Efficiency Score — the MPG for local AI. A direct measure of how efficiently your hardware converts power into inference throughput.
+```
+WES = tok/s ÷ (Watts × PUE × ThermalPenalty)
+```
+
+The "MPG for local AI" — a unitless score that collapses thermal throttling, power draw, and throughput into a single comparable number. Higher is better.
+
+### Inputs (frozen — every WES surface uses these inputs)
+
+| Input | Source | Notes |
+|---|---|---|
+| **Watts** | `getNodePowerW(node)` | **Raw board power** (NVIDIA → Apple SoC → CPU fallback). Never idle-subtracted: the `systemIdleW` per-node setting is for active-inference cost displays only, not WES. The frozen color scale was calibrated against raw watts. |
+| **PUE** | `getNodeSettings(id).pue` (default 1.0) | Datacenter operators set PUE > 1.0 to factor in cooling overhead. Home labs leave it at 1.0. |
+| **ThermalPenalty** | `thermal_state` from agent | See table below. |
+
+All four WES surfaces — KPI hero (Intelligence), Fleet Status row, Model Fit Analysis (Insights → Performance), Summary Strip — read from a shared module-level smoothing buffer (`src/utils/sharedSmoothing.ts`, 4-sample moving average). Same node, same metric, identical value across every tab.
 
 ### Thermal Penalties
 
@@ -52,6 +66,12 @@ Wicklee Efficiency Score — the MPG for local AI. A direct measure of how effic
 | 3–10 | Green | Good |
 | 1–3 | Yellow | Acceptable |
 | < 1 | Red | Low |
+
+### Why low WES isn't always a problem
+
+Big-iron GPUs (H100, A100, DGX Spark / GB10) running batch=1 small workloads will show **persistently low WES** because their idle baseline power dominates per-token energy cost. A Spark drawing ~64W idle on a 32B FP8 model decoded at the memory-bandwidth ceiling produces tok/W ≈ 0.10 — that's physics, not a misconfiguration.
+
+The `bandwidth_ceiling_reached` Pro pattern (#19) detects this case explicitly and fires an *info*-severity observation explaining *"you're at the physics ceiling for this hardware/quant pair."* The Model Fit Analysis fleet headline reflects the same nuance: low efficiency rows are tagged "informational" rather than "needs attention" — the latter is reserved for genuine memory risk (OOM / swap pressure).
 
 ---
 
@@ -132,22 +152,41 @@ When the model architecture is loaded from Ollama `/api/show`, values are exact.
 
 ### Quantization Compression Ratios
 
-Used to estimate FP16-equivalent model size and VRAM savings.
+Used to estimate FP16-equivalent model size, VRAM savings, and weight-size projections for runtimes that don't expose explicit quant metadata.
 
-| Quant | Bits/weight avg | Size vs FP16 |
-|-------|----------------|--------------|
-| Q2 | ~2 | 25% |
-| Q3 | ~3 | 35% |
-| Q4 | ~4.5 (K-quant mixed) | 45% |
-| Q5 | ~5 | 55% |
-| Q6 | ~6 | 65% |
-| Q8 | ~8 | 80% |
-| F16 | 16 | 100% (baseline) |
-| F32 | 32 | 200% |
+| Quant family | Bits/weight avg | Size vs FP16 | Recognised tags |
+|---|---|---|---|
+| Q1 / IQ1 | ~1 | 12% | `Q1_K`, `IQ1_S`, `IQ1_M` |
+| Q2 / IQ2 | ~2 | 17% | `Q2_K`, `Q2_K_L`, `IQ2_XXS`, `IQ2_XS`, `IQ2_M` |
+| Q3 / IQ3 | ~3 | 22% | `Q3_K_S`, `Q3_K_M`, `Q3_K_L`, `IQ3_XXS`, `IQ3_XS`, `IQ3_M` |
+| Q4 / IQ4 | ~4.5 (K-quant mixed) | 28% | `Q4_0`, `Q4_K_S`, `Q4_K_M`, `IQ4_XS`, `IQ4_NL` |
+| Q5 | ~5 | 35% | `Q5_K_S`, `Q5_K_M` |
+| Q6 | ~6 | 41% | `Q6_K` |
+| Q8 / FP8 / INT8 | 8 | 50% | `Q8_0`, `FP8`, `INT8` |
+| F16 / BF16 | 16 | 100% (baseline) | `F16`, `BF16`, `FP16` |
+| F32 | 32 | 200% | `F32`, `FP32` |
+| **AWQ** | 4-bit weights | 28% | `AWQ`, `AWQ-INT4`, `AWQ-4BIT` |
+| **GPTQ** (4-bit) | 4-bit weights | 28% | `GPTQ`, `GPTQ-INT4`, `GPTQ-4BIT` |
+| **GPTQ** (8-bit) | 8-bit weights | 50% | `GPTQ-INT8`, `GPTQ-8BIT` |
+| **AQLM / HQQ-2bit** | 2-bit | 17% | `AQLM`, `AQLM-2BIT`, `HQQ-2BIT` |
+| **HQQ** (4-bit) | 4-bit | 28% | `HQQ`, `HQQ-4BIT` |
+| **BNB-4bit / NF4 / FP4** | 4-bit | 28% | `BNB-4BIT`, `NF4`, `FP4` |
+| **BNB-8bit** | 8-bit | 50% | `BNB-8BIT` |
 
-Ratios are approximate (±10%); actual values vary by model architecture (attention head count, MoE sparsity, K-quant mixed precision).
+Ratios are approximate (±10%); actual values vary by model architecture (attention head count, MoE sparsity, K-quant mixed precision). The Unsloth `UD-` prefix is stripped before lookup so `UD-IQ2_M` is recognised as IQ2.
 
-**Source:** `src/components/insights/tier2/ModelFitAnalysis.tsx :: quantCompressionRatio`  
+### Model size estimation chain
+
+When a node doesn't report explicit model size, Wicklee estimates it via a priority chain (each step is strictly more accurate than the next):
+
+1. **Ollama `/api/show` exact value** (`ollama_model_size_gb`) — exact, used when present
+2. **Parameter-count × bytes-per-weight from the model name** (±10–20%) — the common path for vLLM and llama.cpp. Recognises `Llama-3.1-8B`, `qwen2.5-32b-FP8`, `Mixtral-8x7B-AWQ`, etc. When the quant tag can't be parsed, defaults to FP16/BF16 (vLLM's default dtype).
+3. **`nvidia_vram_used_mb` proxy** — last resort. Inflated on vLLM (KV cache reservation), but better than nothing for un-tagged models.
+4. **50 % of used system RAM** — CPU-only llama.cpp.
+
+For vLLM/llama.cpp, the Memory Fit headroom uses `model_size + 10 %` as the "used" baseline rather than `nvidia_vram_used_mb` — answering *"does my model fit with room for context?"* not *"how much has the engine pre-allocated?"*
+
+**Source:** `src/utils/quantSize.ts` (browser) · `agent/src/main.rs :: bytes_per_weight()` (Rust agent — kept in sync)
 **GGUF spec reference:** https://github.com/ggerganov/llama.cpp/blob/master/docs/development/gguf.md
 
 ---
@@ -263,54 +302,22 @@ Available simulation profiles: `m4`, `m4_pro_24gb`, `m4_max_36gb`, `m4_max_64gb`
 
 ---
 
-## Model Fit Analysis
+## Where Model Fit Analysis Lives
 
-The **Model Fit Analysis** tile (Intelligence and Performance tabs) analyzes the *currently loaded model* across three dimensions.
+The full **Model Fit Analysis** card is on the **Insights → Performance** tab — that's the canonical home, alongside the Inference Profiler, SLA Monitor, and Model Discovery surfaces it composes with for active investigation.
 
-### Memory Fit
+The **Intelligence** tab shows a 3-tile **Model Fit Summary Strip** (Model Fit · Quant Sweet Spot · Context Runway) directly under the KPI hero row. Each tile is a click-through that cross-tabs to Insights → Performance and scroll-locks to the full analysis. On fleet view the strip picks the highest-throughput active node and exposes a chip-row picker so operators can switch which node it summarises.
 
-Headroom remaining after the active model is loaded:
+Within the full analysis, **fleet rows are clickable**: clicking any row drops into a per-node detail view with a "← Fleet" back link in the header.
 
-| Score | Headroom |
-|-------|---------|
-| Good  | ≥ 20% of pool free |
-| Fair  | 8–20% free — monitor under long context |
-| Poor  | < 8% free — KV cache growth will force swapping |
+### "Needs attention" semantics
 
-### WES Efficiency
+The fleet headline at the top of the Model Fit Analysis card distinguishes two failure modes deliberately:
 
-WES = `tok/s ÷ (watts × thermal_penalty)`:
-
-| Level | WES | Meaning |
-|-------|-----|---------|
-| Excellent | > 10 | Exceptional throughput per watt |
-| Good | 3–10 | Solid efficiency for this hardware class |
-| Acceptable | 1–3 | Adequate — try a different quantization |
-| Low | < 1 | High energy cost per token; check thermal state |
-
-Thermal penalty amplifies WES loss: Fair = 1.25×, Serious = 1.75×, Critical = 2×.
-
-### Context Runway
-
-Projects KV cache growth against available headroom at standard context milestones (4k, 16k, 32k, 64k, 128k).
-
-**KV cache formula (FP16, Ollama default):**
-```
-bytes = 2 × layers × kv_heads × head_dim × ctx_tokens × 2
-```
-
-Uses `kv_heads` (`llama.attention.head_count_kv` from `/api/show`), **not** total attention heads. GQA models (Llama 3, Mistral, Phi) have 4–8× fewer KV heads than total heads — using the wrong value overpredicts KV cache size by the same factor. When architecture fields are unavailable, runway is estimated from parameter count (±30%, shown with `~`).
-
-### Quant Sweet Spot
-
-| Kind | Condition | Recommendation |
-|------|-----------|----------------|
-| `sweet-spot` | Q4–Q6 | Optimal balance of quality, speed, and memory |
-| `lossless` | Q8 with headroom | Minimal quality loss vs FP16; note ~40% slower than Q4 on memory-bandwidth-bound hardware |
-| `upgrade` | Q2–Q3, room available | Move up for quality recovery |
-| `downgrade` | Q8+ tight on headroom | Reduce size to free room for context |
-
-Speed estimates: `new_tps ≈ observed_tps × (current_gb / new_gb)`.
+- **Needs attention** (red) — memory-poor only. Real OOM / swap risk. Action required.
+- **Fair** (amber) — model fits but warrants a check (memory-fair OR efficiency-acceptable).
+- **Optimal** (green) — both dimensions clean.
+- **Low efficiency (informational)** (gray pill) — WES is low *but memory is fine*. Common on big-iron GPUs running batch=1 small workloads where idle baseline power dominates per-token energy cost. Not a fix-now signal — see the [`bandwidth_ceiling_reached`](#19-observation-patterns--6-fleet-alerts) Pro pattern, which fires when a node is at the physics ceiling for its hardware/quant pair.
 
 ### MCP tool: `get_model_fit`
 

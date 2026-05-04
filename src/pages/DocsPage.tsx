@@ -395,13 +395,18 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
             <p>WES is the primary efficiency metric in Wicklee. It measures how many tokens a node generates per watt of board power, adjusted for thermal throttle state.</p>
 
             <div className="bg-gray-900 border border-indigo-500/20 rounded-xl p-5">
-              <p className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-3">Formula (v2)</p>
+              <p className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-3">Canonical formula</p>
               <pre className="font-mono text-sm text-white leading-loose">
-{`WES = tok/s ÷ (Watts × ThermalPenalty)`}
+{`WES = tok/s ÷ (Watts × PUE × ThermalPenalty)`}
               </pre>
               <p className="mt-3 text-xs text-gray-500 leading-relaxed">
-                ThermalPenalty is applied as a divisor — acting as a <strong className="text-gray-300">multiplicative penalty</strong> on your WES score. A penalty of 1.75 (Serious) reduces your effective score to ~57% of its thermal-ideal value.
+                Every WES surface — KPI hero, Fleet Status row, Model Fit Analysis, Summary Strip — uses this exact formula reading from the same shared smoothing buffer (4-sample moving average). Same node, same metric, identical value across every tab.
               </p>
+              <ul className="mt-2 text-xs text-gray-500 space-y-1 list-disc list-inside">
+                <li><strong className="text-gray-300">Watts</strong>: <code className="text-gray-400 font-mono text-[11px]">getNodePowerW(node)</code> — raw board power (NVIDIA → Apple SoC → CPU fallback). <strong className="text-gray-300">Never</strong> idle-subtracted: <code className="text-gray-400 font-mono text-[11px]">systemIdleW</code> is for active-inference cost displays only.</li>
+                <li><strong className="text-gray-300">PUE</strong>: <code className="text-gray-400 font-mono text-[11px]">getNodeSettings(id).pue</code> (default 1.0). Datacenter operators set PUE &gt; 1.0 to factor in cooling.</li>
+                <li><strong className="text-gray-300">ThermalPenalty</strong>: 1.0 (Normal) / 1.25 (Fair) / 1.75 (Serious) / 2.0 (Critical). Serious reduces effective WES to ~57% of thermal-ideal.</li>
+              </ul>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
                 Wicklee detects thermal state differently per platform, always preferring hardware-authoritative sources over inferred estimates. The <code className="text-gray-400">thermal_source</code> field in each payload identifies which path was used.
               </p>
@@ -584,6 +589,17 @@ sudo wicklee --install-service     # re-install as daemon`}</Code>
             </div>
 
             <p className="text-xs text-gray-500">WES v1 used Serious = 2.0. WES v2 (current) uses Serious = 1.75. The <code className="text-gray-400">wes_version</code> field in the API payload version-stamps each reading so benchmarks remain comparable across releases.</p>
+
+            {/* Low WES is not always a problem callout */}
+            <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4">
+              <p className="text-xs font-semibold text-blue-300 mb-2">Why low WES isn't always a problem</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Big-iron GPUs (H100, A100, DGX Spark / GB10) running batch=1 small workloads will show <strong className="text-gray-200">persistently low WES</strong> because their idle baseline power dominates per-token energy cost. A Spark drawing ~64W idle on a 32B FP8 model decoded at the memory-bandwidth ceiling produces tok/W ≈ 0.10 — that's physics, not a misconfiguration.
+              </p>
+              <p className="text-xs text-gray-400 leading-relaxed mt-2">
+                The <code className="text-gray-300 font-mono text-[11px]">bandwidth_ceiling_reached</code> Pro pattern fires an <em>info</em>-severity observation when a node is at the physics ceiling for its hardware/quant pair. The Model Fit Analysis fleet headline reflects the same nuance: low-efficiency rows are tagged "informational" — the red <strong className="text-red-400">"needs attention"</strong> bucket is reserved for genuine memory risk (OOM / swap pressure).
+              </p>
+            </div>
 
             {/* Derived metrics reference */}
             <div>
