@@ -145,6 +145,8 @@ struct MetricsPayload {
     #[serde(default)]
     vllm_model_name:       Option<String>,
     #[serde(default)]
+    vllm_max_model_len:    Option<u64>,
+    #[serde(default)]
     vllm_tokens_per_sec:   Option<f32>,
     #[serde(default)]
     vllm_cache_usage_perc: Option<f32>,

@@ -654,6 +654,33 @@ struct VllmHarvestResult {
     gen_tokens_total:     Option<u64>,
 }
 
+/// Fetch the `max_model_len` field from vLLM's OpenAI-compatible
+/// `/v1/models` endpoint.  Returns None on network error, non-200, or
+/// unexpected JSON shape.
+///
+/// Cached per (model_name, port) by the caller — vLLM's model catalogue
+/// only changes when the engine restarts, so polling on every tick would
+/// be wasteful.  Network timeout 1 second; failures degrade gracefully
+/// to None and the frontend falls back to the conservative 8 192 default.
+async fn fetch_vllm_max_model_len(port: u16) -> Option<u64> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1_000))
+        .build()
+        .ok()?;
+    let resp = client
+        .get(format!("http://127.0.0.1:{port}/v1/models"))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() { return None; }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    body.get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|m| m.get("max_model_len"))
+        .and_then(|v| v.as_u64())
+}
+
 /// Probe vLLM once on `port`. Never panics on malformed input.
 async fn harvest_vllm(port: u16) -> VllmHarvestResult {
     let client = match reqwest::Client::builder()
@@ -790,6 +817,11 @@ pub(crate) fn start_vllm_harvester(
             eprintln!("[vllm] connected on :{port}");
 
             let mut interval = tokio::time::interval(Duration::from_secs(2));
+            // Per-model metadata cache — fetch /v1/models once per model
+            // change, not every tick.  Cleared when the model_name
+            // disappears or differs from the cached one.
+            let mut cached_model_name:  Option<String> = None;
+            let mut cached_max_ctx:     Option<u64>    = None;
 
             loop {
                 interval.tick().await;
@@ -799,6 +831,8 @@ pub(crate) fn start_vllm_harvester(
                         None => {
                             eprintln!("[vllm] process gone — clearing metrics");
                             if let Ok(mut g) = shared_main.lock() { *g = VllmMetrics::default(); }
+                            cached_model_name = None;
+                            cached_max_ctx    = None;
                             break;
                         }
                         Some(new_port) if new_port != port => { break; }
@@ -807,12 +841,25 @@ pub(crate) fn start_vllm_harvester(
                 }
 
                 let h = harvest_vllm(port).await;
+
+                // Fetch /v1/models metadata once when the loaded model changes.
+                // Off the hot path on subsequent ticks for the same model.
+                if let Some(ref name) = h.model_name {
+                    if cached_model_name.as_deref() != Some(name.as_str()) {
+                        cached_max_ctx    = fetch_vllm_max_model_len(port).await;
+                        cached_model_name = Some(name.clone());
+                    }
+                }
+
                 if let Ok(mut g) = shared_main.lock() {
                     if !h.running {
                         *g = VllmMetrics::default();
+                        cached_model_name = None;
+                        cached_max_ctx    = None;
                     } else {
                         g.vllm_running          = true;
                         if let Some(m) = h.model_name  { g.vllm_model_name = Some(m); }
+                        g.vllm_max_model_len    = cached_max_ctx;
                         // Only overwrite tok/s with live Prometheus value when the
                         // scheduler is actively generating (filter_out_zero applied
                         // upstream). When idle (None), preserve the probe baseline.

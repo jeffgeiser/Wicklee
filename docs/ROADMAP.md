@@ -81,6 +81,12 @@ Three condensed first-fold tiles under the KPI hero row — Model Fit, Quant Swe
 ### Context Runway for vLLM / llama.cpp
 `computeContextRunway` previously required Ollama `/api/show` enrichment fields (num_layers, kv_heads, embedding_dim) or `ollama_parameter_count` — both Ollama-only. New `parseParamCountFromModelName()` extracts size from the model name itself (handles `qwen2.5-32b`, `Mixtral-8x7B`, `deepseek-coder-6.7b`) so vLLM and llama.cpp nodes get a ±30% architecture estimate instead of "Awaiting architecture."
 
+### vLLM `/v1/models` Metadata Capture
+Agent harvester now fetches `/v1/models` on each model change and exposes `vllm_max_model_len` on the wire. Replaces the conservative 8 192-token Context Runway floor with the engine's actual context window for vLLM-backed nodes. Cached per (model_name, port) — fetched once per model change rather than every 2-second tick. Three-way wire-format sync (agent → cloud → frontend type).
+
+### Model Fit Score: vLLM KV-Cache Reservation Fix
+`computeModelFitScore()` previously used `nvidia_vram_used_mb` as a proxy for both model size *and* occupied memory. vLLM eagerly reserves ~90% of VRAM for KV cache (its `gpu_memory_utilization` default), so the proxy reflected engine reservation rather than weights — scoring nodes "Poor" for models that actually fit comfortably. New `src/utils/quantSize.ts` adds `bytesPerWeight()` + `parseQuantFromAnyModelName()` (handles GGUF tags AND full-precision tags FP8/BF16/F16) and an `estimateModelSizeGbFromName()` composer. The fit calculator now picks model size from a priority chain: ollama_model_size_gb → params×BPW from name → vram_used → system memory delta. For vLLM/llama.cpp the "used" baseline becomes model_size + 10%, answering "does my model fit with room for context?" instead of "how much has the engine pre-allocated?"
+
 ---
 
 ## Planned
@@ -90,6 +96,9 @@ Three condensed first-fold tiles under the KPI hero row — Model Fit, Quant Swe
 
 ### vLLM Native Histogram Source
 Read percentiles directly from vLLM's Prometheus `/metrics` endpoint (`vllm_request_latency_seconds_bucket`, `vllm_time_to_first_token_seconds_bucket`) instead of relying on the Ollama proxy's per-request traces. Lets users running vLLM directly (no proxy) get accurate p95/p99 SLA data without enabling proxy mode. The SLA endpoint chooses source per-runtime: proxy traces for Ollama, native histograms for vLLM, both for mixed deployments.
+
+### vLLM Exact GQA Architecture (HF config.json)
+Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `num_hidden_layers` / `num_key_value_heads` / `hidden_size` / `num_attention_heads` for the GQA-aware Context Runway require fetching the model's `config.json` from HuggingFace. To avoid adding a network dependency to the agent (sovereign / air-gapped deploys), Stage 2 will mediate this through the cloud: a new `/api/v1/model-arch?model_id=` endpoint proxies HF and caches in Postgres. Frontend prefers cloud-resolved arch when the node is paired; localhost-only nodes continue using the ±30% name-based estimate.
 
 ### Model-Hardware Fit Score
 "Is this model right for this hardware?" Auto-computed from VRAM headroom, tok/s vs model size ratio, thermal behavior under load, swap pressure. Returns score + recommendation (e.g., "62/100 — VRAM tight, consider Q3_K_M or smaller variant").

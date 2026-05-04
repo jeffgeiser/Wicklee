@@ -153,7 +153,10 @@ export function parseParamCountFromModelName(name: string | null | undefined): n
  */
 function archFromParamCount(node: SentinelMetrics): KVArchitecture | null {
   let params = node.ollama_parameter_count ?? null;
-  const maxCtx = node.ollama_context_length ?? 8_192;
+  // Prefer the real value: Ollama /api/show → vLLM /v1/models → 8 192 floor.
+  const maxCtx = node.ollama_context_length
+              ?? node.vllm_max_model_len
+              ?? 8_192;
 
   // Fallback: parse the model name. Works for vLLM ("qwen2.5-32b") and
   // llama.cpp where parameter_count is not populated.

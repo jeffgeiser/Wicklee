@@ -393,6 +393,11 @@ impl OllamaMetrics {
 pub(crate) struct VllmMetrics {
     pub(crate) vllm_running:          bool,
     pub(crate) vllm_model_name:       Option<String>,
+    /// Model's actual context window (`max_model_len` from `/v1/models`).
+    /// Replaces the 8192 conservative default in the frontend Context
+    /// Runway calculation.  None when /v1/models is unreachable or returns
+    /// an unexpected shape (e.g. older vLLM builds).
+    pub(crate) vllm_max_model_len:    Option<u64>,
     pub(crate) vllm_tokens_per_sec:   Option<f32>,
     pub(crate) vllm_cache_usage_perc: Option<f32>,
     pub(crate) vllm_requests_running: Option<u32>,
@@ -630,6 +635,12 @@ struct MetricsPayload {
     vllm_running:          bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     vllm_model_name:       Option<String>,
+    /// Model's `max_model_len` — actual context window the engine will accept.
+    /// Pulled from `/v1/models` once per model change.  Powers Context Runway
+    /// projections on vLLM nodes so they match the model's real ceiling
+    /// instead of the 8 192 conservative default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_max_model_len:    Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vllm_tokens_per_sec:   Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2782,6 +2793,7 @@ fn start_metrics_broadcaster(
                 ollama_load_duration_ms:   ollama.ollama_load_duration_ms,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
+                vllm_max_model_len:    vllm.vllm_max_model_len,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,
@@ -6272,6 +6284,7 @@ async fn handle_metrics(
                 ollama_load_duration_ms:   ollama.ollama_load_duration_ms,
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
+                vllm_max_model_len:    vllm.vllm_max_model_len,
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,

@@ -189,6 +189,13 @@ export interface SentinelMetrics {
   // vLLM runtime (absent/false when not running)
   vllm_running?:          boolean;
   vllm_model_name?:       string | null;
+  /**
+   * Loaded model's actual context window (`max_model_len` from `/v1/models`).
+   * Used by Context Runway projections so vLLM nodes match the model's real
+   * ceiling instead of the 8192 conservative default. Null when the
+   * /v1/models endpoint is unreachable or returns an unexpected shape.
+   */
+  vllm_max_model_len?:    number | null;
   /** Avg generation throughput from vLLM Prometheus /metrics. Null until first probe. */
   vllm_tokens_per_sec?:   number | null;
   /** KV cache utilisation 0–100%. Agent multiplies vLLM's 0–1 value by 100. */
