@@ -89,8 +89,27 @@ interface Props {
    * the strip silently summarises the default `node` only.
    */
   nodes?: SentinelMetrics[];
+  /**
+   * Optional resolver for the user-set per-node label (Pro feature). Same
+   * shape as the `getNodeSettings` prop on Overview / TracesView — when
+   * provided, the strip uses `locationLabel || hostname || node_id` so node
+   * names match the rest of the page (KPI hero, Best Route, Cost tiles).
+   */
+  getNodeSettings?: (nodeId: string) => { locationLabel?: string | null } | undefined;
   /** Anchor id of the full ModelFitAnalysis section to scroll to. */
   anchorId?: string;
+}
+
+/** Resolve a node's display label using the same chain as other Overview tiles. */
+function nodeLabelFor(
+  n: SentinelMetrics,
+  getNodeSettings?: Props['getNodeSettings'],
+): string {
+  return (
+    getNodeSettings?.(n.node_id)?.locationLabel
+    ?? (n.hostname && n.hostname !== n.node_id ? n.hostname : null)
+    ?? n.node_id
+  );
 }
 
 const hasLoadedModel = (n: SentinelMetrics): boolean =>
@@ -99,6 +118,7 @@ const hasLoadedModel = (n: SentinelMetrics): boolean =>
 const ModelFitSummaryStrip: React.FC<Props> = ({
   node: defaultNode,
   nodes,
+  getNodeSettings,
   anchorId = 'model-fit-analysis',
 }) => {
   // Eligible-for-picker nodes: those with a loaded model.
@@ -130,9 +150,7 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
     ?? node.llamacpp_model_name
     ?? 'Unknown model';
 
-  const hostLabel = node.hostname && node.hostname !== node.node_id
-    ? node.hostname
-    : node.node_id;
+  const hostLabel = nodeLabelFor(node, getNodeSettings);
   const chipLabel = node.chip_name ?? node.gpu_name ?? null;
 
   const scrollToFullAnalysis = (e: React.MouseEvent) => {
@@ -163,7 +181,7 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
         <div className="flex flex-wrap gap-1">
           {candidateNodes.map(n => {
             const isSelected = n.node_id === node.node_id;
-            const nLabel = n.hostname && n.hostname !== n.node_id ? n.hostname : n.node_id;
+            const nLabel = nodeLabelFor(n, getNodeSettings);
             return (
               <button
                 key={n.node_id}

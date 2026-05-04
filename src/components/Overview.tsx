@@ -2830,7 +2830,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             <>
               {/* First-fold model-fit verdict — three condensed tiles that
                   scroll-to the full ModelFitAnalysis section below. */}
-              <ModelFitSummaryStrip node={sentinel} anchorId="model-fit-analysis" />
+              <ModelFitSummaryStrip node={sentinel} getNodeSettings={getNodeSettings} anchorId="model-fit-analysis" />
               <div id="model-fit-analysis">
                 <ModelFitAnalysis
                   node={sentinel}
@@ -2963,7 +2963,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                (a.ollama_tokens_per_second ?? a.vllm_tokens_per_sec ?? 0))
             )[0];
           return fitCandidate
-            ? <ModelFitSummaryStrip node={fitCandidate} nodes={effectiveMetrics} anchorId="model-fit-analysis" />
+            ? <ModelFitSummaryStrip node={fitCandidate} nodes={effectiveMetrics} getNodeSettings={getNodeSettings} anchorId="model-fit-analysis" />
             : null;
         })()}
 

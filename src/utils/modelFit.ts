@@ -13,6 +13,7 @@
  */
 
 import type { SentinelMetrics } from '../types';
+import { estimateModelSizeGbFromName, parseQuantFromAnyModelName } from './quantSize';
 
 export type FitScore = 'good' | 'fair' | 'poor';
 
@@ -45,19 +46,47 @@ export interface FitResult {
  *   - Total memory is zero or negative (malformed payload)
  */
 export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
-  // Ollama provides explicit model size; vLLM/llama.cpp don't — estimate from VRAM used.
+  // Estimate the model's WEIGHT size — not the runtime's total VRAM allocation.
+  //
+  // Priority chain (each step strictly more accurate than the last):
+  //   1. Ollama /api/show explicit value                — exact
+  //   2. Parameter count × bytes-per-weight from name   — ±10–20%
+  //   3. nvidia_vram_used_mb proxy                      — wildly overestimates
+  //                                                       on vLLM (KV cache
+  //                                                       reservation contaminates)
+  //   4. 50% of used system RAM                         — last-resort heuristic
+  //
+  // The vRAM-used proxy was the *only* fallback prior to step 2 being added,
+  // which scored Spark "Poor" for a 32GB FP8 model that occupies 25% of its
+  // 128GB unified memory (vLLM had eagerly reserved the rest for KV cache).
   let modelSizeGb = node.ollama_model_size_gb ?? null;
   const hasVllmModel      = !!node.vllm_model_name;
   const hasLlamaCppModel  = !!node.llamacpp_model_name;
 
-  // If Ollama has no model but vLLM or llama.cpp is active, estimate model size from VRAM.
-  // On NVIDIA GPUs, the loaded model dominates VRAM — used VRAM is a reasonable proxy.
+  if (modelSizeGb == null) {
+    // Step 2: param-count × bytes-per-weight via the model name.
+    const modelName =
+      node.ollama_active_model
+      ?? node.vllm_model_name
+      ?? node.llamacpp_model_name
+      ?? null;
+    const quantHint =
+      node.ollama_quantization
+      ?? parseQuantFromAnyModelName(modelName);
+    const fromName = estimateModelSizeGbFromName(modelName, quantHint);
+    if (fromName != null) modelSizeGb = fromName;
+  }
+
   if (modelSizeGb == null && (hasVllmModel || hasLlamaCppModel)) {
+    // Step 3: VRAM-used proxy. Marked as "best available" but documented above
+    // as inflated on vLLM. We keep the path so non-name-parseable models still
+    // get *some* fit signal, but the param×bpw step above will short-circuit
+    // most real cases.
     const vramUsedMb = node.nvidia_vram_used_mb ?? null;
     if (vramUsedMb != null && vramUsedMb > 0) {
       modelSizeGb = vramUsedMb / 1024;
     } else {
-      // Non-NVIDIA runtime (llama.cpp on CPU) — use 50% of used system RAM as estimate
+      // Step 4: 50% of used system RAM (CPU-only llama.cpp).
       const usedSystemMb = node.total_memory_mb - node.available_memory_mb;
       if (usedSystemMb > 0) {
         modelSizeGb = (usedSystemMb * 0.5) / 1024;
@@ -80,10 +109,30 @@ export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
 
   const totalMb = isNvidia ? vramTotalMb! : totalMemMb;
 
-  // usedMb: for NVIDIA, requires vramUsedMb from NVML; for others, derived from available.
-  const usedMb: number | null = isNvidia
-    ? vramUsedMb                        // null when NVML didn't report VRAM in use
-    : totalMemMb - availMemMb;          // always computable on non-NVIDIA nodes
+  // usedMb decision:
+  //   - For Ollama: nvidia_vram_used_mb is a clean proxy (Ollama doesn't
+  //     pre-allocate KV cache the way vLLM does).
+  //   - For vLLM/llama.cpp: nvidia_vram_used_mb is contaminated by the
+  //     engine's eager KV cache reservation (vLLM defaults to reserving
+  //     ~90% of VRAM, regardless of actual model size). Using it here is
+  //     what scored Spark "Poor" for a 32GB FP8 model on 128GB unified
+  //     memory. Substitute the estimated model weight size + a small KV
+  //     overhead instead — that's what the operator actually wants to
+  //     know on the Model Fit card ("does my model fit and have room
+  //     for context?", not "how much has the engine pre-allocated?").
+  //   - For non-NVIDIA: derived from system memory delta.
+  const isVllmOrLlamaCpp = !node.ollama_active_model && (hasVllmModel || hasLlamaCppModel);
+
+  let usedMb: number | null;
+  if (isVllmOrLlamaCpp) {
+    // Treat model weights + 10% context overhead as "used" — same convention
+    // the agent's `estimate_vram_mb()` uses for fit candidate scoring.
+    usedMb = Math.round(modelSizeMb * 1.10);
+  } else if (isNvidia) {
+    usedMb = vramUsedMb;
+  } else {
+    usedMb = totalMemMb - availMemMb;
+  }
 
   // Guard: can't score without a used-memory figure, or with degenerate total.
   if (usedMb == null) return null;
