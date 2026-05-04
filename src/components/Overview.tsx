@@ -2963,7 +2963,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                (a.ollama_tokens_per_second ?? a.vllm_tokens_per_sec ?? 0))
             )[0];
           return fitCandidate
-            ? <ModelFitSummaryStrip node={fitCandidate} anchorId="model-fit-analysis" />
+            ? <ModelFitSummaryStrip node={fitCandidate} nodes={effectiveMetrics} anchorId="model-fit-analysis" />
             : null;
         })()}
 

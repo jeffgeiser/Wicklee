@@ -107,15 +107,64 @@ function archFromPayload(node: SentinelMetrics): KVArchitecture | null {
 }
 
 /**
+ * Parse a parameter-count hint out of a model name string.
+ *
+ * Handles common patterns:
+ *   "qwen2.5-32b"               → 32_000_000_000
+ *   "Llama-3.1-8B-Instruct"     → 8_000_000_000
+ *   "phi-3-mini"                → null  (no numeric tag)
+ *   "Mixtral-8x7B-Instruct"     → 56_000_000_000  (8×7 expert MoE — total params)
+ *   "deepseek-coder-6.7b"       → 6_700_000_000
+ *
+ * Used as a fallback path for vLLM and llama.cpp models where the agent does
+ * not run the Ollama /api/show enrichment that populates parameter_count.
+ * Returns null when no plausible size token is found.
+ */
+export function parseParamCountFromModelName(name: string | null | undefined): number | null {
+  if (!name) return null;
+  const lower = name.toLowerCase();
+
+  // Mixtral-style "8x7b" / "16x17b" — sum of expert params.
+  const moe = lower.match(/(\d+)x(\d+(?:\.\d+)?)b\b/);
+  if (moe) {
+    const experts = parseInt(moe[1], 10);
+    const perExpert = parseFloat(moe[2]);
+    if (experts > 0 && perExpert > 0) return Math.round(experts * perExpert * 1e9);
+  }
+
+  // Standard "<num>b" or "<num>B" tag — e.g. 8b, 70B, 6.7b, 32b.
+  const std = lower.match(/(?:^|[^a-z0-9])(\d+(?:\.\d+)?)\s*b\b/);
+  if (std) {
+    const b = parseFloat(std[1]);
+    if (b > 0 && b < 10_000) return Math.round(b * 1e9);
+  }
+  return null;
+}
+
+/**
  * Estimate architecture from parameter count when /api/show fields are absent.
  *
  * Patterns use common open-weight architectures (Llama 3, Mistral, Phi).
  * GQA ratios are representative — actual values vary by model family.
  * Estimates carry ±30% uncertainty.
+ *
+ * When ollama_parameter_count is null (vLLM, llama.cpp), falls back to
+ * parsing the active model name for a "<n>b" tag.
  */
 function archFromParamCount(node: SentinelMetrics): KVArchitecture | null {
-  const params = node.ollama_parameter_count ?? null;
+  let params = node.ollama_parameter_count ?? null;
   const maxCtx = node.ollama_context_length ?? 8_192;
+
+  // Fallback: parse the model name. Works for vLLM ("qwen2.5-32b") and
+  // llama.cpp where parameter_count is not populated.
+  if (params == null) {
+    const name =
+      node.ollama_active_model
+      ?? node.vllm_model_name
+      ?? node.llamacpp_model_name
+      ?? null;
+    params = parseParamCountFromModelName(name);
+  }
   if (params == null) return null;
 
   const b = params / 1e9; // parameter count in billions

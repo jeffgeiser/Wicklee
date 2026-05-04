@@ -15,8 +15,8 @@
  * to the full ModelFitAnalysis card lower on the page.
  */
 
-import React from 'react';
-import { Cpu, Gauge, Layers, ArrowRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { Cpu, Gauge, Layers, ArrowRight, Server } from 'lucide-react';
 import type { SentinelMetrics } from '../../types';
 import { computeModelFitScore } from '../../utils/modelFit';
 import { computeQuantRecommendation } from '../../utils/quantSweet';
@@ -79,12 +79,36 @@ function extractQuantFamily(quant: string | null | undefined): string {
 // ── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
+  /** Default node — always shown when no picker selection is active. */
   node: SentinelMetrics;
+  /**
+   * Optional fleet roster.  When provided AND more than one node has a model
+   * loaded, the strip renders a node-picker chip row above the tiles so the
+   * fleet operator can switch which node the strip summarises.  Without this,
+   * the strip silently summarises the default `node` only.
+   */
+  nodes?: SentinelMetrics[];
   /** Anchor id of the full ModelFitAnalysis section to scroll to. */
   anchorId?: string;
 }
 
-const ModelFitSummaryStrip: React.FC<Props> = ({ node, anchorId = 'model-fit-analysis' }) => {
+const hasLoadedModel = (n: SentinelMetrics): boolean =>
+  !!(n.ollama_active_model || n.vllm_model_name || n.llamacpp_model_name);
+
+const ModelFitSummaryStrip: React.FC<Props> = ({
+  node: defaultNode,
+  nodes,
+  anchorId = 'model-fit-analysis',
+}) => {
+  // Eligible-for-picker nodes: those with a loaded model.
+  const candidateNodes = (nodes ?? []).filter(hasLoadedModel);
+  const showPicker = candidateNodes.length > 1;
+
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const node = selectedNodeId
+    ? (candidateNodes.find(n => n.node_id === selectedNodeId) ?? defaultNode)
+    : defaultNode;
+
   const fit = computeModelFitScore(node);
   if (!fit) return null;
 
@@ -105,6 +129,11 @@ const ModelFitSummaryStrip: React.FC<Props> = ({ node, anchorId = 'model-fit-ana
     ?? node.llamacpp_model_name
     ?? 'Unknown model';
 
+  const hostLabel = node.hostname && node.hostname !== node.node_id
+    ? node.hostname
+    : node.node_id;
+  const chipLabel = node.chip_name ?? node.gpu_name ?? null;
+
   const scrollToFullAnalysis = (e: React.MouseEvent) => {
     e.preventDefault();
     const el = document.getElementById(anchorId);
@@ -112,7 +141,48 @@ const ModelFitSummaryStrip: React.FC<Props> = ({ node, anchorId = 'model-fit-ana
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div className="space-y-2">
+      {/* Node attribution — always visible so the strip is unambiguous. */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 text-[10px] text-gray-500">
+          <Server className="w-3 h-3 text-gray-600" />
+          <span className="uppercase tracking-widest text-gray-600">Showing</span>
+          <span className="font-mono text-gray-300">{hostLabel}</span>
+          {chipLabel && <span className="text-gray-600">· {chipLabel}</span>}
+          {showPicker && (
+            <span className="text-gray-600">
+              · {candidateNodes.findIndex(n => n.node_id === node.node_id) + 1} of {candidateNodes.length}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Node picker chip row — only when fleet has multiple model-loaded nodes. */}
+      {showPicker && (
+        <div className="flex flex-wrap gap-1">
+          {candidateNodes.map(n => {
+            const isSelected = n.node_id === node.node_id;
+            const nLabel = n.hostname && n.hostname !== n.node_id ? n.hostname : n.node_id;
+            return (
+              <button
+                key={n.node_id}
+                onClick={() => setSelectedNodeId(
+                  n.node_id === defaultNode.node_id && !selectedNodeId ? null : n.node_id
+                )}
+                className={`text-[9px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
+                  isSelected
+                    ? 'bg-gray-700 border-gray-600 text-gray-200'
+                    : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                {nLabel}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
       {/* ── Tile 1 — Model Fit ───────────────────────────────────────────── */}
       <a
         href={`#${anchorId}`}
@@ -177,6 +247,7 @@ const ModelFitSummaryStrip: React.FC<Props> = ({ node, anchorId = 'model-fit-ana
                 </span>
               )}
             </div>
+            <p className="text-[10px] text-gray-600 truncate -mt-0.5 mb-1" title={modelName}>{modelName}</p>
             <p className="text-[11px] text-gray-400 line-clamp-2">{rec.headline}</p>
             {rec.estimatedTps != null && rec.currentTps != null && (
               <p className="text-[10px] text-gray-600 mt-1.5 font-mono">
@@ -229,6 +300,7 @@ const ModelFitSummaryStrip: React.FC<Props> = ({ node, anchorId = 'model-fit-ana
                 {runway.arch.isExact ? 'GQA-aware' : '~est'}
               </span>
             </div>
+            <p className="text-[10px] text-gray-600 truncate -mt-0.5 mb-1" title={modelName}>{modelName}</p>
             <p className="text-[11px] text-gray-400 line-clamp-2">{runway.summary}</p>
             <p className="text-[10px] text-gray-600 mt-1.5 font-mono">
               {runway.arch.layers}L · {runway.arch.kvHeads} KV heads · h={runway.arch.headDim}
@@ -238,11 +310,12 @@ const ModelFitSummaryStrip: React.FC<Props> = ({ node, anchorId = 'model-fit-ana
           <>
             <p className="text-sm font-bold text-gray-500 mb-1">Awaiting architecture</p>
             <p className="text-[11px] text-gray-600 line-clamp-2">
-              Layer / head metadata not yet captured. Context runway estimate pending.
+              No layer/head metadata and no parameter-count tag in the model name. Ollama auto-populates this on model load; for vLLM, ensure the model name carries a "<code className="text-gray-500">7b</code>"-style size tag.
             </p>
           </>
         )}
       </a>
+      </div>
     </div>
   );
 };
