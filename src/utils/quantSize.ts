@@ -71,12 +71,20 @@ export function parseQuantFromAnyModelName(name: string | null | undefined): str
  *
  *   size_gb = parameter_count × bytes_per_weight / 1e9
  *
- * Returns null when either parameter count or quant cannot be parsed.
- * Carries ±10-20% uncertainty (exact GGUF file sizes vary by architecture
- * — embedding tables, output layer, K/V dim variations).
+ * When the quant cannot be parsed (e.g. vLLM model names like
+ * "Qwen/Qwen2.5-32B-Instruct" with no -fp8 / -bf16 / -q4 tag), defaults
+ * to **2.0 bytes/weight** — FP16/BF16, vLLM's default dtype and the
+ * modal answer for modern transformer LLMs.  Slightly over-estimates
+ * size for genuinely quantized models, which is exactly what we want
+ * for fit scoring: better to occasionally tell a 4-bit user "you have
+ * 50% headroom" than to fall through to the inflated `nvidia_vram_used_mb`
+ * proxy and report "Poor" for a model that's actually well-fitted.
  *
- * This is the right answer for vLLM where `nvidia_vram_used_mb` includes
- * KV cache reservation that has nothing to do with model weight size.
+ * Returns null only when parameter count itself cannot be inferred from
+ * the name (e.g. "phi-3-mini" with no <n>b tag).
+ *
+ * Carries ±10–30% uncertainty (exact GGUF file sizes vary by
+ * architecture — embedding tables, output layer, K/V dim variations).
  */
 export function estimateModelSizeGbFromName(
   modelName: string | null | undefined,
@@ -86,8 +94,11 @@ export function estimateModelSizeGbFromName(
   const params = parseParamCountFromModelName(modelName);
   if (params == null) return null;
   const quant = quantHint ?? parseQuantFromAnyModelName(modelName);
-  const bpw = bytesPerWeight(quant);
-  if (bpw == null) return null;
+  // Fall back to FP16/BF16 (2 bytes/weight) when quant unknown — this is
+  // vLLM's default and matches what most users running un-tagged models
+  // are actually doing.  Strict callers should use `bytesPerWeight()`
+  // directly and check for null.
+  const bpw = bytesPerWeight(quant) ?? 2.0;
   return (params * bpw) / 1e9;
 }
 

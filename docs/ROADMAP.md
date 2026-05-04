@@ -97,6 +97,9 @@ Agent harvester now fetches `/v1/models` on each model change and exposes `vllm_
 ### vLLM Native Histogram Source
 Read percentiles directly from vLLM's Prometheus `/metrics` endpoint (`vllm_request_latency_seconds_bucket`, `vllm_time_to_first_token_seconds_bucket`) instead of relying on the Ollama proxy's per-request traces. Lets users running vLLM directly (no proxy) get accurate p95/p99 SLA data without enabling proxy mode. The SLA endpoint chooses source per-runtime: proxy traces for Ollama, native histograms for vLLM, both for mixed deployments.
 
+### vLLM Dtype Capture (Process Cmdline)
+The vLLM Prometheus `/metrics` endpoint and `/v1/models` both omit the engine's runtime dtype (FP8 / BF16 / FP16 / AWQ / GPTQ etc.). To accurately size weight memory for the Model Fit calculator we currently default to FP16/BF16 (2 bytes/weight) when the model name carries no quant tag — slightly over-estimates for actually-quantized vLLM deployments. Stage 2: capture the `--dtype` / `--quantization` flags from the vLLM process command line via the existing process_discovery scanner; expose as `vllm_dtype` on the wire (three-way sync); frontend prefers it over name-based parsing. Eliminates the over-estimate path for users running explicit FP8 / AWQ / GPTQ.
+
 ### vLLM Exact GQA Architecture (HF config.json)
 Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `num_hidden_layers` / `num_key_value_heads` / `hidden_size` / `num_attention_heads` for the GQA-aware Context Runway require fetching the model's `config.json` from HuggingFace. To avoid adding a network dependency to the agent (sovereign / air-gapped deploys), Stage 2 will mediate this through the cloud: a new `/api/v1/model-arch?model_id=` endpoint proxies HF and caches in Postgres. Frontend prefers cloud-resolved arch when the node is paired; localhost-only nodes continue using the ±30% name-based estimate.
 
