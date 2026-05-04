@@ -2310,7 +2310,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     nodes={effectiveNodes}
                     fleetView={!isLocalHost && effectiveNodes.length > 1}
                     onNavigateToPerformance={() => setActiveTab('performance')}
-                    systemIdleW={getNodeSettings(effectiveNodes[0].node_id).systemIdleW}
+                    getNodeSettings={getNodeSettings}
                   />
                 </div>
               ) : canViewInsight(10) ? (

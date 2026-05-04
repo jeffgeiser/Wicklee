@@ -1,7 +1,23 @@
 /**
  * WES — Wicklee Efficiency Score
  *
- * WES = tok/s ÷ (Watts_adjusted × ThermalPenalty)
+ *   WES = tok/s ÷ (Watts × PUE × ThermalPenalty)
+ *
+ * Where:
+ *   Watts = `getNodePowerW(node)` — RAW node power, NOT idle-subtracted.
+ *           The frozen color scale (>10 emerald, 3–10 green, 1–3 yellow,
+ *           <1 red) was calibrated against raw watts; subtracting
+ *           systemIdleW from `getNodeSettings(id)` would shift every node's
+ *           score and break the cross-tab comparison invariant. systemIdleW
+ *           is for active-inference cost displays, not for WES.
+ *   PUE   = `getNodeSettings(id).pue ?? 1.0` — facility multiplier.
+ *           Datacenter operators set PUE > 1.0 to factor in cooling overhead.
+ *   ThermalPenalty = 1.0 (Normal) | 1.25 (Fair) | 1.75 (Serious) | 2.0 (Critical)
+ *
+ * Every WES surface in the app must use this formula. Currently aligned:
+ *   - Overview tile (Intelligence)         → src/components/Overview.tsx
+ *   - Model Fit Analysis card (Insights)   → src/components/insights/tier2/ModelFitAnalysis.tsx
+ *   - WES Trend / Leaderboard charts       → src/components/insights/*.tsx
  *
  * The "MPG for local AI inference": a unitless score that collapses thermal
  * throttling, power draw, and throughput into a single comparable number.

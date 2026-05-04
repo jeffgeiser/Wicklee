@@ -236,20 +236,28 @@ function deriveModelEntry(
   modelWes:     number | null,
   quantRaw:     string | null,
   sizeGb:       number | null,
-  adjWatts:     number | null,
+  watts:        number | null,
+  pue:          number,
   thermalState: string | null,
 ): ModelEntry {
   const quant  = quantRaw?.toUpperCase() ?? parseQuantFromName(modelName)?.toUpperCase() ?? null;
   const family = quant ? quantFamily(quant) : 'Unknown';
   const ratio  = quantCompressionRatio(family);
 
-  const w1k = tps != null && adjWatts != null && tps > 0
-    ? (adjWatts / tps) * 1_000
+  // W/1K tkn — facility-load adjusted to match Overview row formula.
+  // Overview's per-row W/1K omits PUE, so we mirror that exactly here:
+  // (watts / tps) × 1000 with raw watts.  Lower = more efficient.
+  const w1k = tps != null && watts != null && tps > 0
+    ? (watts / tps) * 1_000
     : null;
 
+  // WES — canonical formula tps / (watts × PUE × thermal_penalty).
+  // Prefer the agent-provided per-model WES when present (active_models[].wes
+  // carries proxy-based per-model attribution that node-level math can't
+  // reproduce).  When absent, compute against the same inputs Overview uses.
   const wes = modelWes ?? (
-    tps != null && adjWatts != null && tps > 0 && adjWatts > 0
-      ? computeWES(tps, adjWatts, thermalState)
+    tps != null && watts != null && tps > 0 && watts > 0
+      ? computeWES(tps, watts, thermalState, pue)
       : null
   );
 
@@ -281,8 +289,12 @@ interface ModelFitAnalysisProps {
    */
   fleetView?:  boolean;
   onNavigateToPerformance?: () => void;
-  /** System idle power offset (W) subtracted from accelerator draw before WES. */
-  systemIdleW?: number;
+  /**
+   * Per-node settings resolver — used to pull the user-configured PUE
+   * multiplier so WES values shown here match the Overview tile exactly.
+   * Without this, WES uses the canonical PUE=1.0 default.
+   */
+  getNodeSettings?: (nodeId: string) => { pue?: number; locationLabel?: string | null } | undefined;
 }
 
 // ── Fleet table helpers ────────────────────────────────────────────────────────
@@ -305,36 +317,56 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   node: defaultNode,
   nodes,
   fleetView = false,
-  systemIdleW = 0,
+  getNodeSettings,
 }) => {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  function adjWattsFor(n: SentinelMetrics): number | null {
-    const raw = getNodePowerW(n);
-    return raw != null && systemIdleW > 0 ? Math.max(raw - systemIdleW, 0.1) : raw;
+  // ── Canonical WES + W/1K math ─────────────────────────────────────────────
+  // Aligned with the Overview tile: WES = tok/s ÷ (raw_watts × PUE × penalty);
+  // W/1K = (raw_watts / tok/s) × 1000.  We deliberately do NOT subtract
+  // systemIdleW here even when configured — that knob is for active-inference
+  // cost displays.  The frozen WES color scale was calibrated against raw
+  // watts; subtracting idle would silently shift every node's score.
+  function wattsFor(n: SentinelMetrics): number | null {
+    return getNodePowerW(n);
+  }
+  function pueFor(n: SentinelMetrics): number {
+    return getNodeSettings?.(n.node_id)?.pue ?? 1.0;
+  }
+  // Combine Ollama + vLLM tok/s when both runtimes are reporting non-null
+  // values on the same node — same convention as Overview.estimateTps's
+  // `rawCombined`.  Single-runtime nodes get the one value.
+  function combinedTpsFor(n: SentinelMetrics): number | null {
+    const o = n.ollama_tokens_per_second ?? null;
+    const v = n.vllm_tokens_per_sec      ?? null;
+    if (o != null && v != null) return o + v;
+    return o ?? v;
   }
 
   function buildEntries(n: SentinelMetrics): ModelEntry[] {
-    const adj = adjWattsFor(n);
+    const watts = wattsFor(n);
+    const pue   = pueFor(n);
     if (n.active_models && n.active_models.length > 0) {
       const hasPerModelThroughput = n.active_models.some(am => am.tok_s != null);
+      const nodeTps = combinedTpsFor(n);
       return n.active_models.map(am => {
-        // When no per-model throughput (no proxy), attribute node-level tok/s to
-        // whichever model was most recently active — others show —.
+        // When no per-model throughput (no proxy), attribute node-level tok/s
+        // to whichever model was most recently active — others show —.
         const isActive = !hasPerModelThroughput && am.model === n.ollama_active_model;
-        const tps = am.tok_s ?? (isActive ? (n.ollama_tokens_per_second ?? null) : null);
-        return deriveModelEntry(am.model, tps, am.wes ?? null, am.quantization ?? null, am.size_gb ?? null, adj, n.thermal_state);
+        const tps = am.tok_s ?? (isActive ? nodeTps : null);
+        return deriveModelEntry(am.model, tps, am.wes ?? null, am.quantization ?? null, am.size_gb ?? null, watts, pue, n.thermal_state);
       });
     }
     const primary = n.ollama_active_model ?? n.vllm_model_name ?? n.llamacpp_model_name ?? null;
     if (!primary) return [];
     return [deriveModelEntry(
       primary,
-      n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null,
+      combinedTpsFor(n),
       null,
       n.ollama_quantization ?? parseQuantFromName(primary),
       n.ollama_model_size_gb ?? null,
-      adj,
+      watts,
+      pue,
       n.thermal_state,
     )];
   }
