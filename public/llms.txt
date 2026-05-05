@@ -31,6 +31,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `GET /api/profile?minutes=60` — Inference Profiler: correlated TTFT/KV/queue/thermal/power timeline
 - `GET /api/sla?window_min=60&target_ttft_ms=500` — Inference SLA Monitor: p50/p95/p99 for TTFT/E2E/TPOT, compliance vs target, per-model breakdown, recent violations
 - `GET /api/v1/thermal-budget?node_id=X` — Thermal Budget Calculator (Pro+, cloud): sustainable_tps, push_threshold_tps, time_to_fair_min, fair_penalized_tps, plain-English backfire advice over a 7-day window
+- `POST/GET/DELETE /api/v1/webhooks[/:id[/test]]` — Threshold Webhooks (Pro+): register HMAC-SHA256 signed push notifications for thermal_state_changed, inference_state_changed, wes_below, wes_above
 - `GET /api/cost-by-model?hours=24` — Cost attribution per model (daily breakdown)
 - `GET /api/explain-slowdown?ts_ms=N` — Root cause analysis for slow inference requests
 - `GET /api/model-comparison?hours=168` — Side-by-side model efficiency (WES, tok/s, watts, cost)

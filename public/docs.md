@@ -386,6 +386,68 @@ Wicklee uniquely has hardware telemetry, inference metrics, model identity, and 
 
 Surfaced on the Performance tab as an SLA Monitor card with 1h / 6h / 24h windows, 250 ms / 500 ms / 1 s / 2 s target presets, color-coded compliance pill (≥99% emerald, ≥95% green, ≥90% yellow, <90% red), per-model p95 table, and a recent-violations list.
 
+### Threshold Webhooks (Pro)
+
+Push notifications for state transitions and threshold crossings. Replaces polling for users running NRO / agent automation loops that need sub-second reaction to fleet state changes.
+
+**CRUD endpoints (Pro+, JWT auth):**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/webhooks` | Register a subscription. Returns the HMAC secret **once** — save it. |
+| `GET`  | `/api/v1/webhooks` | List your subscriptions (no secrets). |
+| `DELETE` | `/api/v1/webhooks/:id` | Remove a subscription. |
+| `POST` | `/api/v1/webhooks/:id/test` | Fire a synthetic payload to test your URL. |
+
+**Event types:**
+
+| `event_type` | Triggers when | Threshold required? |
+|---|---|---|
+| `thermal_state_changed` | thermal_state changes (e.g. Normal → Fair) | no |
+| `inference_state_changed` | inference_state changes (e.g. idle → live) | no |
+| `wes_below` | WES crosses below the threshold | yes |
+| `wes_above` | WES crosses above the threshold | yes |
+
+**Subscription create body:**
+
+```json
+{
+  "url":        "https://your-server.example.com/wicklee-hook",
+  "event_type": "wes_below",
+  "node_id":    "WK-XXXX",   // optional — omit to fire for all your nodes
+  "threshold":  1.0,         // required for wes_below / wes_above
+  "cooldown_s": 60           // min seconds between fires per (sub, node), default 60, min 10
+}
+```
+
+**Webhook delivery (POST to your URL):**
+
+Header `X-Wicklee-Signature: sha256=<hex>` is HMAC-SHA256 of the request body using your subscription's secret. Verify on receipt to confirm authenticity.
+
+```json
+{
+  "event_type":     "thermal_state_changed",
+  "node_id":        "WK-XXXX",
+  "node_hostname":  "macmini.local",
+  "ts_ms":          1735689600000,
+  "previous_state": "Normal",
+  "current_state":  "Fair",
+  "context": {
+    "tok_s":          18.5,
+    "watts":          22.3,
+    "thermal_state":  "Fair",
+    "inference_state": "live",
+    "active_model":   "llama3.1:8b"
+  }
+}
+```
+
+For threshold-crossing events (`wes_below`, `wes_above`), the body uses `previous_value` / `current_value` / `threshold` numeric fields instead of `previous_state` / `current_state`.
+
+**Delivery semantics:** 5-second timeout, no retries — fire-and-forget. Failed deliveries are logged but not requeued. Keep your handler fast and idempotent. Cooldown is enforced per (subscription, node) pair so flapping conditions don't spam your endpoint.
+
+Manage subscriptions in **Settings → Threshold Webhooks**. The HMAC secret is shown **once** at creation — store it in your secrets manager before dismissing.
+
 ### Thermal Budget Calculator (Pro)
 `GET /api/v1/thermal-budget?node_id=X` — predicts when pushing a node harder backfires. Walks the 7-day `metrics_5min` rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, then computes:
 
@@ -441,6 +503,10 @@ Auth: None required.
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT/E2E/TPOT, compliance vs target, per-model breakdown, recent violations |
 | GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (Pro+, cloud) — predicts when pushing harder backfires. Sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
+| POST | /api/v1/webhooks | Threshold Webhooks (Pro+) — register a subscription for state-transition push notifications. HMAC-SHA256 signed |
+| GET | /api/v1/webhooks | List your webhook subscriptions |
+| DELETE | /api/v1/webhooks/:id | Remove a subscription |
+| POST | /api/v1/webhooks/:id/test | Fire a synthetic payload to test the URL |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Root cause analysis for slow inference requests |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for all models |

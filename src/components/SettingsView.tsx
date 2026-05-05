@@ -3,6 +3,7 @@ import { version as pkgVersion } from '../../package.json';
 import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock, Key, ChevronRight, Globe } from 'lucide-react';
 import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
+import WebhooksSection from './settings/WebhooksSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
@@ -648,6 +649,16 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         nodes={nodes}
         onNavigateToPricing={onNavigateToPricing}
       />
+
+      {/* ── ④¾ THRESHOLD WEBHOOKS (Pro+) ─────────────────────────────────── */}
+      {isCloudMode && (
+        <WebhooksSection
+          subscriptionTier={subscriptionTier}
+          getToken={getToken}
+          nodes={nodes.map(n => ({ node_id: n.id, hostname: n.hostname }))}
+          onNavigateToPricing={onNavigateToPricing}
+        />
+      )}
 
       {/* ── ④½ API KEYS ───────────────────────────────────────────────────── */}
       {isCloudMode && (

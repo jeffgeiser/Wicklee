@@ -84,6 +84,9 @@ Three condensed first-fold tiles under the KPI hero row — Model Fit, Quant Swe
 ### vLLM `/v1/models` Metadata Capture
 Agent harvester now fetches `/v1/models` on each model change and exposes `vllm_max_model_len` on the wire. Replaces the conservative 8 192-token Context Runway floor with the engine's actual context window for vLLM-backed nodes. Cached per (model_name, port) — fetched once per model change rather than every 2-second tick. Three-way wire-format sync (agent → cloud → frontend type).
 
+### Threshold Webhooks (Pro)
+`POST /api/v1/webhooks` plus list / delete / test endpoints. Replaces polling with sub-second push notifications for state transitions (`thermal_state_changed`, `inference_state_changed`) and threshold crossings (`wes_below`, `wes_above`). Subscriptions are HMAC-SHA256 signed via `X-Wicklee-Signature` header so receivers verify authenticity. Per-(subscription, node) cooldown prevents flapping. Evaluator runs inline in the telemetry-push path so subscribers see fires within 1-2 seconds of the condition. Fire-and-forget delivery (5s timeout, no retries). Surfaced in Settings → Threshold Webhooks with a CRUD UI, secret reveal-once flow, and per-row test button.
+
 ### Thermal Budget Calculator (Pro)
 `GET /api/v1/thermal-budget?node_id=X` — predicts when pushing a node harder backfires. Walks the 7-day `metrics_5min` rollup, identifies sustained Normal blocks (≥30 min) and Normal→Fair transitions, computes the sustainable tok/s rate, the load level that pushed the node out of Normal, the average time-to-Fair, and the resulting penalized rate (push ÷ 1.25). Generates a plain-English advice string comparing 1-hour token output of "stay sustainable" vs "push then drop to penalized." Confidence levels (insufficient / low / medium / high) gate the analysis based on transitions observed and total samples. Surfaced on the Performance tab as the Thermal Budget card.
 
@@ -123,9 +126,6 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 
 ### Deployment Profiles
 Single config selector (`sovereign_dev`, `dedicated_server`, `production_fleet`) that adjusts all observation thresholds, evidence windows, and alert sensitivity coherently. sovereign_dev: high thresholds, long windows — laptop running inference alongside other workloads. dedicated_server: standard thresholds — single-purpose inference node. production_fleet: aggressive early warning — serving real users where latency matters. Eliminates per-pattern threshold knobs in favor of a single intent declaration. Maps cleanly to routing_hint severity: steer_away on a dev profile means genuinely broken, on production it means slightly degraded.
-
-### Threshold Webhooks (Event-Driven Push)
-Register interest in specific state transitions (inference_state changed, thermal_state > Fair, WES dropped below threshold) and receive push notifications without polling. Essential for NRO/agent automation loops that need sub-second reaction to fleet state changes. Would run off the existing SSE stream with a subscription/filter model.
 
 ### Kubernetes Operator
 Helm chart and operator for automated Wicklee agent deployment across GPU node pools.

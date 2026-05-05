@@ -59,6 +59,28 @@ Inference SLA Monitor — p50/p95/p99/max for TTFT, end-to-end latency, and TPOT
 { "window_minutes": 60, "request_count": 412, "error_count": 3, "error_rate_pct": 0.7, "ttft": { "p50": 120, "p95": 340, "p99": 1240, "max": 2300 }, "e2e": { "p50": 1850, "p95": 8400, "p99": 15300, "max": 22100 }, "tpot": { "p50": 28, "p95": 45, "p99": 89, "max": 0 }, "sla": { "target_ttft_ms": 500, "compliance_pct": 98.4, "violations_count": 7, "violations": [{ "ts_ms": 1234, "model": "qwen2.5:32b", "ttft_ms": 2300, "latency_ms": 12400 }] }, "by_model": [{ "model": "llama3.1:8b", "count": 374, "p95_ttft_ms": 280, "p95_e2e_ms": 7200 }] }
 ```
 
+### Threshold Webhooks (Pro+, JWT auth)
+Push notifications for state transitions and threshold crossings. HMAC-SHA256 signed via `X-Wicklee-Signature: sha256=<hex>` header. Fire-and-forget delivery (5s timeout, no retries) so the telemetry-push path isn't blocked.
+
+Event types:
+- `thermal_state_changed` — fires on any thermal_state transition
+- `inference_state_changed` — fires on inference_state transition (idle/idle-spd/busy/live)
+- `wes_below` — fires when WES crosses below threshold (threshold required)
+- `wes_above` — fires when WES crosses above threshold (threshold required)
+
+```
+POST /api/v1/webhooks      → create subscription, returns secret ONCE
+GET /api/v1/webhooks       → list (no secrets)
+DELETE /api/v1/webhooks/:id
+POST /api/v1/webhooks/:id/test → fire synthetic payload
+```
+
+Create body: `{ "url": "...", "event_type": "wes_below", "node_id": "WK-X" /*opt*/, "threshold": 1.0, "cooldown_s": 60 }`
+
+Webhook payload (state-changed): `{ "event_type": "thermal_state_changed", "node_id": "...", "ts_ms": ..., "previous_state": "Normal", "current_state": "Fair", "context": { "tok_s": 18.5, "watts": 22.3, "thermal_state": "Fair", "active_model": "..." } }`
+
+Webhook payload (threshold-crossing): same shape but with `previous_value` / `current_value` / `threshold` numeric fields instead of state strings.
+
 ### GET /api/v1/thermal-budget?node_id=X
 Thermal Budget Calculator (Pro+, cloud, requires JWT). Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, and computes whether pushing a node harder backfires. Returns `sustainable_tps` (max during ≥30-min Normal blocks), `push_threshold_tps` (median tps in 10 min before transition), `time_to_fair_min` (avg duration before transition), `fair_penalized_tps` (push ÷ 1.25), confidence level (insufficient/low/medium/high), and a plain-English advice string comparing 1-hour token output of "stay sustainable" vs "push then drop to penalized."
 ```json
