@@ -844,7 +844,8 @@ fn is_business_or_above(tier: &str) -> bool {
     matches!(tier, "business" | "enterprise")
 }
 
-/// Pattern-to-tier allowlist. Community users see 7 patterns; Pro+ see all 18.
+/// Pattern-to-tier allowlist. Community sees 9 community patterns + cloud
+/// alerts; Pro+ sees all 20 (9 community + 10 Pro agent + 1 Pro cloud).
 fn allowed_patterns_for_tier(tier: &str) -> Vec<String> {
     // Cloud alerts (always visible to all tiers)
     let cloud_alerts: Vec<&str> = vec![

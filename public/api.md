@@ -9,7 +9,7 @@ Auth: None required.
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry with full MetricsPayload |
 | GET | /ws | WebSocket — 1 Hz live telemetry (same payload as SSE, fallback transport) |
-| GET | /api/observations | 18 patterns with routing_hint per observation + node-level routing_hint/routing_hint_source |
+| GET | /api/observations | 18 agent-evaluated patterns with routing_hint per observation + node-level routing_hint/routing_hint_source. (2 additional cloud-evaluated patterns are queryable via the cloud Observations endpoint.) |
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT, E2E latency, TPOT plus compliance vs target |

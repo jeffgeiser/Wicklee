@@ -831,8 +831,9 @@ pub(crate) fn start_vllm_harvester(
                         None => {
                             eprintln!("[vllm] process gone — clearing metrics");
                             if let Ok(mut g) = shared_main.lock() { *g = VllmMetrics::default(); }
-                            cached_model_name = None;
-                            cached_max_ctx    = None;
+                            // cached_model_name/cached_max_ctx are scoped to
+                            // this loop iteration and the outer loop will
+                            // re-init them — no clear-up needed.
                             break;
                         }
                         Some(new_port) if new_port != port => { break; }

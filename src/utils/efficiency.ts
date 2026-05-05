@@ -26,7 +26,7 @@ export { computeWES, formatWES, wesColorClass, THERMAL_PENALTY };
  * Use the 24h baseline shown in the Triage tab as the stable SLO reference.
  */
 export const WES_TOOLTIP =
-  'Wicklee Efficiency Score — formula: (tok/s ÷ watts) × thermal_penalty × pue. ' +
+  'Wicklee Efficiency Score — formula: tok/s ÷ (watts × PUE × thermal_penalty). ' +
   'Drops near-zero when idle (no throughput to measure — expected). ' +
   'Use the 24h baseline in Triage for regression detection. Higher is better.';
 

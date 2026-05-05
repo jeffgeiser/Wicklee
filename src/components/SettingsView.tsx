@@ -972,7 +972,7 @@ const AlertsSection: React.FC<{
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Pro — $9/mo
+            Upgrade to Pro — $29/mo
           </button>
         </div>
       </Section>
