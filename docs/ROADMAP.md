@@ -84,6 +84,14 @@ Three condensed first-fold tiles under the KPI hero row — Model Fit, Quant Swe
 ### vLLM `/v1/models` Metadata Capture
 Agent harvester now fetches `/v1/models` on each model change and exposes `vllm_max_model_len` on the wire. Replaces the conservative 8 192-token Context Runway floor with the engine's actual context window for vLLM-backed nodes. Cached per (model_name, port) — fetched once per model change rather than every 2-second tick. Three-way wire-format sync (agent → cloud → frontend type).
 
+### Quantization Advisor (Pro)
+The "would-be" tile spec — *"Switching from Q8_0 to Q4_K_M would: free 4.2 GB VRAM, reduce power ~15%, improve WES from 8.2 to 11.4"* — is delivered by the composition of two shipped features rather than a separate tile:
+
+1. **Quant Sweet Spot** (existing, on the Model Fit Summary Strip + Model Fit Analysis card) — bandwidth-aware tok/s and VRAM projections via `computeQuantRecommendation()`. Estimates the speed and headroom delta for moving up or down a quant level.
+2. **Perplexity Tax** (shipped this release, `public/perplexity_baseline.json` + `quantSweet.ts qualityDeltaFor()`) — empirical KLD/PPL data per (model family, quant) pair sourced from Unsloth Dynamic GGUF benchmarks.
+
+Together they answer the same three-axis question the Advisor spec posed: speed, memory, quality. The Quant Sweet Spot tile's `detail` string now reads something like *"Q6_K fits in headroom (+1.4 GB) at +0.10% PPL — near-lossless. ~13 tok/s (-31% speed)"* — covering all three axes. Future enhancement (cross-fleet empirical data: *"observed across 3 nodes running Q4 vs 1 node running Q8"*) is queued under the Team trend-cards section.
+
 ### Threshold Webhooks (Pro)
 `POST /api/v1/webhooks` plus list / delete / test endpoints. Replaces polling with sub-second push notifications for state transitions (`thermal_state_changed`, `inference_state_changed`) and threshold crossings (`wes_below`, `wes_above`). Subscriptions are HMAC-SHA256 signed via `X-Wicklee-Signature` header so receivers verify authenticity. Per-(subscription, node) cooldown prevents flapping. Evaluator runs inline in the telemetry-push path so subscribers see fires within 1-2 seconds of the condition. Fire-and-forget delivery (5s timeout, no retries). Surfaced in Settings → Threshold Webhooks with a CRUD UI, secret reveal-once flow, and per-row test button.
 
@@ -117,9 +125,6 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 
 ### Fleet Capacity Planner
 "Your 3-node fleet sustains 45 tok/s at current thermal conditions. Adding one M4 Pro would add ~15 tok/s at $0.04/day." Uses real WES data from fleet to project capacity and cost of scaling.
-
-### Quantization Advisor
-"Switching from Q8_0 to Q4_K_M would: free 4.2GB VRAM, reduce power ~15%, improve WES from 8.2 to 11.4." Based on observed metrics for the same model family at different quantizations across fleet nodes.
 
 ### Cross-Node Model Migration
 "Llama 3.1 70B on WK-A1B2 has WES 8.2, VRAM at 89%. WK-C3D4 has WES 12.1, VRAM at 52%. Recommend migrating for 47% efficiency gain." Fleet-wide model placement optimization based on measured performance.

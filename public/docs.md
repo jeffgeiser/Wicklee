@@ -111,6 +111,14 @@ CPU-only nodes (no GPU/VRAM) show `—` for Efficiency until an inference probe 
 
 Watts consumed per 1,000 tokens generated. Hardware-agnostic — lower is better. Useful for direct node-to-node comparisons regardless of model size.
 
+### Quantization Advisor
+
+The Quantization Advisor is delivered by the composition of two features. **Quant Sweet Spot** projects the speed and memory delta of moving up or down a quant level; **Perplexity Tax** quantifies the empirical quality cost. Together they answer the three-axis tradeoff:
+
+> *"Q6_K fits in headroom (+1.4 GB) at +0.10% PPL — near-lossless. ~13 tok/s (–31% speed)."*
+
+You'll see this combined recommendation in the Quant Sweet Spot tile on the Model Fit Summary Strip (Intelligence) and the Model Fit Analysis card (Insights → Performance).
+
 ### Quant Sweet Spot
 
 A bandwidth-aware quantization recommendation computed from:
