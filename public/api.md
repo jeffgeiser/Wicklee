@@ -13,6 +13,7 @@ Auth: None required.
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT, E2E latency, TPOT plus compliance vs target |
+| GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (Pro+, cloud) — sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Slowdown explainer — root cause analysis for a slow request |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for every model that has run |

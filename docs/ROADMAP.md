@@ -84,6 +84,9 @@ Three condensed first-fold tiles under the KPI hero row — Model Fit, Quant Swe
 ### vLLM `/v1/models` Metadata Capture
 Agent harvester now fetches `/v1/models` on each model change and exposes `vllm_max_model_len` on the wire. Replaces the conservative 8 192-token Context Runway floor with the engine's actual context window for vLLM-backed nodes. Cached per (model_name, port) — fetched once per model change rather than every 2-second tick. Three-way wire-format sync (agent → cloud → frontend type).
 
+### Thermal Budget Calculator (Pro)
+`GET /api/v1/thermal-budget?node_id=X` — predicts when pushing a node harder backfires. Walks the 7-day `metrics_5min` rollup, identifies sustained Normal blocks (≥30 min) and Normal→Fair transitions, computes the sustainable tok/s rate, the load level that pushed the node out of Normal, the average time-to-Fair, and the resulting penalized rate (push ÷ 1.25). Generates a plain-English advice string comparing 1-hour token output of "stay sustainable" vs "push then drop to penalized." Confidence levels (insufficient / low / medium / high) gate the analysis based on transitions observed and total samples. Surfaced on the Performance tab as the Thermal Budget card.
+
 ### WES Long-Term Drift Pattern (Pro, #20)
 20th observation pattern, cloud-evaluated. Detects gradual WES degradation by comparing the most recent 24-hour rolling average against the 6-day baseline (days 1–6 of the 7-day Pro Postgres history). Fires when the drop exceeds 15% with ≥100 baseline samples and ≥30 recent samples; cooldown 24h. Surfaces in the existing observation flow with severity `warning`. The Insights → Performance WES history chart shows a matching drift annotation when 7d range is selected, so chart and observation card stay in agreement. Extends `wes_velocity_drop` (10-minute window) into a 7-day analysis that catches dust accumulation, thermal paste aging, driver regression, and background process creep — degradations the short-window pattern misses.
 
@@ -117,9 +120,6 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 
 ### Cross-Node Model Migration
 "Llama 3.1 70B on WK-A1B2 has WES 8.2, VRAM at 89%. WK-C3D4 has WES 12.1, VRAM at 52%. Recommend migrating for 47% efficiency gain." Fleet-wide model placement optimization based on measured performance.
-
-### Thermal Budget Calculator
-"Your M4 Pro sustains 40 tok/s indefinitely at Normal thermal. Pushing to 50 tok/s triggers Fair thermal within ~8 min, reducing effective throughput to 32 tok/s. Net: fewer tokens by pushing harder." Predicts when increased load backfires.
 
 ### Deployment Profiles
 Single config selector (`sovereign_dev`, `dedicated_server`, `production_fleet`) that adjusts all observation thresholds, evidence windows, and alert sensitivity coherently. sovereign_dev: high thresholds, long windows — laptop running inference alongside other workloads. dedicated_server: standard thresholds — single-purpose inference node. production_fleet: aggressive early warning — serving real users where latency matters. Eliminates per-pattern threshold knobs in favor of a single intent declaration. Maps cleanly to routing_hint severity: steer_away on a dev profile means genuinely broken, on production it means slightly degraded.

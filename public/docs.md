@@ -386,6 +386,18 @@ Wicklee uniquely has hardware telemetry, inference metrics, model identity, and 
 
 Surfaced on the Performance tab as an SLA Monitor card with 1h / 6h / 24h windows, 250 ms / 500 ms / 1 s / 2 s target presets, color-coded compliance pill (≥99% emerald, ≥95% green, ≥90% yellow, <90% red), per-model p95 table, and a recent-violations list.
 
+### Thermal Budget Calculator (Pro)
+`GET /api/v1/thermal-budget?node_id=X` — predicts when pushing a node harder backfires. Walks the 7-day `metrics_5min` rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, then computes:
+
+- **`sustainable_tps`** — max tok/s observed during any Normal block ≥ 30 min long. The rate you can hold indefinitely.
+- **`push_threshold_tps`** — median tok/s in the 10 min before any Normal→Fair transition. The load level that pushed you out of the Normal envelope.
+- **`time_to_fair_min`** — average duration a Normal block lasted before transitioning. How long you have at push level.
+- **`fair_penalized_tps`** — `push_threshold ÷ 1.25` (Fair thermal penalty). Effective throughput once Fair triggers.
+
+Generates a plain-English advice string comparing 1-hour token output of "stay sustainable" vs "push then drop to penalized rate." When pushing yields fewer net tokens than the sustainable rate, the advice flags it as backfiring. Confidence levels (`insufficient` / `low` / `medium` / `high`) gate the analysis based on transitions observed and total samples — sparse fleets won't see false claims.
+
+Surfaced on the Performance tab as the Thermal Budget card alongside the WES history chart and SLA Monitor.
+
 ### Cost Attribution Per Model
 `GET /api/cost-by-model?hours=24` — per-model daily cost breakdown: model name, hours active, avg watts, cost USD. Uses power draw × model identity from DuckDB.
 
@@ -428,6 +440,7 @@ Auth: None required.
 | GET | /api/observations | 17 observation patterns with per-observation `routing_hint` (steer_away/reduce_batch/monitor) + node-level `routing_hint` + `routing_hint_source` |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT/E2E/TPOT, compliance vs target, per-model breakdown, recent violations |
+| GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (Pro+, cloud) — predicts when pushing harder backfires. Sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Root cause analysis for slow inference requests |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for all models |

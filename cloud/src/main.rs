@@ -2924,6 +2924,223 @@ async fn handle_wes_history(
     Json(serde_json::json!({ "range": range, "nodes": nodes_data })).into_response()
 }
 
+/// GET /api/v1/thermal-budget?node_id=X
+///
+/// Thermal Budget Calculator (Pro+).  Predicts when increased load
+/// backfires — i.e. when pushing harder triggers a thermal transition
+/// that lowers effective throughput more than the extra load gained.
+///
+/// Walks the 7-day metrics_5min rollup for the requested node, identifies
+/// sustained Normal blocks and Normal→Fair/Serious transitions, and
+/// computes:
+///
+///   sustainable_tps   — max tok/s held during any Normal block ≥ 30 min
+///   push_threshold_tps — median tok/s during the 10-min window before
+///                        any Normal→Fair transition
+///   time_to_fair_min  — mean duration of Normal blocks that transitioned
+///   fair_penalized_tps — push_threshold × 0.8 (1.25x thermal penalty)
+///
+/// Plus a plain-English advice string summarising whether pushing harder
+/// produces more or fewer net tokens over a 1-hour window.
+async fn handle_thermal_budget(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let node_id = match params.get("node_id") {
+        Some(id) if !id.is_empty() => id.clone(),
+        _ => return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "node_id query param required" }))).into_response(),
+    };
+
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    // Pro+ tier gate (uses 7-day Postgres history Pro tier buys).
+    let tier: String = sqlx::query_scalar::<_, String>(
+        "SELECT subscription_tier FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    if !is_pro_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Thermal Budget requires Pro tier or higher",
+                "tier_required": "pro"
+            }))).into_response();
+    }
+
+    // Verify ownership.
+    let owns: Option<String> = sqlx::query_scalar(
+        "SELECT wk_id FROM nodes WHERE wk_id = $1 AND user_id = $2"
+    ).bind(&node_id).bind(&user_id).fetch_optional(&state.pool).await.unwrap_or(None);
+    if owns.is_none() {
+        return (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Node not found" }))).into_response();
+    }
+
+    // Tenant scope (matches how observations are inserted — solo user OR
+    // Clerk org id when org-shared).
+    let tenant_id: String = sqlx::query_scalar(
+        "SELECT COALESCE(org_id, user_id) FROM users WHERE id = $1"
+    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| user_id.clone());
+
+    // Pull last 7 days of 5-min rollups in chronological order.
+    let rows: Vec<(i64, Option<f32>, Option<f32>, Option<String>)> = sqlx::query_as(
+        "SELECT (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS ts_ms,
+                tok_s_avg, watts_avg, thermal_state_worst
+         FROM metrics_5min
+         WHERE tenant_id = $1 AND node_id = $2
+           AND ts >= NOW() - INTERVAL '7 days'
+         ORDER BY ts ASC"
+    ).bind(&tenant_id).bind(&node_id)
+      .fetch_all(&state.pool).await.unwrap_or_default();
+
+    if rows.len() < 12 {
+        // Need at least ~1 hour of data to compute anything useful.
+        return Json(serde_json::json!({
+            "node_id": node_id,
+            "samples_analyzed": rows.len(),
+            "confidence": "insufficient",
+            "advice": "Need at least 1 hour of telemetry across varying load to compute a thermal budget. Check back after the node has been running for a while.",
+        })).into_response();
+    }
+
+    // Walk the samples to identify:
+    //   - Sustained Normal blocks (≥6 consecutive samples = 30 min)
+    //   - Normal→Fair/Serious/Critical transitions
+    //
+    // For each Normal block that ended in a transition, capture the median
+    // tok/s of the trailing 2 samples (10 min) — that's the load level that
+    // pushed the node into thermal trouble.
+    #[derive(Default)]
+    struct Block {
+        start_idx: usize,
+        end_idx:   usize,
+        len:       usize,
+    }
+
+    let mut sustained_normal_max_tps: f32 = 0.0;
+    let mut sustained_normal_max_watts: f32 = 0.0;
+    let mut transitions: Vec<(f32, f32, usize)> = Vec::new(); // (push_tps, push_watts, block_len_samples)
+    let mut cur = Block::default();
+    let mut in_normal = false;
+
+    for (i, (_ts, tps, watts, thermal)) in rows.iter().enumerate() {
+        let is_normal = thermal.as_deref().unwrap_or("Normal") == "Normal";
+        if is_normal {
+            if !in_normal {
+                cur = Block { start_idx: i, end_idx: i, len: 1 };
+                in_normal = true;
+            } else {
+                cur.end_idx = i;
+                cur.len += 1;
+            }
+            // Track sustainable_tps over Normal blocks ≥ 30 min.
+            if cur.len >= 6 {
+                if let Some(t) = tps { if *t > sustained_normal_max_tps { sustained_normal_max_tps = *t; } }
+                if let Some(w) = watts { if *w > sustained_normal_max_watts { sustained_normal_max_watts = *w; } }
+            }
+        } else {
+            // Non-Normal sample. If we were in a Normal block, this is a
+            // transition. Capture the load level that pushed us out.
+            if in_normal && cur.len >= 2 {
+                // Median tok/s of the trailing 2 samples (10 min before transition).
+                let tail_start = cur.end_idx.saturating_sub(1);
+                let tail: Vec<f32> = rows[tail_start..=cur.end_idx]
+                    .iter()
+                    .filter_map(|(_t, tps, _w, _th)| *tps)
+                    .collect();
+                let tail_w: Vec<f32> = rows[tail_start..=cur.end_idx]
+                    .iter()
+                    .filter_map(|(_t, _tps, w, _th)| *w)
+                    .collect();
+                if !tail.is_empty() && !tail_w.is_empty() {
+                    let push_tps = tail.iter().sum::<f32>() / tail.len() as f32;
+                    let push_w   = tail_w.iter().sum::<f32>() / tail_w.len() as f32;
+                    transitions.push((push_tps, push_w, cur.len));
+                }
+            }
+            in_normal = false;
+        }
+    }
+
+    let transitions_n = transitions.len();
+    let push_threshold_tps: Option<f32> = if !transitions.is_empty() {
+        let sum: f32 = transitions.iter().map(|(t, _, _)| *t).sum();
+        Some(sum / transitions.len() as f32)
+    } else { None };
+    let push_threshold_watts: Option<f32> = if !transitions.is_empty() {
+        let sum: f32 = transitions.iter().map(|(_, w, _)| *w).sum();
+        Some(sum / transitions.len() as f32)
+    } else { None };
+    // Block length is in 5-min samples; convert to minutes.
+    let time_to_fair_min: Option<f32> = if !transitions.is_empty() {
+        let sum: usize = transitions.iter().map(|(_, _, l)| *l).sum();
+        Some((sum as f32 / transitions.len() as f32) * 5.0)
+    } else { None };
+
+    let fair_penalized_tps: Option<f32> = push_threshold_tps.map(|t| t / 1.25);
+
+    // Confidence — heuristic based on transitions observed and samples.
+    let confidence = if transitions_n >= 4 && rows.len() >= 200 { "high" }
+                     else if transitions_n >= 2 && rows.len() >= 100 { "medium" }
+                     else if rows.len() >= 50 { "low" }
+                     else { "insufficient" };
+
+    // Generate advice. Compares 1-hour token output of "stay sustainable"
+    // vs "push then drop to penalized" once a transition happens.
+    let advice: String = match (push_threshold_tps, fair_penalized_tps, time_to_fair_min, sustained_normal_max_tps > 0.0) {
+        (Some(push), Some(fair), Some(ttf), true) if ttf < 60.0 => {
+            // Tokens over 1 hour at sustainable rate.
+            let sustained_tokens = sustained_normal_max_tps as f64 * 3600.0;
+            // Tokens over 1 hour pushing: push_tps for ttf min, then fair_penalized for remainder.
+            let push_seconds = (ttf as f64 * 60.0).min(3600.0);
+            let fair_seconds = (3600.0 - push_seconds).max(0.0);
+            let push_tokens = push as f64 * push_seconds + fair as f64 * fair_seconds;
+            let backfires = push_tokens < sustained_tokens;
+            let pct_diff = ((push_tokens - sustained_tokens) / sustained_tokens) * 100.0;
+            if backfires {
+                format!(
+                    "Sustainable rate: {:.0} tok/s indefinitely at Normal thermal. Pushing to {:.0} tok/s triggers Fair thermal within ~{:.0} min, dropping effective throughput to {:.0} tok/s. Net over 1 hour: pushing yields {:.0}% fewer tokens than holding the sustainable rate.",
+                    sustained_normal_max_tps, push, ttf, fair, pct_diff.abs()
+                )
+            } else {
+                format!(
+                    "Sustainable rate: {:.0} tok/s indefinitely at Normal thermal. Pushing to {:.0} tok/s triggers Fair thermal within ~{:.0} min (drops to {:.0} tok/s). Over 1 hour, pushing still yields ~{:.0}% more tokens — but coherence and tail latency degrade with thermal Fair, so use cautiously.",
+                    sustained_normal_max_tps, push, ttf, fair, pct_diff
+                )
+            }
+        }
+        (None, _, _, true) => format!(
+            "Sustainable rate: {:.0} tok/s indefinitely at Normal thermal. No thermal transitions observed in the last 7 days — your workload stays comfortably below the budget ceiling.",
+            sustained_normal_max_tps
+        ),
+        _ => "Insufficient data: need varied load (some Normal blocks, some thermal transitions) over the last 7 days to compute a budget.".to_string(),
+    };
+
+    Json(serde_json::json!({
+        "node_id":              node_id,
+        "samples_analyzed":     rows.len(),
+        "transitions_detected": transitions_n,
+        "confidence":           confidence,
+        "sustainable_tps":      sustained_normal_max_tps,
+        "sustainable_watts":    sustained_normal_max_watts,
+        "push_threshold_tps":   push_threshold_tps,
+        "push_threshold_watts": push_threshold_watts,
+        "time_to_fair_min":     time_to_fair_min,
+        "fair_penalized_tps":   fair_penalized_tps,
+        "advice":               advice,
+    })).into_response()
+}
+
 /// GET /api/fleet/metrics-history
 async fn handle_metrics_history(
     State(state): State<AppState>,
@@ -7232,6 +7449,7 @@ async fn main() {
         .route("/api/fleet",              get(handle_fleet))
         .route("/api/fleet/stream",       get(handle_fleet_stream))
         .route("/api/fleet/wes-history",          get(handle_wes_history))
+        .route("/api/v1/thermal-budget",          get(handle_thermal_budget))
         .route("/api/fleet/metrics-history",      get(handle_metrics_history))
         .route("/api/fleet/duty",                 get(handle_fleet_duty))
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
