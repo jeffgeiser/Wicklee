@@ -14,13 +14,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Webhook, Plus, Trash2, Check, AlertTriangle, Lock, Send, Copy } from 'lucide-react';
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../../utils/cloudUrl';
 
 interface WebhookSub {
   id:            string;

@@ -16,7 +16,7 @@
       "post": {
         "operationId": "mcpJsonRpc",
         "summary": "MCP JSON-RPC 2.0 endpoint",
-        "description": "Model Context Protocol endpoint for AI agents. Supports tools (get_node_status, get_inference_state, get_active_models, get_observations — 18 server-side patterns, get_metrics_history) and resources (wicklee://node/metrics, wicklee://node/thermal). Localhost only, no auth required.",
+        "description": "Model Context Protocol endpoint for AI agents. Supports tools (get_node_status, get_inference_state, get_active_models, get_observations — 18 agent-evaluated patterns; 2 additional cloud-evaluated patterns are queryable via the cloud Observations endpoint, get_metrics_history, get_model_fit) and resources (wicklee://node/metrics, wicklee://node/thermal). Localhost only, no auth required.",
         "servers": [{ "url": "http://localhost:7700" }],
         "requestBody": {
           "required": true,
@@ -136,6 +136,93 @@
           "200": { "description": "Key revoked" }
         }
       }
+    },
+    "/api/sla": {
+      "get": {
+        "operationId": "getInferenceSla",
+        "summary": "Inference SLA Monitor — p50/p95/p99 percentiles",
+        "description": "Returns p50/p95/p99/max for TTFT, end-to-end latency, and TPOT computed via DuckDB quantile_cont() over per-request inference_traces. Compliance percentage against a configurable TTFT target, the 20 most-recent violations, and per-model breakdown. Requires the Ollama proxy (Settings → Proxy) to capture per-request data. Window: 1–1440 minutes (24h hard ceiling — that's the trace retention).",
+        "servers": [{ "url": "http://localhost:7700" }],
+        "parameters": [
+          { "name": "window_min",      "in": "query", "required": false, "schema": { "type": "integer", "default": 60,  "minimum": 1, "maximum": 1440 } },
+          { "name": "target_ttft_ms",  "in": "query", "required": false, "schema": { "type": "integer", "default": 500, "minimum": 1 } },
+          { "name": "model",           "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional model filter — narrows percentiles to a single model name." }
+        ],
+        "responses": {
+          "200": { "description": "SLA summary", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SlaSummary" } } } }
+        }
+      }
+    },
+    "/api/v1/thermal-budget": {
+      "get": {
+        "operationId": "getThermalBudget",
+        "summary": "Thermal Budget Calculator (Pro+) — predicts when pushing harder backfires",
+        "description": "Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks (≥30 min) and Normal→Fair transitions, computes the sustainable tok/s rate, the load level that pushes the node out of Normal, the average time-to-Fair, and the resulting penalized rate (push ÷ 1.25). Generates a plain-English advice string comparing 1-hour token output of stay-sustainable vs push-then-drop-to-penalized.",
+        "parameters": [
+          { "name": "node_id", "in": "query", "required": true, "schema": { "type": "string" }, "example": "WK-XXXX" }
+        ],
+        "responses": {
+          "200": { "description": "Thermal budget summary", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ThermalBudget" } } } },
+          "400": { "description": "node_id query param required" },
+          "401": { "description": "Missing or invalid auth" },
+          "403": { "description": "Pro tier or higher required" },
+          "404": { "description": "Node not found in user's fleet" }
+        }
+      }
+    },
+    "/api/v1/webhooks": {
+      "post": {
+        "operationId": "createWebhook",
+        "summary": "Threshold Webhooks (Pro+) — create subscription",
+        "description": "Register a webhook for state-transition push notifications (thermal_state_changed, inference_state_changed, wes_below, wes_above). Returns the HMAC-SHA256 secret ONCE — store it. Receivers verify the X-Wicklee-Signature header to confirm authenticity.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateWebhookBody" } } }
+        },
+        "responses": {
+          "200": { "description": "Subscription created (secret returned ONCE)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookSubscription" } } } },
+          "400": { "description": "Invalid url, event_type, or missing required threshold" },
+          "401": { "description": "Missing or invalid auth" },
+          "403": { "description": "Pro tier or higher required" },
+          "404": { "description": "Specified node_id not found in user's fleet" }
+        }
+      },
+      "get": {
+        "operationId": "listWebhooks",
+        "summary": "List your webhook subscriptions (no secrets)",
+        "responses": {
+          "200": {
+            "description": "Subscription list",
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "subscriptions": { "type": "array", "items": { "$ref": "#/components/schemas/WebhookSubscription" } }
+            } } } }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/{id}": {
+      "delete": {
+        "operationId": "deleteWebhook",
+        "summary": "Remove a webhook subscription",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Subscription deleted" },
+          "404": { "description": "Subscription not found" }
+        }
+      }
+    },
+    "/api/v1/webhooks/{id}/test": {
+      "post": {
+        "operationId": "testWebhook",
+        "summary": "Fire a synthetic test payload to a subscription's URL",
+        "description": "Sends a synthetic webhook payload to the subscription's configured URL with a valid HMAC signature. Use to verify your receiver before relying on real condition triggers.",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Test delivered", "content": { "application/json": { "schema": { "type": "object", "properties": { "delivered": { "type": "boolean" }, "status": { "type": "integer", "description": "Receiver's HTTP response status" } } } } } },
+          "404": { "description": "Subscription not found" },
+          "502": { "description": "Receiver unreachable or returned non-2xx" }
+        }
+      }
     }
   },
   "components": {
@@ -230,6 +317,95 @@
           "detail": { "type": "string" },
           "value": { "type": "number", "format": "float" },
           "unit": { "type": "string" }
+        }
+      },
+      "SlaSummary": {
+        "type": "object",
+        "properties": {
+          "window_minutes":       { "type": "integer" },
+          "request_count":        { "type": "integer" },
+          "error_count":          { "type": "integer" },
+          "error_rate_pct":       { "type": "number", "format": "float" },
+          "ttft":                 { "$ref": "#/components/schemas/SlaPercentiles" },
+          "e2e":                  { "$ref": "#/components/schemas/SlaPercentiles" },
+          "tpot":                 { "$ref": "#/components/schemas/SlaPercentiles" },
+          "sla": {
+            "type": "object",
+            "properties": {
+              "target_ttft_ms":   { "type": "integer" },
+              "compliance_pct":   { "type": "number", "format": "float" },
+              "violations_count": { "type": "integer" },
+              "violations":       { "type": "array", "items": { "$ref": "#/components/schemas/SlaViolation" } }
+            }
+          },
+          "by_model": { "type": "array", "items": {
+            "type": "object",
+            "properties": {
+              "model":        { "type": "string" },
+              "count":        { "type": "integer" },
+              "p95_ttft_ms":  { "type": "number", "format": "float" },
+              "p95_e2e_ms":   { "type": "number", "format": "float" }
+            }
+          } }
+        }
+      },
+      "SlaPercentiles": {
+        "type": "object",
+        "properties": {
+          "p50": { "type": "number", "format": "float" },
+          "p95": { "type": "number", "format": "float" },
+          "p99": { "type": "number", "format": "float" },
+          "max": { "type": "number", "format": "float" }
+        }
+      },
+      "SlaViolation": {
+        "type": "object",
+        "properties": {
+          "ts_ms":      { "type": "integer", "format": "int64" },
+          "model":      { "type": "string" },
+          "ttft_ms":    { "type": "integer" },
+          "latency_ms": { "type": "integer" }
+        }
+      },
+      "ThermalBudget": {
+        "type": "object",
+        "properties": {
+          "node_id":              { "type": "string" },
+          "samples_analyzed":     { "type": "integer" },
+          "transitions_detected": { "type": "integer" },
+          "confidence":           { "type": "string", "enum": ["insufficient", "low", "medium", "high"] },
+          "sustainable_tps":      { "type": "number", "format": "float", "description": "Max tok/s sustained during any Normal-thermal block ≥30 min" },
+          "sustainable_watts":    { "type": "number", "format": "float" },
+          "push_threshold_tps":   { "type": "number", "format": "float", "nullable": true, "description": "Median tok/s in 10 min before any Normal→Fair transition" },
+          "push_threshold_watts": { "type": "number", "format": "float", "nullable": true },
+          "time_to_fair_min":     { "type": "number", "format": "float", "nullable": true, "description": "Avg duration of Normal blocks before Fair transition (minutes)" },
+          "fair_penalized_tps":   { "type": "number", "format": "float", "nullable": true, "description": "push_threshold_tps ÷ 1.25 — effective rate once Fair triggers" },
+          "advice":               { "type": "string", "description": "Plain-English 1-hour-output comparison: stay-sustainable vs push-then-drop" }
+        }
+      },
+      "CreateWebhookBody": {
+        "type": "object",
+        "required": ["url", "event_type"],
+        "properties": {
+          "url":        { "type": "string", "format": "uri", "example": "https://your-server.example.com/wicklee-hook" },
+          "event_type": { "type": "string", "enum": ["thermal_state_changed", "inference_state_changed", "wes_below", "wes_above"] },
+          "node_id":    { "type": "string", "nullable": true, "description": "Omit to fire for any node owned by the user" },
+          "threshold":  { "type": "number", "format": "float", "nullable": true, "description": "Required for wes_below / wes_above" },
+          "cooldown_s": { "type": "integer", "minimum": 10, "default": 60, "description": "Min seconds between fires per (subscription, node) pair" }
+        }
+      },
+      "WebhookSubscription": {
+        "type": "object",
+        "properties": {
+          "id":            { "type": "string" },
+          "url":           { "type": "string" },
+          "event_type":    { "type": "string" },
+          "node_id":       { "type": "string", "nullable": true },
+          "threshold":     { "type": "number", "format": "float", "nullable": true },
+          "cooldown_s":    { "type": "integer" },
+          "enabled":       { "type": "boolean" },
+          "last_fired_ms": { "type": "integer", "format": "int64", "nullable": true },
+          "secret":        { "type": "string", "description": "HMAC-SHA256 secret returned ONLY at creation. Used to verify X-Wicklee-Signature on incoming webhook calls." }
         }
       },
       "MetricsPayload": {

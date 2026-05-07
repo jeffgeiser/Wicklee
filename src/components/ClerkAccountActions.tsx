@@ -1,6 +1,7 @@
 import React from 'react';
 import { useClerk, useAuth } from '@clerk/clerk-react';
 import { LogOut, UserCog } from 'lucide-react';
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 /**
  * Clerk-dependent account actions (Manage Account + Sign Out).
@@ -21,8 +22,7 @@ const ClerkAccountActions: React.FC<{
     try {
       const jwt = await getToken();
       if (jwt) {
-        const cloud = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-        fetch(`${cloud}/api/auth/stream-token`, {
+        fetch(`${CLOUD_URL}/api/auth/stream-token`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${jwt}` },
         }).catch(() => {});

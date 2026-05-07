@@ -2,15 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Key, Plus, Trash2, Copy, Check, X, Terminal, ChevronRight } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
 import type { ApiKey, CreateApiKeyResponse } from '../types';
-
-// ── Cloud URL (mirrors App.tsx pattern) ──────────────────────────────────────
-// For API calls — may be empty string in same-origin proxy mode.
-const CLOUD_URL = (() => {
-  const v = import.meta.env.VITE_CLOUD_URL ?? '';
-  if (!v) return 'https://wicklee.dev';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 // For display in the Quick Reference — always the public URL.
 const DISPLAY_URL = 'https://wicklee.dev';

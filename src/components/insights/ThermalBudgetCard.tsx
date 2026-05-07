@@ -14,13 +14,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Thermometer, AlertTriangle, Lock, RefreshCw } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../../utils/cloudUrl';
 
 interface ThermalBudgetResponse {
   node_id:               string;

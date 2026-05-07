@@ -32,6 +32,7 @@ import {
 } from 'recharts';
 import { TrendingUp } from 'lucide-react';
 import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, EventHistoryRecord, SentinelMetrics, SubscriptionTier } from '../types';
+import { CLOUD_URL } from '../utils/cloudUrl';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useEventHistory } from '../hooks/useEventHistory';
 
@@ -1450,13 +1451,6 @@ const EventHistoryPanel: React.FC = () => {
 // ══════════════════════════════════════════════════════════════════════════════
 // CLOUD SECTIONS — Fleet-first Mission Control (wicklee.dev only)
 // ══════════════════════════════════════════════════════════════════════════════
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
 
 // ── Section 1: Sovereignty (merged Guard + Inspector) ─────────────────────────
 

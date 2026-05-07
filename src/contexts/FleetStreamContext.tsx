@@ -1,18 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import type { SentinelMetrics, FleetEvent, FleetNode, FleetStreamState, ConnectionState } from '../types';
 import { getNodePowerW } from '../utils/power';
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const isLocalHost =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-  if (!v) return 'https://wicklee.dev';
-  if (v === '/') return '';   // same-origin proxy mode — nginx routes /api/*
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
 
 const STALE_THRESHOLD_MS = 30_000;
 const RETRY_MS           = 5_000;

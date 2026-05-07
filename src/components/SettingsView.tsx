@@ -8,15 +8,7 @@ import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
 } from '../hooks/useSettings';
-
-// ── Cloud URL (matches WESHistoryChart pattern) ────────────────────────────────
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 // ── Alert types ────────────────────────────────────────────────────────────────
 

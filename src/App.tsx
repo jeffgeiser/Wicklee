@@ -6,6 +6,7 @@ import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Ther
 import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
+import { CLOUD_URL } from './utils/cloudUrl';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -112,21 +113,7 @@ const LOCAL_USER: UserType = {
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 // Cloud backend URL — env var takes precedence; falls back to the known Railway service.
-//
-// Three modes:
-//   unset / ''  → direct backend URL (dev, agent builds)
-//   '/'         → empty string = same-origin; nginx proxies /api/* to backend
-//   'https://…' → explicit absolute URL
-//
-// In the Railway frontend service set VITE_CLOUD_URL=/ to enable the nginx
-// reverse proxy so all API calls flow through wicklee.dev/api/* instead of
-// crossing origins (eliminates CORS, hides the backend URL from the client).
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://wicklee.dev';
-  if (v === '/') return '';   // same-origin proxy mode — nginx handles routing
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+// Resolution rules + rationale documented in src/utils/cloudUrl.ts (single source of truth).
 
 // Build-time flag: true in the agent binary where ClerkProvider is absent.
 // Hoisted to module scope so it's available to both AppCore and the export shim.

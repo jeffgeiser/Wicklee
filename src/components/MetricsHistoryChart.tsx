@@ -21,15 +21,7 @@ import { Activity, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { getNodePowerW } from '../utils/power';
-
-// ── Config ────────────────────────────────────────────────────────────────────
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

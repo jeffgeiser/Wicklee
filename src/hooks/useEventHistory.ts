@@ -10,16 +10,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { EventHistoryRecord } from '../types';
-
-// Resolve CLOUD_URL the same way FleetStreamContext / MetricsHistoryChart do.
-// When VITE_CLOUD_URL='/' (Railway nginx proxy), this becomes '' (same-origin).
-// When unset, falls back to the direct backend URL.
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL ?? '') as string;
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 interface UseEventHistoryOptions {
   /** Max events per page (default 50, max 200). */

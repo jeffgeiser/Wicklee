@@ -5,16 +5,8 @@ import {
 } from 'recharts';
 import { TrendingUp, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier } from '../types';
+import { CLOUD_URL } from '../utils/cloudUrl';
 // benchmarkReport imports removed — CSV export replaces modal
-
-// ── Config ────────────────────────────────────────────────────────────────────
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

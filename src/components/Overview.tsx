@@ -6,6 +6,7 @@ import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW, hasPowerData } from '../utils/power';
 import { pushAndGetSmoothed, pruneBuffers } from '../utils/sharedSmoothing';
+import { CLOUD_URL } from '../utils/cloudUrl';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
@@ -72,14 +73,6 @@ function estimateTps(
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
 // Controls Cockpit vs Mission Control rendering mode. Never derived from runtime auth state.
 const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-
-// ── Cloud URL (same derivation as MetricsHistoryChart) ──────────────────────
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
 
 interface OverviewProps {
   nodes: NodeAgent[];

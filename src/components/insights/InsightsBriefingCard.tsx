@@ -54,13 +54,7 @@ import { useFleetStream } from '../../contexts/FleetStreamContext';
 import type { SentinelMetrics } from '../../types';
 import { computeWES } from '../../utils/wes';
 import { getNodePowerW } from '../../utils/power';
-
-// ── Cloud URL (mirrors App.tsx / APIKeysView.tsx) ─────────────────────────────
-const CLOUD_URL = (() => {
-  const v = import.meta.env.VITE_CLOUD_URL ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../../utils/cloudUrl';
 
 // ── Node-availability gate constant ───────────────────────────────────────────
 // Mirrors the ONLINE_GATE_MS used in AIInsights to build FleetNodeSummary.

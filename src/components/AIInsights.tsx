@@ -41,13 +41,7 @@ import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW } from '../utils/power';
 import { buildReportFromLive } from '../utils/benchmarkReport';
 import type { BenchmarkReport } from '../utils/benchmarkReport';
-
-const CLOUD_URL = (() => {
-  const v = (import.meta.env.VITE_CLOUD_URL as string) ?? '';
-  if (!v) return 'https://vibrant-fulfillment-production-62c0.up.railway.app';
-  if (v === '/') return '';
-  return v.startsWith('http') ? v : `https://${v}`;
-})();
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 import BenchmarkReportModal from './BenchmarkReportModal';
 import { computeModelFitScore } from '../utils/modelFit';
