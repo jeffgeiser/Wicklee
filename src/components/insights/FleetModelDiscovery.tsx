@@ -138,8 +138,12 @@ const FleetModelRow: React.FC<{
           {shortName(model.model_id)}
         </span>
 
-        {/* Fleet fit summary: node pills (dim non-focus nodes when filtering) */}
-        <div className="flex items-center gap-1 flex-wrap justify-end max-w-[45%] hidden sm:flex">
+        {/* Right-side stats — all fixed-width slots so columns align cleanly
+            across every row, regardless of content length. Reserved space
+            shown as "—" when a metric is absent (likes = 0). */}
+
+        {/* Node pills — fixed slot, right-justified. Hidden on small screens. */}
+        <div className="hidden sm:flex items-center gap-1 justify-end shrink-0 w-[180px]">
           {model.nodes.slice(0, 4).map(n => (
             <NodePill
               key={n.node_id}
@@ -152,10 +156,10 @@ const FleetModelRow: React.FC<{
           )}
         </div>
 
-        {/* Summary: X/Y nodes fit — or per-node fit status when filtered */}
+        {/* Fit summary — fixed-width right-aligned column. */}
         <span
           title="Nodes with fit score ≥40 (Tight or better). Green = Excellent/Good (≥60). Yellow = Tight (40–59). Orange = Marginal (1–39). Red = Won't Fit."
-          className={`text-[10px] whitespace-nowrap shrink-0 cursor-default ${
+          className={`text-[10px] whitespace-nowrap shrink-0 cursor-default text-right tabular-nums w-[88px] ${
             focusNodeId
               ? fittingNodes.length > 0 ? 'text-emerald-500' : 'text-red-500/70'
               : 'text-gray-600'
@@ -164,23 +168,23 @@ const FleetModelRow: React.FC<{
           {fitSummary}
         </span>
 
-        {/* Downloads + likes (downloads = historical pull volume,
-            likes = current bookmark interest). Pair surfaces "trending
-            now" alongside "popular all-time." */}
+        {/* Downloads — fixed-width right-aligned. */}
         <span
-          className="text-[10px] text-gray-700 tabular-nums shrink-0"
+          className="text-[10px] text-gray-700 tabular-nums shrink-0 text-right w-[56px]"
           title="HuggingFace downloads (all time)"
         >
           {fmtDl(model.downloads)}↓
         </span>
-        {model.likes != null && model.likes > 0 && (
-          <span
-            className="text-[10px] text-rose-400/70 tabular-nums shrink-0"
-            title="HuggingFace likes (current bookmark interest)"
-          >
-            {fmtDl(model.likes)}♥
-          </span>
-        )}
+
+        {/* Likes — fixed slot reserved even when 0 so adjacent columns don't shift. */}
+        <span
+          className="text-[10px] tabular-nums shrink-0 text-right w-[48px]"
+          title="HuggingFace likes (current bookmark interest)"
+        >
+          {model.likes != null && model.likes > 0
+            ? <span className="text-rose-400/70">{fmtDl(model.likes)}♥</span>
+            : <span className="text-gray-800">—</span>}
+        </span>
 
         {open
           ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
