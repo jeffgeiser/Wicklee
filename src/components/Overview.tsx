@@ -1606,6 +1606,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     // On cloud, server-side /api/fleet/duty (Postgres) is the SSOT.
   }, [dutyMetrics]);
 
+  // Prune the shared smoothing-store buffers when the fleet roster shrinks.
+  // Reads from `allNodeMetrics` (declared just above) so this hook lives
+  // ABOVE the early-return for nodesLoading — keeping the hook count
+  // stable across loading and loaded renders. Without this placement React
+  // throws "rendered more hooks than during the previous render" on the
+  // load → loaded transition (Error #310 in production).
+  const liveNodeIdsKey = Object.keys(allNodeMetrics).sort().join(',');
+  useEffect(() => {
+    pruneBuffers(Object.keys(allNodeMetrics));
+  // Re-runs when the SET of node ids changes (key concatenation), not on
+  // every render where the same set arrives in a new array reference.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveNodeIdsKey]);
+
   // While the initial fleet fetch is in-flight (nodesLoading), show a blank
   // loading screen rather than EmptyFleetState — avoids the "Add your first node"
   // flash on every page refresh for users who already have nodes paired.
@@ -1633,13 +1647,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const effectiveMetrics: SentinelMetrics[] = isLocalHost
     ? (sentinel ? [sentinel] : [])
     : liveMetrics.filter(m => !restrictedIds.has(m.node_id));
-
-  // Prune the shared smoothing-store buffers when the fleet roster shrinks.
-  // App-level lifecycle owner — bounds memory across long sessions where
-  // nodes come and go.
-  React.useEffect(() => {
-    pruneBuffers(effectiveMetrics.map(m => m.node_id));
-  }, [effectiveMetrics]);
 
   // Tile 1 — THROUGHPUT: ∑ estimated tok/s across inference-active nodes (Ollama + vLLM).
   // Both runtimes are not mutually exclusive — a node can run both simultaneously.
