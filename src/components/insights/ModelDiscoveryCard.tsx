@@ -28,6 +28,8 @@ interface VariantResult {
 interface ModelResult {
   model_id:  string;
   downloads: number;
+  /** HuggingFace likes — current bookmark interest (complements downloads). */
+  likes?:    number;
   variants:  VariantResult[];
 }
 
@@ -210,10 +212,23 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
           {(best.file_size_mb / 1024).toFixed(1)} GB
         </span>
 
-        {/* Downloads */}
-        <span className="text-[10px] text-gray-700 tabular-nums shrink-0">
+        {/* Downloads + HF likes — downloads is historical pull volume,
+            likes is current bookmark interest. Pair gives a sharper
+            "is this trending?" signal than downloads alone. */}
+        <span
+          className="text-[10px] text-gray-700 tabular-nums shrink-0"
+          title="HuggingFace downloads (all time)"
+        >
           {fmtDl(model.downloads)}↓
         </span>
+        {model.likes != null && model.likes > 0 && (
+          <span
+            className="text-[10px] text-rose-400/70 tabular-nums shrink-0"
+            title="HuggingFace likes (current bookmark interest)"
+          >
+            {fmtDl(model.likes)}♥
+          </span>
+        )}
 
         {open
           ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />

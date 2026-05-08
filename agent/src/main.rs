@@ -5091,12 +5091,12 @@ fn pct_encode_query(s: &str) -> String {
 
 static HF_LAST_FETCH: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
-/// Returns (model_id, downloads, variants: [(filename, quant_level, file_size_bytes)]).
+/// Returns (model_id, downloads, likes, variants: [(filename, quant_level, file_size_bytes)]).
 #[cfg(not(target_env = "musl"))]
 async fn fetch_hf_gguf(
     search: Option<&str>,
     limit: usize,
-) -> Vec<(String, u64, Vec<(String, String, u64)>)> {
+) -> Vec<(String, u64, u64, Vec<(String, String, u64)>)> {
     // Rate-limit HF fetches to 1 per second to avoid server-side IP bans.
     let delay = {
         let mut guard = HF_LAST_FETCH.lock().unwrap();
@@ -5132,11 +5132,13 @@ async fn fetch_hf_gguf(
     let model_list: Vec<serde_json::Value> = list_resp.json().await.unwrap_or_default();
 
     // Step 2: for each model, fetch /api/models/{id}/tree/main to get actual file sizes.
-    let mut results = Vec::new();
+    // Tuple shape: (model_id, downloads, likes, variants[]).
+    let mut results: Vec<(String, u64, u64, Vec<(String, String, u64)>)> = Vec::new();
     for model in &model_list {
         let model_id = model["id"].as_str().unwrap_or("");
         if !valid_hf_model_id(model_id) { continue; }
         let downloads = model["downloads"].as_u64().unwrap_or(0);
+        let likes     = model["likes"].as_u64().unwrap_or(0);
 
         let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
         let mut tree_req = client.get(&tree_url);
@@ -5161,7 +5163,7 @@ async fn fetch_hf_gguf(
         variants.sort_by(|a, b| b.2.cmp(&a.2));
 
         if !variants.is_empty() {
-            results.push((model_id.to_string(), downloads, variants));
+            results.push((model_id.to_string(), downloads, likes, variants));
         }
 
         // Brief pause between tree requests to be polite to HF
@@ -5179,12 +5181,12 @@ async fn refresh_model_catalog(store: store::Store) {
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
-    let mut entries: Vec<(String, String, String, u64, u64, i64)> = Vec::new();
+    let mut entries: Vec<(String, String, String, u64, u64, u64, i64)> = Vec::new();
     let models_count = models.len();
 
-    for (model_id, downloads, variants) in &models {
+    for (model_id, downloads, likes, variants) in &models {
         for (filename, quant, file_size) in variants {
-            entries.push((model_id.clone(), filename.clone(), quant.clone(), *file_size, *downloads, now));
+            entries.push((model_id.clone(), filename.clone(), quant.clone(), *file_size, *downloads, *likes, now));
         }
     }
 
@@ -5241,8 +5243,9 @@ async fn handle_model_candidates(
         thermal_state: thermal.to_string(),
     };
 
-    // Fetch catalog: live HF search when a term is present, cached trending otherwise
-    let catalog: Vec<(String, u64, Vec<(String, String, u64)>)> = if let Some(ref term) = search {
+    // Fetch catalog: live HF search when a term is present, cached trending otherwise.
+    // Tuple shape: (model_id, downloads, likes, variants[]).
+    let catalog: Vec<(String, u64, u64, Vec<(String, String, u64)>)> = if let Some(ref term) = search {
         // Live search — always fresh from HF
         fetch_hf_gguf(Some(term), limit).await
     } else {
@@ -5258,7 +5261,7 @@ async fn handle_model_candidates(
     };
 
     let mut models: Vec<serde_json::Value> = Vec::new();
-    for (model_id, downloads, variants) in &catalog {
+    for (model_id, downloads, likes, variants) in &catalog {
         if !valid_hf_model_id(model_id) { continue; }
         let mut scored_variants: Vec<serde_json::Value> = Vec::new();
         for (filename, quant, file_size) in variants {
@@ -5287,6 +5290,7 @@ async fn handle_model_candidates(
         models.push(serde_json::json!({
             "model_id": model_id,
             "downloads": downloads,
+            "likes": likes,
             "variants": scored_variants,
         }));
     }

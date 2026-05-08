@@ -31,6 +31,8 @@ interface NodeFit {
 interface FleetModel {
   model_id:          string;
   downloads:         number;
+  /** HuggingFace likes — current bookmark interest (complements downloads). */
+  likes?:            number;
   fleet_best_score:  number;
   nodes:             NodeFit[];
 }
@@ -162,10 +164,23 @@ const FleetModelRow: React.FC<{
           {fitSummary}
         </span>
 
-        {/* Downloads */}
-        <span className="text-[10px] text-gray-700 tabular-nums shrink-0">
+        {/* Downloads + likes (downloads = historical pull volume,
+            likes = current bookmark interest). Pair surfaces "trending
+            now" alongside "popular all-time." */}
+        <span
+          className="text-[10px] text-gray-700 tabular-nums shrink-0"
+          title="HuggingFace downloads (all time)"
+        >
           {fmtDl(model.downloads)}↓
         </span>
+        {model.likes != null && model.likes > 0 && (
+          <span
+            className="text-[10px] text-rose-400/70 tabular-nums shrink-0"
+            title="HuggingFace likes (current bookmark interest)"
+          >
+            {fmtDl(model.likes)}♥
+          </span>
+        )}
 
         {open
           ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />

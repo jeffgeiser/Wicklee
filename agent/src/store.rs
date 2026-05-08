@@ -526,9 +526,11 @@ impl Store {
                 quant_level TEXT    NOT NULL,
                 file_size   BIGINT  NOT NULL,
                 downloads   BIGINT  NOT NULL DEFAULT 0,
+                likes       BIGINT  NOT NULL DEFAULT 0,
                 fetched_at  BIGINT  NOT NULL,
                 PRIMARY KEY (model_id, filename)
             );
+            ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT NOT NULL DEFAULT 0;
         ")
     }
 
@@ -1704,13 +1706,14 @@ impl Store {
     // ── Model Catalog (HuggingFace GGUF cache) ─────────────────────────────
 
     /// Write a batch of catalog entries (replaces existing for the same model_id).
-    pub fn write_catalog(&self, entries: &[(String, String, String, u64, u64, i64)]) -> Result<(), duckdb::Error> {
+    /// Tuple shape: (model_id, filename, quant_level, file_size, downloads, likes, fetched_at).
+    pub fn write_catalog(&self, entries: &[(String, String, String, u64, u64, u64, i64)]) -> Result<(), duckdb::Error> {
         let conn = self.0.lock().unwrap();
-        for (model_id, filename, quant_level, file_size, downloads, fetched_at) in entries {
+        for (model_id, filename, quant_level, file_size, downloads, likes, fetched_at) in entries {
             conn.execute(
-                "INSERT OR REPLACE INTO model_catalog (model_id, filename, quant_level, file_size, downloads, fetched_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                duckdb::params![model_id, filename, quant_level, file_size, downloads, fetched_at],
+                "INSERT OR REPLACE INTO model_catalog (model_id, filename, quant_level, file_size, downloads, likes, fetched_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                duckdb::params![model_id, filename, quant_level, file_size, downloads, likes, fetched_at],
             )?;
         }
         Ok(())
@@ -1731,14 +1734,15 @@ impl Store {
     }
 
     /// Read all catalog entries grouped by model_id.
-    pub fn query_catalog(&self, search: Option<&str>, limit: i64) -> Result<Vec<(String, u64, Vec<(String, String, u64)>)>, duckdb::Error> {
+    /// Tuple shape: (model_id, downloads, likes, variants[]).
+    pub fn query_catalog(&self, search: Option<&str>, limit: i64) -> Result<Vec<(String, u64, u64, Vec<(String, String, u64)>)>, duckdb::Error> {
         let conn = self.0.lock().unwrap();
         let sql = if search.is_some() {
-            "SELECT model_id, filename, quant_level, file_size, downloads
+            "SELECT model_id, filename, quant_level, file_size, downloads, likes
              FROM model_catalog WHERE LOWER(model_id) LIKE '%' || LOWER(?) || '%'
              ORDER BY downloads DESC"
         } else {
-            "SELECT model_id, filename, quant_level, file_size, downloads
+            "SELECT model_id, filename, quant_level, file_size, downloads, likes
              FROM model_catalog ORDER BY downloads DESC"
         };
         let mut stmt = conn.prepare(sql)?;
@@ -1748,7 +1752,7 @@ impl Store {
             stmt.query([])?
         };
 
-        let mut models: Vec<(String, u64, Vec<(String, String, u64)>)> = Vec::new();
+        let mut models: Vec<(String, u64, u64, Vec<(String, String, u64)>)> = Vec::new();
         let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
         while let Some(row) = rows.next()? {
@@ -1757,12 +1761,13 @@ impl Store {
             let quant: String = row.get(2)?;
             let file_size: u64 = row.get::<_, i64>(3)? as u64;
             let downloads: u64 = row.get::<_, i64>(4)? as u64;
+            let likes:     u64 = row.get::<_, i64>(5).unwrap_or(0) as u64;
 
             if let Some(&idx) = seen.get(&model_id) {
-                models[idx].2.push((filename, quant, file_size));
+                models[idx].3.push((filename, quant, file_size));
             } else {
                 seen.insert(model_id.clone(), models.len());
-                models.push((model_id, downloads, vec![(filename, quant, file_size)]));
+                models.push((model_id, downloads, likes, vec![(filename, quant, file_size)]));
             }
         }
         models.truncate(limit as usize);

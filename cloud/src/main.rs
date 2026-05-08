@@ -805,6 +805,12 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("model_catalog migration failed");
 
+    // Additive: HuggingFace likes — current taste signal (vs downloads which
+    // skew toward older, well-established models). Populated by the same
+    // refresh task. Default 0 for any rows written before this migration.
+    sqlx::query("ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT NOT NULL DEFAULT 0")
+        .execute(pool).await.ok();
+
     // ── Backfill: if only one user exists, assign all orphaned nodes to them. ──
     sqlx::query("
         UPDATE nodes
@@ -4253,12 +4259,15 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
     // Step 2: Fetch /tree/main for all repos concurrently (max 5 in-flight).
     // Sequential fetches take 30–60 s for 30 repos; parallel cuts it to ~6 s.
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
-    let mut tasks: Vec<tokio::task::JoinHandle<Option<(String, i64, Vec<serde_json::Value>)>>> = Vec::new();
+    let mut tasks: Vec<tokio::task::JoinHandle<Option<(String, i64, i64, Vec<serde_json::Value>)>>> = Vec::new();
 
     for model in &models {
         let model_id = model["id"].as_str().unwrap_or("").to_string();
         if model_id.is_empty() { continue; }
         let downloads = model["downloads"].as_i64().unwrap_or(0);
+        // HF "likes" — current bookmark interest; complements downloads (which
+        // skew toward older models that have had time to accumulate volume).
+        let likes     = model["likes"].as_i64().unwrap_or(0);
         let tok2      = hf_token.clone();
         let sem       = semaphore.clone();
 
@@ -4272,14 +4281,14 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
             }).await.ok()?.ok()?;
             let tree_body  = tree_resp.into_string().ok()?;
             let files: Vec<serde_json::Value> = serde_json::from_str(&tree_body).ok()?;
-            Some((model_id, downloads, files))
+            Some((model_id, downloads, likes, files))
         }));
     }
 
     let mut count      = 0usize;
     let mut repo_count = 0usize;
     for task in tasks {
-        let Some((model_id, downloads, files)) = task.await.unwrap_or(None) else { continue };
+        let Some((model_id, downloads, likes, files)) = task.await.unwrap_or(None) else { continue };
         repo_count += 1;
 
         // Wipe all existing rows for this model_id before re-inserting.
@@ -4357,11 +4366,15 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
 
         for (_key, v) in variants {
             match sqlx::query(
-                "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads)
-                 VALUES ($1, $2, $3, $4, $5)
+                "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads, likes)
+                 VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT (model_id, filename) DO UPDATE SET
-                   file_size = EXCLUDED.file_size, downloads = EXCLUDED.downloads, fetched_at = NOW()"
-            ).bind(&model_id).bind(&v.canonical_filename).bind(&v.quant).bind(v.total_size).bind(downloads)
+                   file_size = EXCLUDED.file_size,
+                   downloads = EXCLUDED.downloads,
+                   likes     = EXCLUDED.likes,
+                   fetched_at = NOW()"
+            ).bind(&model_id).bind(&v.canonical_filename).bind(&v.quant)
+              .bind(v.total_size).bind(downloads).bind(likes)
             .execute(pool).await {
                 Ok(_)  => count += 1,
                 Err(e) => eprintln!("[model-catalog] insert failed for {model_id}/{}: {e}", v.canonical_filename),
@@ -4661,29 +4674,31 @@ async fn handle_fleet_model_candidates(
     // limit * 30 rows then cap at `limit` distinct models after grouping, ensuring we always
     // surface the requested number of models regardless of variant count.
     let row_limit: i32 = limit.saturating_mul(30).min(1200);
-    let rows: Vec<(String, String, String, i64, i64)> = if let Some(ref s) = search {
+    let rows: Vec<(String, String, String, i64, i64, i64)> = if let Some(ref s) = search {
         sqlx::query_as(
-            "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
+            "SELECT model_id, filename, quant_level, file_size, downloads, likes FROM model_catalog
              WHERE LOWER(model_id) LIKE '%' || LOWER($2) || '%'
              ORDER BY downloads DESC LIMIT $1"
         ).bind(row_limit).bind(s).fetch_all(&state.pool).await.unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
+            "SELECT model_id, filename, quant_level, file_size, downloads, likes FROM model_catalog
              ORDER BY downloads DESC LIMIT $1"
         ).bind(row_limit).fetch_all(&state.pool).await.unwrap_or_default()
     };
 
-    // Group flat rows by model_id → variants list
-    let mut model_map: std::collections::HashMap<String, (u64, Vec<(String, String, u64)>)> = std::collections::HashMap::new();
-    for (model_id, filename, quant, file_size, downloads) in &rows {
+    // Group flat rows by model_id → (downloads, likes, variants).
+    // downloads + likes are repo-level (same for every variant of the same model_id),
+    // so we just take the first one we see — the SELECT preserves repo order.
+    let mut model_map: std::collections::HashMap<String, (u64, u64, Vec<(String, String, u64)>)> = std::collections::HashMap::new();
+    for (model_id, filename, quant, file_size, downloads, likes) in &rows {
         if !valid_hf_model_id_cloud(model_id) { continue; }
         if *file_size <= 0 { continue; }
-        let entry = model_map.entry(model_id.clone()).or_insert_with(|| (*downloads as u64, Vec::new()));
-        entry.1.push((filename.clone(), quant.clone(), *file_size as u64));
+        let entry = model_map.entry(model_id.clone()).or_insert_with(|| (*downloads as u64, *likes as u64, Vec::new()));
+        entry.2.push((filename.clone(), quant.clone(), *file_size as u64));
     }
     // Sort each model's variants by file size descending (largest first = highest quality first)
-    for (_, (_, variants)) in model_map.iter_mut() {
+    for (_, (_, _, variants)) in model_map.iter_mut() {
         variants.sort_by(|a, b| b.2.cmp(&a.2));
     }
 
@@ -4696,9 +4711,9 @@ async fn handle_fleet_model_candidates(
     eprintln!("[fleet-discovery] {hf_debug}");
 
     // Build hf_models sorted by downloads descending, capped at `limit` distinct models.
-    let mut hf_models: Vec<(String, u64, Vec<(String, String, u64)>)> = model_map
+    let mut hf_models: Vec<(String, u64, u64, Vec<(String, String, u64)>)> = model_map
         .into_iter()
-        .map(|(id, (dl, vars))| (id, dl, vars))
+        .map(|(id, (dl, likes, vars))| (id, dl, likes, vars))
         .collect();
     hf_models.sort_by(|a, b| b.1.cmp(&a.1));
     hf_models.truncate(limit as usize);
@@ -4723,7 +4738,7 @@ async fn handle_fleet_model_candidates(
 
     // Score each model × each node
     let mut models: Vec<serde_json::Value> = Vec::new();
-    for (model_id, downloads, variants) in &hf_models {
+    for (model_id, downloads, likes, variants) in &hf_models {
         if !valid_hf_model_id_cloud(model_id) { continue; }
         let mut node_fits: Vec<serde_json::Value> = Vec::new();
         let mut fleet_best_score = 0u8;
@@ -4771,6 +4786,7 @@ async fn handle_fleet_model_candidates(
         models.push(serde_json::json!({
             "model_id":         model_id,
             "downloads":        downloads,
+            "likes":            likes,
             "fleet_best_score": fleet_best_score,
             "nodes":            node_fits,
         }));
@@ -4952,15 +4968,15 @@ async fn handle_v1_models_discover(
         "AND LOWER(model_id) LIKE '%' || LOWER($2) || '%'"
     } else { "" };
     let sql = format!(
-        "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog
+        "SELECT model_id, filename, quant_level, file_size, downloads, likes FROM model_catalog
          WHERE TRUE {search_clause} ORDER BY downloads DESC LIMIT $1"
     );
 
-    let rows: Vec<(String, String, String, i64, i64)> = if let Some(ref s) = search {
+    let rows: Vec<(String, String, String, i64, i64, i64)> = if let Some(ref s) = search {
         sqlx::query_as(&sql).bind(limit).bind(s).fetch_all(&state.pool).await.unwrap_or_default()
     } else {
         let sql_no_search = format!(
-            "SELECT model_id, filename, quant_level, file_size, downloads FROM model_catalog ORDER BY downloads DESC LIMIT $1"
+            "SELECT model_id, filename, quant_level, file_size, downloads, likes FROM model_catalog ORDER BY downloads DESC LIMIT $1"
         );
         sqlx::query_as(&sql_no_search).bind(limit).fetch_all(&state.pool).await.unwrap_or_default()
     };
@@ -4969,7 +4985,7 @@ async fn handle_v1_models_discover(
     let mut models: Vec<serde_json::Value> = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
-    for (model_id, _filename, quant, file_size, downloads) in &rows {
+    for (model_id, _filename, quant, file_size, downloads, likes) in &rows {
         let (vram, power) = if sim_label.is_some() {
             (sim_vram, sim_power)
         } else {
@@ -4993,6 +5009,7 @@ async fn handle_v1_models_discover(
             models.push(serde_json::json!({
                 "model_id": model_id,
                 "downloads": downloads,
+                "likes": likes,
                 "variants": [variant],
             }));
         }
