@@ -90,10 +90,14 @@ const NodePill: React.FC<{ node: NodeFit; highlighted?: boolean }> = ({ node, hi
   return (
     <span
       title={`${label}: ${node.fit_label} (${node.best_quant}, ${(node.file_size_mb / 1024).toFixed(1)} GB)`}
-      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${c.badge} whitespace-nowrap transition-opacity ${highlighted === false ? 'opacity-30' : ''}`}
+      // Fixed-width pills so dots line up vertically across rows even when
+      // hostnames vary in length. 88px = comfortable fit for typical 8-12
+      // char hostnames; truncate with ellipsis past that. Full hostname
+      // stays available on hover via the title attribute above.
+      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${c.badge} whitespace-nowrap transition-opacity w-[88px] overflow-hidden ${highlighted === false ? 'opacity-30' : ''}`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot} shrink-0`} />
-      {label}
+      <span className="truncate">{label}</span>
     </span>
   );
 };
@@ -142,17 +146,21 @@ const FleetModelRow: React.FC<{
             across every row, regardless of content length. Reserved space
             shown as "—" when a metric is absent (likes = 0). */}
 
-        {/* Node pills — fixed slot, right-justified. Hidden on small screens. */}
-        <div className="hidden sm:flex items-center gap-1 justify-end shrink-0 w-[180px]">
-          {model.nodes.slice(0, 4).map(n => (
+        {/* Node pills — fixed slot, left-justified inside the slot so pills
+            anchor at the same x-position across rows. Each pill is 88px;
+            slot fits 2 pills + gap. Beyond 2 nodes, the slot will overflow
+            horizontally on small fleets — acceptable since fleets > 2 are
+            the minority and the spacer ("+N") indicator handles the rest. */}
+        <div className="hidden sm:flex items-center gap-1 shrink-0 w-[188px]">
+          {model.nodes.slice(0, 2).map(n => (
             <NodePill
               key={n.node_id}
               node={n}
               highlighted={focusNodeId == null ? undefined : n.node_id === focusNodeId}
             />
           ))}
-          {model.nodes.length > 4 && (
-            <span className="text-[10px] text-gray-600">+{model.nodes.length - 4}</span>
+          {model.nodes.length > 2 && (
+            <span className="text-[10px] text-gray-600 tabular-nums">+{model.nodes.length - 2}</span>
           )}
         </div>
 

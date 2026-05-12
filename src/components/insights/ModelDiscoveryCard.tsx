@@ -263,6 +263,14 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
       if (query) params.set('search', query);
       const resp = await fetch(`/api/model-candidates?${params}`);
       if (!resp.ok) throw new Error(`${resp.status}`);
+      // When the agent doesn't have this route, axum's static fallback
+      // serves index.html (HTML) — JSON.parse then fails with a cryptic
+      // "Unexpected token '<'". Detect via Content-Type to surface a
+      // clean "update your agent" message instead.
+      const ct = resp.headers.get('content-type') ?? '';
+      if (!ct.includes('application/json')) {
+        throw new Error('agent endpoint missing — update your agent: `curl -fsSL https://wicklee.dev/install.sh | bash`');
+      }
       setData(await resp.json());
     } catch (e: any) {
       setError(e.message ?? 'Failed to load');
