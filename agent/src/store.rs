@@ -406,6 +406,12 @@ impl Store {
     }
 
     fn init_schema(&self) -> Result<(), duckdb::Error> {
+        // ── Baseline schema (CREATE TABLE) ───────────────────────────────────
+        // These are the foundational tables. If any one of them fails, the
+        // store cannot operate — propagate the error so Store::open returns
+        // Err and main.rs disables the DuckDB-gated routes. ALTER statements
+        // (additive column migrations) are split into a tolerant pass below
+        // so a single bad migration cannot strip the whole feature surface.
         self.0.lock().unwrap().execute_batch("
             -- Tier 0: raw 1-Hz samples, 24-hour retention.
             -- PRIMARY KEY enforces uniqueness; ON CONFLICT DO NOTHING in write_sample
@@ -506,18 +512,6 @@ impl Store {
                 PRIMARY KEY (ts_ms, node_id, message)
             );
 
-            -- Migrations: add columns introduced after the initial schema.
-            -- DuckDB supports ADD COLUMN IF NOT EXISTS — safe to run on every startup.
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s      DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS clock_throttle_pct   DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ttft_ms              DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS avg_latency_ms       DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth          BIGINT;
-            -- Phase 2: columns needed for backend pattern evaluation (C/I/M/N)
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS penalty_avg          DOUBLE;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS nvidia_gpu_temp_c    INTEGER;
-            ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS vllm_cache_usage_perc DOUBLE;
-
             -- Model catalog: cached HuggingFace GGUF model metadata for fit scoring.
             -- 24h TTL, refreshed on demand or by background task.
             CREATE TABLE IF NOT EXISTS model_catalog (
@@ -530,15 +524,45 @@ impl Store {
                 fetched_at  BIGINT  NOT NULL,
                 PRIMARY KEY (model_id, filename)
             );
-            -- ADD COLUMN cannot enforce NOT NULL on a table with existing
-            -- rows in DuckDB; the migration would abort the whole batch
-            -- and kill Store::open, which silently strips every
-            -- DuckDB-gated /api/* route from the router (model-candidates,
-            -- sla, profile, history, etc.). Keep it nullable here; query
-            -- code uses .unwrap_or(0) to handle the rare null on legacy
-            -- rows. Fresh installs still get NOT NULL via CREATE TABLE.
-            ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT DEFAULT 0;
-        ")
+        ")?;
+
+        // ── Additive column migrations (tolerant) ────────────────────────────
+        // Each ALTER runs in its own execute() call so a single statement
+        // failure cannot abort the batch and kill Store::open. The whole
+        // feature surface (~12 routes — model-candidates, sla, profile,
+        // history, traces, events/history, observations, cost-by-model,
+        // model-comparison, …) is gated on Store being Some(_) in main.rs;
+        // one bad ALTER previously stripped all of them silently. Now any
+        // ALTER failure is logged but ignored — the column was either
+        // already there, or the DuckDB version doesn't support the syntax,
+        // either of which is recoverable: query code uses .unwrap_or
+        // defaults when a column is absent.
+        //
+        // Note: a literal `ALTER TABLE ... ADD COLUMN ... NOT NULL` on a
+        // table with existing rows is rejected by DuckDB even with a
+        // DEFAULT. Always omit NOT NULL on additive migrations.
+        let migrations: &[&str] = &[
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s      DOUBLE",
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS clock_throttle_pct   DOUBLE",
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ttft_ms              DOUBLE",
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS avg_latency_ms       DOUBLE",
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth          BIGINT",
+            // Phase 2 — backend pattern evaluation (C/I/M/N)
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS penalty_avg          DOUBLE",
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS nvidia_gpu_temp_c    INTEGER",
+            "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS vllm_cache_usage_perc DOUBLE",
+            // HF likes — nullable so existing-row tables accept the migration.
+            "ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT DEFAULT 0",
+        ];
+        {
+            let conn = self.0.lock().unwrap();
+            for sql in migrations {
+                if let Err(e) = conn.execute(sql, []) {
+                    eprintln!("[store] migration skipped ({e}): {sql}");
+                }
+            }
+        }
+        Ok(())
     }
 
     // ── Write ─────────────────────────────────────────────────────────────────

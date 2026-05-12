@@ -6158,6 +6158,49 @@ async fn handle_tags() -> Json<TagsResponse> {
     })
 }
 
+/// Health snapshot — operator-facing diagnostic for "are the API routes I
+/// expect actually live?". Reports agent version, build target, DuckDB
+/// store state (healthy / disabled), and which feature surface that gates.
+///
+/// When `store_healthy=false`, the routes listed under `routes_unavailable`
+/// will silently return the SPA fallback HTML instead of JSON — same class
+/// of failure that caused #1d95124 (the `model_catalog.likes` migration
+/// killing every store-gated route).
+#[derive(Clone, Copy)]
+pub(crate) struct StoreHealth(pub bool);
+
+async fn handle_health(
+    axum::extract::Extension(store_healthy): axum::extract::Extension<StoreHealth>,
+) -> Json<serde_json::Value> {
+    // Routes that depend on the DuckDB store. Kept in sync with the
+    // store-gated block in the router builder below.
+    const STORE_GATED_ROUTES: &[&str] = &[
+        "/api/history", "/api/traces", "/api/events/history", "/api/export",
+        "/api/insights/dismiss", "/api/insights/dismissed", "/api/observations",
+        "/api/profile", "/api/sla", "/api/cost-by-model", "/api/explain-slowdown",
+        "/api/model-comparison", "/api/model-switches", "/api/model-candidates",
+    ];
+    Json(serde_json::json!({
+        "ok":             true,
+        "agent_version":  env!("CARGO_PKG_VERSION"),
+        "build_target":   std::env::consts::OS.to_string() + "-" + std::env::consts::ARCH,
+        "store_healthy":  store_healthy.0,
+        "routes_available": if store_healthy.0 { STORE_GATED_ROUTES } else { &[] },
+        "routes_unavailable": if store_healthy.0 { &[] as &[&str] } else { STORE_GATED_ROUTES },
+        "store_failure_hint": if store_healthy.0 {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(
+                "DuckDB store init failed on startup — check the agent log for [store] lines. \
+                 Common causes: schema migration error, disk space, file permission on the db path."
+            )
+        },
+        "ts_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64).unwrap_or(0),
+    }))
+}
+
 /// Immutable proxy + runtime port config, set once at startup.
 #[derive(Clone)]
 struct ProxyPorts {
@@ -6670,6 +6713,30 @@ async fn main() {
                         println!("{}", row("vLLM", &format!(":{p}{tag} · detected")));
                     } else {
                         println!("{}", row("vLLM", "not running"));
+                    }
+
+                    // Store health — surfaces the "all my routes are missing
+                    // because DuckDB init failed" failure mode that would
+                    // otherwise be invisible. Falls back to no-op if /api/health
+                    // is unreachable (e.g. older agent without the endpoint).
+                    let health_url = format!("http://127.0.0.1:{port}/api/health");
+                    if let Ok(resp) = reqwest::get(&health_url).await {
+                        if resp.status().is_success() {
+                            if let Ok(v) = resp.json::<serde_json::Value>().await {
+                                let healthy = v["store_healthy"].as_bool().unwrap_or(false);
+                                if healthy {
+                                    println!("{}", row("Store", "healthy · DuckDB ok"));
+                                } else {
+                                    println!("{sep}");
+                                    println!("{}", row("Store", "⚠ disabled · DuckDB init failed"));
+                                    println!("{}", row("",      "Check /var/log/wicklee.log"));
+                                    println!("{}", row("",      "for [store] error lines."));
+                                    println!("{}", row("",      "~12 /api/* routes are offline:"));
+                                    println!("{}", row("",      "model-candidates, sla, profile,"));
+                                    println!("{}", row("",      "history, observations, …"));
+                                }
+                            }
+                        }
                     }
                     println!("{bot}");
                 }
@@ -7203,10 +7270,20 @@ async fn main() {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // Store health flag — true when DuckDB opened cleanly. Surfaced via
+    // /api/health so operators can diagnose "why are my routes missing"
+    // with one curl. False = the entire store-gated block silently
+    // dropped from the router.
+    #[cfg(not(target_env = "musl"))]
+    let store_healthy = StoreHealth(metrics_store.is_some());
+    #[cfg(target_env = "musl")]
+    let store_healthy = StoreHealth(false);
+
     // Build the router.  The /api/history route and its Extension are only
     // compiled in on non-musl targets where DuckDB is available.
     let app = {
         let r = Router::new()
+            .route("/api/health",         get(handle_health))         // diagnostic — always live
             .route("/api/tags",           get(handle_tags))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
@@ -7245,6 +7322,7 @@ async fn main() {
         };
 
         r.fallback(static_handler)
+         .layer(axum::extract::Extension(store_healthy))
          .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
          .layer(axum::extract::Extension(apple_metrics))
          .layer(axum::extract::Extension(nvidia_metrics))
