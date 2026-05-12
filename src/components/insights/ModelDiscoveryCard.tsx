@@ -192,43 +192,47 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
           {shortModelName(model.model_id)}
         </span>
 
-        {/* Best-fit badge — label first */}
+        {/* Right-side columns — all fixed-width, right-aligned, tabular-nums
+            so they stack cleanly across every row regardless of how long
+            the model name on the left is. Reserved space shown as a faint
+            dash when the metric is absent (e.g. no quant, no likes), so
+            adjacent columns don't shift between rows. */}
+
+        {/* Best-fit badge — fixed slot for label (Excellent/Good/Tight/Won't Fit). */}
         <span
           title={`Fit score ${best.fit_score}/100 · Excellent ≥80 · Good ≥60 · Tight ≥40 · Won't Fit <40`}
-          className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${colors.badge} shrink-0 whitespace-nowrap cursor-default`}
+          className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${colors.badge} shrink-0 whitespace-nowrap cursor-default text-center w-[78px]`}
         >
           {best.fit_label}
         </span>
 
-        {/* Best quant */}
-        {best.quant && best.quant !== 'unknown' && (
-          <span className="text-[10px] text-gray-500 font-mono shrink-0 hidden sm:inline">
-            {best.quant}
-          </span>
-        )}
+        {/* Best quant — fixed slot. */}
+        <span className="text-[10px] text-gray-500 font-mono shrink-0 hidden sm:inline text-right w-[72px] truncate">
+          {best.quant && best.quant !== 'unknown' ? best.quant : <span className="text-gray-800">—</span>}
+        </span>
 
-        {/* Size */}
-        <span className="text-[10px] text-gray-600 tabular-nums shrink-0 hidden sm:inline">
+        {/* Size — fixed slot. */}
+        <span className="text-[10px] text-gray-600 tabular-nums shrink-0 hidden sm:inline text-right w-[56px]">
           {(best.file_size_mb / 1024).toFixed(1)} GB
         </span>
 
-        {/* Downloads + HF likes — downloads is historical pull volume,
-            likes is current bookmark interest. Pair gives a sharper
-            "is this trending?" signal than downloads alone. */}
+        {/* Downloads — fixed slot. */}
         <span
-          className="text-[10px] text-gray-700 tabular-nums shrink-0"
+          className="text-[10px] text-gray-700 tabular-nums shrink-0 text-right w-[56px]"
           title="HuggingFace downloads (all time)"
         >
           {fmtDl(model.downloads)}↓
         </span>
-        {model.likes != null && model.likes > 0 && (
-          <span
-            className="text-[10px] text-rose-400/70 tabular-nums shrink-0"
-            title="HuggingFace likes (current bookmark interest)"
-          >
-            {fmtDl(model.likes)}♥
-          </span>
-        )}
+
+        {/* Likes — fixed slot reserved even when 0 so the chevron stays put. */}
+        <span
+          className="text-[10px] tabular-nums shrink-0 text-right w-[48px]"
+          title="HuggingFace likes (current bookmark interest)"
+        >
+          {model.likes != null && model.likes > 0
+            ? <span className="text-rose-400/70">{fmtDl(model.likes)}♥</span>
+            : <span className="text-gray-800">—</span>}
+        </span>
 
         {open
           ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
