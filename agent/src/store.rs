@@ -530,7 +530,14 @@ impl Store {
                 fetched_at  BIGINT  NOT NULL,
                 PRIMARY KEY (model_id, filename)
             );
-            ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT NOT NULL DEFAULT 0;
+            -- ADD COLUMN cannot enforce NOT NULL on a table with existing
+            -- rows in DuckDB; the migration would abort the whole batch
+            -- and kill Store::open, which silently strips every
+            -- DuckDB-gated /api/* route from the router (model-candidates,
+            -- sla, profile, history, etc.). Keep it nullable here; query
+            -- code uses .unwrap_or(0) to handle the rare null on legacy
+            -- rows. Fresh installs still get NOT NULL via CREATE TABLE.
+            ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT DEFAULT 0;
         ")
     }
 
