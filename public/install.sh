@@ -20,18 +20,23 @@ fi
 
 set -euo pipefail
 
-# ── Wicklee — one-line installer ───────────────────────────────────────────────
+# ── Wicklee — one-line installer (v0.8.0+) ────────────────────────────────────
 #
 #   curl -fsSL https://wicklee.dev/install.sh | bash
 #
-# Downloads the latest binary for the current OS/arch from GitHub Releases,
-# installs it to /usr/local/bin/wicklee, and prints getting-started tips.
+# No sudo. Downloads the latest binary to ~/.wicklee/bin/wicklee and prints
+# next-step instructions. To run as a system service (LaunchDaemon / systemd),
+# the user runs `sudo wicklee --install-service` — that is the only sudo step,
+# and it self-copies the binary to /usr/local/bin/wicklee for the service unit.
 
 REPO="jeffgeiser/Wicklee"
 RELEASE_TAG="nightly"       # GitHub release tag used in the download URL
 DISPLAY_CHANNEL="latest"    # Human-friendly label shown in install output
-INSTALL_DIR="/usr/local/bin"
 BIN_NAME="wicklee"
+
+USER_INSTALL_DIR="${HOME}/.wicklee/bin"
+USER_INSTALL_PATH="${USER_INSTALL_DIR}/${BIN_NAME}"
+CANONICAL_BIN="/usr/local/bin/${BIN_NAME}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,11 +65,63 @@ case "$ARCH" in
   *)               die "Unsupported architecture: $ARCH" ;;
 esac
 
-# On Linux, prefer the glibc+NVML build when an NVIDIA GPU is present.
-# The nvidia variant dlopen-s libnvidia-ml.so at runtime (ships with NVIDIA
-# drivers) — no CUDA toolkit required on the target machine. Falls back to
-# the fully-static musl build if no GPU is detected.
-# Supported arches: x86_64-nvidia, aarch64-nvidia (NVIDIA Grace Blackwell / DGX Spark).
+# ── Detect existing install ──────────────────────────────────────────────────
+# Single upgrade path: if /usr/local/bin/wicklee exists, point to
+# `sudo wicklee --install-service` regardless of whether the service is
+# currently active. That command stops the running service (if any),
+# self-copies the new binary to the canonical path, and restarts.
+
+EXISTING_SERVICE_ACTIVE=false
+EXISTING_BINARY=false
+
+if [[ -x "$CANONICAL_BIN" ]]; then
+  EXISTING_BINARY=true
+  if [[ "$OS_TAG" == "linux" ]] && command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet wicklee 2>/dev/null; then
+      EXISTING_SERVICE_ACTIVE=true
+    fi
+  elif [[ "$OS_TAG" == "darwin" ]]; then
+    if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
+      if launchctl print system/dev.wicklee.agent >/dev/null 2>&1; then
+        EXISTING_SERVICE_ACTIVE=true
+      fi
+    fi
+  fi
+fi
+
+if [[ "$EXISTING_BINARY" == "true" ]]; then
+  EXISTING_VERSION="$("$CANONICAL_BIN" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+  echo ""
+  if [[ "$EXISTING_SERVICE_ACTIVE" == "true" ]]; then
+    green "  Existing Wicklee install detected at ${CANONICAL_BIN}${EXISTING_VERSION:+ (${EXISTING_VERSION})}."
+    echo "  Service is currently active."
+  else
+    green "  Existing Wicklee binary detected at ${CANONICAL_BIN}${EXISTING_VERSION:+ (${EXISTING_VERSION})}."
+    dim   "  (No service is currently running.)"
+  fi
+  echo ""
+  echo "  To upgrade in place, run:"
+  echo ""
+  bold "    sudo ${CANONICAL_BIN} --install-service"
+  echo ""
+  dim "  That command stops the service, swaps in the new binary, and restarts."
+  dim "  It is the only step that needs sudo."
+  echo ""
+
+  # Fire-and-forget telemetry — flag this as an upgrade attempt.
+  curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \
+    -H "Content-Type: application/json" \
+    -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${EXISTING_VERSION:-unknown}\",\"nvidia\":false,\"upgrade\":true,\"stage\":\"detect-existing\"}" \
+    >/dev/null 2>&1 &
+
+  exit 0
+fi
+
+# ── NVIDIA detection (Linux) ─────────────────────────────────────────────────
+# Prefer the glibc+NVML build when an NVIDIA GPU is present. The nvidia
+# variant dlopen-s libnvidia-ml.so at runtime (ships with NVIDIA drivers) —
+# no CUDA toolkit required. Falls back to the fully-static musl build
+# otherwise. Supported arches: x86_64-nvidia, aarch64-nvidia.
 NVIDIA_SUFFIX=""
 if [[ "$OS_TAG" == "linux" ]]; then
   if command -v nvidia-smi >/dev/null 2>&1 || [[ -c /dev/nvidia0 ]]; then
@@ -92,147 +149,43 @@ curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" \
 
 chmod +x "$TMP"
 
-# ── Preserve Linux capabilities ──────────────────────────────────────────────
-# The install replaces the binary, which strips filesystem capabilities.
-# If the old binary had cap_sys_ptrace (for cross-user runtime discovery),
-# remember it so we can re-apply after the copy.
-HAD_PTRACE_CAP=false
-if [[ "$OS_TAG" == "linux" ]] && command -v getcap &>/dev/null; then
-  if [[ -f "${INSTALL_DIR}/${BIN_NAME}" ]]; then
-    if getcap "${INSTALL_DIR}/${BIN_NAME}" 2>/dev/null | grep -q cap_sys_ptrace; then
-      HAD_PTRACE_CAP=true
-    fi
-  fi
-fi
+# ── Install to ~/.wicklee/bin (no sudo) ──────────────────────────────────────
 
-# ── Ghost-Kill preflight ─────────────────────────────────────────────────────
-# Stop any running wicklee instance before swapping the binary.
-# Prevents "port 7700 already in use" when the new binary first starts.
-# We attempt a clean service stop first; pkill is the belt-and-suspenders fallback.
+mkdir -p "$USER_INSTALL_DIR"
+mv "$TMP" "$USER_INSTALL_PATH"
+chmod 755 "$USER_INSTALL_PATH"
+trap - EXIT
 
-GHOST_KILLED=false
-
-if [[ "$OS_TAG" == "darwin" ]]; then
-  # Migrate old user-level LaunchAgent (pre-v0.5.3 installs).
-  # Runs as the real user (before sudo), so $HOME and id -u are correct.
-  OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/dev.wicklee.agent.plist"
-  if [[ -f "$OLD_AGENT_PLIST" ]]; then
-    echo "  Migrating from user LaunchAgent to system LaunchDaemon…"
-    launchctl bootout "gui/$(id -u)/dev.wicklee.agent" 2>/dev/null || true
-    sleep 0.5
-    rm -f "$OLD_AGENT_PLIST"
-    dim "  Old LaunchAgent removed — full SoC/ANE power will be available after install."
-  fi
-
-  if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
-    sudo launchctl bootout system/dev.wicklee.agent 2>/dev/null && GHOST_KILLED=true || true
-    # launchd label deregistration is async — poll until the label is actually
-    # gone instead of a fixed sleep. Prevents exit status 5 race in --install-service.
-    for i in $(seq 1 20); do
-      launchctl list dev.wicklee.agent &>/dev/null || break
-      sleep 0.5
-    done
-  fi
-  # Also kill any manual `sudo wicklee` process not managed by launchd.
-  sudo pkill -x wicklee 2>/dev/null && GHOST_KILLED=true || true
-
-elif [[ "$OS_TAG" == "linux" ]]; then
-  if command -v systemctl &>/dev/null && systemctl is-active --quiet wicklee 2>/dev/null; then
-    sudo systemctl stop wicklee && GHOST_KILLED=true
-  fi
-  sudo pkill -x wicklee-agent 2>/dev/null && GHOST_KILLED=true || true
-  sudo pkill -x wicklee       2>/dev/null && GHOST_KILLED=true || true
-fi
-
-[[ "$GHOST_KILLED" == "true" ]] && dim "  Stopped previous Wicklee instance."
-
-# ── Install ───────────────────────────────────────────────────────────────────
-# Use cp+mv rather than cp-in-place so an existing running wicklee service
-# (Text file busy) doesn't block the update.  mv replaces the directory entry
-# atomically; the old inode/process keeps running until systemd restarts it.
-
-INSTALL_PATH="${INSTALL_DIR}/${BIN_NAME}"
-INSTALL_TMP="${INSTALL_PATH}.new"
-
-if [[ -w "$INSTALL_DIR" ]]; then
-  cp "$TMP" "$INSTALL_TMP" && mv "$INSTALL_TMP" "$INSTALL_PATH"
-else
-  echo "  Installing to ${INSTALL_PATH} (sudo required)…"
-  sudo cp "$TMP" "$INSTALL_TMP" && sudo mv "$INSTALL_TMP" "$INSTALL_PATH"
-fi
-
-# ── Re-apply Linux capabilities ──────────────────────────────────────────────
-if [[ "$HAD_PTRACE_CAP" == "true" ]]; then
-  sudo setcap cap_sys_ptrace+ep "$INSTALL_PATH" 2>/dev/null \
-    && dim "  Restored cap_sys_ptrace (cross-user runtime discovery)." \
-    || dim "  Warning: could not restore cap_sys_ptrace — run: sudo setcap cap_sys_ptrace+ep $INSTALL_PATH"
-fi
-
-# ── Service update ────────────────────────────────────────────────────────────
-# If a service is already registered, re-run --install-service so the unit
-# file stays current and the service is restarted with the new binary.
-
-SERVICE_UPDATED=false
-
-if [[ "$OS_TAG" == "linux" ]] && command -v systemctl &>/dev/null; then
-  if [[ -f "/etc/systemd/system/wicklee.service" ]]; then
-    echo "  Updating systemd service…"
-    sudo "${INSTALL_PATH}" --install-service
-    SERVICE_UPDATED=true
-  fi
-elif [[ "$OS_TAG" == "darwin" ]]; then
-  if [[ -f "/Library/LaunchDaemons/dev.wicklee.agent.plist" ]]; then
-    echo "  Updating launchd service…"
-    sudo "${INSTALL_PATH}" --install-service
-    SERVICE_UPDATED=true
-  fi
-fi
-
-# ── Success ───────────────────────────────────────────────────────────────────
-
-# Read the actual version from the installed binary (e.g. "wicklee-agent v0.4.36").
-INSTALLED_VERSION="$("${INSTALL_PATH}" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+INSTALLED_VERSION="$("${USER_INSTALL_PATH}" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 VERSION_LABEL="${INSTALLED_VERSION:-${RELEASE_TAG}}"
 
 # ── Anonymous install telemetry ───────────────────────────────────────────────
-# Fire-and-forget ping — no PII, no blocking. Silently ignored on failure.
-UPGRADE_FLAG="false"
-[[ "$GHOST_KILLED" == "true" ]] && UPGRADE_FLAG="true"
 NVIDIA_FLAG="false"
 [[ -n "$NVIDIA_SUFFIX" ]] && NVIDIA_FLAG="true"
 curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \
   -H "Content-Type: application/json" \
-  -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${VERSION_LABEL}\",\"nvidia\":${NVIDIA_FLAG},\"upgrade\":${UPGRADE_FLAG}}" \
+  -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${VERSION_LABEL}\",\"nvidia\":${NVIDIA_FLAG},\"upgrade\":false}" \
   >/dev/null 2>&1 &
+
+# ── Success ───────────────────────────────────────────────────────────────────
 
 echo ""
 green "  ✓ Wicklee agent installed successfully — ${VERSION_LABEL}"
+dim   "    Location: ${USER_INSTALL_PATH}"
 echo ""
-
-if [[ "$SERVICE_UPDATED" == "true" ]]; then
-  # Verify the service is actually running before claiming success.
-  sleep 2
-  if curl -sf http://localhost:7700/api/pair/status &>/dev/null; then
-    dim "  Service updated and restarted automatically."
-  else
-    dim "  Service updated. If the dashboard is unreachable, run:"
-    if [[ "$OS_TAG" == "darwin" ]]; then
-      bold "    sudo wicklee --install-service"
-    else
-      bold "    sudo systemctl restart wicklee"
-    fi
-  fi
-  echo ""
+echo "  Next steps:"
+echo ""
+bold "  Try it (foreground, no sudo):"
+echo "    ${USER_INSTALL_PATH}"
+echo ""
+bold "  Recommended (background service, starts on boot):"
+echo "    sudo ${USER_INSTALL_PATH} --install-service"
+dim   "    Promotes the binary to ${CANONICAL_BIN} and registers"
+if [[ "$OS_TAG" == "darwin" ]]; then
+  dim "    the LaunchDaemon. This is the only step that needs sudo."
 else
-  echo "  Start monitoring your node:"
-  echo ""
-  bold "  Recommended — runs on every boot:"
-  bold "    sudo wicklee --install-service"
-  echo ""
-  echo "  To upgrade later, just run this script again — it stops the old"
-  echo "  instance automatically before swapping in the new binary."
+  dim "    the systemd unit. This is the only step that needs sudo."
 fi
-
 echo ""
 echo "  Local dashboard:    http://localhost:7700"
 echo "  Fleet dashboard:    https://wicklee.dev"

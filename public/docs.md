@@ -8,14 +8,17 @@
 ## Quick Start
 
 ```bash
-# macOS & Linux
+# macOS & Linux — installs to ~/.wicklee/bin/wicklee, no sudo
 curl -fsSL https://wicklee.dev/install.sh | bash
+
+# Run on every boot (the only sudo step)
+sudo ~/.wicklee/bin/wicklee --install-service
 
 # Windows (PowerShell as Administrator)
 irm https://wicklee.dev/install.ps1 | iex
 ```
 
-Dashboard opens at **http://localhost:7700**. Auto-starts on boot as a system service.
+Dashboard opens at **http://localhost:7700**. The `--install-service` step copies the binary to `/usr/local/bin/wicklee` and registers the LaunchDaemon (macOS) / systemd unit (Linux). Skip it if you only want to try the agent in the foreground (`~/.wicklee/bin/wicklee`).
 
 ## CLI Reference
 

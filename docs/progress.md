@@ -6,6 +6,25 @@
 
 ---
 
+## May 21, 2026 — v0.8.0: No-Sudo Install Flow
+
+### Why
+`curl | bash` previously prompted for sudo on every fresh install — required to drop the binary in `/usr/local/bin` and register the service in one shot. That made the no-friction first-touch story ("just paste this") feel heavier than it had to. Many evaluators want to *try* the agent before granting root.
+
+### What changed
+- **Two-step model.** `install.sh` now installs to `~/.wicklee/bin/wicklee` with **no sudo**. The only sudo step is `sudo wicklee --install-service`, which the user runs themselves when they're ready to run on every boot.
+- **Self-promoting service installer.** `agent/src/service.rs::install_service()` detects when it's invoked from a non-canonical path (e.g. `~/.wicklee/bin/wicklee`), stops any running service, copies the binary to `/usr/local/bin/wicklee`, and registers the LaunchDaemon / systemd unit against that canonical path. No manual move required.
+- **Single upgrade path.** If `/usr/local/bin/wicklee` already exists, `install.sh` detects it, reports the version + service state, and points to `sudo /usr/local/bin/wicklee --install-service` as the only upgrade command. No alternative offered — power users who want a parallel install can handle it themselves.
+- **install.sh ghost-kill block removed.** The `--install-service` path now handles stopping/restarting on upgrade.
+- **Windows untouched.** `install.ps1` still installs to Program Files. The two-step model only applies to Unix.
+
+### Files
+- `agent/src/service.rs` — `install_service()` self-copy block, `CANONICAL_BIN = "/usr/local/bin/wicklee"`.
+- `public/install.sh` — full rewrite. No sudo on fresh path; upgrade path detects and instructs only.
+- `agent/Cargo.toml` — bumped to 0.8.0.
+
+---
+
 ## April 13-14, 2026 — v0.7.14: Multi-Model Monitoring, Model Discovery, Install Telemetry, Billing Pipeline
 
 ### Multi-Model Concurrent Tracking

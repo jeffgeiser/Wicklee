@@ -20,13 +20,23 @@ One Rust binary per node. Live hardware dashboard at `localhost:7700`. Optional 
 curl -fsSL https://wicklee.dev/install.sh | bash
 ```
 
+No sudo. Installs to `~/.wicklee/bin/wicklee` so you can try it before granting root.
+
+To run on every boot as a background service (the only step that needs sudo):
+
+```bash
+sudo ~/.wicklee/bin/wicklee --install-service
+```
+
+That command stops any running service, copies the binary to `/usr/local/bin/wicklee`, and registers the LaunchDaemon (macOS) / systemd unit (Linux).
+
 **Windows (PowerShell as Administrator):**
 
 ```powershell
 irm https://wicklee.dev/install.ps1 | iex
 ```
 
-Dashboard opens at **http://localhost:7700**. Auto-starts on boot as a system service.
+Dashboard opens at **http://localhost:7700**.
 
 ---
 

@@ -94,11 +94,69 @@ fn validate_binary_path(path: &str) -> Result<(), String> {
 }
 
 pub(crate) async fn install_service() {
-    let exe = match std::env::current_exe() {
+    let current_exe = match std::env::current_exe() {
         Ok(p)  => p,
         Err(e) => { eprintln!("error: cannot determine executable path: {e}"); return; }
     };
-    let exe_str = exe.to_string_lossy().into_owned();
+
+    // ── v0.8.0: Self-copy to canonical /usr/local/bin/wicklee ────────────
+    // Install.sh now drops the binary at ~/.wicklee/bin/wicklee with no
+    // sudo. When the user runs `sudo wicklee --install-service`, we
+    // promote ourselves to /usr/local/bin/wicklee (the canonical service
+    // path) before writing any unit/plist file. Service descriptors
+    // always reference the canonical path so systemd/launchd survive
+    // a future `rm -rf ~/.wicklee/`.
+    //
+    // On macOS and Linux the canonical path is /usr/local/bin/wicklee.
+    // If we're already there (re-running --install-service to refresh
+    // the unit file), skip the copy.
+    const CANONICAL_BIN: &str = "/usr/local/bin/wicklee";
+    let needs_promote = current_exe.to_string_lossy() != CANONICAL_BIN;
+    if needs_promote {
+        // Stop the existing service (if any) so we can replace the file
+        // without "Text file busy" on Linux. launchd holds an open fd
+        // but we can still mv-over on macOS.
+        #[cfg(target_os = "linux")]
+        {
+            let _ = tokio::process::Command::new("systemctl")
+                .args(["stop", "wicklee"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status().await;
+        }
+        // Copy the current binary to the canonical location. cp + chmod
+        // rather than mv so the source (which may be in the user's home)
+        // stays intact in case the user re-runs.
+        let copy_status = tokio::process::Command::new("cp")
+            .arg(&current_exe)
+            .arg(CANONICAL_BIN)
+            .status().await;
+        match copy_status {
+            Ok(s) if s.success() => {
+                eprintln!("[install] promoted binary: {} → {CANONICAL_BIN}", current_exe.display());
+                let _ = tokio::process::Command::new("chmod")
+                    .args(["755", CANONICAL_BIN])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status().await;
+            }
+            Ok(s) => {
+                eprintln!("error: cannot copy binary to {CANONICAL_BIN} (status: {s})");
+                eprintln!("       Are you running with sudo? Service install needs root to");
+                eprintln!("       write /usr/local/bin and register the systemd/launchd unit.");
+                return;
+            }
+            Err(e) => {
+                eprintln!("error: cp to {CANONICAL_BIN} failed: {e}");
+                return;
+            }
+        }
+    }
+
+    // From here on, all references to the binary path use the canonical
+    // location — unit/plist files must never point at the user-home
+    // staging path, since the staging copy may be removed.
+    let exe_str = CANONICAL_BIN.to_string();
 
     // C3 — Validate before embedding in any service descriptor.
     // An attacker who installs the binary at a path with shell metacharacters
