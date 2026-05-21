@@ -89,9 +89,16 @@ jobs:
           name: wicklee-agent-windows-x86_64.exe
           path: wicklee-agent-windows-x86_64.exe
 
-  # ── Linux x64 (musl — fully static, no glibc dependency) ─────────────────────
+  # ── Linux x64 (glibc, no NVIDIA — default for non-NVIDIA hosts) ──────────────
+  # v0.8.2: switched from musl to glibc. The musl build statically excluded
+  # DuckDB (cfg(not(target_env = "musl"))), which silently dropped the
+  # 14 store-backed routes (Model Discovery, observations, profile, SLA,
+  # history, cost-by-model, etc.) on every non-NVIDIA Linux host. glibc
+  # 2.35 (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 9+) covers 95% of
+  # modern Linux. Alpine and ancient distro users can `cargo build` from
+  # source if they need static linking.
   build-linux-x64:
-    name: Build · Linux (x64, musl)
+    name: Build · Linux (x64, glibc, no NVIDIA)
     runs-on: ubuntu-22.04
     timeout-minutes: 25      # bounded to prevent runaway builds
     steps:
@@ -106,34 +113,30 @@ jobs:
         run: npm ci && npm run build:agent
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-
-      # musl cannot link or dlopen glibc-based NVIDIA libraries; skip NVML.
-      # The binary runs on Ubuntu 18.04–24.04, Debian, Alpine, and any Linux.
-      - name: Build agent (musl, no NVML)
-        run: cross build --release --target x86_64-unknown-linux-musl
+      # No NVML headers needed: --cfg no_nvml strips the nvml-wrapper
+      # link dependency at compile time. Runtime nvidia-smi probing is
+      # disabled in this build; users with NVIDIA GPUs should download
+      # the -nvidia variant instead (install.sh auto-detects).
+      - name: Build agent (glibc, no NVML)
+        run: cargo build --release
         working-directory: agent
         env:
           RUSTFLAGS: '--cfg no_nvml'
 
       - name: Stage binary
-        run: cp agent/target/x86_64-unknown-linux-musl/release/wicklee-agent wicklee-agent-linux-x86_64
+        run: cp agent/target/release/wicklee-agent wicklee-agent-linux-x86_64
 
       - uses: actions/upload-artifact@v4
         with:
           name: wicklee-agent-linux-x86_64
           path: wicklee-agent-linux-x86_64
 
-  # ── Linux arm64 (musl — fully static, no glibc dependency) ───────────────────
+  # ── Linux arm64 (glibc, no NVIDIA — default for non-NVIDIA ARM hosts) ────────
   build-linux-arm64:
-    name: Build · Linux (arm64, musl)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 25      # bounded to prevent runaway builds
+    name: Build · Linux (arm64, glibc, no NVIDIA)
+    runs-on: ubuntu-24.04-arm     # native ARM64 runner — no cross-compilation
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -146,21 +149,15 @@ jobs:
         run: npm ci && npm run build:agent
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-musl
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-
-      - name: Build agent (musl, no NVML)
-        run: cross build --release --target aarch64-unknown-linux-musl
+      - name: Build agent (glibc, no NVML)
+        run: cargo build --release
         working-directory: agent
         env:
           RUSTFLAGS: '--cfg no_nvml'
 
       - name: Stage binary
-        run: cp agent/target/aarch64-unknown-linux-musl/release/wicklee-agent wicklee-agent-linux-aarch64
+        run: cp agent/target/release/wicklee-agent wicklee-agent-linux-aarch64
 
       - uses: actions/upload-artifact@v4
         with:

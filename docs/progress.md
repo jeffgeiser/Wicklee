@@ -6,6 +6,51 @@
 
 ---
 
+## May 21, 2026 — v0.8.2: Linux Default Switched From musl To glibc
+
+### Why
+The default Linux x86_64 and aarch64 builds were musl-static. That sounded
+portable but had a hidden cost: `store.rs` is gated
+`#[cfg(not(target_env = "musl"))]`, which silently strips DuckDB and the
+14 store-backed routes (`/api/observations`, `/api/profile`, `/api/sla`,
+`/api/cost-by-model`, `/api/explain-slowdown`, `/api/model-comparison`,
+`/api/model-switches`, `/api/model-candidates`, `/api/history`,
+`/api/traces`, `/api/events/history`, `/api/export`,
+`/api/insights/dismiss`, `/api/insights/dismissed`) from the router at
+compile time. Every non-NVIDIA Linux user (Intel iGPU, AMD, ARM) lost
+half the dashboard — Model Discovery, observations, profile, SLA, cost
+attribution, model comparison.
+
+Discovered the night before launch testing on a bare-metal Intel BMC:
+the install script correctly defaulted to `linux-x86_64` (musl) because
+no NVIDIA was detected. `/api/health` reported `store_healthy=false`
+with the migration-error hint — misleading, because the real cause was
+"compiled out", not "init failed". No `[store]` log lines at all.
+
+### Fix
+`release.yml`: dropped musl. The default `linux-x86_64` and `linux-aarch64`
+artifacts are now glibc-no-NVIDIA builds — `cargo build --release` on
+ubuntu-22.04 / ubuntu-24.04-arm, with `RUSTFLAGS=--cfg no_nvml` to skip
+NVML linking. DuckDB is included; the 14 store-backed routes now work
+for everyone.
+
+Trade-off: glibc 2.35+ required (Ubuntu 22.04+, Debian 12+, Fedora 36+,
+RHEL 9+). Alpine and ancient distros are no longer first-class targets.
+Those users can `cargo build --release --target x86_64-unknown-linux-musl`
+from source — but they lose DuckDB, same as the old default. Net effect:
+95% of Linux users gain a working dashboard; 5% trade a binary download
+for a `cargo build`.
+
+The `cross` and `taiki-e/install-action` tooling is no longer needed —
+native runners on both arches.
+
+### Files
+- `.github/workflows/release.yml` — two Linux build jobs rewritten.
+- `agent/Cargo.toml` → 0.8.2.
+- `CLAUDE.md` — note that DuckDB is now always present in Linux builds.
+
+---
+
 ## May 21, 2026 — v0.8.1: Auto-Stop Foreground On `--install-service`
 
 ### Why
