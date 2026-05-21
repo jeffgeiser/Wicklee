@@ -213,10 +213,11 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">1</span>
                 <p className="font-semibold text-white text-sm">Try it — no account, no sudo</p>
               </div>
-              <p>Downloads the agent and starts a live session immediately. Telemetry appears in the local dashboard — no service registration, no commitment. Start here.</p>
+              <p>Downloads the agent to <code className="font-mono text-xs text-gray-300">~/.wicklee/bin/wicklee</code> — no sudo prompt, no service registration. Run it once in the foreground to see your local dashboard, then decide whether to register as a service.</p>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
-                <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | bash</Code>
+                <Code lang="shell">{`curl -fsSL https://wicklee.dev/install.sh | bash
+~/.wicklee/bin/wicklee`}</Code>
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Windows (PowerShell)</p>
@@ -235,7 +236,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               <div className="space-y-2 text-sm">
                 <div>
                   <p className="text-white font-medium">Linux</p>
-                  <p className="text-gray-400">CPU power draw (RAPL) and some thermal sensors need root. Run <code className="font-mono text-xs text-gray-300">sudo wicklee</code> or install as a service (step 3) to unlock WATTS and full thermal state.</p>
+                  <p className="text-gray-400">CPU power draw (RAPL) and some thermal sensors need root. Run <code className="font-mono text-xs text-gray-300">sudo ~/.wicklee/bin/wicklee</code> or install as a service (step 3) to unlock WATTS and full thermal state.</p>
                 </div>
                 <div>
                   <p className="text-white font-medium">macOS</p>
@@ -244,7 +245,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Linux (one-off)</p>
-                <Code lang="shell">sudo wicklee</Code>
+                <Code lang="shell">sudo ~/.wicklee/bin/wicklee</Code>
               </div>
               <NoteBox>
                 On both platforms, the recommended path is step 3 (<code className="font-mono text-xs text-gray-300">--install-service</code>) — it handles root access automatically via launchd/systemd and starts on every boot.
@@ -257,17 +258,17 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">3</span>
                 <p className="font-semibold text-white text-sm">Always-on monitoring — register as a system service</p>
               </div>
-              <p>Registers the agent with launchd (macOS) or systemd (Linux) so it starts automatically on every boot. This is the recommended setup for nodes in your fleet.</p>
+              <p>Registers the agent with launchd (macOS) or systemd (Linux) so it starts automatically on every boot. This is the recommended setup for nodes in your fleet. The command self-promotes the binary from <code className="font-mono text-xs text-gray-300">~/.wicklee/bin/wicklee</code> to <code className="font-mono text-xs text-gray-300">/usr/local/bin/wicklee</code> as part of the install.</p>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
-                <Code lang="shell">sudo wicklee --install-service</Code>
+                <Code lang="shell">sudo ~/.wicklee/bin/wicklee --install-service</Code>
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Windows (PowerShell — run as Administrator)</p>
                 <Code lang="powershell">wicklee --install-service</Code>
               </div>
               <NoteBox>
-                <code className="font-mono text-xs text-gray-300">sudo</code> is required because the agent installs as a system service (LaunchDaemon on macOS, systemd on Linux) and <strong className="text-gray-300">runs as root</strong>. Root access is needed for hardware sensor reads — <code className="font-mono text-xs text-gray-300">powermetrics</code> on macOS, RAPL powercap on Linux, and deeper thermal sensor access.
+                <code className="font-mono text-xs text-gray-300">sudo</code> is required because the agent installs as a system service (LaunchDaemon on macOS, systemd on Linux) and <strong className="text-gray-300">runs as root</strong>. Root access is needed for hardware sensor reads — <code className="font-mono text-xs text-gray-300">powermetrics</code> on macOS, RAPL powercap on Linux, and deeper thermal sensor access. <strong className="text-gray-300">This is the only step that needs sudo.</strong>
               </NoteBox>
             </div>
 
@@ -280,18 +281,20 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
             {/* Upgrading */}
             <div>
               <p className="font-semibold text-white mb-2">Upgrading Wicklee</p>
-              <p className="mb-3">The install script handles everything automatically — it stops any running instance before swapping the binary, so upgrades are one command:</p>
+              <p className="mb-3">Upgrades use the same two commands as a fresh install. The install script detects an existing <code className="font-mono text-xs text-gray-300">/usr/local/bin/wicklee</code> and prints the exact follow-up command:</p>
               <div className="mb-4">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">The easy way (v0.4.36+)</p>
-                <Code lang="shell">curl -fsSL https://wicklee.dev/install.sh | bash</Code>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Upgrade (v0.8.0+)</p>
+                <Code lang="shell">{`curl -fsSL https://wicklee.dev/install.sh | bash
+sudo ~/.wicklee/bin/wicklee --install-service`}</Code>
               </div>
+              <p className="mb-3 text-gray-400">The second command stops the running service, copies the new binary to <code className="font-mono text-xs text-gray-300">/usr/local/bin/wicklee</code>, and restarts. Running the existing <code className="font-mono text-xs text-gray-300">/usr/local/bin/wicklee --install-service</code> would just re-register the old binary — always run the freshly downloaded one from <code className="font-mono text-xs text-gray-300">~/.wicklee/bin/</code>.</p>
               <p className="mb-3 text-gray-400">If you see a version mismatch banner or <span className="font-mono text-xs text-gray-300">Port 7700 is busy</span>, run the manual recovery sequence:</p>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Manual recovery</p>
-                <Code lang="shell">{`sudo wicklee --uninstall-service   # stop and remove the daemon
-sudo pkill -9 wicklee              # clear any ghost processes
+                <Code lang="shell">{`sudo wicklee --uninstall-service                # stop and remove the daemon
+sudo pkill -9 wicklee                           # clear any ghost processes
 curl -fsSL https://wicklee.dev/install.sh | bash
-sudo wicklee --install-service     # re-install as daemon`}</Code>
+sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
               </div>
             </div>
           </Section>
@@ -2121,10 +2124,11 @@ ollama_port = 11435   # port where Ollama now listens`}
                   <div>
                     <p className="text-sm text-white font-medium">Restart the Wicklee agent</p>
                     <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
-{`curl -fsSL https://wicklee.dev/install.sh | bash
-# or manually:
-# macOS: sudo launchctl kickstart -k system/dev.wicklee.agent
-# Linux: sudo systemctl restart wicklee`}
+{`# macOS
+sudo launchctl kickstart -k system/dev.wicklee.agent
+
+# Linux
+sudo systemctl restart wicklee`}
                     </pre>
                     <p className="mt-1">Verify the proxy is active — your dashboard will show <code className="text-gray-300 font-mono text-xs">proxy: :11434 → :11435</code> in the Diagnostics rail.</p>
                   </div>
@@ -2551,7 +2555,7 @@ ollama_port = 11435   # port where Ollama now listens`}
               </div>
               <div className="mt-3 space-y-1.5 text-xs text-gray-500">
                 <p><span className="text-gray-400">¹ Apple Silicon VRAM</span> — Apple Silicon has no dedicated VRAM. The GPU shares the unified memory pool. The dashboard shows available headroom against the <em>wired memory budget</em> (<code className="text-gray-400">iogpu.wired_limit_mb</code>), which is the maximum macOS will wire for GPU access — typically ~75% of physical RAM. On a 24 GB M2, expect a ~18 GB GPU budget, not 24 GB. Loading a model larger than the available headroom will trigger compression and swap, degrading throughput.</p>
-                <p><span className="text-gray-400">² Linux NVIDIA</span> — VRAM metrics require the <strong className="text-gray-300">GPU-enabled build</strong>. The default install script auto-detects an NVIDIA GPU (<code className="text-gray-400">nvidia-smi</code>) and downloads the glibc binary with NVML enabled. If you installed before this was added, re-run <code className="text-gray-400">curl -fsSL https://wicklee.dev/install.sh | bash</code>.</p>
+                <p><span className="text-gray-400">² Linux NVIDIA</span> — VRAM metrics require the <strong className="text-gray-300">GPU-enabled build</strong>. The default install script auto-detects an NVIDIA GPU (<code className="text-gray-400">nvidia-smi</code>) and downloads the glibc binary with NVML enabled. If you installed before this was added, re-run <code className="text-gray-400">curl -fsSL https://wicklee.dev/install.sh | bash</code> followed by <code className="text-gray-400">sudo ~/.wicklee/bin/wicklee --install-service</code>.</p>
                 <p><span className="text-gray-400">⁴ ARM64 NVIDIA unified memory (GB10 / Grace Blackwell)</span> — The NVIDIA GB10 SoC (DGX Spark) uses LPDDR5x unified memory shared between the Grace CPU and Blackwell GPU. NVML reports <code className="text-gray-400">[N/A]</code> for <code className="text-gray-400">memory.total</code> because there is no dedicated framebuffer. Wicklee tracks VRAM usage via <strong className="text-gray-300">process residency</strong> — the sum of GPU memory reported by all running compute processes — which is the same accounting nvidia-smi uses internally. The capacity figure is system RAM (the full unified pool). The dashboard shows a <strong className="text-gray-300">Unified Memory</strong> badge on these nodes to distinguish them from discrete-VRAM GPUs.</p>
                 <p><span className="text-gray-400">³ Inference VRAM threshold</span> — Wicklee only counts GPU devices with <strong className="text-gray-300">≥ 1 GB</strong> of reported VRAM toward fleet totals, the VRAM column, model-fit scoring, and memory-exhaustion alerts. Devices below this threshold — onboard BMC/IPMI video chips (ASPEED AST), motherboard framebuffers, and headless server display adapters — are excluded. This prevents ghost entries from inflating fleet capacity on bare-metal servers that have no inference-capable GPU.</p>
               </div>

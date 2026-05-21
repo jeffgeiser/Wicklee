@@ -65,17 +65,21 @@ case "$ARCH" in
   *)               die "Unsupported architecture: $ARCH" ;;
 esac
 
-# ── Detect existing install ──────────────────────────────────────────────────
-# Single upgrade path: if /usr/local/bin/wicklee exists, point to
-# `sudo wicklee --install-service` regardless of whether the service is
-# currently active. That command stops the running service (if any),
-# self-copies the new binary to the canonical path, and restarts.
+# ── Detect existing install (upgrade vs fresh) ───────────────────────────────
+# Single upgrade path: if /usr/local/bin/wicklee exists, we still download
+# the new binary (to ~/.wicklee/bin/) and instruct the user to run
+# `sudo /usr/local/bin/wicklee --install-service` — no, wait: they should
+# run `sudo ~/.wicklee/bin/wicklee --install-service` so the NEW binary
+# self-promotes to the canonical path. The existing /usr/local/bin/wicklee
+# would just reinstall its own (old) bits.
 
 EXISTING_SERVICE_ACTIVE=false
 EXISTING_BINARY=false
+EXISTING_VERSION=""
 
 if [[ -x "$CANONICAL_BIN" ]]; then
   EXISTING_BINARY=true
+  EXISTING_VERSION="$("$CANONICAL_BIN" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
   if [[ "$OS_TAG" == "linux" ]] && command -v systemctl >/dev/null 2>&1; then
     if systemctl is-active --quiet wicklee 2>/dev/null; then
       EXISTING_SERVICE_ACTIVE=true
@@ -87,34 +91,14 @@ if [[ -x "$CANONICAL_BIN" ]]; then
       fi
     fi
   fi
-fi
-
-if [[ "$EXISTING_BINARY" == "true" ]]; then
-  EXISTING_VERSION="$("$CANONICAL_BIN" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
   echo ""
   if [[ "$EXISTING_SERVICE_ACTIVE" == "true" ]]; then
     green "  Existing Wicklee install detected at ${CANONICAL_BIN}${EXISTING_VERSION:+ (${EXISTING_VERSION})}."
-    echo "  Service is currently active."
+    echo "  Service is currently active. Downloading new binary…"
   else
     green "  Existing Wicklee binary detected at ${CANONICAL_BIN}${EXISTING_VERSION:+ (${EXISTING_VERSION})}."
-    dim   "  (No service is currently running.)"
+    echo "  No service running. Downloading new binary…"
   fi
-  echo ""
-  echo "  To upgrade in place, run:"
-  echo ""
-  bold "    sudo ${CANONICAL_BIN} --install-service"
-  echo ""
-  dim "  That command stops the service, swaps in the new binary, and restarts."
-  dim "  It is the only step that needs sudo."
-  echo ""
-
-  # Fire-and-forget telemetry — flag this as an upgrade attempt.
-  curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \
-    -H "Content-Type: application/json" \
-    -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${EXISTING_VERSION:-unknown}\",\"nvidia\":false,\"upgrade\":true,\"stage\":\"detect-existing\"}" \
-    >/dev/null 2>&1 &
-
-  exit 0
 fi
 
 # ── NVIDIA detection (Linux) ─────────────────────────────────────────────────
@@ -162,31 +146,47 @@ VERSION_LABEL="${INSTALLED_VERSION:-${RELEASE_TAG}}"
 # ── Anonymous install telemetry ───────────────────────────────────────────────
 NVIDIA_FLAG="false"
 [[ -n "$NVIDIA_SUFFIX" ]] && NVIDIA_FLAG="true"
+UPGRADE_FLAG="false"
+[[ "$EXISTING_BINARY" == "true" ]] && UPGRADE_FLAG="true"
 curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \
   -H "Content-Type: application/json" \
-  -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${VERSION_LABEL}\",\"nvidia\":${NVIDIA_FLAG},\"upgrade\":false}" \
+  -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${VERSION_LABEL}\",\"nvidia\":${NVIDIA_FLAG},\"upgrade\":${UPGRADE_FLAG}}" \
   >/dev/null 2>&1 &
 
 # ── Success ───────────────────────────────────────────────────────────────────
 
 echo ""
-green "  ✓ Wicklee agent installed successfully — ${VERSION_LABEL}"
+green "  ✓ Wicklee agent downloaded successfully — ${VERSION_LABEL}"
 dim   "    Location: ${USER_INSTALL_PATH}"
 echo ""
-echo "  Next steps:"
-echo ""
-bold "  Try it (foreground, no sudo):"
-echo "    ${USER_INSTALL_PATH}"
-echo ""
-bold "  Recommended (background service, starts on boot):"
-echo "    sudo ${USER_INSTALL_PATH} --install-service"
-dim   "    Promotes the binary to ${CANONICAL_BIN} and registers"
-if [[ "$OS_TAG" == "darwin" ]]; then
-  dim "    the LaunchDaemon. This is the only step that needs sudo."
+
+if [[ "$EXISTING_BINARY" == "true" ]]; then
+  # Upgrade path — existing service install. One command swaps in the new bits.
+  echo "  Finish the upgrade (the only sudo step):"
+  echo ""
+  bold "    sudo ${USER_INSTALL_PATH} --install-service"
+  echo ""
+  dim   "  Stops the current service, copies the new binary to ${CANONICAL_BIN},"
+  dim   "  and restarts. The new ${VERSION_LABEL} binary self-promotes — running the"
+  dim   "  existing ${CANONICAL_BIN} directly would just re-install the old version."
+  echo ""
 else
-  dim "    the systemd unit. This is the only step that needs sudo."
+  # Fresh install — two choices.
+  echo "  Next steps:"
+  echo ""
+  bold "  Try it (foreground, no sudo):"
+  echo "    ${USER_INSTALL_PATH}"
+  echo ""
+  bold "  Recommended (background service, starts on boot):"
+  echo "    sudo ${USER_INSTALL_PATH} --install-service"
+  if [[ "$OS_TAG" == "darwin" ]]; then
+    dim "    Promotes the binary to ${CANONICAL_BIN} and registers the LaunchDaemon."
+  else
+    dim "    Promotes the binary to ${CANONICAL_BIN} and registers the systemd unit."
+  fi
+  dim   "    This is the only step that needs sudo."
+  echo ""
 fi
-echo ""
 echo "  Local dashboard:    http://localhost:7700"
 echo "  Fleet dashboard:    https://wicklee.dev"
 echo ""

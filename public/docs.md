@@ -840,10 +840,11 @@ ollama_port = 11435   # port where Ollama now listens
 **Step 3 — Restart the Wicklee agent:**
 
 ```bash
-curl -fsSL https://wicklee.dev/install.sh | bash
-# or manually:
-# macOS: sudo launchctl kickstart -k system/dev.wicklee.agent
-# Linux: sudo systemctl restart wicklee
+# macOS
+sudo launchctl kickstart -k system/dev.wicklee.agent
+
+# Linux
+sudo systemctl restart wicklee
 ```
 
 Verify the proxy is active — your dashboard will show `proxy: :11434 → :11435` in the Diagnostics rail.
