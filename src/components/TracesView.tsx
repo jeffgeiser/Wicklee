@@ -1126,7 +1126,7 @@ const DismissalLogPanel: React.FC = () => {
       const data: { dismissals: Dismissal[] } = await r.json();
       setRows(data.dismissals ?? []);
     } catch {
-      setError('Dismissal log unavailable — agent may be offline or running a musl build.');
+      setError('Dismissal log unavailable — agent may be offline or out of date.');
       setRows([]);
     }
     setLoading(false);

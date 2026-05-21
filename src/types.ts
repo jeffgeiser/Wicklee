@@ -248,7 +248,7 @@ export interface SentinelMetrics {
    * GPU clock throttle percentage: 0 = running at full rated speed, 100 = fully throttled.
    * NVIDIA: derived from nvmlDeviceGetClockInfo(GRAPHICS) / nvmlDeviceGetMaxClockInfo(GRAPHICS).
    * AMD/Linux: derived from scaling_cur_freq / cpuinfo_max_freq (clock_ratio path only).
-   * Absent on macOS, Windows, non-AMD Linux without cpufreq, and musl builds.
+   * Absent on macOS, Windows, and non-AMD Linux without cpufreq.
    * 0% is healthy; higher values mean the GPU/CPU clock is below its rated maximum.
    */
   clock_throttle_pct?: number | null;

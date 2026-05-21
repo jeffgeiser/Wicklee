@@ -23,20 +23,23 @@ fn config_path_hint() -> &'static str {
 }
 
 pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16, cfg_ref: &WickleeConfig) {
-    // Format one 48-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
+    // Format one 64-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
+    // v0.8.2: widened from 48 → 64 cols so longer Ollama / vLLM status lines
+    // ("running (no model loaded)", "not detected → set runtime_ports.vllm in
+    // config") no longer truncate mid-word. Still comfortable in 80-col terms.
     let row = |key: &str, val: &str| -> String {
         let inner = if key.is_empty() { format!("   {val}") } else { format!("   {:<8} {}", key, val) };
-        let capped = if inner.chars().count() <= 46 {
-            format!("{:<46}", inner)
+        let capped = if inner.chars().count() <= 62 {
+            format!("{:<62}", inner)
         } else {
-            inner.chars().take(43).collect::<String>() + "..."
+            inner.chars().take(59).collect::<String>() + "..."
         };
         format!("║{}║", capped)
     };
-    let sep       = "╠══════════════════════════════════════════════╣";
-    let top       = "╔══════════════════════════════════════════════╗";
-    let bot       = "╚══════════════════════════════════════════════╝";
-    let blank_row = "║                                              ║";
+    let sep       = "╠══════════════════════════════════════════════════════════════╣";
+    let top       = "╔══════════════════════════════════════════════════════════════╗";
+    let bot       = "╚══════════════════════════════════════════════════════════════╝";
+    let blank_row = "║                                                              ║";
 
     // ── Banner ────────────────────────────────────────────────────────────────
     println!("{top}");

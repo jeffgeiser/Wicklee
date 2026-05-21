@@ -132,7 +132,7 @@ Proxy inference traces (when proxy is enabled).
 ### GET /api/events/history
 Node event log from DuckDB.
 ```json
-{ "events": [{ "ts_ms": 1774621630223, "event_type": "startup", "level": "info", "message": "Agent started v0.7.10", "node_id": "WK-XXXX" }] }
+{ "events": [{ "ts_ms": 1774621630223, "event_type": "startup", "level": "info", "message": "Agent started v0.8.2", "node_id": "WK-XXXX" }] }
 ```
 
 ### GET /api/events/recent
@@ -344,7 +344,7 @@ The full telemetry payload sent every 1-2 seconds. All fields are optional (null
 - `sample_count`: u32 — Samples in current WES window
 
 ### Agent
-- `agent_version`: string — "0.7.10"
+- `agent_version`: string — "0.8.2"
 - `timestamp_ms`: u64 — Unix milliseconds
 
 ---
