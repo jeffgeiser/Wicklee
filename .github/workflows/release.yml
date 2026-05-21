@@ -89,25 +89,36 @@ jobs:
           name: wicklee-agent-windows-x86_64.exe
           path: wicklee-agent-windows-x86_64.exe
 
-  # ── Linux x64 (glibc, no NVIDIA — default for non-NVIDIA hosts) ──────────────
-  # v0.8.2: switched from musl to glibc. The musl build statically excluded
-  # DuckDB (cfg(not(target_env = "musl"))), which silently dropped the
-  # 14 store-backed routes (Model Discovery, observations, profile, SLA,
-  # history, cost-by-model, etc.) on every non-NVIDIA Linux host. glibc
-  # 2.35 (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 9+) covers 95% of
-  # modern Linux. Alpine and ancient distro users can `cargo build` from
-  # source if they need static linking.
+  # ── Linux x64 (glibc 2.31, no NVIDIA — default for non-NVIDIA hosts) ─────────
+  # v0.8.3: build inside Ubuntu 20.04 container to target glibc 2.31. The
+  # v0.8.2 build ran on ubuntu-22.04 directly → glibc 2.35, which doesn't
+  # run on Ubuntu 20.04 / Debian 11 / RHEL 8 (still very common on homelab
+  # and BMC hardware). glibc 2.31 is forward-compatible with everything
+  # Ubuntu 20.04+, Debian 11+, RHEL 8+, Fedora 33+. Covers ~99% of real
+  # Linux installs. CentOS 7 holdouts must build from source.
+  #
+  # Why container instead of cross: simpler. The frontend builds in the
+  # same container so we don't need to ferry dist/ between host and
+  # container filesystems. DuckDB compiles fine — Ubuntu 20.04 has a
+  # recent-enough cmake + gcc-9.
   build-linux-x64:
-    name: Build · Linux (x64, glibc, no NVIDIA)
+    name: Build · Linux (x64, glibc 2.31, no NVIDIA)
     runs-on: ubuntu-22.04
-    timeout-minutes: 25      # bounded to prevent runaway builds
+    container: ubuntu:20.04
+    timeout-minutes: 30      # bounded to prevent runaway builds
     steps:
-      - uses: actions/checkout@v4
+      - name: Install build prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates build-essential cmake pkg-config \
+            libssl-dev git
+          # Node 20 from NodeSource (ubuntu:20.04 ships Node 10)
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y nodejs
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
+      - uses: actions/checkout@v4
 
       - name: Build frontend
         run: npm ci && npm run build:agent
@@ -118,7 +129,7 @@ jobs:
       # link dependency at compile time. Runtime nvidia-smi probing is
       # disabled in this build; users with NVIDIA GPUs should download
       # the -nvidia variant instead (install.sh auto-detects).
-      - name: Build agent (glibc, no NVML)
+      - name: Build agent (glibc 2.31, no NVML)
         run: cargo build --release
         working-directory: agent
         env:
@@ -132,25 +143,31 @@ jobs:
           name: wicklee-agent-linux-x86_64
           path: wicklee-agent-linux-x86_64
 
-  # ── Linux arm64 (glibc, no NVIDIA — default for non-NVIDIA ARM hosts) ────────
+  # ── Linux arm64 (glibc 2.31, no NVIDIA — default for non-NVIDIA ARM hosts) ───
   build-linux-arm64:
-    name: Build · Linux (arm64, glibc, no NVIDIA)
-    runs-on: ubuntu-24.04-arm     # native ARM64 runner — no cross-compilation
-    timeout-minutes: 25
+    name: Build · Linux (arm64, glibc 2.31, no NVIDIA)
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:20.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Install build prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates build-essential cmake pkg-config \
+            libssl-dev git
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y nodejs
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
+      - uses: actions/checkout@v4
 
       - name: Build frontend
         run: npm ci && npm run build:agent
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build agent (glibc, no NVML)
+      - name: Build agent (glibc 2.31, no NVML)
         run: cargo build --release
         working-directory: agent
         env:

@@ -6,6 +6,44 @@
 
 ---
 
+## May 21, 2026 — v0.8.3: Linux Builds Target glibc 2.31 (Ubuntu 20.04 Container)
+
+### Why
+v0.8.2 fixed the missing-DuckDB problem (switched musl → glibc) but
+introduced a new one: built on ubuntu-22.04 directly, the binary links
+against glibc 2.35 and refuses to run on anything older. Bare-metal
+re-test on an Ubuntu 20.04 BMC failed with:
+```
+GLIBCXX_3.4.29 not found
+GLIBC_2.32 / 2.33 / 2.34 not found
+```
+
+Ubuntu 20.04, Debian 11, RHEL 8 are all glibc 2.31 — still massively
+common on homelab and bare-metal infrastructure. The v0.8.2 binary
+covered modern dev laptops only.
+
+### Fix
+Linux glibc builds now run inside an `ubuntu:20.04` container on the
+ubuntu-22.04 / ubuntu-24.04-arm runners. Same Rust toolchain via
+rustup, same `cargo build --release`, but compiled against glibc 2.31.
+Result: forward-compatible with Ubuntu 20.04+, Debian 11+, RHEL 8+,
+Fedora 33+ — ~99% of real Linux install base. CentOS 7 holdouts
+(glibc 2.17) must build from source.
+
+The frontend build moved inside the container too so we don't have
+to ferry dist/ across the host/container boundary. Node 20 is pulled
+from NodeSource since ubuntu:20.04 ships an ancient Node 10.
+
+NVIDIA builds (linux-x86_64-nvidia, linux-aarch64-nvidia) intentionally
+NOT changed — those users skew toward modern CUDA-friendly distros
+(Ubuntu 22.04+). Can revisit if NVIDIA-on-old-distro complaints arrive.
+
+### Files
+- `.github/workflows/release.yml` — two Linux jobs use `container: ubuntu:20.04`.
+- `agent/Cargo.toml` → 0.8.3.
+
+---
+
 ## May 21, 2026 — v0.8.2: Linux Default Switched From musl To glibc
 
 ### Why
