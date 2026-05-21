@@ -6,6 +6,39 @@
 
 ---
 
+## May 21, 2026 — v0.8.1: Auto-Stop Foreground On `--install-service`
+
+### Why
+v0.8.0 introduced the two-step Reddit-friendly install:
+```
+curl -fsSL https://wicklee.dev/install.sh | bash && ~/.wicklee/bin/wicklee
+# then…
+sudo ~/.wicklee/bin/wicklee --install-service
+```
+The natural Reddit-paste mistake is to chain those two without Ctrl-C in
+between. The foreground `~/.wicklee/bin/wicklee` keeps port 7700 bound,
+so when `--install-service` registers the LaunchDaemon / systemd unit,
+the new daemon immediately hits `EADDRINUSE` and crash-loops. Confusing
+and unrecoverable without manual `pkill`.
+
+### Fix
+`install_service()` now runs `lsof -ti tcp:7700`, filters out its own
+PID, SIGTERMs anything left, waits up to 3s for clean exit, then
+SIGKILLs stragglers. Targets the port rather than the process name so
+unrelated `wicklee` strings (e.g. an editor with `wicklee.rs` open)
+never get false-matched.
+
+Effect: a user can copy-paste the chained one-liner, and the second
+sudo command silently displaces the foreground try before promoting
+the binary to `/usr/local/bin/wicklee`.
+
+### Files
+- `agent/src/service.rs::install_service()` — port-7700 cleanup block,
+  gated on `cfg(unix)`. macOS and Linux both ship `lsof`.
+- `agent/Cargo.toml` → 0.8.1.
+
+---
+
 ## May 21, 2026 — v0.8.0: No-Sudo Install Flow
 
 ### Why

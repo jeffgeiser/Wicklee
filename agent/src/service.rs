@@ -124,6 +124,60 @@ pub(crate) async fn install_service() {
                 .stderr(std::process::Stdio::null())
                 .status().await;
         }
+
+        // ── v0.8.1: Kill foreground 7700 holders ────────────────────────
+        // The common Reddit-paste failure mode is:
+        //   curl | bash && ~/.wicklee/bin/wicklee   # foreground holds :7700
+        //   sudo wicklee --install-service          # daemon EADDRINUSEs
+        // Solve it here: any process binding port 7700 that isn't us is a
+        // foreground try-it-out. SIGTERM, wait, then proceed. We use
+        // lsof -ti :7700 so we don't false-positive on unrelated wicklee
+        // procs (e.g. the user's editor named "wicklee.rs").
+        #[cfg(unix)]
+        {
+            let self_pid = std::process::id();
+            let out = tokio::process::Command::new("lsof")
+                .args(["-ti", "tcp:7700"])
+                .output().await;
+            if let Ok(o) = out {
+                let pids: Vec<u32> = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter_map(|l| l.trim().parse::<u32>().ok())
+                    .filter(|p| *p != self_pid)
+                    .collect();
+                if !pids.is_empty() {
+                    eprintln!("[install] stopping {} foreground process(es) holding :7700", pids.len());
+                    for pid in &pids {
+                        let _ = tokio::process::Command::new("kill")
+                            .args(["-TERM", &pid.to_string()])
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status().await;
+                    }
+                    // Give them up to 3s to exit cleanly, then SIGKILL stragglers.
+                    for _ in 0..6 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let still = tokio::process::Command::new("lsof")
+                            .args(["-ti", "tcp:7700"])
+                            .output().await
+                            .ok()
+                            .map(|o| String::from_utf8_lossy(&o.stdout)
+                                .lines()
+                                .filter_map(|l| l.trim().parse::<u32>().ok())
+                                .any(|p| p != self_pid))
+                            .unwrap_or(false);
+                        if !still { break; }
+                    }
+                    for pid in &pids {
+                        let _ = tokio::process::Command::new("kill")
+                            .args(["-KILL", &pid.to_string()])
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status().await;
+                    }
+                }
+            }
+        }
         // Copy the current binary to the canonical location. cp + chmod
         // rather than mv so the source (which may be in the user's home)
         // stays intact in case the user re-runs.
