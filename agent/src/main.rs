@@ -32,6 +32,7 @@ mod proxy;
 mod cloud_push;
 mod service;
 mod diagnostics;
+mod runtime_config;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
