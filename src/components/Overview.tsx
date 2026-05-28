@@ -19,6 +19,7 @@ import { useLocalEvents } from '../hooks/useLocalEvents';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
 import EventFeed, { eventMeta, fmtAgo as fmtEventAgo } from './EventFeed';
 import MetricTooltip from './MetricTooltip';
+import RuntimeConfigModal from './RuntimeConfigModal';
 
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -324,9 +325,10 @@ interface NodeRowProps {
   peakTps?: number;
   restricted?: boolean;
   onUpgrade?: () => void;
+  onOpenConfig?: (modelName: string) => void;
 }
 
-const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, restricted = false, onUpgrade }) => {
+const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, restricted = false, onUpgrade, onOpenConfig }) => {
   const [expanded, setExpanded] = useState(false);
   const isOnline = m !== null;
 
@@ -816,6 +818,24 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             <DetailCell label="Agent" value={m.agent_version ?? null}
               tooltip="Wicklee agent version running on this node. If behind fleet majority, the Agent Version Mismatch observation will fire." />
 
+            {/* v0.9.0: Runtime Config pill — single-model case. Shows only when
+                the active model has a cached config on the agent. Multi-model
+                nodes get per-row Config links in the Active Models panel. */}
+            {m.runtime_config_available === true
+              && (!m.active_models || m.active_models.length <= 1)
+              && (m.ollama_active_model || m.vllm_model_name)
+              && (
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase tracking-widest text-gray-500 mb-0.5">Config</span>
+                <button
+                  onClick={() => onOpenConfig?.(m.ollama_active_model ?? m.vllm_model_name ?? '')}
+                  className="self-start px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors"
+                >
+                  View →
+                </button>
+              </div>
+            )}
+
             {/* Always show TTFT + thermal source */}
             <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={ttftSource}
               tooltip="Time To First Token — latency from request arrival to first generated token. Source: vLLM histogram (production), proxy rolling avg (production), or Ollama probe (synthetic 20-token baseline every ~30s). Lower is more responsive." />
@@ -875,6 +895,14 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
                     {am.wes != null && <span className={`font-mono tabular-nums whitespace-nowrap ${wesColorClass(am.wes)}`}>{am.wes.toFixed(1)} WES</span>}
                     {am.vram_mb != null && <span className="text-gray-500 font-mono tabular-nums whitespace-nowrap">{(am.vram_mb / 1024).toFixed(1)}G</span>}
                     {am.request_count > 0 && <span className="text-gray-600 tabular-nums whitespace-nowrap">{am.request_count} req</span>}
+                    {m.runtime_config_available === true && (
+                      <button
+                        onClick={() => onOpenConfig?.(am.model)}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors whitespace-nowrap"
+                      >
+                        Config
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1311,6 +1339,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   // Local-only state (used when isLocalHost for WS/SSE to the local agent)
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
+  // v0.9.0: Runtime Config modal — null when closed, otherwise the model name to inspect.
+  const [runtimeConfigModel, setRuntimeConfigModel] = useState<string | null>(null);
   const [localConnected, setLocalConnected] = useState(false);
   const [localTransport, setLocalTransport] = useState<'ws' | 'sse' | null>(null);
 
@@ -2607,6 +2637,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                     {am.wes != null && <span className={`font-mono tabular-nums whitespace-nowrap ${wesColorClass(am.wes)}`}>{am.wes.toFixed(1)} WES</span>}
                     {am.vram_mb != null && <span className="text-gray-500 font-mono tabular-nums whitespace-nowrap">{(am.vram_mb / 1024).toFixed(1)}G</span>}
                     {am.request_count > 0 && <span className="text-gray-600 tabular-nums whitespace-nowrap">{am.request_count} req</span>}
+                    {s.runtime_config_available === true && (
+                      <button
+                        onClick={() => setRuntimeConfigModel(am.model)}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors whitespace-nowrap"
+                      >
+                        Config
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2672,7 +2710,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
               <FleetStatusHeader />
               <div className="divide-y divide-gray-100 dark:divide-gray-800">
                 {visibleRows.map(row => (
-                  <FleetStatusRow key={row.nodeId} {...row} />
+                  <FleetStatusRow key={row.nodeId} {...row} onOpenConfig={setRuntimeConfigModel} />
                 ))}
               </div>
             </div>
@@ -3251,6 +3289,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           )}
 
         </div>
+      )}
+
+      {/* v0.9.0: Runtime Config modal — opened from "Config" pills */}
+      {runtimeConfigModel && (
+        <RuntimeConfigModal
+          modelName={runtimeConfigModel}
+          onClose={() => setRuntimeConfigModel(null)}
+        />
       )}
     </div>
   );
