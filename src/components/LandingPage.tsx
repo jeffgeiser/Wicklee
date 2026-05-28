@@ -142,9 +142,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             {/* macOS / Linux */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
               <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
-                <p className="text-zinc-500 whitespace-nowrap"># macOS &amp; Linux</p>
+                <p className="text-zinc-500 whitespace-nowrap"># macOS &amp; Linux &nbsp;<span className="text-green-500/70">— no sudo, installs to ~/.wicklee/bin/</span></p>
                 <p className="text-white whitespace-nowrap">curl -fsSL https://wicklee.dev/install.sh | bash</p>
-                <p className="text-zinc-500 whitespace-nowrap"># Then: sudo wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
+                <p className="text-zinc-500 whitespace-nowrap"># Optional: sudo ~/.wicklee/bin/wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
               </div>
               <button
                 onClick={() => {
@@ -163,9 +163,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             {/* Windows */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 pt-3 border-t border-zinc-800">
               <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
-                <p className="text-zinc-500 whitespace-nowrap"># Windows (PowerShell)</p>
+                <p className="text-zinc-500 whitespace-nowrap"># Windows (PowerShell, Admin)</p>
                 <p className="text-white whitespace-nowrap">irm https://wicklee.dev/install.ps1 | iex</p>
-                <p className="text-zinc-500 whitespace-nowrap"># Then: wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
+                <p className="text-zinc-500 whitespace-nowrap"># Optional: wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
               </div>
               <button
                 onClick={() => {
