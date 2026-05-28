@@ -115,19 +115,22 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           </span>
         </h1>
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
-          Thermal intelligence. WES (thermally-honest MPG for AI) and 18 observation patterns. No proxy unless you want production-grade metrics. Install in 60 seconds — nothing to configure.
+          Thermal intelligence. WES (thermally-honest MPG for AI) and 18 observation patterns. No proxy unless you want production-grade metrics. Install in 60 seconds — no sudo, no account, nothing to configure.
         </p>
         <div className="flex items-center justify-center">
           <button
-            onClick={onSignUp}
+            onClick={() => document.getElementById('install-snippet')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             className="w-full sm:w-auto px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 text-lg"
           >
-            Create Account — Free
+            Try it now — no sudo, no signup
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
         <p className="mt-3 text-xs text-gray-500">
-          No account needed for local-only
+          Want fleet dashboards across multiple nodes?{' '}
+          <button onClick={onSignUp} className="text-blue-400 hover:text-blue-300 underline underline-offset-2">
+            Create a free account
+          </button>
         </p>
         <p className="mt-1 text-xs text-gray-600">
           100% local by default · Nothing leaves your machine · Optional cloud pairing &amp; enterprise exports
@@ -135,7 +138,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       </section>
 
       {/* Install Command Section */}
-      <section className="max-w-3xl mx-auto px-4 sm:px-8 pb-16 sm:pb-32 relative z-10">
+      <section id="install-snippet" className="max-w-3xl mx-auto px-4 sm:px-8 pb-16 sm:pb-32 relative z-10 scroll-mt-20">
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-2xl relative group overflow-hidden">
           <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
           <div className="relative z-10 space-y-4">
