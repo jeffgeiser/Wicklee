@@ -6,6 +6,65 @@
 
 ---
 
+## May 28, 2026 — v0.9.0: Runtime Config Surface
+
+### Why
+Operators running multiple inference runtimes on the same node ask the
+same question over and over: *what is this engine actually loaded
+with?* Context length, GPU layer count, quantization, the prompt
+template, the system prompt — these live in three completely different
+places (Ollama's `/api/show`, vLLM's `/v1/server_info`, llama-server's
+`/props`) and you need a terminal to see them. We surface them in one
+place so a quick "Config →" click answers questions like *is this the
+quantized build I deployed?* or *does the system prompt match what the
+team's running in prod?*
+
+### What changed
+- **Ollama**: the existing `/api/show` fetch in `harvester.rs` (already
+  fires on model change) now also calls `runtime_config::build_ollama_config`
+  and inserts into a shared `RuntimeConfigCache`. Template + system prompt
+  are captured.
+- **vLLM**: dedicated 5-min poller in `main.rs` calls
+  `runtime_config::fetch_vllm_config` — tries `/v1/server_info` first,
+  falls back to `ps aux` if the endpoint isn't available.
+- **llama.cpp**: same shape — tries `/props` first, falls back to
+  `ps aux` parsing of `llama-server` / `llama.cpp` args.
+- New endpoint `GET /api/runtime-config?model=<name>` returns the cached
+  `RuntimeConfig` (400 / 404 / 200 + JSON). Reads in-memory cache only;
+  available regardless of DuckDB / store health.
+- `MetricsPayload.runtime_config_available` flips to `Some(true)` once
+  the cache has any entry — three-way wire format (agent / cloud /
+  frontend types) already shipped in v0.9.0 prep.
+- New `RuntimeConfigModal.tsx` — fetches the endpoint and renders a
+  runtime-aware view (Ollama: parameters + collapsible template +
+  system prompt; vLLM / llama.cpp: parameters + process_args). Esc /
+  backdrop / X to close, Copy-as-Markdown button.
+- Two placements in `Overview.tsx`: a single-model "Config" pill in the
+  Diagnostics rail (next to Runtime + Agent), and a per-row "Config"
+  link in both Active Models panels (fleet expanded row + localhost
+  diagnostic).
+
+### Privacy note
+Templates and system prompts can contain proprietary content. They
+live in the agent's in-memory cache and are served only by the
+**localhost** endpoint to the localhost dashboard. The cloud telemetry
+push (`cloud_push.rs`) is **not** modified — none of these fields ride
+the fleet wire. Operators who want cross-fleet config visibility can
+opt in later; this release is local-only by design.
+
+### Files touched
+- `agent/src/runtime_config.rs` (already present from v0.9.0 prep)
+- `agent/src/harvester.rs` — cache insertion in Ollama `/api/show` block
+- `agent/src/main.rs` — cache plumbing, vLLM + llama.cpp pollers, HTTP
+  handler, broadcaster flag, route + Extension wiring
+- `agent/Cargo.toml` — version 0.8.3 → 0.9.0
+- `src/components/RuntimeConfigModal.tsx` (new)
+- `src/components/Overview.tsx` — modal state, FleetStatusRow prop,
+  three placements
+- `docs/progress.md` (this entry)
+
+---
+
 ## May 21, 2026 — v0.8.3: Linux Builds Target glibc 2.31 (Ubuntu 20.04 Container)
 
 ### Why
