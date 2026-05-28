@@ -167,6 +167,14 @@ export interface SentinelMetrics {
    * Null/absent = single model (use singular ollama_* fields).
    * Present when 2+ models are loaded in Ollama's /api/ps. */
   active_models?: ModelLiveMetrics[] | null;
+  /**
+   * v0.9.0: true when this node has runtime launch-config snapshots cached
+   * (parameters, template, system prompt, GPU layers, etc.) and available via
+   * GET /api/runtime-config?model=<name>. The full config payload is fetched
+   * on demand to keep the 1Hz SSE stream small. Frontend uses this flag to
+   * decide whether to render the "Config" pill/link affordance.
+   */
+  runtime_config_available?: boolean | null;
   /** Port the proxy listens on (e.g. 11434). Null/undefined when proxy is disabled. */
   proxy_listen_port?: number | null;
   /** Port the proxy forwards to (the real Ollama port, e.g. 11435). Null when disabled. */

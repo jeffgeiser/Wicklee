@@ -111,6 +111,11 @@ struct MetricsPayload {
     /// Per-model live metrics when multiple models are loaded concurrently.
     #[serde(default)]
     active_models: Option<Vec<CloudModelLiveMetrics>>,
+    /// v0.9.0: true when the agent has runtime launch-config snapshots cached
+    /// and available via its localhost /api/runtime-config endpoint. Lets the
+    /// fleet UI render the "Config" affordance without round-tripping.
+    #[serde(default)]
+    runtime_config_available: Option<bool>,
     #[serde(default)]
     proxy_listen_port: Option<u16>,
     #[serde(default)]

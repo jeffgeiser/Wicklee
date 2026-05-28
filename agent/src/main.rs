@@ -595,6 +595,14 @@ struct MetricsPayload {
     /// Per-model live metrics when multiple models are loaded concurrently.
     #[serde(skip_serializing_if = "Option::is_none")]
     active_models: Option<Vec<ModelLiveMetrics>>,
+    /// True when this node has runtime launch-config snapshots cached and
+    /// available via GET /api/runtime-config?model=<name>. Lets the frontend
+    /// decide whether to render the "Config" pill/link without round-tripping
+    /// to a separate endpoint just to find out. The full config payload (which
+    /// can include template + system prompt) is fetched on demand to keep the
+    /// 1Hz SSE stream small. v0.9.0+ (Runtime Config Surface).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_config_available: Option<bool>,
     /// Port the proxy listens on (e.g. 11434). None when proxy is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     proxy_listen_port: Option<u16>,
@@ -2776,6 +2784,9 @@ fn start_metrics_broadcaster(
                         }).collect()
                     })
                 },
+                // v0.9.0: Runtime Config Surface. Stays None until harvester
+                // populates runtime_config_cache; frontend checks this flag.
+                runtime_config_available: None,
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -6326,6 +6337,9 @@ async fn handle_metrics(
                         }).collect()
                     })
                 },
+                // v0.9.0: Runtime Config Surface. Stays None until harvester
+                // populates runtime_config_cache; frontend checks this flag.
+                runtime_config_available: None,
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
