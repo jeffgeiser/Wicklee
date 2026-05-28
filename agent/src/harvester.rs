@@ -186,6 +186,7 @@ pub(crate) fn start_ollama_harvester(
     nvidia:    Arc<Mutex<NvidiaMetrics>>,
     proxy_arc: Option<Arc<ProxyState>>,
     port_rx: process_discovery::PortRx,
+    runtime_config_cache: crate::runtime_config::RuntimeConfigCache,
 ) -> (Arc<Mutex<OllamaMetrics>>, Arc<std::sync::atomic::AtomicBool>) {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
     // Atomic flag: true while the /api/generate probe is in-flight.
@@ -199,6 +200,7 @@ pub(crate) fn start_ollama_harvester(
     let proxy_main  = proxy_arc.clone();
     let mut port_rx_main = port_rx.clone();
     let probe_active_harvester = Arc::clone(&probe_active);
+    let rc_cache = runtime_config_cache.clone();
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -409,6 +411,14 @@ pub(crate) fn start_ollama_harvester(
                                 cached_kv_heads      = mi["llama.attention.head_count_kv"].as_u64();
                                 cached_num_heads     = mi["llama.attention.head_count"].as_u64();
                                 cached_embedding_dim = mi["llama.embedding_length"].as_u64();
+
+                                // v0.9.0: stash full runtime config (template + system prompt)
+                                // in the in-memory cache for the localhost endpoint.
+                                let cfg = crate::runtime_config::build_ollama_config(model_name, &show_json);
+                                if let Ok(mut c) = rc_cache.lock() {
+                                    c.insert(model_name.clone(), cfg);
+                                    eprintln!("[runtime-config] ollama: cached config for {model_name}");
+                                }
                             }
                         }
                     } else {

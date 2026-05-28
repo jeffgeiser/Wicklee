@@ -2665,6 +2665,7 @@ fn start_metrics_broadcaster(
     config_node_id:        String,
     model_baseline:        ModelBaselineCache,
     cpu_usage_atomic:      Arc<std::sync::atomic::AtomicU32>,
+    runtime_config_cache:  runtime_config::RuntimeConfigCache,
 ) -> broadcast::Sender<String> {
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
@@ -2785,9 +2786,13 @@ fn start_metrics_broadcaster(
                         }).collect()
                     })
                 },
-                // v0.9.0: Runtime Config Surface. Stays None until harvester
-                // populates runtime_config_cache; frontend checks this flag.
-                runtime_config_available: None,
+                // v0.9.0: Runtime Config Surface. Some(true) once any model
+                // has a cached config; None otherwise (saves payload bytes
+                // when the feature can't be used yet).
+                runtime_config_available: {
+                    let c = runtime_config_cache.lock().unwrap();
+                    if c.is_empty() { None } else { Some(true) }
+                },
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -6234,6 +6239,7 @@ async fn handle_metrics(
     axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
     axum::extract::Extension(proxy_ports):           axum::extract::Extension<ProxyPorts>,
     axum::extract::Extension(config_node_id):        axum::extract::Extension<NodeId>,
+    axum::extract::Extension(runtime_config_cache):  axum::extract::Extension<runtime_config::RuntimeConfigCache>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
@@ -6338,9 +6344,13 @@ async fn handle_metrics(
                         }).collect()
                     })
                 },
-                // v0.9.0: Runtime Config Surface. Stays None until harvester
-                // populates runtime_config_cache; frontend checks this flag.
-                runtime_config_available: None,
+                // v0.9.0: Runtime Config Surface. Some(true) once any model
+                // has a cached config; None otherwise (saves payload bytes
+                // when the feature can't be used yet).
+                runtime_config_available: {
+                    let c = runtime_config_cache.lock().unwrap();
+                    if c.is_empty() { None } else { Some(true) }
+                },
                 proxy_listen_port,
                 proxy_target_port,
                 runtime_port_overrides: runtime_port_overrides.clone(),
@@ -6415,6 +6425,24 @@ async fn handle_metrics(
 
     Sse::new(ReceiverStream::new(rx))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+// ── Runtime Config (v0.9.0) ──────────────────────────────────────────────────
+// GET /api/runtime-config?model=<name> — returns the cached RuntimeConfig for
+// the named model. Available across Ollama, vLLM, and llama.cpp. Reads from
+// the in-memory cache populated by the harvesters; never blocks on I/O.
+async fn handle_runtime_config(
+    axum::extract::Extension(cache): axum::extract::Extension<runtime_config::RuntimeConfigCache>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let Some(model) = q.get("model") else {
+        return (StatusCode::BAD_REQUEST, "missing ?model= query param").into_response();
+    };
+    let guard = cache.lock().unwrap();
+    match guard.get(model) {
+        Some(config) => (StatusCode::OK, Json(config.clone())).into_response(),
+        None => (StatusCode::NOT_FOUND, "no cached config for this model").into_response(),
+    }
 }
 
 // ── Static Asset Serving ──────────────────────────────────────────────────────
@@ -6976,16 +7004,90 @@ async fn main() {
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
+    // v0.9.0: shared runtime-config cache populated by Ollama harvester (on
+    // model change) and by dedicated vLLM / llama.cpp pollers below. Read by
+    // GET /api/runtime-config and used to set the MetricsPayload availability
+    // flag.
+    let runtime_config_cache = runtime_config::new_cache();
     let (ollama_metrics, probe_active) = harvester::start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         proxy_arc,
         ollama_port_rx,
+        Arc::clone(&runtime_config_cache),
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
     let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
     let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
+
+    // v0.9.0: Runtime Config Surface — dedicated 5-min pollers for vLLM and
+    // llama.cpp. Both run alongside the existing metrics harvesters and write
+    // into the shared runtime_config_cache. First poll is delayed 30 s so we
+    // don't slow first-paint.
+    {
+        let cache = Arc::clone(&runtime_config_cache);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap_or_default();
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                let port = process_discovery::scan_runtimes()
+                    .get("vllm")
+                    .copied();
+                let Some(port) = port else { continue; };
+                let base = format!("http://127.0.0.1:{port}");
+                match runtime_config::fetch_vllm_config(&client, &base).await {
+                    Ok(config) => {
+                        let model = config.model.clone();
+                        if let Ok(mut c) = cache.lock() {
+                            c.insert(model.clone(), config);
+                        }
+                        eprintln!("[runtime-config] vllm: cached config for {model}");
+                    }
+                    Err(reason) => {
+                        eprintln!("[runtime-config] vllm: probe failed: {reason}");
+                    }
+                }
+            }
+        });
+    }
+    {
+        let cache = Arc::clone(&runtime_config_cache);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap_or_default();
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                let runtimes = process_discovery::scan_runtimes();
+                let port = runtimes.get("llamacpp")
+                    .or_else(|| runtimes.get("llama-box"))
+                    .copied();
+                let Some(port) = port else { continue; };
+                let base = format!("http://127.0.0.1:{port}");
+                match runtime_config::fetch_llamacpp_config(&client, &base).await {
+                    Ok(config) => {
+                        let model = config.model.clone();
+                        if let Ok(mut c) = cache.lock() {
+                            c.insert(model.clone(), config);
+                        }
+                        eprintln!("[runtime-config] llamacpp: cached config for {model}");
+                    }
+                    Err(reason) => {
+                        eprintln!("[runtime-config] llamacpp: probe failed: {reason}");
+                    }
+                }
+            }
+        });
+    }
 
     // Shared CPU usage for idle-thermal override (IEEE f32 bits in AtomicU32).
     let cpu_usage_atomic = Arc::new(std::sync::atomic::AtomicU32::new(0_f32.to_bits()));
@@ -7031,6 +7133,7 @@ async fn main() {
         config.node_id.clone(),
         Arc::clone(&model_baseline_cache),
         Arc::clone(&cpu_usage_atomic),
+        Arc::clone(&runtime_config_cache),
     );
 
     // Shared observation cache — written by the 10 s evaluator task, read by
@@ -7309,7 +7412,10 @@ async fn main() {
             .route("/api/pair/disconnect",post(handle_pair_disconnect))
             // MCP (Model Context Protocol) — JSON-RPC 2.0 for AI agents
             .route("/mcp",                      post(handle_mcp))
-            .route("/.well-known/mcp.json",     get(handle_mcp_manifest));
+            .route("/.well-known/mcp.json",     get(handle_mcp_manifest))
+            // v0.9.0: Runtime Config Surface — backed by in-memory cache,
+            // available regardless of store health.
+            .route("/api/runtime-config",       get(handle_runtime_config));
 
         // Wire store-backed routes only when DuckDB opened successfully.
         // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET),
@@ -7353,6 +7459,7 @@ async fn main() {
          .layer(axum::extract::Extension(probe_active))
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
          .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target, runtime_overrides: runtime_overrides }))
+         .layer(axum::extract::Extension(Arc::clone(&runtime_config_cache)))
          .layer(cors)
     };
     // Suppress unused-variable warning on musl where metrics_store = None:()
