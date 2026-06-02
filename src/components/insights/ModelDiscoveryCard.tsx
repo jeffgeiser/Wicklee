@@ -435,7 +435,9 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ limit: '20' });
+      // Pull a wide catalog so trending lists actually have depth on
+      // capable nodes. Backend caps at 200.
+      const params = new URLSearchParams({ limit: '200' });
       if (query) params.set('search', query);
       const resp = await fetch(`/api/model-candidates?${params}`);
       if (!resp.ok) throw new Error(`${resp.status}`);

@@ -398,6 +398,11 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   const [onlineNodes, setOnlineNodes] = useState<Pick<NodeFit, 'node_id' | 'hostname'>[]>([]);
   const history                       = useModelComparisonHistory(false, getToken);
   const [contextLength, setContextLength] = useState<number>(DEFAULT_CONTEXT_LENGTH);
+  // "any" (default, broader) vs "all" (intersection — every node must fit).
+  // The intersection view punishes heterogeneous fleets — adding a small
+  // node shrinks the catalog. Default to "any" so the model list reflects
+  // the largest box in the fleet, not the smallest.
+  const [fitMode, setFitMode] = useState<'any' | 'all'>('any');
   const { settings }                   = useSettings();
   const kwhRate                        = settings.fleet.kwhRate || 0.16;
   const historyCount                   = history?.length ?? 0;
@@ -408,7 +413,9 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ limit: '20' });
+      // Pull a wide catalog so the client-side fit-mode filter and per-node
+      // focus have enough candidates to work with. Backend caps at 200.
+      const params = new URLSearchParams({ limit: '200' });
       if (query)  params.set('search', query);
       if (nodeId) params.set('node_id', nodeId);
       const resp = await fetch(`/api/fleet/model-candidates?${params}`, {
@@ -479,8 +486,21 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     fetchModels(pendingSearch || undefined, focusNodeId ?? undefined);
   };
 
-  // Server already filtered and ranked per-node when focusNodeId is set.
-  const displayModels = data?.models ?? [];
+  // Apply fit-mode filter to the raw catalog. "Any" keeps models where at
+  // least one node has score ≥40 (Tight or better). "All" requires every
+  // node to score ≥40. Per-node focus bypasses the toggle — that view is
+  // already implicitly single-node.
+  const displayModels = useMemo(() => {
+    const all = data?.models ?? [];
+    if (focusNodeId || onlineNodes.length <= 1) return all;
+    return all.filter(m => {
+      const scores = m.nodes.map(n => n.fit_score);
+      if (scores.length === 0) return false;
+      return fitMode === 'all'
+        ? scores.every(s => s >= 40)
+        : scores.some(s => s >= 40);
+    });
+  }, [data, focusNodeId, onlineNodes.length, fitMode]);
 
   const focusNodeLabel = focusNodeId
     ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)
@@ -638,6 +658,37 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         ))}
       </div>
 
+      {/* Fit-mode toggle — only meaningful for multi-node fleets without a
+          single-node focus. With one node selected the toggle is a no-op
+          (any == all when n=1). */}
+      {onlineNodes.length > 1 && focusNodeId == null && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] text-gray-600 uppercase tracking-widest">Show models that fit:</span>
+          <button
+            onClick={() => setFitMode('any')}
+            title="Show models that at least ONE node in your fleet can run (broader catalog)."
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+              fitMode === 'any'
+                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+            }`}
+          >
+            Any node {fitMode === 'any' ? '✓' : ''}
+          </button>
+          <button
+            onClick={() => setFitMode('all')}
+            title="Show only models EVERY node in your fleet can run (intersection — smaller list, safer for fleet-wide deployment)."
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+              fitMode === 'all'
+                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+            }`}
+          >
+            All nodes (intersection) {fitMode === 'all' ? '✓' : ''}
+          </button>
+        </div>
+      )}
+
       {/* Source label */}
       {data && (
         <div className="text-[10px] text-gray-700">
@@ -649,7 +700,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           {focusNodeId && focusNodeLabel
             ? <span className="text-cyan-600 ml-1">· showing {focusNodeLabel} compatible models</span>
             : onlineNodes.length > 1
-              ? <span className="ml-1">· showing models all nodes can run</span>
+              ? <span className="ml-1">· showing models {fitMode === 'all' ? 'every node can run' : 'at least one node can run'}</span>
               : null}
         </div>
       )}
