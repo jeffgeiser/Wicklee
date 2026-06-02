@@ -1,5 +1,5 @@
 import React, { Suspense, useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog, CreditCard } from 'lucide-react';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog, CreditCard, Boxes } from 'lucide-react';
 import { ConnectionState, DashboardTab, User, UserRole, TIER_BADGE } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -40,6 +40,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
 
   const items = [
     { id: DashboardTab.OVERVIEW,     icon: LayoutGrid, label: 'Intelligence', show: true },
+    { id: DashboardTab.MODELS,       icon: Boxes,      label: 'Models',          show: true },
     { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
     { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
     { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },

@@ -11,6 +11,7 @@ import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
 import Overview from './components/Overview';
+import ModelsPage from './components/ModelsPage';
 import NodesList from './components/NodesList';
 import TracesView from './components/TracesView';
 import ScaffoldingView from './components/ScaffoldingView';
@@ -468,6 +469,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} getToken={isLocalHost ? undefined : getToken} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
+      case DashboardTab.MODELS:
+        return <ModelsPage isLocalHost={isLocalHost} getToken={isLocalHost ? undefined : getToken} nodes={nodes} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} cloudUrl={isLocalHost ? undefined : CLOUD_URL} onNodesRemoved={handleNodeAdded} />;
       case DashboardTab.TRACES:

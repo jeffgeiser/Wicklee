@@ -532,6 +532,7 @@ export interface FleetStreamState {
 
 export enum DashboardTab {
   OVERVIEW = 'overview',
+  MODELS = 'models',
   NODES = 'nodes',
   TRACES = 'traces',
   SCAFFOLDING = 'scaffolding',

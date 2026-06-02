@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, Cpu, Server, Activity } from 'lucide-react';
+import { LayoutGrid, Cpu, Server, Activity, Boxes } from 'lucide-react';
 import { DashboardTab } from '../types';
 
 interface MobileTabBarProps {
@@ -9,6 +9,7 @@ interface MobileTabBarProps {
 
 const tabs = [
   { id: DashboardTab.OVERVIEW,    icon: LayoutGrid, label: 'Intelligence'  },
+  { id: DashboardTab.MODELS,      icon: Boxes,      label: 'Models'        },
   { id: DashboardTab.AI_INSIGHTS, icon: Cpu,        label: 'Insights'      },
   { id: DashboardTab.NODES,       icon: Server,     label: 'Management'    },
   { id: DashboardTab.TRACES,      icon: Activity,   label: 'Observability' },
