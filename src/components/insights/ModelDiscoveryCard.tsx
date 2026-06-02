@@ -10,8 +10,18 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Cpu, Loader2 } from 'lucide-react';
-import { quantQualityHint, recommendedQuant } from '../../utils/quantQuality';
+import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Cpu, Loader2, Sparkles } from 'lucide-react';
+import { useSettings } from '../../hooks/useSettings';
+import {
+  quantQualityHint,
+  recommendedQuant,
+  vramAtContext,
+  fitLabelAtContext,
+  parseParameterCountB,
+  CONTEXT_LENGTH_OPTIONS,
+  DEFAULT_CONTEXT_LENGTH,
+  contextLengthLabel,
+} from '../../utils/quantQuality';
 import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
 
 interface VariantResult {
@@ -109,14 +119,41 @@ const VariantTable: React.FC<{
   modelId: string;
   pullCmd?: string;
   history: ComparisonRow[] | null;
-}> = ({ variants, modelId, pullCmd, history }) => {
+  contextLength: number;
+  vramBudgetMb: number;
+  kwhRate: number;
+}> = ({ variants, modelId, pullCmd, history, contextLength, vramBudgetMb, kwhRate }) => {
   const [showAll, setShowAll] = useState(false);
-  const fitting  = variants.filter(v => v.fit_score >= 40);
-  const wontFit  = variants.filter(v => v.fit_score < 40);
-  const displayed = showAll ? variants : fitting;
+  const paramsB = parseParameterCountB(modelId) ?? 7;
+  const isDefaultCtx = contextLength === DEFAULT_CONTEXT_LENGTH;
+
+  // Recompute per-variant VRAM + fit at chosen context. At default context,
+  // trust the backend's score so colors match the parent row.
+  const recomputed = variants.map(v => {
+    if (isDefaultCtx) {
+      return { ...v, _vramMb: v.vram_required_mb, _label: v.fit_label, _score: v.fit_score, _headroomPct: v.vram_headroom_pct };
+    }
+    const vramMb = vramAtContext(v.file_size_mb, paramsB, contextLength);
+    const fit = fitLabelAtContext(vramMb, vramBudgetMb);
+    return { ...v, _vramMb: vramMb, _label: fit.label, _score: fit.score, _headroomPct: fit.headroomPct };
+  });
+
+  const fitting  = recomputed.filter(v => v._score >= 40);
+  const wontFit  = recomputed.filter(v => v._score < 40);
+  const displayed = showAll ? recomputed : fitting;
   const maxSize  = variants.reduce((m, v) => Math.max(m, v.file_size_mb), 0);
   const recQuant = recommendedQuant(maxSize);
   const hasRecQuant = variants.some(v => v.quant?.toUpperCase() === recQuant.toUpperCase());
+
+  // Estimate avg watts at inference from history (same-class models).
+  // Used for per-variant cost-per-million-tokens.
+  const avgWatts = (() => {
+    if (!history || !history.length) return null;
+    const withWatts = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
+    if (!withWatts.length) return null;
+    const sum = withWatts.reduce((s, r) => s + (r.avg_watts as number), 0);
+    return sum / withWatts.length;
+  })();
 
   return (
     <>
@@ -139,10 +176,20 @@ const VariantTable: React.FC<{
       {/* Variant rows */}
       <div className="space-y-0">
         {displayed.map(v => {
-          const vc = fitColors(v.fit_score);
+          const vc = fitColors(v._score);
           const label = quantLabel(v);
           const isRecommended = hasRecQuant && v.quant?.toUpperCase() === recQuant.toUpperCase();
           const proj = history ? projectTpsForVariant(history, v.file_size_mb, v.quant) : null;
+          // Cost-per-million-tokens — only when we have both a tok/s projection
+          // and a watts estimate from fleet/local telemetry.
+          let costPerM: number | null = null;
+          if (proj && avgWatts != null) {
+            const tpsAvg = (proj.min + proj.max) / 2;
+            if (tpsAvg > 0) {
+              // (watts / 1000) * (1,000,000 / tps / 3600) * rate
+              costPerM = (avgWatts / 1000) * (1_000_000 / tpsAvg / 3600) * kwhRate;
+            }
+          }
           return (
             <div key={v.filename} className="flex items-center gap-2 py-1 border-t border-gray-700/20 first:border-t-0">
               <div className={`w-1.5 h-1.5 rounded-full ${vc.dot} shrink-0`} />
@@ -153,7 +200,7 @@ const VariantTable: React.FC<{
                 {label}
               </span>
               <span className={`text-[10px] font-medium px-1.5 py-px rounded ${vc.badge} border shrink-0`}>
-                {v.fit_label}
+                {v._label}
               </span>
               {isRecommended && (
                 <span
@@ -166,14 +213,30 @@ const VariantTable: React.FC<{
               <span className="text-[11px] text-gray-500 font-mono tabular-nums shrink-0">
                 {(v.file_size_mb / 1024).toFixed(1)} GB
               </span>
-              <span className="text-[10px] text-gray-600 truncate flex-1">
-                {v.vram_headroom_pct >= 0 ? `${v.vram_headroom_pct.toFixed(0)}% headroom` : 'over budget'}
+              <span
+                className="text-[10px] text-gray-600 truncate flex-1"
+                title={isDefaultCtx ? undefined : `VRAM at ${contextLengthLabel(contextLength)} ctx: ${(v._vramMb / 1024).toFixed(2)} GB (model + KV cache + overhead)`}
+              >
+                {v._headroomPct >= 0 ? `${v._headroomPct.toFixed(0)}% headroom` : 'over budget'}
+                {!isDefaultCtx && (
+                  <span className="ml-1 text-gray-700">
+                    · {(v._vramMb / 1024).toFixed(1)} GB @ {contextLengthLabel(contextLength)}
+                  </span>
+                )}
                 {proj && (
                   <span
                     className="ml-2 text-gray-500"
                     title={`Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} you've run in the last 7 days.`}
                   >
                     ≈ {proj.min.toFixed(0)}-{proj.max.toFixed(0)} tok/s ({proj.count})
+                  </span>
+                )}
+                {costPerM != null && (
+                  <span
+                    className="ml-2 text-gray-600"
+                    title={`Estimated electricity cost at ${kwhRate.toFixed(3)} $/kWh, using projected tok/s and ${avgWatts!.toFixed(0)} W avg from your hardware.`}
+                  >
+                    ≈ ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)} / M tokens
                   </span>
                 )}
               </span>
@@ -203,9 +266,72 @@ const VariantTable: React.FC<{
   );
 };
 
+// ── Speed comparison chart ────────────────────────────────────────────────────
+
+/**
+ * Inline horizontal-bar chart showing each variant's projected tok/s on
+ * the user's hardware. Rendered with plain divs (no chart library) to
+ * keep bundle size flat. Skipped when fewer than 2 variants have a
+ * projection — a single bar is not a comparison.
+ */
+const QuantSpeedChart: React.FC<{
+  variants: VariantResult[];
+  history: ComparisonRow[] | null;
+}> = ({ variants, history }) => {
+  if (!history || history.length === 0) return null;
+
+  type Bar = { quant: string; mid: number };
+  const bars: Bar[] = [];
+  for (const v of variants) {
+    const proj = projectTpsForVariant(history, v.file_size_mb, v.quant);
+    if (!proj) continue;
+    bars.push({ quant: quantLabel(v), mid: (proj.min + proj.max) / 2 });
+  }
+  if (bars.length < 2) return null;
+
+  const max = bars.reduce((m, b) => Math.max(m, b.mid), 0);
+  if (max <= 0) return null;
+
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
+        Estimated tok/s by quant on your hardware
+      </div>
+      <div className="space-y-1">
+        {bars.map(b => {
+          const pct = Math.max(4, Math.round((b.mid / max) * 100));
+          return (
+            <div key={b.quant} className="flex items-center gap-2">
+              <span className="text-[10px] text-gray-500 font-mono w-[72px] shrink-0 truncate">
+                {b.quant}
+              </span>
+              <div className="flex-1 h-3 bg-gray-700/40 rounded-sm overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500/70 rounded-sm flex items-center justify-end pr-1.5"
+                  style={{ width: `${pct}%` }}
+                >
+                  <span className="text-[9px] text-gray-100 font-mono tabular-nums">
+                    {b.mid.toFixed(0)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // ── Model row ─────────────────────────────────────────────────────────────────
 
-const ModelRow: React.FC<{ model: ModelResult; history: ComparisonRow[] | null }> = ({ model, history }) => {
+const ModelRow: React.FC<{
+  model: ModelResult;
+  history: ComparisonRow[] | null;
+  contextLength: number;
+  vramBudgetMb: number;
+  kwhRate: number;
+}> = ({ model, history, contextLength, vramBudgetMb, kwhRate }) => {
   const [open, setOpen] = useState(false);
   const best = model.variants[0];
   if (!best) return null;
@@ -274,7 +400,16 @@ const ModelRow: React.FC<{ model: ModelResult; history: ComparisonRow[] | null }
       {/* Expanded: variants + pull command, no separate HF link row */}
       {open && (
         <div className="px-3 pb-2 border-t border-gray-700/40">
-          <VariantTable variants={model.variants} modelId={model.model_id} pullCmd={best.pull_cmd || undefined} history={history} />
+          <VariantTable
+            variants={model.variants}
+            modelId={model.model_id}
+            pullCmd={best.pull_cmd || undefined}
+            history={history}
+            contextLength={contextLength}
+            vramBudgetMb={vramBudgetMb}
+            kwhRate={kwhRate}
+          />
+          <QuantSpeedChart variants={model.variants} history={history} />
         </div>
       )}
     </div>
@@ -291,6 +426,10 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   const [error, setError]           = useState<string | null>(null);
   const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
   const history                     = useModelComparisonHistory(isLocalHost);
+  const [contextLength, setContextLength] = useState<number>(DEFAULT_CONTEXT_LENGTH);
+  const { settings }                = useSettings();
+  const kwhRate                     = settings.fleet.kwhRate || 0.16;
+  const historyCount                = history?.length ?? 0;
 
   const fetchModels = useCallback(async (query?: string) => {
     setLoading(true);
@@ -324,6 +463,7 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   // Debounced live search
   const handleSearchChange = (val: string) => {
     setPending(val);
+    setContextLength(DEFAULT_CONTEXT_LENGTH);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setSearch(val);
@@ -400,11 +540,51 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         </button>
       </form>
 
+      {/* "Your hardware" positioning callout */}
+      <div className="flex items-start gap-2 px-3 py-2 bg-blue-500/5 border border-blue-500/20 rounded-lg">
+        <Sparkles className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-px" />
+        <p className="text-[11px] text-gray-400 leading-snug">
+          {historyCount > 0 ? (
+            <>
+              Wicklee scores models against <span className="text-gray-200 font-medium">YOUR hardware's actual performance</span> —
+              not generic benchmarks. Projections use telemetry from{' '}
+              <span className="text-blue-300 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} you've run.
+            </>
+          ) : (
+            <>
+              Run a few models — Wicklee will then project tok/s and cost for
+              candidates based on your <span className="text-gray-200 font-medium">actual hardware's performance</span>.
+            </>
+          )}
+        </p>
+      </div>
+
+      {/* Context length picker */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] text-gray-600 uppercase tracking-widest">Context length:</span>
+        {CONTEXT_LENGTH_OPTIONS.map(ctx => (
+          <button
+            key={ctx}
+            onClick={() => setContextLength(ctx)}
+            title={`Recalculate VRAM and fit assuming ${contextLengthLabel(ctx)} token context window`}
+            className={`text-[10px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
+              contextLength === ctx
+                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+            }`}
+          >
+            {contextLengthLabel(ctx)}
+          </button>
+        ))}
+      </div>
+
       {/* Source label */}
       <div className="text-[10px] text-gray-700">
         {data?.is_live_search
           ? `Live HuggingFace search · ${data.models.length} model${data.models.length !== 1 ? 's' : ''} scored against your hardware`
-          : `Trending GGUF models by downloads · scored against your hardware`}
+          : !search
+            ? <span><span className="text-gray-400 font-semibold">Recommended for your hardware</span> — sorted by fit, then popularity</span>
+            : `Trending GGUF models by downloads · scored against your hardware`}
       </div>
 
       {/* Error */}
@@ -430,9 +610,28 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
       {/* Results */}
       {data && data.models.length > 0 && (
         <div className="space-y-1">
-          {data.models.map(model => (
-            <ModelRow key={model.model_id} model={model} history={history} />
-          ))}
+          {(() => {
+            const list = [...data.models];
+            // When no search query, re-sort by best fit then by downloads.
+            if (!search) {
+              list.sort((a, b) => {
+                const aFit = a.variants.reduce((m, v) => Math.max(m, v.fit_score), 0);
+                const bFit = b.variants.reduce((m, v) => Math.max(m, v.fit_score), 0);
+                if (bFit !== aFit) return bFit - aFit;
+                return (b.downloads ?? 0) - (a.downloads ?? 0);
+              });
+            }
+            return list.map(model => (
+              <ModelRow
+                key={model.model_id}
+                model={model}
+                history={history}
+                contextLength={contextLength}
+                vramBudgetMb={hw?.vram_mb ?? 0}
+                kwhRate={kwhRate}
+              />
+            ));
+          })()}
         </div>
       )}
     </div>

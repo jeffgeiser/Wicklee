@@ -14,9 +14,19 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle } from 'lucide-react';
-import { quantQualityHint, recommendedQuant } from '../../utils/quantQuality';
+import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import {
+  quantQualityHint,
+  recommendedQuant,
+  vramAtContext,
+  fitLabelAtContext,
+  parseParameterCountB,
+  CONTEXT_LENGTH_OPTIONS,
+  DEFAULT_CONTEXT_LENGTH,
+  contextLengthLabel,
+} from '../../utils/quantQuality';
 import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
+import { useSettings } from '../../hooks/useSettings';
 
 interface NodeFit {
   node_id:      string;
@@ -111,12 +121,22 @@ const FleetModelRow: React.FC<{
   getToken:       () => Promise<string | null>;
   focusNodeId:    string | null;
   history:        ComparisonRow[] | null;
-}> = ({ model, focusNodeId, history }) => {
+  contextLength:  number;
+  kwhRate:        number;
+}> = ({ model, focusNodeId, history, contextLength, kwhRate }) => {
   const [open, setOpen] = useState(false);
   // Max file size across all nodes' best-quant variants — proxy for model class.
   const maxFileSizeMb = model.nodes.reduce((m, n) => Math.max(m, n.file_size_mb), 0);
   const recQuant = recommendedQuant(maxFileSizeMb);
   const hasRecQuant = model.nodes.some(n => n.best_quant?.toUpperCase() === recQuant.toUpperCase());
+  const paramsB = parseParameterCountB(model.model_id) ?? 7;
+  const isDefaultCtx = contextLength === DEFAULT_CONTEXT_LENGTH;
+  const avgWatts = (() => {
+    if (!history || !history.length) return null;
+    const w = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
+    if (!w.length) return null;
+    return w.reduce((s, r) => s + (r.avg_watts as number), 0) / w.length;
+  })();
 
   // When a node is focused, score and sort from that node's perspective.
   const focusedNode = focusNodeId
@@ -226,11 +246,29 @@ const FleetModelRow: React.FC<{
           </div>
           <div className="space-y-0">
             {model.nodes.map(node => {
-              const nc = fitColors(node.fit_score);
+              // Per-node recomputation at chosen context.
+              let vramMb = node.file_size_mb; // not used directly when default
+              let displayLabel = node.fit_label;
+              let displayScore = node.fit_score;
+              if (!isDefaultCtx) {
+                const budgetMb = node.mem_budget_gb * 1024;
+                vramMb = vramAtContext(node.file_size_mb, paramsB, contextLength);
+                const fit = fitLabelAtContext(vramMb, budgetMb);
+                displayLabel = fit.label;
+                displayScore = fit.score;
+              }
+              const nc = fitColors(displayScore);
               const displayName = node.hostname ?? node.node_id;
               const isFocused = focusNodeId === node.node_id;
               const isRecommended = hasRecQuant && node.best_quant?.toUpperCase() === recQuant.toUpperCase();
               const proj = history ? projectTpsForVariant(history, node.file_size_mb, node.best_quant) : null;
+              let costPerM: number | null = null;
+              if (proj && avgWatts != null) {
+                const tpsAvg = (proj.min + proj.max) / 2;
+                if (tpsAvg > 0) {
+                  costPerM = (avgWatts / 1000) * (1_000_000 / tpsAvg / 3600) * kwhRate;
+                }
+              }
               return (
                 <div
                   key={node.node_id}
@@ -241,7 +279,7 @@ const FleetModelRow: React.FC<{
                     {displayName}
                   </span>
                   <span className={`text-[10px] font-medium px-1.5 py-px rounded border ${nc.badge} shrink-0`}>
-                    {node.fit_label}
+                    {displayLabel}
                   </span>
                   <span
                     className="text-[10px] text-gray-500 font-mono shrink-0 cursor-help"
@@ -257,8 +295,13 @@ const FleetModelRow: React.FC<{
                       Rec
                     </span>
                   )}
-                  <span className="text-[10px] text-gray-600 shrink-0">
-                    {(node.file_size_mb / 1024).toFixed(1)} GB
+                  <span
+                    className="text-[10px] text-gray-600 shrink-0"
+                    title={isDefaultCtx ? undefined : `VRAM at ${contextLengthLabel(contextLength)} ctx: ${(vramMb / 1024).toFixed(2)} GB (model + KV cache + overhead)`}
+                  >
+                    {isDefaultCtx
+                      ? `${(node.file_size_mb / 1024).toFixed(1)} GB`
+                      : `${(vramMb / 1024).toFixed(1)} GB @ ${contextLengthLabel(contextLength)}`}
                   </span>
                   <span className="text-[10px] text-gray-700 shrink-0 hidden md:inline">
                     {node.mem_budget_gb} GB pool
@@ -269,6 +312,14 @@ const FleetModelRow: React.FC<{
                       title={`Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} from fleet history (last 7 days).`}
                     >
                       ≈ {proj.min.toFixed(0)}-{proj.max.toFixed(0)} tok/s
+                    </span>
+                  )}
+                  {costPerM != null && (
+                    <span
+                      className="text-[10px] text-gray-600 shrink-0 hidden md:inline"
+                      title={`Estimated electricity cost at ${kwhRate.toFixed(3)} $/kWh, using projected tok/s and ${avgWatts!.toFixed(0)} W avg from fleet telemetry.`}
+                    >
+                      ≈ ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)} / M
                     </span>
                   )}
                   {/* Pull command inline */}
@@ -323,6 +374,10 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   // Stable list of online nodes (from most recent all-nodes response).
   const [onlineNodes, setOnlineNodes] = useState<Pick<NodeFit, 'node_id' | 'hostname'>[]>([]);
   const history                       = useModelComparisonHistory(false, getToken);
+  const [contextLength, setContextLength] = useState<number>(DEFAULT_CONTEXT_LENGTH);
+  const { settings }                   = useSettings();
+  const kwhRate                        = settings.fleet.kwhRate || 0.16;
+  const historyCount                   = history?.length ?? 0;
 
   const fetchModels = useCallback(async (query?: string, nodeId?: string | null) => {
     const token = await getToken();
@@ -390,6 +445,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
 
   const handleChange = (val: string) => {
     setPending(val);
+    setContextLength(DEFAULT_CONTEXT_LENGTH);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => fetchModels(val || undefined, focusNodeId ?? undefined), 600);
   };
@@ -499,12 +555,52 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </button>
       </form>
 
+      {/* "Your hardware" positioning callout */}
+      <div className="flex items-start gap-2 px-3 py-2 bg-blue-500/5 border border-blue-500/20 rounded-lg">
+        <Sparkles className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-px" />
+        <p className="text-[11px] text-gray-400 leading-snug">
+          {historyCount > 0 ? (
+            <>
+              Wicklee scores models against <span className="text-gray-200 font-medium">YOUR fleet's actual performance</span> —
+              not generic benchmarks. Projections use telemetry from{' '}
+              <span className="text-blue-300 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} you've run.
+            </>
+          ) : (
+            <>
+              Run a few models on your fleet — Wicklee will then project tok/s and cost for
+              candidates based on your <span className="text-gray-200 font-medium">actual hardware's performance</span>.
+            </>
+          )}
+        </p>
+      </div>
+
+      {/* Context length picker */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] text-gray-600 uppercase tracking-widest">Context length:</span>
+        {CONTEXT_LENGTH_OPTIONS.map(ctx => (
+          <button
+            key={ctx}
+            onClick={() => setContextLength(ctx)}
+            title={`Recalculate VRAM and fit assuming ${contextLengthLabel(ctx)} token context window`}
+            className={`text-[10px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
+              contextLength === ctx
+                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+            }`}
+          >
+            {contextLengthLabel(ctx)}
+          </button>
+        ))}
+      </div>
+
       {/* Source label */}
       {data && (
         <div className="text-[10px] text-gray-700">
           {data.is_live_search
             ? `Live HuggingFace search · scored against ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`
-            : `Trending GGUF by downloads · scored across your ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`}
+            : !pendingSearch
+              ? <span><span className="text-gray-400 font-semibold">Recommended for your fleet</span> — sorted by fit, then popularity</span>
+              : `Trending GGUF by downloads · scored across your ${data.online_nodes} online node${data.online_nodes !== 1 ? 's' : ''}`}
           {focusNodeId && focusNodeLabel
             ? <span className="text-cyan-600 ml-1">· showing {focusNodeLabel} compatible models</span>
             : onlineNodes.length > 1
@@ -557,15 +653,32 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
       {/* Results */}
       {displayModels.length > 0 && (
         <div className="space-y-1">
-          {displayModels.map(model => (
-            <FleetModelRow
-              key={model.model_id}
-              model={model}
-              getToken={getToken}
-              focusNodeId={focusNodeId}
-              history={history}
-            />
-          ))}
+          {(() => {
+            const list = [...displayModels];
+            if (!pendingSearch) {
+              list.sort((a, b) => {
+                const aFit = focusNodeId
+                  ? (a.nodes.find(n => n.node_id === focusNodeId)?.fit_score ?? 0)
+                  : a.fleet_best_score;
+                const bFit = focusNodeId
+                  ? (b.nodes.find(n => n.node_id === focusNodeId)?.fit_score ?? 0)
+                  : b.fleet_best_score;
+                if (bFit !== aFit) return bFit - aFit;
+                return (b.downloads ?? 0) - (a.downloads ?? 0);
+              });
+            }
+            return list.map(model => (
+              <FleetModelRow
+                key={model.model_id}
+                model={model}
+                getToken={getToken}
+                focusNodeId={focusNodeId}
+                history={history}
+                contextLength={contextLength}
+                kwhRate={kwhRate}
+              />
+            ));
+          })()}
         </div>
       )}
     </div>

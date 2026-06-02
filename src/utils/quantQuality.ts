@@ -116,3 +116,94 @@ export function estimateModelFileSizeMb(modelName: string): number | null {
   // FP16 baseline ≈ 2 bytes/param → params(B) × 2 GB. Then × ratio for quant.
   return params * 2 * 1024 * ratio;
 }
+
+/**
+ * Parse the parameter count (in billions) from a model name / filename.
+ * Matches the same "Nb" / "N.Mb" pattern as `estimateModelFileSizeMb` but
+ * exposes only the param count so callers (e.g. KV cache estimation) can
+ * key on model class.
+ *
+ * Returns null when no plausible billions tag is present.
+ */
+export function parseParameterCountB(name: string): number | null {
+  if (!name) return null;
+  const m = name.toLowerCase().match(/(\d+(?:\.\d+)?)\s*b\b/);
+  if (!m) return null;
+  const params = parseFloat(m[1]);
+  if (!isFinite(params) || params <= 0 || params > 1000) return null;
+  return params;
+}
+
+/**
+ * Estimates additional KV cache memory (above model weights) for a given
+ * parameter class and context length, in MB. Based on standard GQA-family
+ * architectures (Llama 3, Qwen 2.5, Mistral, etc.). For non-GQA models
+ * (older Llama 2 13B, Falcon-family, MPT) KV cache is ~5x larger but we
+ * accept the underestimate — most modern GGUF models use GQA.
+ *
+ * Reference: KV cache MB ≈ 2 × layers × ctx × kv_heads × head_dim × bytes / 1MB
+ */
+export function estimateKvCacheMb(parameterCountB: number, contextLength: number): number {
+  // KV per 1K context, derived from per-class architecture defaults.
+  // Conservative bias: round up for borderline cases.
+  let kvPer1KMb: number;
+  if (parameterCountB < 2) kvPer1KMb = 8;     // 1-1.5B class
+  else if (parameterCountB < 4) kvPer1KMb = 14;  // 2-3B class
+  else if (parameterCountB < 10) kvPer1KMb = 16; // 7-8B class
+  else if (parameterCountB < 20) kvPer1KMb = 24; // 13-14B class
+  else if (parameterCountB < 40) kvPer1KMb = 32; // 30-34B class
+  else if (parameterCountB < 80) kvPer1KMb = 42; // 70-72B class
+  else kvPer1KMb = 56;                            // 100B+ class
+
+  return Math.round((contextLength / 1024) * kvPer1KMb);
+}
+
+/**
+ * Returns a model's recomputed VRAM requirement at a specific context length.
+ * Adds activation/framework overhead (~15% of file size) plus a
+ * context-specific KV cache estimate to the on-disk model size.
+ *
+ * Returns the recomputed total vram_required_mb.
+ */
+export function vramAtContext(
+  fileSizeMb: number,
+  parameterCountB: number,
+  contextLength: number,
+): number {
+  const weightsAndOverhead = Math.round(fileSizeMb * 1.15);
+  const kvCache = estimateKvCacheMb(parameterCountB, contextLength);
+  return weightsAndOverhead + kvCache;
+}
+
+/**
+ * Frontend-recomputed fit label for a candidate variant at a chosen context
+ * length. Mirrors (loosely) the backend's `score_fit` headroom buckets so
+ * the picker can show a fresh label without round-tripping the agent.
+ */
+export function fitLabelAtContext(
+  vramRequiredMb: number,
+  vramBudgetMb: number,
+): { label: string; headroomPct: number; score: number } {
+  if (vramBudgetMb <= 0) {
+    return { label: "Unknown", headroomPct: 0, score: 0 };
+  }
+  const headroomPct = ((vramBudgetMb - vramRequiredMb) / vramBudgetMb) * 100;
+  if (headroomPct < 0)  return { label: "Won't Fit", headroomPct, score: 0 };
+  if (headroomPct < 15) return { label: 'Marginal',  headroomPct, score: 30 };
+  if (headroomPct < 45) return { label: 'Tight',     headroomPct, score: 55 };
+  if (headroomPct < 75) return { label: 'Good',      headroomPct, score: 70 };
+  return { label: 'Excellent', headroomPct, score: 90 };
+}
+
+/** Context length options for the discovery picker (tokens). */
+export const CONTEXT_LENGTH_OPTIONS = [2048, 4096, 8192, 16384, 32768, 131072] as const;
+export const DEFAULT_CONTEXT_LENGTH = 8192;
+
+/** Compact label for a context length (e.g. 8192 -> "8K", 131072 -> "128K"). */
+export function contextLengthLabel(ctx: number): string {
+  if (ctx >= 1024) {
+    const k = ctx / 1024;
+    return Number.isInteger(k) ? `${k}K` : `${k.toFixed(1)}K`;
+  }
+  return `${ctx}`;
+}
