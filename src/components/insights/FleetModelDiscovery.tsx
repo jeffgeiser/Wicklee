@@ -254,21 +254,109 @@ const FleetModelRow: React.FC<{
 
   return (
     <div className="border border-gray-700/60 rounded-xl overflow-hidden">
-      {/* Summary row — two lines. Line 1: identity + copy CTA. Line 2:
-          dense decision info (quant/size/fit/speed/cost/downloads/likes). */}
+      {/* Single-line grid summary — each column has a fixed proportion so the
+          identity / quant / fit / projection / popularity / action columns
+          line up vertically across every row. Truncation + title hover
+          handles long model names without column shift.
+
+          Responsive: at narrow widths popularity hides first (lowest decision
+          value), then projection, then quant. Identity + fit + action always
+          visible. */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex flex-col gap-1 px-3 py-2 hover:bg-gray-700/20 transition-colors text-left"
+        className="w-full grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_auto] gap-3 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left"
       >
-        {/* Line 1 — model identity */}
-        <div className="flex items-center gap-2 w-full">
+        {/* Col 1 — identity (dot + stacked name/uploader) */}
+        <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2 h-2 rounded-full ${best.dot} shrink-0`} />
-          <span className="text-xs text-gray-200 font-mono truncate min-w-0 flex-1">
-            {shortName(model.model_id)}
+          <div className="min-w-0 flex-1">
+            <div
+              className="text-xs text-gray-200 font-mono truncate"
+              title={shortName(model.model_id)}
+            >
+              {shortName(model.model_id)}
+            </div>
             {uploader && (
-              <span className="text-gray-600 font-sans"> · {uploader}</span>
+              <div className="text-[10px] text-gray-600 truncate" title={uploader}>
+                {uploader}
+              </div>
             )}
+          </div>
+        </div>
+
+        {/* Col 2 — recommended quant + size (hidden on small screens) */}
+        <div
+          className="text-[10px] font-mono tabular-nums hidden md:block min-w-0"
+          title={quantQualityHint(recQuantToShow)}
+        >
+          {recQuantFileSizeMb > 0 ? (
+            <>
+              <span className="text-gray-300">{recQuantToShow}</span>
+              <span className="text-gray-600"> · {(recQuantFileSizeMb / 1024).toFixed(1)} GB</span>
+            </>
+          ) : (
+            <span className="text-gray-700">—</span>
+          )}
+        </div>
+
+        {/* Col 3 — fit bars + label + count */}
+        <div
+          className="flex items-center gap-1.5 text-[10px] min-w-0"
+          title={focusNodeId
+            ? `Fit on ${focusedNode?.hostname ?? focusNodeId}`
+            : `Highest fit grade across ${model.nodes.length} fleet node${model.nodes.length === 1 ? '' : 's'}`}
+        >
+          <FitBars
+            nodes={model.nodes}
+            getScore={n => nodeScoresAtCtx.get(n.node_id)?.score ?? n.fit_score}
+          />
+          <span className={`${best.badge.split(' ').find(c => c.startsWith('text-')) ?? 'text-gray-400'} truncate`}>
+            {fitGradeLabel(effectiveScore)}
           </span>
+          <span className="text-gray-600 tabular-nums whitespace-nowrap">
+            {focusNodeId
+              ? fitSummary
+              : `${fittingNodes.length}/${model.nodes.length}`}
+          </span>
+        </div>
+
+        {/* Col 4 — speed + cost projections (hidden on < lg) */}
+        <div className="text-[10px] tabular-nums hidden lg:flex items-center gap-2 min-w-0">
+          {projForRow ? (
+            <span
+              className="text-gray-400"
+              title={`Projected from ${projForRow.count} similar-size model${projForRow.count === 1 ? '' : 's'} (last 7 days fleet history)`}
+            >
+              ≈{((projForRow.min + projForRow.max) / 2).toFixed(0)} t/s
+            </span>
+          ) : null}
+          {costPerMRow != null ? (
+            <span
+              className="text-gray-500"
+              title={`Electricity at ${kwhRate.toFixed(3)} $/kWh · projected tok/s · ${avgWatts?.toFixed(0)} W avg`}
+            >
+              ${costPerMRow < 0.01 ? costPerMRow.toFixed(4) : costPerMRow.toFixed(3)}/M
+            </span>
+          ) : null}
+          {!projForRow && costPerMRow == null && (
+            <span className="text-gray-700">—</span>
+          )}
+        </div>
+
+        {/* Col 5 — popularity (hidden on < xl, lowest decision value) */}
+        <div className="text-[10px] tabular-nums hidden xl:flex items-center gap-2 min-w-0 justify-end">
+          <span className="text-gray-700" title="HuggingFace downloads (all time)">
+            {fmtDl(model.downloads)}↓
+          </span>
+          {model.likes != null && model.likes > 0 && (
+            <span className="text-rose-400/50" title="HuggingFace likes">
+              {fmtDl(model.likes)}♥
+            </span>
+          )}
+        </div>
+
+        {/* Col 6 — actions (always visible, right-aligned) */}
+        <div className="flex items-center gap-1 shrink-0">
           {bestPullCmd && (effectiveScore >= 40) && (
             <RowCopyButton
               text={bestPullCmd}
@@ -276,78 +364,8 @@ const FleetModelRow: React.FC<{
             />
           )}
           {open
-            ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
-            : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
-        </div>
-
-        {/* Line 2 — dense decision info, left → right by priority. */}
-        <div className="flex items-center gap-2 w-full flex-wrap text-[10px] pl-4">
-          {/* Recommended quant + size */}
-          {recQuantFileSizeMb > 0 && (
-            <span
-              className="text-gray-400 font-mono tabular-nums"
-              title={quantQualityHint(recQuantToShow)}
-            >
-              <span className="text-gray-300">{recQuantToShow}</span>
-              <span className="text-gray-600"> ({(recQuantFileSizeMb / 1024).toFixed(1)} GB)</span>
-            </span>
-          )}
-
-          {/* Fit grade visual + label */}
-          <span className="text-gray-600">·</span>
-          <span
-            className="inline-flex items-center gap-1.5"
-            title={focusNodeId
-              ? `Fit on ${focusedNode?.hostname ?? focusNodeId}`
-              : `Highest fit grade across ${model.nodes.length} fleet node${model.nodes.length === 1 ? '' : 's'}`}
-          >
-            <FitBars
-              nodes={model.nodes}
-              getScore={n => nodeScoresAtCtx.get(n.node_id)?.score ?? n.fit_score}
-            />
-            <span className={best.badge.split(' ').find(c => c.startsWith('text-')) ?? 'text-gray-400'}>
-              {fitGradeLabel(effectiveScore)}
-            </span>
-            <span className="text-gray-600">{focusNodeId ? fitSummary : `on ${fittingNodes.length}/${model.nodes.length} node${model.nodes.length === 1 ? '' : 's'}`}</span>
-          </span>
-
-          {/* Speed projection */}
-          {projForRow && (
-            <>
-              <span className="text-gray-600">·</span>
-              <span
-                className="text-gray-400 tabular-nums"
-                title={`Projected from ${projForRow.count} similar-size model${projForRow.count === 1 ? '' : 's'} (last 7 days fleet history)`}
-              >
-                ≈{((projForRow.min + projForRow.max) / 2).toFixed(0)} tok/s
-              </span>
-            </>
-          )}
-
-          {/* Cost projection */}
-          {costPerMRow != null && (
-            <>
-              <span className="text-gray-600">·</span>
-              <span
-                className="text-gray-500 tabular-nums"
-                title={`Electricity at ${kwhRate.toFixed(3)} $/kWh · projected tok/s · ${avgWatts?.toFixed(0)} W avg`}
-              >
-                ${costPerMRow < 0.01 ? costPerMRow.toFixed(4) : costPerMRow.toFixed(3)}/M
-              </span>
-            </>
-          )}
-
-          {/* Downloads — de-emphasized */}
-          <span className="text-gray-700 tabular-nums ml-auto" title="HuggingFace downloads (all time)">
-            {fmtDl(model.downloads)}↓
-          </span>
-
-          {/* Likes — only if non-zero */}
-          {model.likes != null && model.likes > 0 && (
-            <span className="text-rose-400/50 tabular-nums" title="HuggingFace likes">
-              {fmtDl(model.likes)}♥
-            </span>
-          )}
+            ? <ChevronDown className="w-3 h-3 text-gray-600" />
+            : <ChevronRight className="w-3 h-3 text-gray-600" />}
         </div>
       </button>
 
@@ -680,24 +698,51 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         )}
       </div>
 
-      {/* Node filter pills */}
+      {/* Unified view selector — replaces the prior split between a "Filter"
+          pill row (node focus) and a separate "Show models that fit"
+          fit-mode toggle. Those two controls were answering related-but-
+          confusingly-redundant questions; this single row makes every option
+          unambiguous and self-explanatory.
+
+            [Any fleet node]   = focus null + fitMode 'any'   (default)
+            [Every fleet node] = focus null + fitMode 'all'   (intersection)
+            [<hostname>]       = focus that node              (fitMode N/A)
+       */}
       {onlineNodes.length > 1 && (
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[9px] text-gray-700 uppercase tracking-widest mr-0.5">Filter:</span>
+          <span className="text-[9px] text-gray-700 uppercase tracking-widest mr-0.5">View:</span>
+          {/* Any fleet node — broadest, default */}
           <button
-            onClick={() => setFocusNode(null)}
+            onClick={() => { setFocusNode(null); setFitMode('any'); }}
+            title="Show models any one of your fleet nodes can run (broadest catalog)."
             className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-              focusNodeId == null
-                ? 'bg-gray-700 border-gray-600 text-gray-200'
+              focusNodeId == null && fitMode === 'any'
+                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
                 : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
             }`}
           >
-            All nodes
+            Any fleet node {focusNodeId == null && fitMode === 'any' ? '✓' : ''}
           </button>
+          {/* Every fleet node — intersection */}
+          <button
+            onClick={() => { setFocusNode(null); setFitMode('all'); }}
+            title="Show only models EVERY node in your fleet can run (intersection — safe for fleet-wide deployment)."
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+              focusNodeId == null && fitMode === 'all'
+                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+            }`}
+          >
+            Every fleet node {focusNodeId == null && fitMode === 'all' ? '✓' : ''}
+          </button>
+          {/* Subtle separator before per-node pills */}
+          <span className="text-gray-800">·</span>
+          {/* Per-node pills */}
           {onlineNodes.map(n => (
             <button
               key={n.node_id}
               onClick={() => setFocusNode(prev => prev === n.node_id ? null : n.node_id)}
+              title={`Show only models that fit ${n.hostname ?? n.node_id}.`}
               className={`text-[10px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
                 focusNodeId === n.node_id
                   ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
@@ -772,36 +817,10 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         ))}
       </div>
 
-      {/* Fit-mode toggle — only meaningful for multi-node fleets without a
-          single-node focus. With one node selected the toggle is a no-op
-          (any == all when n=1). */}
-      {onlineNodes.length > 1 && focusNodeId == null && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] text-gray-600 uppercase tracking-widest">Show models that fit:</span>
-          <button
-            onClick={() => setFitMode('any')}
-            title="Show models that at least ONE node in your fleet can run (broader catalog)."
-            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-              fitMode === 'any'
-                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
-                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
-            }`}
-          >
-            Any node {fitMode === 'any' ? '✓' : ''}
-          </button>
-          <button
-            onClick={() => setFitMode('all')}
-            title="Show only models EVERY node in your fleet can run (intersection — smaller list, safer for fleet-wide deployment)."
-            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-              fitMode === 'all'
-                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
-                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
-            }`}
-          >
-            All nodes (intersection) {fitMode === 'all' ? '✓' : ''}
-          </button>
-        </div>
-      )}
+      {/* The fit-mode toggle that used to live here was merged into the unified
+          "View:" pill row above. Both questions ("which node to focus on" and
+          "any-or-all aggregation") collapse into a single set of mutually-
+          exclusive options where every choice is self-explanatory. */}
 
       {/* Source label */}
       {data && (
