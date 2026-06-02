@@ -11,6 +11,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Cpu, Loader2 } from 'lucide-react';
+import { quantQualityHint, recommendedQuant } from '../../utils/quantQuality';
+import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
 
 interface VariantResult {
   quant:              string;
@@ -102,11 +104,19 @@ function quantLabel(v: VariantResult): string {
   return stem.split(/[-.]/).pop() ?? stem;
 }
 
-const VariantTable: React.FC<{ variants: VariantResult[]; modelId: string; pullCmd?: string }> = ({ variants, modelId, pullCmd }) => {
+const VariantTable: React.FC<{
+  variants: VariantResult[];
+  modelId: string;
+  pullCmd?: string;
+  history: ComparisonRow[] | null;
+}> = ({ variants, modelId, pullCmd, history }) => {
   const [showAll, setShowAll] = useState(false);
   const fitting  = variants.filter(v => v.fit_score >= 40);
   const wontFit  = variants.filter(v => v.fit_score < 40);
   const displayed = showAll ? variants : fitting;
+  const maxSize  = variants.reduce((m, v) => Math.max(m, v.file_size_mb), 0);
+  const recQuant = recommendedQuant(maxSize);
+  const hasRecQuant = variants.some(v => v.quant?.toUpperCase() === recQuant.toUpperCase());
 
   return (
     <>
@@ -130,20 +140,42 @@ const VariantTable: React.FC<{ variants: VariantResult[]; modelId: string; pullC
       <div className="space-y-0">
         {displayed.map(v => {
           const vc = fitColors(v.fit_score);
+          const label = quantLabel(v);
+          const isRecommended = hasRecQuant && v.quant?.toUpperCase() === recQuant.toUpperCase();
+          const proj = history ? projectTpsForVariant(history, v.file_size_mb, v.quant) : null;
           return (
             <div key={v.filename} className="flex items-center gap-2 py-1 border-t border-gray-700/20 first:border-t-0">
               <div className={`w-1.5 h-1.5 rounded-full ${vc.dot} shrink-0`} />
-              <span className="text-[11px] text-gray-400 font-mono shrink-0 w-[72px] truncate" title={v.filename}>
-                {quantLabel(v)}
+              <span
+                className="text-[11px] text-gray-400 font-mono shrink-0 w-[72px] truncate cursor-help"
+                title={`${v.filename}\n\n${quantQualityHint(label)}`}
+              >
+                {label}
               </span>
               <span className={`text-[10px] font-medium px-1.5 py-px rounded ${vc.badge} border shrink-0`}>
                 {v.fit_label}
               </span>
+              {isRecommended && (
+                <span
+                  title={`Recommended quant for this size class — typical sweet spot of quality vs. file size.`}
+                  className="text-[9px] font-semibold px-1.5 py-px rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shrink-0 cursor-default uppercase tracking-wider"
+                >
+                  Recommended
+                </span>
+              )}
               <span className="text-[11px] text-gray-500 font-mono tabular-nums shrink-0">
                 {(v.file_size_mb / 1024).toFixed(1)} GB
               </span>
               <span className="text-[10px] text-gray-600 truncate flex-1">
                 {v.vram_headroom_pct >= 0 ? `${v.vram_headroom_pct.toFixed(0)}% headroom` : 'over budget'}
+                {proj && (
+                  <span
+                    className="ml-2 text-gray-500"
+                    title={`Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} you've run in the last 7 days.`}
+                  >
+                    ≈ {proj.min.toFixed(0)}-{proj.max.toFixed(0)} tok/s ({proj.count})
+                  </span>
+                )}
               </span>
             </div>
           );
@@ -173,7 +205,7 @@ const VariantTable: React.FC<{ variants: VariantResult[]; modelId: string; pullC
 
 // ── Model row ─────────────────────────────────────────────────────────────────
 
-const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
+const ModelRow: React.FC<{ model: ModelResult; history: ComparisonRow[] | null }> = ({ model, history }) => {
   const [open, setOpen] = useState(false);
   const best = model.variants[0];
   if (!best) return null;
@@ -242,7 +274,7 @@ const ModelRow: React.FC<{ model: ModelResult }> = ({ model }) => {
       {/* Expanded: variants + pull command, no separate HF link row */}
       {open && (
         <div className="px-3 pb-2 border-t border-gray-700/40">
-          <VariantTable variants={model.variants} modelId={model.model_id} pullCmd={best.pull_cmd || undefined} />
+          <VariantTable variants={model.variants} modelId={model.model_id} pullCmd={best.pull_cmd || undefined} history={history} />
         </div>
       )}
     </div>
@@ -258,6 +290,7 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const history                     = useModelComparisonHistory(isLocalHost);
 
   const fetchModels = useCallback(async (query?: string) => {
     setLoading(true);
@@ -398,7 +431,7 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
       {data && data.models.length > 0 && (
         <div className="space-y-1">
           {data.models.map(model => (
-            <ModelRow key={model.model_id} model={model} />
+            <ModelRow key={model.model_id} model={model} history={history} />
           ))}
         </div>
       )}

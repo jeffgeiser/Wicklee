@@ -15,6 +15,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle } from 'lucide-react';
+import { quantQualityHint, recommendedQuant } from '../../utils/quantQuality';
+import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
 
 interface NodeFit {
   node_id:      string;
@@ -108,8 +110,13 @@ const FleetModelRow: React.FC<{
   model:          FleetModel;
   getToken:       () => Promise<string | null>;
   focusNodeId:    string | null;
-}> = ({ model, focusNodeId }) => {
+  history:        ComparisonRow[] | null;
+}> = ({ model, focusNodeId, history }) => {
   const [open, setOpen] = useState(false);
+  // Max file size across all nodes' best-quant variants — proxy for model class.
+  const maxFileSizeMb = model.nodes.reduce((m, n) => Math.max(m, n.file_size_mb), 0);
+  const recQuant = recommendedQuant(maxFileSizeMb);
+  const hasRecQuant = model.nodes.some(n => n.best_quant?.toUpperCase() === recQuant.toUpperCase());
 
   // When a node is focused, score and sort from that node's perspective.
   const focusedNode = focusNodeId
@@ -222,6 +229,8 @@ const FleetModelRow: React.FC<{
               const nc = fitColors(node.fit_score);
               const displayName = node.hostname ?? node.node_id;
               const isFocused = focusNodeId === node.node_id;
+              const isRecommended = hasRecQuant && node.best_quant?.toUpperCase() === recQuant.toUpperCase();
+              const proj = history ? projectTpsForVariant(history, node.file_size_mb, node.best_quant) : null;
               return (
                 <div
                   key={node.node_id}
@@ -234,15 +243,34 @@ const FleetModelRow: React.FC<{
                   <span className={`text-[10px] font-medium px-1.5 py-px rounded border ${nc.badge} shrink-0`}>
                     {node.fit_label}
                   </span>
-                  <span className="text-[10px] text-gray-500 font-mono shrink-0">
+                  <span
+                    className="text-[10px] text-gray-500 font-mono shrink-0 cursor-help"
+                    title={quantQualityHint(node.best_quant)}
+                  >
                     {node.best_quant}
                   </span>
+                  {isRecommended && (
+                    <span
+                      title="Recommended quant for this size class — typical sweet spot of quality vs. file size."
+                      className="text-[9px] font-semibold px-1.5 py-px rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shrink-0 cursor-default uppercase tracking-wider"
+                    >
+                      Rec
+                    </span>
+                  )}
                   <span className="text-[10px] text-gray-600 shrink-0">
                     {(node.file_size_mb / 1024).toFixed(1)} GB
                   </span>
                   <span className="text-[10px] text-gray-700 shrink-0 hidden md:inline">
                     {node.mem_budget_gb} GB pool
                   </span>
+                  {proj && (
+                    <span
+                      className="text-[10px] text-gray-500 shrink-0 hidden md:inline"
+                      title={`Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} from fleet history (last 7 days).`}
+                    >
+                      ≈ {proj.min.toFixed(0)}-{proj.max.toFixed(0)} tok/s
+                    </span>
+                  )}
                   {/* Pull command inline */}
                   {node.pull_cmd && node.fit_score >= 40 && (
                     <div className="flex items-center gap-1 ml-auto">
@@ -294,6 +322,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   const debounceRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Stable list of online nodes (from most recent all-nodes response).
   const [onlineNodes, setOnlineNodes] = useState<Pick<NodeFit, 'node_id' | 'hostname'>[]>([]);
+  const history                       = useModelComparisonHistory(false, getToken);
 
   const fetchModels = useCallback(async (query?: string, nodeId?: string | null) => {
     const token = await getToken();
@@ -534,6 +563,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
               model={model}
               getToken={getToken}
               focusNodeId={focusNodeId}
+              history={history}
             />
           ))}
         </div>
