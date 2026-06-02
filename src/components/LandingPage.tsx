@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Server } from 'lucide-react';
+import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Server, Search, Webhook, Bell } from 'lucide-react';
 import Logo from './Logo';
 
 interface LandingPageProps {
@@ -363,6 +363,65 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
       </section>
 
+      {/* Model Fit Section — the "instant utility" moment for everyone */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
+        <div className="text-center mb-10">
+          <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-4">Model Discovery</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl mx-auto">
+            Know what fits before you pull.
+          </h2>
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mx-auto leading-relaxed">
+            Type a model. See every GGUF quantization ranked against <em>your</em> hardware —
+            VRAM headroom, fit score, download size, with the pull command pre-filled.
+          </p>
+        </div>
+
+        {/* Mock discovery panel — visual proof of the feature */}
+        <div className="max-w-3xl mx-auto bg-gray-900 border border-gray-700 rounded-2xl overflow-hidden shadow-2xl">
+          <div className="bg-gray-800 border-b border-gray-700 p-4 flex items-center gap-3">
+            <Search className="w-4 h-4 text-gray-500 shrink-0" />
+            <span className="font-mono text-sm text-gray-200">llama</span>
+            <span className="text-xs text-gray-600 ml-auto whitespace-nowrap">3 of 1,247 GGUFs</span>
+          </div>
+          <div className="divide-y divide-gray-800">
+            {[
+              { name: 'bartowski/Llama-3.2-3B-Instruct-GGUF', quant: 'Q4_K_M', size: '1.9 GB', dl: '293k', fit: 'Excellent', score: 95, color: 'text-emerald-400' },
+              { name: 'hugging-quants/Llama-3.2-1B-Instruct-Q8_0', quant: 'Q8_0', size: '1.3 GB', dl: '779k', fit: 'Excellent', score: 85, color: 'text-emerald-400' },
+              { name: 'lmg-anon/vntl-llama3-8b-v2-gguf', quant: 'Q5_K_M', size: '5.5 GB', dl: '894k', fit: 'Good', score: 72, color: 'text-green-300' },
+            ].map((m) => (
+              <div key={m.name + m.quant} className="p-4 flex items-center gap-4 hover:bg-gray-800/40 transition-colors">
+                <div className="flex-1 min-w-0">
+                  <p className="font-mono text-sm text-gray-200 truncate">{m.name}</p>
+                  <p className="text-xs text-gray-500 mt-0.5 font-mono">{m.quant} · {m.size} · {m.dl} downloads</p>
+                </div>
+                <div className="text-right whitespace-nowrap shrink-0">
+                  <p className={`text-xs font-semibold ${m.color}`}>{m.fit}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">fit {m.score}/100</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="bg-gray-950 border-t border-gray-700 p-3 font-mono text-xs text-gray-400 overflow-x-auto">
+            <span className="text-gray-600">$ </span>ollama pull hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
+          </div>
+        </div>
+
+        {/* Supporting feature tiles */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mx-auto mt-10">
+          {[
+            { title: 'Hardware-aware', desc: 'Fit scored against your actual VRAM headroom, not a generic compatibility table.' },
+            { title: 'Every GGUF quant', desc: 'Q4_K_M, Q5, Q6, Q8, F16, IQ-series — ranked by hardware fit, not just file size.' },
+            { title: 'HuggingFace catalog', desc: 'Live index of GGUF models with download counts and HF likes data.' },
+            { title: 'One-click pull', desc: 'Pre-filled ollama or llama-cpp command per variant. Copy, paste, done.' },
+          ].map((t) => (
+            <div key={t.title} className="p-4 bg-gray-800/40 border border-gray-700/50 rounded-xl">
+              <p className="text-sm font-semibold text-white mb-1">{t.title}</p>
+              <p className="text-xs text-gray-500 leading-relaxed">{t.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* The Programmable Fleet Section — moved up to lead the below-fold story */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="text-center mb-4">
@@ -496,41 +555,73 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
       </section>
 
-      {/* Grows With You Section */}
+      {/* Ecosystem / Enriches Your Stack Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12">
-          <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-4 text-center">Scale</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Grows with you — from local to enterprise.</h2>
+          <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-4 text-center">Ecosystem</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-6 tracking-tight text-center">Enriches your existing stack.</h2>
           <p className="text-gray-400 text-sm sm:text-base leading-relaxed max-w-3xl mx-auto mb-10 text-center">
-            Start 100% locally with full sovereignty.
-            When your fleet scales or your organization requires enterprise observability, Wicklee becomes the bridge — enriching your existing tools with the hardware context they're missing.
+            Wicklee doesn't replace Datadog, Grafana, PagerDuty, or your AI gateway —
+            it feeds them. We specialize in AI-inference telemetry no general observability
+            tool exposes: WES, thermal penalty, per-model VRAM share, queue saturation, runtime
+            config drift. Your stack consumes it through standard interfaces.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
               <BarChart2 className="w-6 h-6 text-amber-400 mb-3" />
               <h4 className="text-sm font-bold text-white mb-2">OpenTelemetry Export</h4>
               <p className="text-xs text-gray-500 leading-relaxed">
-                Enrich Datadog, Grafana, and New Relic LLM traces with GPU utilization, thermal state, and WES context from every node.
+                Enrich Datadog, Grafana, Honeycomb, and New Relic LLM traces with GPU utilization,
+                thermal state, and WES context from every node.
               </p>
             </div>
             <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
               <Gauge className="w-6 h-6 text-amber-400 mb-3" />
-              <h4 className="text-sm font-bold text-white mb-2">Prometheus Endpoint</h4>
+              <h4 className="text-sm font-bold text-white mb-2">Prometheus Scrape</h4>
               <p className="text-xs text-gray-500 leading-relaxed">
-                Expose WES scores, thermal patterns, and node intelligence as Prometheus metrics for your existing alerting stack.
+                Standard <code className="font-mono text-[10px] bg-gray-800 px-1 py-0.5 rounded">/metrics</code> endpoint — drop Wicklee into your existing Prometheus stack with no extra plumbing.
+              </p>
+            </div>
+            <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
+              <Route className="w-6 h-6 text-amber-400 mb-3" />
+              <h4 className="text-sm font-bold text-white mb-2">AI Gateway Data Layer</h4>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                LiteLLM, OpenRouter-style gateways, custom proxies — consume Wicklee's best-node API
+                to make hardware-aware routing decisions without writing the telemetry yourself.
+              </p>
+            </div>
+            <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
+              <Bell className="w-6 h-6 text-amber-400 mb-3" />
+              <h4 className="text-sm font-bold text-white mb-2">Slack + PagerDuty</h4>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Inference-specific alerts route to the on-call tools your team already uses.
+                Thermal degradation, TTFT regression, queue saturation, WES drift.
               </p>
             </div>
             <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
               <Server className="w-6 h-6 text-amber-400 mb-3" />
-              <h4 className="text-sm font-bold text-white mb-2">MCP Server</h4>
+              <h4 className="text-sm font-bold text-white mb-2">MCP for AI Agents</h4>
               <p className="text-xs text-gray-500 leading-relaxed">
-                Give AI agents direct access to fleet state, routing recommendations, and hardware-aware inference decisions via Model Context Protocol.
+                Cursor, Claude Desktop, Windsurf, and custom agents query fleet state, WES scores,
+                and observations via the Model Context Protocol — locally, no auth required.
+              </p>
+            </div>
+            <div className="p-5 bg-gray-700/40 border border-gray-700/50 rounded-2xl">
+              <Webhook className="w-6 h-6 text-amber-400 mb-3" />
+              <h4 className="text-sm font-bold text-white mb-2">REST API + Webhooks</h4>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Build custom dashboards, automation scripts, internal reporting. HMAC-signed
+                webhook deliveries for state changes; rate-limited REST for everything else.
               </p>
             </div>
           </div>
-          <p className="mt-6 text-xs text-gray-600">
-            Team tier unlocks enterprise bridge features, shared dashboards, and the MCP server.
-          </p>
+          <div className="mt-8 p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl max-w-3xl mx-auto">
+            <p className="text-xs text-amber-200/80 leading-relaxed text-center">
+              <strong className="text-amber-300">The specialization story:</strong> we go deep on
+              AI-inference observability so you don't have to. Your stack stays standard;
+              Wicklee just gives it eyes for the hardware layer everyone else ignores.
+            </p>
+          </div>
         </div>
       </section>
 
