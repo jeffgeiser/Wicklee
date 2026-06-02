@@ -167,10 +167,29 @@ pub(crate) struct FitResult {
     pub(crate) recommendation: String,
 }
 
-/// VRAM overhead estimate: model file size + ~10% for context/KV cache at default context.
+/// VRAM overhead estimate for a candidate model that hasn't been loaded yet.
+///
+/// Real VRAM usage = weights + KV cache + activation buffers + framework overhead.
+/// The KV cache alone scales with context length and architecture — Llama 3 8B
+/// at 8K context uses ~1 GB for KV; at 32K context, ~4 GB. The previous 10%
+/// heuristic systematically underestimated by 2-3x, causing "Excellent" fit
+/// labels on models that would OOM in production.
+///
+/// 30% overhead covers a realistic working set: KV cache at typical 8K context
+/// for a 7-13B class model (~15% of weights), activation buffers (~5%),
+/// framework alignment + scratch space (~10%). Conservative is correct here —
+/// better to slightly underrate fit than tell a user "Excellent" on a model
+/// that crashes their node.
+///
+/// Floor: 512 MB. Smaller models still need framework + minimum context overhead.
+///
+/// Future improvement: when the GGUF metadata is reliably available
+/// (block_count, attention_head_count_kv, embedding_length), compute the exact
+/// KV cache size. For now we don't have that for candidate models (only for
+/// loaded ones via /api/show), so the heuristic is the floor.
 fn estimate_vram_mb(file_size_bytes: u64) -> u64 {
     let base_mb = file_size_bytes / (1024 * 1024);
-    base_mb + (base_mb / 10).max(256) // file size + 10% or at least 256 MB for context
+    base_mb + (base_mb * 30 / 100).max(512)
 }
 
 /// Pure function: score a model variant against a hardware profile.
