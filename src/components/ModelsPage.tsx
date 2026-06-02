@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Boxes, ArrowRightLeft, DollarSign, BarChart3, Activity } from 'lucide-react';
+import { Boxes, ArrowRightLeft, DollarSign, BarChart3, Activity, Search } from 'lucide-react';
 import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { wesColorClass } from '../utils/wes';
@@ -448,9 +448,9 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, nodes })
       {/* Section 1: Model Discovery */}
       <Section
         eyebrow="Discover"
-        title="Model Discovery"
-        icon={<Boxes className="w-4 h-4" />}
-        subtitle="GGUF models scored against this hardware — pick what fits."
+        title="Find a model that fits"
+        icon={<Search className="w-4 h-4" />}
+        subtitle="Browse the HuggingFace GGUF catalog scored against your hardware."
       >
         {isLocalHost ? (
           <ModelDiscoveryCard isLocalHost={isLocalHost} />
