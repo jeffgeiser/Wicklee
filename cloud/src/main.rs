@@ -344,6 +344,7 @@ struct MetricsRow {
     ttft_ms:          Option<f32>,      // best-available TTFT (vLLM > proxy > Ollama probe)
     avg_latency_ms:   Option<f32>,      // best-available E2E latency (vLLM > proxy)
     queue_depth:      Option<i32>,      // vLLM requests_waiting
+    ollama_active_model: Option<String>, // model name at the moment this row was captured
 }
 
 /// A Live Activity event destined for the `node_events` table.
@@ -596,6 +597,12 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         .execute(pool).await.ok();
     sqlx::query("ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth INTEGER")
         .execute(pool).await.ok();
+    // v0.9.0+ — per-row model attribution so fleet endpoints can aggregate by model.
+    // Old rows stay NULL; queries filter `WHERE ollama_active_model IS NOT NULL`
+    // so the model-comparison / model-switches / cost-by-model endpoints
+    // degrade gracefully until new telemetry accumulates.
+    sqlx::query("ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ollama_active_model TEXT")
+        .execute(pool).await.ok();
 
     // Convert to hypertable (idempotent check via exception handling)
     sqlx::query(
@@ -631,6 +638,9 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     ").execute(pool).await.expect("metrics_5min migration failed");
 
     sqlx::query("ALTER TABLE metrics_5min ADD COLUMN IF NOT EXISTS swap_write_avg REAL")
+        .execute(pool).await.ok();
+    // v0.9.0+ — most-common active model in the 5-minute window.
+    sqlx::query("ALTER TABLE metrics_5min ADD COLUMN IF NOT EXISTS ollama_active_model TEXT")
         .execute(pool).await.ok();
 
     sqlx::query(
@@ -4064,6 +4074,9 @@ fn metrics_row_from_payload(m: &MetricsPayload, ts_ms: u64) -> MetricsRow {
         // Best-available latency: vLLM > proxy
         avg_latency_ms:   m.vllm_avg_e2e_latency_ms.or(m.ollama_proxy_avg_latency_ms),
         queue_depth:      m.vllm_requests_waiting.map(|v| v as i32),
+        // Prefer Ollama's active model; fall back to vLLM's model name so
+        // fleet aggregations have something to attribute the row to.
+        ollama_active_model: m.ollama_active_model.clone().or(m.vllm_model_name.clone()),
     }
 }
 
@@ -4094,12 +4107,13 @@ async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
         let ttft:        Vec<Option<f32>>    = chunk.iter().map(|r| r.ttft_ms).collect();
         let avg_lat:     Vec<Option<f32>>    = chunk.iter().map(|r| r.avg_latency_ms).collect();
         let q_depth:     Vec<Option<i32>>    = chunk.iter().map(|r| r.queue_depth).collect();
+        let active_mdl:  Vec<Option<&str>>   = chunk.iter().map(|r| r.ollama_active_model.as_deref()).collect();
 
         let _ = sqlx::query(
             "INSERT INTO metrics_raw (ts, node_id, tenant_id, tok_s, watts, wes_raw, wes_penalized,
                 thermal_cost_pct, thermal_penalty, thermal_state, vram_used_mb, vram_total_mb,
                 mem_pressure_pct, gpu_pct, cpu_pct, inference_state, wes_version, swap_write,
-                ttft_ms, avg_latency_ms, queue_depth)
+                ttft_ms, avg_latency_ms, queue_depth, ollama_active_model)
              SELECT to_timestamp(unnest($1::float8[]) / 1000.0),
                     unnest($2::text[]), unnest($3::text[]),
                     unnest($4::real[]), unnest($5::real[]), unnest($6::real[]), unnest($7::real[]),
@@ -4107,7 +4121,8 @@ async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
                     unnest($11::int[]), unnest($12::int[]),
                     unnest($13::real[]), unnest($14::real[]), unnest($15::real[]),
                     unnest($16::text[]), unnest($17::smallint[]), unnest($18::real[]),
-                    unnest($19::real[]), unnest($20::real[]), unnest($21::int[])
+                    unnest($19::real[]), unnest($20::real[]), unnest($21::int[]),
+                    unnest($22::text[])
              ON CONFLICT DO NOTHING"
         )
         .bind(&ts_values).bind(&node_ids).bind(&tenant_ids)
@@ -4117,6 +4132,7 @@ async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
         .bind(&mem_pct).bind(&gpu_pct).bind(&cpu_pct)
         .bind(&inf_state).bind(&wes_ver).bind(&swap_write)
         .bind(&ttft).bind(&avg_lat).bind(&q_depth)
+        .bind(&active_mdl)
         .execute(pool).await;
     }
 }
@@ -4180,7 +4196,8 @@ async fn run_rollup(pool: &sqlx::PgPool) {
             thermal_cost_pct_avg, thermal_cost_pct_max, thermal_state_worst,
             mem_pressure_pct_avg, mem_pressure_pct_max, gpu_pct_avg,
             inference_duty_pct, swap_write_avg,
-            sample_count, wes_version, wes_version_count, agent_version)
+            sample_count, wes_version, wes_version_count, agent_version,
+            ollama_active_model)
         SELECT
             to_timestamp(floor(EXTRACT(EPOCH FROM ts) / 300) * 300) AS bucket,
             node_id, tenant_id,
@@ -4204,7 +4221,9 @@ async fn run_rollup(pool: &sqlx::PgPool) {
             COUNT(*)::smallint,
             MIN(wes_version)::smallint,
             COUNT(DISTINCT wes_version)::smallint,
-            MIN(agent_version)
+            MIN(agent_version),
+            -- Last non-null model name observed in the 5-minute window.
+            (array_agg(ollama_active_model ORDER BY ts DESC) FILTER (WHERE ollama_active_model IS NOT NULL))[1]
         FROM metrics_raw
         WHERE ts < NOW() - INTERVAL '24 hours'
         GROUP BY bucket, node_id, tenant_id
