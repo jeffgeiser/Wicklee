@@ -2895,7 +2895,14 @@ async fn handle_fleet_model_switches(
         .clamp(1, 168);
     let interval = format!("{hours} hours");
 
-    let rows: Vec<(i64, String, Option<String>, String, Option<f64>)> = sqlx::query_as(
+    // NOTE on typing: `to_model` is the un-cast `ollama_active_model` column
+    // which Postgres considers nullable TEXT, so sqlx will refuse to decode
+    // it into `String` even though the CTE filter guarantees NOT NULL at runtime.
+    // We type it as Option<String> to satisfy sqlx, then unwrap unconditionally
+    // at the json! step since the filter still applies. The prior version
+    // failed silently because .unwrap_or_default() swallowed the decode error
+    // and returned an empty Vec.
+    let rows_result = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, Option<f64>)>(
         "WITH model_changes AS (
             SELECT
               ts,
@@ -2921,7 +2928,15 @@ async fn handle_fleet_model_switches(
          LIMIT 200"
     )
     .bind(&user_id).bind(&interval)
-    .fetch_all(&state.pool).await.unwrap_or_default();
+    .fetch_all(&state.pool).await;
+
+    let rows = match rows_result {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[fleet-model-switches] sqlx error: {e}");
+            Vec::new()
+        }
+    };
 
     let total_swaps = rows.len() as i64;
     let total_gap_ms: f64 = rows.iter().filter_map(|(_, _, _, _, g)| *g).sum();
@@ -2930,7 +2945,7 @@ async fn handle_fleet_model_switches(
             "ts_ms":      ts_ms,
             "node_id":    node_id,
             "from_model": from_model,
-            "to_model":   to_model,
+            "to_model":   to_model.unwrap_or_default(),
             "gap_ms":     gap_ms.unwrap_or(0.0),
         })
     }).collect();
