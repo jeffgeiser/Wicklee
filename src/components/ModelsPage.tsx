@@ -199,17 +199,27 @@ interface ComparisonRow {
   sample_count: number;
 }
 
-const RecentSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
+const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [sortBy, setSortBy] = useState<'wes' | 'tok_s' | 'cost'>('wes');
 
   useEffect(() => {
-    if (!isLocalHost) return;
+    // Fleet mode needs an authenticated session; bail if no token plumbing.
+    if (!isLocalHost && !getToken) return;
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const res = await fetch('http://localhost:7700/api/model-comparison?hours=168');
+        const url = isLocalHost
+          ? 'http://localhost:7700/api/model-comparison?hours=168'
+          : '/api/v1/fleet/model-comparison?hours=168';
+        const headers: Record<string, string> = {};
+        if (!isLocalHost && getToken) {
+          const token = await getToken();
+          if (!token) { setLoaded(true); return; }
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        const res = await fetch(url, { headers });
         if (!res.ok) { setLoaded(true); return; }
         const data = await res.json();
         if (cancelled) return;
@@ -222,7 +232,7 @@ const RecentSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
     fetchData();
     const id = setInterval(fetchData, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [isLocalHost]);
+  }, [isLocalHost, getToken]);
 
   const sortedRows = useMemo(() => {
     const copy = [...rows];
@@ -234,22 +244,22 @@ const RecentSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
     return copy;
   }, [rows, sortBy]);
 
-  const meta = !isLocalHost
-    ? 'localhost only'
-    : !loaded
-      ? 'loading'
-      : sortedRows.length === 0
-        ? 'no data yet'
-        : `${sortedRows.length} model${sortedRows.length === 1 ? '' : 's'} · last 7 days`;
+  const meta = !loaded
+    ? 'loading'
+    : sortedRows.length === 0
+      ? (isLocalHost ? 'no data yet' : 'fleet aggregation pending')
+      : `${sortedRows.length} model${sortedRows.length === 1 ? '' : 's'} · last 7 days${isLocalHost ? '' : ' · fleet'}`;
 
   return (
     <Section eyebrow="Recent" meta={meta}>
-      {!isLocalHost ? (
-        <EmptyState>Recent comparison is currently available on localhost only. Open Wicklee on the node running inference.</EmptyState>
-      ) : !loaded ? (
+      {!loaded ? (
         <EmptyState>Loading…</EmptyState>
       ) : sortedRows.length === 0 ? (
-        <EmptyState>No models tracked in the past 7 days.</EmptyState>
+        <EmptyState>
+          {isLocalHost
+            ? 'No models tracked in the past 7 days.'
+            : 'No models tracked yet — fleet aggregation needs a few hours of telemetry under the new schema. Local nodes have full data via the localhost dashboard.'}
+        </EmptyState>
       ) : (
         <Card>
           <div className="px-4 py-3 border-b border-gray-700 flex items-center gap-2 text-xs">
@@ -303,19 +313,28 @@ const RecentSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
 };
 
 // ── Section 3: SWAPS — model switching activity ───────────────────────────
-interface SwapEntry { ts_ms: number; from_model: string | null; to_model: string | null; gap_ms: number; }
+interface SwapEntry { ts_ms: number; node_id?: string; from_model: string | null; to_model: string | null; gap_ms: number; }
 interface SwapsResponse { swaps: SwapEntry[]; total_swaps: number; total_gap_ms: number; total_gap_minutes: number; }
 
-const SwapsSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
+const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
   const [data, setData] = useState<SwapsResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!isLocalHost) return;
+    if (!isLocalHost && !getToken) return;
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const res = await fetch('http://localhost:7700/api/model-switches?hours=24');
+        const url = isLocalHost
+          ? 'http://localhost:7700/api/model-switches?hours=24'
+          : '/api/v1/fleet/model-switches?hours=24';
+        const headers: Record<string, string> = {};
+        if (!isLocalHost && getToken) {
+          const token = await getToken();
+          if (!token) { setLoaded(true); return; }
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        const res = await fetch(url, { headers });
         if (!res.ok) { setLoaded(true); return; }
         const json = await res.json();
         if (!cancelled) { setData(json); setLoaded(true); }
@@ -326,7 +345,7 @@ const SwapsSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
     fetchData();
     const id = setInterval(fetchData, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [isLocalHost]);
+  }, [isLocalHost, getToken]);
 
   const fmtTime = (ms: number) => {
     const d = new Date(ms);
@@ -337,22 +356,22 @@ const SwapsSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
     return `${(ms / 60_000).toFixed(1)}m`;
   };
 
-  const meta = !isLocalHost
-    ? 'localhost only'
-    : !loaded
-      ? 'loading'
-      : !data || data.swaps.length === 0
-        ? 'no swaps · last 24h'
-        : `${data.total_swaps} swap${data.total_swaps === 1 ? '' : 's'} · ${data.total_gap_minutes.toFixed(1)} min idle · last 24h`;
+  const meta = !loaded
+    ? 'loading'
+    : !data || data.swaps.length === 0
+      ? (isLocalHost ? 'no swaps · last 24h' : 'fleet aggregation pending')
+      : `${data.total_swaps} swap${data.total_swaps === 1 ? '' : 's'} · ${data.total_gap_minutes.toFixed(1)} min idle · last 24h${isLocalHost ? '' : ' · fleet'}`;
 
   return (
     <Section eyebrow="Swaps" meta={meta}>
-      {!isLocalHost ? (
-        <EmptyState>Swap analysis is currently available on localhost only.</EmptyState>
-      ) : !loaded ? (
+      {!loaded ? (
         <EmptyState>Loading…</EmptyState>
       ) : !data || data.swaps.length === 0 ? (
-        <EmptyState>No model swaps in the past 24 hours. Each swap costs idle time while VRAM is reallocated — fewer is better.</EmptyState>
+        <EmptyState>
+          {isLocalHost
+            ? 'No model swaps in the past 24 hours. Each swap costs idle time while VRAM is reallocated — fewer is better.'
+            : 'No model swaps tracked yet — fleet aggregation needs a few hours of telemetry under the new schema. Local nodes have full data via the localhost dashboard.'}
+        </EmptyState>
       ) : (
         <Card>
           <div className="overflow-x-auto">
@@ -360,6 +379,7 @@ const SwapsSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
               <thead>
                 <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
                   <th className="text-left font-medium px-4 py-3">Time</th>
+                  {!isLocalHost && <th className="text-left font-medium px-4 py-3">Node</th>}
                   <th className="text-left font-medium px-4 py-3">From</th>
                   <th className="text-left font-medium px-4 py-3">To</th>
                   <th className="text-right font-medium px-4 py-3">Idle gap</th>
@@ -369,6 +389,7 @@ const SwapsSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
                 {data.swaps.map((s, i) => (
                   <tr key={`${s.ts_ms}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
                     <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtTime(s.ts_ms)}</td>
+                    {!isLocalHost && <td className="px-4 py-3 font-mono text-xs text-gray-300">{s.node_id ?? '—'}</td>}
                     <td className="px-4 py-3 font-mono text-xs text-gray-200">{s.from_model ?? '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-white">{s.to_model ?? '—'}</td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-yellow-300">{fmtGap(s.gap_ms)}</td>
@@ -415,8 +436,8 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, nodes })
 
       {/* Builder-first section order: what's running NOW → what ran RECENTLY → SWAPS → DISCOVER */}
       <LiveSection isLocalHost={isLocalHost} nodes={nodes} />
-      <RecentSection isLocalHost={isLocalHost} />
-      <SwapsSection isLocalHost={isLocalHost} />
+      <RecentSection isLocalHost={isLocalHost} getToken={getToken} />
+      <SwapsSection isLocalHost={isLocalHost} getToken={getToken} />
       <BrowseSection isLocalHost={isLocalHost} getToken={getToken} />
     </div>
   );
