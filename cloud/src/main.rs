@@ -2909,7 +2909,9 @@ async fn handle_fleet_model_switches(
               node_id,
               ollama_active_model AS to_model,
               LAG(ollama_active_model) OVER (PARTITION BY node_id ORDER BY ts) AS from_model,
-              EXTRACT(EPOCH FROM ts - LAG(ts) OVER (PARTITION BY node_id ORDER BY ts)) * 1000 AS gap_ms
+              -- EXTRACT(EPOCH FROM interval) returns NUMERIC in modern Postgres;
+              -- explicit cast to DOUBLE PRECISION so sqlx can decode into f64.
+              (EXTRACT(EPOCH FROM ts - LAG(ts) OVER (PARTITION BY node_id ORDER BY ts)) * 1000)::DOUBLE PRECISION AS gap_ms
             FROM metrics_raw
             WHERE tenant_id = $1
               AND ts > NOW() - $2::INTERVAL
