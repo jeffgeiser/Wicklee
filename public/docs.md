@@ -285,7 +285,13 @@ Four components, weighted to favor models that leave significant headroom for co
 
 **Multi-part shard aggregation:** Large GGUF models published as multi-part shards (e.g. `model-Q4_K_M-00001-of-00003.gguf` + `00002-of-00003` + `00003-of-00003`) are aggregated into a single catalog variant with the **total** size summed across all shards. Without this, a 30 GB model split into 3 × 10 GB shards would score as three independent 10 GB variants and incorrectly appear to fit small hardware.
 
-**Fleet "all nodes" filter:** the trending list defaults to showing only models scoring **Good (60+) on every online node**. Tight or marginal models are filtered out — users browsing the trending list expect models that will run well, not barely fit.
+**Fleet fit-mode toggle (Discovery v2):** the fleet view now defaults to **"fits any node ✓"** with an opt-in **"all nodes (intersection)"** toggle. The previous implicit intersection filter punished heterogeneous fleets — a single small node would knock every interesting model off the list. Default-any unlocks discovery for mixed-hardware fleets without losing the strict mode for operators who genuinely need a single deployable target across the whole fleet.
+
+**Context-length picker (Discovery v2):** 2K / 4K / 8K (default) / 16K / 32K / 128K. Each variant's VRAM requirement and fit score re-calculate when changed, using architecture-aware KV cache estimates per parameter class. Lets you compare "this model at 8K context" vs "this model at 32K" without leaving the page.
+
+**Projected tok/s and cost/M tokens (Discovery v2):** every row shows a projected throughput and cost-per-million-tokens estimate sourced from your fleet's own historical model-comparison data — only displayed when 2+ similar-size models have been observed running on similar hardware. This is the competitive moat against generic "can you run this LLM?" calculators: Wicklee scores against what *your* hardware actually delivers, not synthetic benchmarks. Empty-state copy nudges users to "Run a few models" to seed projections.
+
+**Quant quality tooltips + sweet-spot badge (Discovery v2):** every quant label hovers a quality tooltip from the QUANT_QUALITY map (e.g. *"Q4_K_M: ~97% quality. Standard sweet spot for most models."*). The sweet-spot quant for each model family carries a `[Rec]` badge so newcomers don't end up downloading Q8 by accident.
 
 ### Search behavior
 
@@ -482,6 +488,30 @@ Surfaced on the Performance tab as the Thermal Budget card alongside the WES his
 
 Cloud MCP tools: `get_inference_profile` and `explain_slowdown` available for Team+ tier.
 
+### Runtime Config Surface (v0.9.0)
+`GET /api/runtime-config?model=<name>` — returns the cached launch-time configuration for a model across all three supported runtimes:
+
+- **Ollama** — parsed from `POST /api/show` whenever the active model changes. Captures `context_length`, `parameter_count`, `quantization`, plus the prompt `template` and `system_prompt`.
+- **vLLM** — a 5-minute poller first tries `GET /v1/server_info` (vLLM 0.5.0+), then falls back to parsing `ps aux` for the vLLM process command line. Captures `process_args` and best-effort common fields.
+- **llama.cpp / llama-server** — same pattern: `GET /props` first, then `ps aux` fallback.
+
+The full payload is fetched on demand to keep the 1 Hz SSE stream small — `MetricsPayload.runtime_config_available: bool` flips to true once the cache has any entry, so the frontend knows whether to render the "Config" affordance.
+
+**Privacy:** templates and system prompts can carry proprietary content. They live in the agent's local cache and are served only by this localhost endpoint. The cloud telemetry push (`cloud_push.rs`) does NOT carry these fields — v0.9.0 is local-only by design.
+
+**Response codes:** 200 with the JSON `RuntimeConfig`, 400 when `?model=` is missing, 404 when no config has been cached yet (cold start or a model that's never been loaded).
+
+**Frontend surfaces:** a "Config" pill in the Diagnostics rail (single-model nodes) plus a per-row link in the Active Models panel (multi-model nodes). Both open the same `RuntimeConfigModal` — Esc / backdrop / X to close, Copy-as-Markdown button.
+
+### Models Tab
+The dashboard now has a top-level **Models** tab (between Intelligence and Insights — `DashboardTab.MODELS`). Three sections:
+
+- **Loaded** — what's resident in memory right now. Columns: Node, Model, Quant, Memory (VRAM if available, RAM with `size_gb` fallback), Status (Active ● = currently inferring vs Idle ○ = loaded but not active). This is a *model-state* view — for inference-state telemetry (live / idle-spd / busy / idle) see the Intelligence tab.
+- **Browse** — HuggingFace GGUF catalog discovery, scored against your actual fleet (details in [Model Discovery & Hardware Fit](#model-discovery--hardware-fit) below).
+- **Past activity** — collapsible footer with the 7-day model comparison (`/api/v1/fleet/model-comparison`) and 24-hour swap activity (`/api/v1/fleet/model-switches`).
+
+The page header reads *"What's loaded across your fleet, and what could you add. Inference performance lives on the Intelligence tab."*
+
 ---
 
 ## Event Feeds
@@ -521,6 +551,9 @@ Auth: None required.
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Root cause analysis for slow inference requests |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for all models |
+| GET | /api/model-switches?hours=24 | Model swap frequency + idle gap per transition |
+| GET | /api/model-candidates?search=llama | Discovery — HuggingFace GGUF catalog scored against local hardware |
+| GET | /api/runtime-config?model=X | Runtime Config Surface (v0.9.0) — cached launch-time config for the named model |
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
@@ -551,6 +584,9 @@ Auth: `X-API-Key: wk_live_...` header.
 | GET | /api/v1/fleet/wes | WES scores ranked | All |
 | GET | /api/v1/nodes/{id} | Single node deep dive | All |
 | GET | /api/v1/route/best | Routing recommendation | All |
+| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720h window. | All |
+| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events via LAG over `metrics_raw`. 1–168h, capped at 200 rows. | All |
+| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost at $0.16/kWh. 1–168h. | All |
 | GET | /api/v1/insights/latest | Fleet intelligence snapshot | Team+ |
 | GET | /metrics | Prometheus scrape endpoint | Team+ |
 | GET | /api/otel/config | OTel export configuration | Team+ |

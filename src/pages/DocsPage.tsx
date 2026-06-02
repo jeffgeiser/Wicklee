@@ -110,6 +110,7 @@ const NAV = [
   { id: 'intelligence', label: 'Pattern Intelligence' },
   { id: 'alerts',      label: 'Alerts & Notifications' },
   { id: 'event-feeds', label: 'Event Feeds' },
+  { id: 'runtime-config', label: 'Runtime Config' },
   { id: 'deep-intel',   label: 'Deep Intelligence' },
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
@@ -1514,6 +1515,32 @@ WES Version:     2
 
           {/* ── Deep Intelligence ── */}
           <Section
+            id="runtime-config"
+            icon={<Lightbulb className="w-5 h-5" />}
+            accent="border-amber-500/20"
+            title="Runtime Config Surface (v0.9.0)"
+          >
+            <p>
+              Operators running multiple inference runtimes on the same node ask the same question over and over: <em>what is this engine actually loaded with?</em> Context length, GPU layer count, quantization, the prompt template, the system prompt — they live in three different places. Wicklee captures them all and serves them through one endpoint.
+            </p>
+            <p>
+              <code className="text-gray-300 font-mono text-[10px]">GET /api/runtime-config?model=&lt;name&gt;</code> returns the cached <code className="text-gray-300 font-mono text-[10px]">RuntimeConfig</code> for a model. 200 with JSON, 400 if <code className="text-gray-300 font-mono text-[10px]">?model=</code> is missing, 404 if no config has been cached yet. Read-only — never blocks on I/O, works regardless of DuckDB store health.
+            </p>
+            <ul className="list-disc list-inside text-sm text-gray-400 space-y-1">
+              <li><strong className="text-white">Ollama:</strong> parsed from <code className="font-mono text-[10px]">POST /api/show</code> on every model change. Captures context length, parameter count, quantization, template, system prompt.</li>
+              <li><strong className="text-white">vLLM:</strong> 5-minute poller tries <code className="font-mono text-[10px]">GET /v1/server_info</code> (vLLM 0.5.0+), falls back to parsing <code className="font-mono text-[10px]">ps aux</code> for the process command line.</li>
+              <li><strong className="text-white">llama.cpp:</strong> same pattern — <code className="font-mono text-[10px]">GET /props</code> first, then <code className="font-mono text-[10px]">ps aux</code> fallback.</li>
+            </ul>
+            <NoteBox>
+              <strong className="text-white">Privacy:</strong> templates and system prompts can carry proprietary content. They live in the agent's local cache and are served only by the <strong>localhost</strong> endpoint. The cloud telemetry push does NOT carry these fields — v0.9.0 is local-only by design.
+            </NoteBox>
+            <p className="text-xs text-gray-400">
+              The MetricsPayload carries a single boolean — <code className="font-mono text-[10px]">runtime_config_available</code> — so the frontend can render the "Config" affordance without speculatively hitting the endpoint for every node. Two placements: a "Config" pill in the Diagnostics rail (single-model nodes), and a per-row link in the Active Models panel (multi-model nodes). Both open <code className="font-mono text-[10px]">RuntimeConfigModal</code> with a Copy-as-Markdown button.
+            </p>
+          </Section>
+
+          {/* ── Deep Intelligence ── */}
+          <Section
             id="deep-intel"
             icon={<Lightbulb className="w-5 h-5" />}
             accent="border-amber-500/20"
@@ -1623,6 +1650,10 @@ WES Version:     2
                     <Td>Model discovery — GGUF models from HuggingFace scored against local hardware (fit score, VRAM headroom, recommendation)</Td>
                   </tr>
                   <tr>
+                    <Td mono>GET /api/runtime-config?model=X</Td>
+                    <Td>Runtime Config Surface (<span className="text-blue-400">v0.9.0</span>) — cached launch-time config for the named model across Ollama, vLLM, llama.cpp. Templates and system prompts stay local.</Td>
+                  </tr>
+                  <tr>
                     <Td mono>GET /api/history?node_id=WK-XXXX</Td>
                     <Td>DuckDB metric history — 1h of raw samples (tok/s, GPU util, power, memory pressure, swap)</Td>
                   </tr>
@@ -1730,6 +1761,18 @@ curl https://wicklee.dev/api/v1/fleet \\
                   <tr>
                     <Td mono>GET /api/v1/models/discover</Td>
                     <Td>Model discovery — browse (<code className="text-gray-400 text-xs">?search=</code>), hardware simulation (<code className="text-gray-400 text-xs">?simulate_hw=nvidia_4090</code>, Pro+), fleet matching (<code className="text-gray-400 text-xs">?fleet=true&amp;model_id=X</code>, Team+)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/v1/fleet/model-comparison?hours=168</Td>
+                    <Td>Fleet-wide per-model rollup — WES, tok/s, watts, TTFT, cost. Reads <code className="text-gray-400 text-xs">metrics_5min</code>. 1–720 hour window.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/v1/fleet/model-switches?hours=24</Td>
+                    <Td>Cross-node model swap events. LAG window function over <code className="text-gray-400 text-xs">metrics_raw</code>, 1–168 hour window, capped at 200 rows.</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/v1/fleet/cost-by-model?hours=24</Td>
+                    <Td>Fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/insights/latest</Td>
