@@ -74,14 +74,41 @@ We added the thermal penalty layer because raw IPW assumes a steady state. Real 
 
 Apple Silicon M-series chips routinely score 10–20+ thanks to their ultra-low power draw (1–3W SoC power at idle inference). A well-cooled RTX 4090 at inference sits in the 1–3 range. CPU-only inference on high-wattage chips (EPYC, Xeon) typically scores below 3.
 
-## Routing With WES
+## Best-Node Selection with WES
 
 `GET /api/v1/route/best` returns two candidates: the **latency** pick (highest tok/s) and the **efficiency** pick (highest penalized WES). The default recommendation is efficiency — the node that gives you the most output per watt.
 
 For latency-critical paths, use the latency pick. For background batch jobs, the efficiency pick gives you the most output per dollar of electricity. Both are returned in every response — the tradeoff is always visible.
 
-That's what WES is for.
+Wicklee tells you which node is best. You decide whether to route to it. We're never in your request path; we're the data source for the routing decisions your gateway or proxy actually makes.
+
+## What's shipped since this post
+
+A few things landed between the original WES design and now:
+
+- **Multi-model WES** — when 2+ models are loaded concurrently in Ollama, each gets its own WES score using proportional VRAM share for power attribution. You can finally answer "is qwen2.5:7b faster than llama3.2:8b on this box?" with real numbers.
+- **Inference Profiler** (`GET /api/profile`) — correlates TTFT, KV cache, queue depth, thermal, and power on a single timeline. Useful for diagnosing *why* WES dropped, not just *that* WES dropped.
+- **Runtime Config Surface** (v0.9.0) — one click to inspect each node's exact launch parameters (context size, GPU layers, system prompt, quantization) across Ollama, vLLM, and llama.cpp. Diff configs across nodes when their WES diverges. [Read more →](/blog/runtime-config-surface)
+- **Model Discovery with fit scoring** — type a HuggingFace model, see every GGUF quant ranked against *your* hardware's available VRAM. Pull command pre-filled.
+- **Install simplification** (v0.8.x) — no sudo on install. The agent goes to `~/.wicklee/bin/wicklee` and you can try it before granting root.
+
+## Try it
+
+```bash
+curl -fsSL https://wicklee.dev/install.sh | bash
+~/.wicklee/bin/wicklee
+```
+
+No sudo. No account required. Local dashboard opens at `http://localhost:7700` with live WES values, the per-node leaderboard, and Thermal Cost % visible at a glance.
+
+Want the agent to run on every boot?
+
+```bash
+sudo ~/.wicklee/bin/wicklee --install-service
+```
+
+That's the only step that needs root. WES, the leaderboard, multi-model WES, and Thermal Cost % are all available on the free Community tier — no upgrade required.
 
 ---
 
-*WES scores update live from your fleet's SSE telemetry. Penalized WES and Thermal Cost % are available on all Wicklee tiers — no upgrade required. Try it at [wicklee.dev](https://wicklee.dev).*
+*WES scores update live from your fleet's SSE telemetry. Open source under FSL-1.1-Apache-2.0 (converts to Apache 2.0 after 4 years). See the [source code](https://github.com/jeffgeiser/Wicklee).*
