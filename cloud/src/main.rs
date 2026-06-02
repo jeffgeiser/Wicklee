@@ -2770,6 +2770,248 @@ async fn handle_resolve_observation(
     }
 }
 
+// ── Fleet model aggregation endpoints (v0.9.0+) ─────────────────────────────
+//
+// These mirror the localhost `/api/model-comparison`, `/api/model-switches`,
+// and `/api/cost-by-model` endpoints but aggregate across every node owned
+// by the authenticated tenant. Response shapes match the localhost shape
+// exactly so the frontend can re-use rendering logic verbatim.
+//
+// All three filter on `ollama_active_model IS NOT NULL`, so they will return
+// empty arrays until new telemetry has been ingested under the new schema.
+
+const DEFAULT_KWH_RATE_USD: f32 = 0.16;
+
+/// GET /api/v1/fleet/model-comparison?hours=168
+/// Per-model rollup over the past N hours. Sourced from metrics_5min for the
+/// long 7-day window (metrics_raw at 30s granularity is too heavy).
+async fn handle_fleet_model_comparison(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let hours: i32 = params.get("hours")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(168)
+        .clamp(1, 720); // 30 days max
+    let kwh_rate = DEFAULT_KWH_RATE_USD;
+
+    // Each 5-min bucket = 5/60 hours. Cost = avg_watts * hours_active * kwh_rate / 1000.
+    let interval = format!("{hours} hours");
+    let rows: Vec<(String, Option<f32>, Option<f32>, Option<f32>, Option<f64>, i64)> = sqlx::query_as(
+        "SELECT
+            ollama_active_model,
+            AVG(tok_s_avg)::REAL          AS avg_tok_s,
+            AVG(watts_avg)::REAL          AS avg_watts,
+            AVG(wes_penalized_avg)::REAL  AS wes,
+            (COUNT(*) * 5.0 / 60.0)::DOUBLE PRECISION AS hours_active,
+            COUNT(*)::BIGINT              AS sample_count
+         FROM metrics_5min
+         WHERE tenant_id = $1
+           AND ts > NOW() - $2::INTERVAL
+           AND ollama_active_model IS NOT NULL
+         GROUP BY ollama_active_model
+         ORDER BY wes DESC NULLS LAST"
+    )
+    .bind(&user_id).bind(&interval)
+    .fetch_all(&state.pool).await.unwrap_or_default();
+
+    // TTFT lives in metrics_raw only; pull a side query for the rolling window
+    // we still have raw data for (last 24h). For older windows TTFT will be null.
+    let ttft_rows: Vec<(String, Option<f32>)> = sqlx::query_as(
+        "SELECT ollama_active_model, AVG(ttft_ms)::REAL
+         FROM metrics_raw
+         WHERE tenant_id = $1
+           AND ts > NOW() - INTERVAL '24 hours'
+           AND ollama_active_model IS NOT NULL
+           AND ttft_ms IS NOT NULL
+         GROUP BY ollama_active_model"
+    )
+    .bind(&user_id)
+    .fetch_all(&state.pool).await.unwrap_or_default();
+    let ttft_map: HashMap<String, Option<f32>> = ttft_rows.into_iter().collect();
+
+    let models: Vec<serde_json::Value> = rows.into_iter().map(|(model, tok_s, watts, wes, hours_active, samples)| {
+        let hours_active = hours_active.unwrap_or(0.0);
+        let total_cost = match watts {
+            Some(w) if w > 0.0 => Some((w as f64) * hours_active * (kwh_rate as f64) / 1000.0),
+            _ => None,
+        };
+        let cost_per_hour = match watts {
+            Some(w) if w > 0.0 => Some((w as f64) * (kwh_rate as f64) / 1000.0),
+            _ => None,
+        };
+        let avg_ttft = ttft_map.get(&model).copied().unwrap_or(None);
+        serde_json::json!({
+            "model":         model,
+            "hours_active":  (hours_active * 100.0).round() / 100.0,
+            "avg_tok_s":     tok_s,
+            "avg_watts":     watts,
+            "wes":           wes,
+            "avg_ttft_ms":   avg_ttft,
+            "cost_per_hour": cost_per_hour,
+            "total_cost":    total_cost,
+            "sample_count":  samples,
+        })
+    }).collect();
+
+    Json(serde_json::json!({ "models": models })).into_response()
+}
+
+/// GET /api/v1/fleet/model-switches?hours=24
+/// Model swap events across all nodes in the past N hours.
+async fn handle_fleet_model_switches(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let hours: i32 = params.get("hours")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24)
+        .clamp(1, 168);
+    let interval = format!("{hours} hours");
+
+    let rows: Vec<(i64, String, Option<String>, String, Option<f64>)> = sqlx::query_as(
+        "WITH model_changes AS (
+            SELECT
+              ts,
+              node_id,
+              ollama_active_model AS to_model,
+              LAG(ollama_active_model) OVER (PARTITION BY node_id ORDER BY ts) AS from_model,
+              EXTRACT(EPOCH FROM ts - LAG(ts) OVER (PARTITION BY node_id ORDER BY ts)) * 1000 AS gap_ms
+            FROM metrics_raw
+            WHERE tenant_id = $1
+              AND ts > NOW() - $2::INTERVAL
+              AND ollama_active_model IS NOT NULL
+         )
+         SELECT
+            (EXTRACT(EPOCH FROM ts) * 1000)::BIGINT AS ts_ms,
+            node_id,
+            from_model,
+            to_model,
+            gap_ms
+         FROM model_changes
+         WHERE from_model IS NOT NULL
+           AND from_model <> to_model
+         ORDER BY ts DESC
+         LIMIT 200"
+    )
+    .bind(&user_id).bind(&interval)
+    .fetch_all(&state.pool).await.unwrap_or_default();
+
+    let total_swaps = rows.len() as i64;
+    let total_gap_ms: f64 = rows.iter().filter_map(|(_, _, _, _, g)| *g).sum();
+    let swaps: Vec<serde_json::Value> = rows.into_iter().map(|(ts_ms, node_id, from_model, to_model, gap_ms)| {
+        serde_json::json!({
+            "ts_ms":      ts_ms,
+            "node_id":    node_id,
+            "from_model": from_model,
+            "to_model":   to_model,
+            "gap_ms":     gap_ms.unwrap_or(0.0),
+        })
+    }).collect();
+
+    Json(serde_json::json!({
+        "swaps":            swaps,
+        "total_swaps":      total_swaps,
+        "total_gap_ms":     total_gap_ms,
+        "total_gap_minutes": (total_gap_ms / 60_000.0 * 10.0).round() / 10.0,
+    })).into_response()
+}
+
+/// GET /api/v1/fleet/cost-by-model?hours=24
+/// Per-model cost rollup over the past N hours. Uses metrics_raw for
+/// short windows (24h × ~12 nodes is manageable).
+async fn handle_fleet_cost_by_model(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
+        Some(id) => id,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let hours: i32 = params.get("hours")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24)
+        .clamp(1, 168);
+    let kwh_rate = DEFAULT_KWH_RATE_USD;
+    let interval = format!("{hours} hours");
+
+    // Sample interval ~30s in metrics_raw → hours_active = COUNT(*) * 30 / 3600.
+    let rows: Vec<(String, Option<f32>, Option<f32>, Option<f64>, i64)> = sqlx::query_as(
+        "SELECT
+            ollama_active_model,
+            AVG(tok_s)::REAL  AS tok_s_avg,
+            AVG(watts)::REAL  AS avg_watts,
+            (COUNT(*) * 30.0 / 3600.0)::DOUBLE PRECISION AS hours_active,
+            COUNT(*)::BIGINT  AS sample_count
+         FROM metrics_raw
+         WHERE tenant_id = $1
+           AND ts > NOW() - $2::INTERVAL
+           AND ollama_active_model IS NOT NULL
+         GROUP BY ollama_active_model
+         ORDER BY hours_active DESC"
+    )
+    .bind(&user_id).bind(&interval)
+    .fetch_all(&state.pool).await.unwrap_or_default();
+
+    let mut total_cost_usd: f64 = 0.0;
+    let models: Vec<serde_json::Value> = rows.into_iter().map(|(model, tok_s, watts, hours_active, samples)| {
+        let hours_active = hours_active.unwrap_or(0.0);
+        let cost_usd = match watts {
+            Some(w) if w > 0.0 => (w as f64) * hours_active * (kwh_rate as f64) / 1000.0,
+            _ => 0.0,
+        };
+        total_cost_usd += cost_usd;
+        serde_json::json!({
+            "model":        model,
+            "hours_active": (hours_active * 100.0).round() / 100.0,
+            "avg_watts":    watts,
+            "cost_usd":     cost_usd,
+            "tok_s_avg":    tok_s,
+            "sample_count": samples,
+        })
+    }).collect();
+
+    Json(serde_json::json!({
+        "models":         models,
+        "total_cost_usd": total_cost_usd,
+    })).into_response()
+}
+
 /// GET /api/fleet/export
 async fn handle_fleet_export(
     State(state): State<AppState>,
@@ -8030,6 +8272,9 @@ async fn main() {
         .route("/api/fleet/events/history",       get(handle_fleet_events_history))
         .route("/api/fleet/export",               get(handle_fleet_export))
         .route("/api/fleet/model-candidates",     get(handle_fleet_model_candidates))
+        .route("/api/v1/fleet/model-comparison",  get(handle_fleet_model_comparison))
+        .route("/api/v1/fleet/model-switches",    get(handle_fleet_model_switches))
+        .route("/api/v1/fleet/cost-by-model",     get(handle_fleet_cost_by_model))
         .route("/api/fleet/observations",            get(handle_fleet_observations).post(handle_submit_observation))
         .route("/api/fleet/observations/:id/acknowledge", post(handle_acknowledge_observation))
         .route("/api/fleet/observations/:id/resolve",     post(handle_resolve_observation))
