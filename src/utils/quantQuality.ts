@@ -137,23 +137,36 @@ export function parseParameterCountB(name: string): number | null {
 /**
  * Estimates additional KV cache memory (above model weights) for a given
  * parameter class and context length, in MB. Based on standard GQA-family
- * architectures (Llama 3, Qwen 2.5, Mistral, etc.). For non-GQA models
- * (older Llama 2 13B, Falcon-family, MPT) KV cache is ~5x larger but we
- * accept the underestimate — most modern GGUF models use GQA.
+ * architectures (Llama 3, Qwen 2.5, Mistral, etc.) at f16 KV precision
+ * (Ollama default; q8 KV halves these but is opt-in).
  *
- * Reference: KV cache MB ≈ 2 × layers × ctx × kv_heads × head_dim × bytes / 1MB
+ * Reference values derived from real architectures:
+ *   Llama 3.2 1B: 16 layers × 8 KV heads × 64 head_dim × 2 (f16) × 2 (K+V)
+ *                 = 32 KB/token = 32 MB per 1K context
+ *   Llama 3.2 3B: 28 × 8 × 128 × 2 × 2 = 112 KB/token = 112 MB per 1K
+ *   Llama 3.1 8B: 32 × 8 × 128 × 2 × 2 = 128 KB/token = 128 MB per 1K
+ *   Qwen 2.5 32B: 64 × 8 × 128 × 2 × 2 = 256 KB/token = 256 MB per 1K
+ *   Llama 3.3 70B: 80 × 8 × 128 × 2 × 2 = 320 KB/token = 320 MB per 1K
+ *
+ * Previous estimates (8/14/16/24/32/42) were 4-8x too low — they appeared
+ * to assume q8 KV cache + a missing factor of 2 somewhere. Switching context
+ * 2K → 128K showed almost no headroom change, defeating the picker's purpose.
+ *
+ * For non-GQA models (older Llama 2 13B, Falcon, MPT) KV cache is ~5x
+ * larger than these GQA defaults. Modern GGUFs are overwhelmingly GQA-based
+ * so the GQA estimate is the right default. Accepting a slight underestimate
+ * for legacy non-GQA models is better than overestimating for the common case.
  */
 export function estimateKvCacheMb(parameterCountB: number, contextLength: number): number {
-  // KV per 1K context, derived from per-class architecture defaults.
-  // Conservative bias: round up for borderline cases.
+  // KV per 1K context, derived from per-class architecture defaults (f16 KV).
   let kvPer1KMb: number;
-  if (parameterCountB < 2) kvPer1KMb = 8;     // 1-1.5B class
-  else if (parameterCountB < 4) kvPer1KMb = 14;  // 2-3B class
-  else if (parameterCountB < 10) kvPer1KMb = 16; // 7-8B class
-  else if (parameterCountB < 20) kvPer1KMb = 24; // 13-14B class
-  else if (parameterCountB < 40) kvPer1KMb = 32; // 30-34B class
-  else if (parameterCountB < 80) kvPer1KMb = 42; // 70-72B class
-  else kvPer1KMb = 56;                            // 100B+ class
+  if (parameterCountB < 2) kvPer1KMb = 32;       // 1-1.5B class (Llama 3.2 1B reference)
+  else if (parameterCountB < 4) kvPer1KMb = 112;  // 2-3B class (Llama 3.2 3B reference)
+  else if (parameterCountB < 10) kvPer1KMb = 128; // 7-8B class (Llama 3.1 8B reference)
+  else if (parameterCountB < 20) kvPer1KMb = 160; // 13-14B class
+  else if (parameterCountB < 40) kvPer1KMb = 256; // 30-34B class (Qwen 2.5 32B reference)
+  else if (parameterCountB < 80) kvPer1KMb = 320; // 70-72B class (Llama 3.3 70B reference)
+  else kvPer1KMb = 400;                            // 100B+ class
 
   return Math.round((contextLength / 1024) * kvPer1KMb);
 }
