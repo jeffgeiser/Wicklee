@@ -13,7 +13,7 @@
  * what fits that machine, with a per-node pull command highlighted.
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle, Sparkles } from 'lucide-react';
 import {
   quantQualityHint,
@@ -143,12 +143,35 @@ const FleetModelRow: React.FC<{
     ? model.nodes.find(n => n.node_id === focusNodeId) ?? null
     : null;
 
-  const effectiveScore = focusedNode?.fit_score ?? model.fleet_best_score;
+  // Recompute each node's fit score at the chosen context length. The
+  // backend's fit_score uses a default context — once the user picks 32K
+  // or 128K, those server-computed scores drift. Recompute client-side
+  // so per-row counts and fit labels actually move with the picker.
+  const nodeScoresAtCtx = useMemo<Map<string, { score: number; label: string }>>(() => {
+    const map = new Map<string, { score: number; label: string }>();
+    for (const n of model.nodes) {
+      if (isDefaultCtx) {
+        // At default context, trust the backend's already-computed score
+        // (avoids subtle drift from differing overhead constants).
+        map.set(n.node_id, { score: n.fit_score, label: n.fit_label });
+      } else {
+        const vramReq = vramAtContext(n.file_size_mb, paramsB, contextLength);
+        const fit = fitLabelAtContext(vramReq, n.mem_budget_gb * 1024);
+        map.set(n.node_id, { score: fit.score, label: fit.label });
+      }
+    }
+    return map;
+  }, [model.nodes, isDefaultCtx, contextLength, paramsB]);
+
+  const effectiveScore = focusedNode
+    ? (nodeScoresAtCtx.get(focusedNode.node_id)?.score ?? focusedNode.fit_score)
+    : Math.max(...Array.from(nodeScoresAtCtx.values()).map((v: { score: number; label: string }) => v.score), 0);
   const best = fitColors(effectiveScore);
+
   // When a node is focused, report fit status for just that node; otherwise fleet-wide count.
   const fittingNodes = focusNodeId
-    ? model.nodes.filter(n => n.node_id === focusNodeId && n.fit_score >= 40)
-    : model.nodes.filter(n => n.fit_score >= 40);
+    ? model.nodes.filter(n => n.node_id === focusNodeId && (nodeScoresAtCtx.get(n.node_id)?.score ?? 0) >= 40)
+    : model.nodes.filter(n => (nodeScoresAtCtx.get(n.node_id)?.score ?? 0) >= 40);
   const fitSummary = focusNodeId
     ? (fittingNodes.length > 0 ? 'fits this node' : "won't fit")
     : `${fittingNodes.length}/${model.nodes.length} nodes fit`;
@@ -463,14 +486,36 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)
     : null;
 
-  // Count "good fit" models (score ≥60) for the current view.
-  // Per-node: count that node's score. All-nodes: count models in the intersection list (server already filtered).
-  const fitCount = focusNodeId
-    ? displayModels.filter(m => {
-        const n = m.nodes.find(x => x.node_id === focusNodeId);
-        return (n?.fit_score ?? 0) >= 60;
-      }).length
-    : displayModels.filter(m => m.fleet_best_score >= 60).length;
+  // Count "good fit" models (score ≥60) for the current view, recomputed at
+  // the chosen context length. The backend's fit_score uses a default context
+  // (~8K-ish); once the user picks 32K or 128K, those scores drift. We
+  // recompute per-node-per-model using the same vramAtContext helper as the
+  // per-row fittingNodes calc — same source of truth, consistent badges.
+  const fitCount = useMemo(() => {
+    const isDefault = contextLength === DEFAULT_CONTEXT_LENGTH;
+    if (isDefault) {
+      // Fast path: trust server scores at the default ctx.
+      return focusNodeId
+        ? displayModels.filter(m => {
+            const n = m.nodes.find(x => x.node_id === focusNodeId);
+            return (n?.fit_score ?? 0) >= 60;
+          }).length
+        : displayModels.filter(m => m.fleet_best_score >= 60).length;
+    }
+    // Recompute at non-default context.
+    return displayModels.filter(m => {
+      const paramsB = parseParameterCountB(m.model_id) ?? 7;
+      const nodes = focusNodeId
+        ? m.nodes.filter(n => n.node_id === focusNodeId)
+        : m.nodes;
+      const scores = nodes.map(n => {
+        const vramReq = vramAtContext(n.file_size_mb, paramsB, contextLength);
+        return fitLabelAtContext(vramReq, n.mem_budget_gb * 1024).score;
+      });
+      const best = scores.length ? Math.max(...scores) : 0;
+      return best >= 60;
+    }).length;
+  }, [displayModels, focusNodeId, contextLength]);
 
   return (
     <div className="space-y-3">
