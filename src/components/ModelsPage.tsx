@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Boxes } from 'lucide-react';
 import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
-import { useFleetStream } from '../contexts/FleetStreamContext';
 import { wesColorClass } from '../utils/wes';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
 import FleetModelDiscovery from './insights/FleetModelDiscovery';
@@ -71,9 +70,9 @@ interface ActiveModelRow {
   model: ModelLiveMetrics;
 }
 
-const LiveSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }> = ({ isLocalHost, nodes }) => {
-  const { allNodeMetrics } = useFleetStream();
+const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
+  const [fleetNodes, setFleetNodes] = useState<Array<{ node_id: string; metrics: SentinelMetrics | null; display_name?: string | null }>>([]);
 
   // Localhost: subscribe to /api/metrics SSE (self-contained — doesn't share Overview's WS)
   useEffect(() => {
@@ -91,6 +90,32 @@ const LiveSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }> = ({ i
     } catch { /* ignore */ }
     return () => { es?.close(); };
   }, [isLocalHost]);
+
+  // Fleet: poll /api/fleet every 3s. We deliberately don't reach into
+  // useFleetStream's allNodeMetrics here — different upstream populating
+  // schedules made the React state miss singular ollama_active_model on
+  // first paint, even though the underlying SSE was sending it. Hitting
+  // /api/fleet directly is simpler and matches Recent/Swaps' pattern.
+  useEffect(() => {
+    if (isLocalHost || !getToken) return;
+    let cancelled = false;
+    const fetchOnce = async () => {
+      try {
+        const token = await getToken();
+        if (!token || cancelled) return;
+        const res = await fetch('/api/fleet', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setFleetNodes(data.nodes || []);
+      } catch { /* ignore transient fetch errors */ }
+    };
+    fetchOnce();
+    const id = setInterval(fetchOnce, 3_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [isLocalHost, getToken]);
 
   const rows: ActiveModelRow[] = useMemo(() => {
     const out: ActiveModelRow[] = [];
@@ -113,19 +138,14 @@ const LiveSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }> = ({ i
       const s = localSentinel;
       if (s) collectFromSentinel(s, s.hostname || s.node_id);
     } else {
-      // Prefer node.metrics (already attached to FleetNode) and fall back to
-      // allNodeMetrics by node_id. Different upstream paths populate these
-      // at slightly different times during the SSE lifecycle; using both
-      // ensures we never miss a node that's online and reporting.
-      for (const node of nodes) {
-        const m = node.metrics ?? allNodeMetrics[node.node_id];
-        if (!m) continue;
-        const label = node.display_name || m.hostname || node.node_id;
-        collectFromSentinel(m, label);
+      for (const node of fleetNodes) {
+        if (!node.metrics) continue;
+        const label = node.display_name || node.metrics.hostname || node.node_id;
+        collectFromSentinel(node.metrics, label);
       }
     }
     return out;
-  }, [isLocalHost, localSentinel, nodes, allNodeMetrics]);
+  }, [isLocalHost, localSentinel, fleetNodes]);
 
   const nodeCount = useMemo(() => {
     const ids = new Set(rows.map(r => r.node_id));
@@ -435,7 +455,7 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, nodes })
       </header>
 
       {/* Builder-first section order: what's running NOW → what ran RECENTLY → SWAPS → DISCOVER */}
-      <LiveSection isLocalHost={isLocalHost} nodes={nodes} />
+      <LiveSection isLocalHost={isLocalHost} getToken={getToken} />
       <RecentSection isLocalHost={isLocalHost} getToken={getToken} />
       <SwapsSection isLocalHost={isLocalHost} getToken={getToken} />
       <BrowseSection isLocalHost={isLocalHost} getToken={getToken} />
