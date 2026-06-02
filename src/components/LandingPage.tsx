@@ -109,13 +109,13 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       {/* Hero Section */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-16 sm:pb-32 text-center relative z-10">
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
-          Local AI inference,{' '}
+          Self-hosted AI inference,{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-400">
-            finally observable.
+            fully observable.
           </span>
         </h1>
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
-          Thermal intelligence. WES (thermally-honest MPG for AI) and 18 observation patterns. No proxy unless you want production-grade metrics. Install in 60 seconds — no sudo, no account, nothing to configure.
+          WES (thermally-honest MPG for AI), 18 observation patterns, instant model fit checks, and programmable APIs for Ollama, vLLM, and llama.cpp. Install in 60 seconds — no sudo, no account, nothing to configure.
         </p>
         <div className="flex items-center justify-center">
           <button
@@ -251,7 +251,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                 {([
                   { icon: <Zap          className="w-4 h-4 text-emerald-400" />, title: 'WES — tok/watt',            desc: 'Thermally-honest efficiency. The metric neither runtime exposes.',            border: 'border-emerald-500/30' },
                   { icon: <Thermometer  className="w-4 h-4 text-amber-400" />,   title: 'Power & Thermal',           desc: 'Real-time watts and thermal state from NVML, IOKit, and RAPL.',               border: 'border-amber-500/30' },
-                  { icon: <Route        className="w-4 h-4 text-blue-400" />,    title: 'Fleet Routing',             desc: 'Cross-node routing decisions based on live WES and availability.',             border: 'border-blue-500/30' },
+                  { icon: <Route        className="w-4 h-4 text-blue-400" />,    title: 'Routing Recommendations',   desc: 'Best-node selection API based on live WES. You orchestrate; Wicklee tells you which node to pick.',  border: 'border-blue-500/30' },
                   { icon: <ShieldCheck  className="w-4 h-4 text-violet-400" />,  title: '20 Observation Patterns',   desc: 'Correlate signals no single runtime exposes — from TTFT regression to queue saturation.', border: 'border-violet-500/30' },
                 ] as const).map(item => (
                   <div key={item.title} className={`bg-gray-700/50 border ${item.border} rounded-xl p-4 flex items-start gap-3`}>
@@ -363,6 +363,41 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
       </section>
 
+      {/* The Programmable Fleet Section — moved up to lead the below-fold story */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
+        <div className="text-center mb-4">
+          <span className="font-mono text-xs text-indigo-400/70 tracking-wider">
+            GET /api/v1/fleet · GET /api/v1/route/best
+          </span>
+        </div>
+        <div className="text-center mb-12">
+          <h2 className="text-4xl sm:text-5xl font-bold text-white mb-6 tracking-tight">
+            The Programmable Fleet
+          </h2>
+          <p className="text-gray-400 text-lg leading-relaxed max-w-2xl mx-auto">
+            Build automation on real-time fleet intelligence. Every metric Wicklee collects
+            is queryable via a rate-limited REST API designed for operator scripting.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-3 gap-6">
+          <FeatureCard
+            icon={Route}
+            title="Best-Node Selection API"
+            description="Query /api/v1/route/best for the optimal node for each request based on live thermal health, runtime backlogs, and Efficiency Score. Wicklee tells you; you route — no critical-path dependency on us."
+          />
+          <FeatureCard
+            icon={Zap}
+            title="Reactive Automation"
+            description="Drive rerouting and rebalancing scripts from live fleet telemetry. Set thresholds on memory saturation, thermal state, or WES to programmatically shift load to a healthier node — before users notice degradation."
+          />
+          <FeatureCard
+            icon={ClipboardCheck}
+            title="Performance CI/CD"
+            description="Plug node-level tok/s into your deployment pipeline. Automatically flag model quantizations that regress performance on your specific hardware mix before they reach production."
+          />
+        </div>
+      </section>
+
       {/* Observe Without Interfering Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="bg-gray-800/50 border border-gray-700 rounded-[32px] p-6 sm:p-12">
@@ -458,41 +493,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <span className="text-gray-600 ml-2">// JSON-RPC 2.0 · no auth · all tiers</span>
             </div>
           </div>
-        </div>
-      </section>
-
-      {/* The Programmable Fleet Section */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
-        <div className="text-center mb-4">
-          <span className="font-mono text-xs text-indigo-400/70 tracking-wider">
-            GET /api/v1/fleet · GET /api/v1/route/best
-          </span>
-        </div>
-        <div className="text-center mb-12">
-          <h2 className="text-4xl sm:text-5xl font-bold text-white mb-6 tracking-tight">
-            The Programmable Fleet
-          </h2>
-          <p className="text-gray-400 text-lg leading-relaxed max-w-2xl mx-auto">
-            Build automation on real-time fleet intelligence. Every metric Wicklee collects
-            is queryable via a rate-limited REST API designed for operator scripting.
-          </p>
-        </div>
-        <div className="grid md:grid-cols-3 gap-6">
-          <FeatureCard
-            icon={Route}
-            title="Programmable Routing"
-            description="Route requests with efficiency-aware intelligence. Query /api/v1/route/best to select the optimal node for each task based on live thermal health, runtime backlogs, and Efficiency Score."
-          />
-          <FeatureCard
-            icon={Zap}
-            title="Reactive Automation"
-            description="Drive rerouting and rebalancing scripts from live fleet telemetry. Set thresholds on memory saturation, thermal state, or WES to programmatically shift load to a healthier node — before users notice degradation."
-          />
-          <FeatureCard
-            icon={ClipboardCheck}
-            title="Performance CI/CD"
-            description="Plug node-level tok/s into your deployment pipeline. Automatically flag model quantizations that regress performance on your specific hardware mix before they reach production."
-          />
         </div>
       </section>
 
