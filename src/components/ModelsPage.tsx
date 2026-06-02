@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Boxes, ArrowRightLeft, DollarSign, BarChart3, Activity, Search } from 'lucide-react';
+import { Boxes } from 'lucide-react';
 import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { wesColorClass } from '../utils/wes';
@@ -12,25 +12,24 @@ interface ModelsPageProps {
   nodes: FleetNode[];
 }
 
-// ── Section wrapper ─────────────────────────────────────────────────────────
+// ── Section wrapper — thin rule, small-caps eyebrow, optional inline meta ──
+// Replaces the prior icon-box pattern. Removes ~120px of vertical chrome per
+// section so the page fits roughly one viewport on desktop.
 interface SectionProps {
   eyebrow: string;
-  title: string;
-  icon: React.ReactNode;
-  subtitle?: string;
+  meta?: string;
   children: React.ReactNode;
 }
-const Section: React.FC<SectionProps> = ({ eyebrow, title, icon, subtitle, children }) => (
+const Section: React.FC<SectionProps> = ({ eyebrow, meta, children }) => (
   <section className="space-y-3">
-    <div className="flex items-start gap-3">
-      <div className="h-9 w-9 rounded-lg bg-gray-800/50 border border-gray-700 flex items-center justify-center text-blue-400 shrink-0">
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <p className="text-[10px] tracking-widest uppercase text-gray-500 font-medium">{eyebrow}</p>
-        <h2 className="text-lg font-semibold text-white leading-tight">{title}</h2>
-        {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
-      </div>
+    <div className="flex items-baseline gap-2 border-b border-gray-700/60 pb-2">
+      <span className="text-[10px] font-bold tracking-widest uppercase text-blue-400">{eyebrow}</span>
+      {meta && (
+        <>
+          <span className="text-gray-600">·</span>
+          <span className="text-xs text-gray-500">{meta}</span>
+        </>
+      )}
     </div>
     {children}
   </section>
@@ -46,18 +45,37 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
   <div className={`rounded-2xl border border-gray-700 bg-gray-800/50 ${className}`}>{children}</div>
 );
 
-// ── Section: Active Models ──────────────────────────────────────────────────
+// ── Bug fix: synthesize a per-model entry from singular fields ─────────────
+// The active_models array on MetricsPayload is only populated when 2+ models
+// are loaded concurrently — Ollama's /api/ps + the agent's per-model
+// accumulators kick in only in that case. When a single model is loaded,
+// the agent uses the legacy ollama_active_model + ollama_tokens_per_second
+// singular fields. Prior to this fix, single-model nodes appeared empty
+// on this page even though the Intelligence dashboard showed them just fine.
+function singleModelFallback(s: SentinelMetrics): ModelLiveMetrics | null {
+  if (!s.ollama_active_model) return null;
+  return {
+    model: s.ollama_active_model,
+    tok_s: s.ollama_tokens_per_second ?? null,
+    vram_mb: s.ollama_model_size_gb != null ? Math.round(s.ollama_model_size_gb * 1024) : null,
+    wes: null,           // singular WES isn't per-model attributed; surfaced via leaderboard instead
+    request_count: 0,    // singular path has no per-model request count without the proxy
+    runtime: 'ollama',
+  } as ModelLiveMetrics;
+}
+
+// ── Section 1: LIVE — what's loaded right now ──────────────────────────────
 interface ActiveModelRow {
   node_id: string;
   node_label: string;
   model: ModelLiveMetrics;
 }
 
-const ActiveModelsSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }> = ({ isLocalHost, nodes }) => {
+const LiveSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }> = ({ isLocalHost, nodes }) => {
   const { allNodeMetrics } = useFleetStream();
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
 
-  // Localhost: subscribe to /api/metrics SSE
+  // Localhost: subscribe to /api/metrics SSE (self-contained — doesn't share Overview's WS)
   useEffect(() => {
     if (!isLocalHost) return;
     let es: EventSource | null = null;
@@ -76,35 +94,53 @@ const ActiveModelsSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }
 
   const rows: ActiveModelRow[] = useMemo(() => {
     const out: ActiveModelRow[] = [];
+    const collectFromSentinel = (s: SentinelMetrics, label: string) => {
+      // Multi-model path
+      if (s.active_models?.length) {
+        for (const m of s.active_models) {
+          out.push({ node_id: s.node_id, node_label: label, model: m });
+        }
+        return;
+      }
+      // Single-model fallback
+      const fallback = singleModelFallback(s);
+      if (fallback) {
+        out.push({ node_id: s.node_id, node_label: label, model: fallback });
+      }
+    };
+
     if (isLocalHost) {
       const s = localSentinel;
-      if (s?.active_models?.length) {
-        for (const m of s.active_models) {
-          out.push({ node_id: s.node_id, node_label: s.hostname || s.node_id, model: m });
-        }
-      }
+      if (s) collectFromSentinel(s, s.hostname || s.node_id);
     } else {
       for (const node of nodes) {
         const m = allNodeMetrics[node.node_id];
-        if (!m?.active_models?.length) continue;
+        if (!m) continue;
         const label = node.display_name || m.hostname || node.node_id;
-        for (const am of m.active_models) {
-          out.push({ node_id: node.node_id, node_label: label, model: am });
-        }
+        collectFromSentinel(m, label);
       }
     }
     return out;
   }, [isLocalHost, localSentinel, nodes, allNodeMetrics]);
 
+  const nodeCount = useMemo(() => {
+    const ids = new Set(rows.map(r => r.node_id));
+    return ids.size;
+  }, [rows]);
+
+  const meta = rows.length === 0
+    ? 'no models loaded'
+    : rows.length === 1
+      ? '1 model active'
+      : `${rows.length} models active across ${nodeCount} node${nodeCount === 1 ? '' : 's'}`;
+
   return (
-    <Section
-      eyebrow="Live"
-      title="Active Models"
-      icon={<Activity className="w-4 h-4" />}
-      subtitle="Models currently loaded into GPU memory and serving requests."
-    >
+    <Section eyebrow="Live" meta={meta}>
       {rows.length === 0 ? (
-        <EmptyState>No models currently loaded. Pull one with <code className="font-mono text-emerald-300">ollama pull llama3.2</code>.</EmptyState>
+        <EmptyState>
+          No models currently loaded. Pull one with{' '}
+          <code className="font-mono text-emerald-300">ollama pull llama3.2</code>.
+        </EmptyState>
       ) : (
         <Card>
           <div className="overflow-x-auto">
@@ -131,7 +167,7 @@ const ActiveModelsSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }
                     <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">
                       {r.model.vram_mb != null ? `${(r.model.vram_mb / 1024).toFixed(1)} GB` : '—'}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.request_count}</td>
+                    <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.request_count || '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -143,7 +179,10 @@ const ActiveModelsSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }
   );
 };
 
-// ── Section: Model Comparison ───────────────────────────────────────────────
+// ── Section 2: RECENT — last 7 days, merged comparison + cost ──────────────
+// Folds the previously-separate Cost-by-Model section into the comparison
+// table as a column. Cost is a stat about historical runs, not its own
+// first-class concept — keeping them separate read as repetitive.
 interface ComparisonRow {
   model: string | null;
   hours_active: number | null;
@@ -156,7 +195,7 @@ interface ComparisonRow {
   sample_count: number;
 }
 
-const ModelComparisonSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
+const RecentSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [sortBy, setSortBy] = useState<'wes' | 'tok_s' | 'cost'>('wes');
@@ -191,15 +230,18 @@ const ModelComparisonSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHos
     return copy;
   }, [rows, sortBy]);
 
+  const meta = !isLocalHost
+    ? 'localhost only'
+    : !loaded
+      ? 'loading'
+      : sortedRows.length === 0
+        ? 'no data yet'
+        : `${sortedRows.length} model${sortedRows.length === 1 ? '' : 's'} · last 7 days`;
+
   return (
-    <Section
-      eyebrow="7-day"
-      title="Model Comparison"
-      icon={<BarChart3 className="w-4 h-4" />}
-      subtitle="Side-by-side efficiency for every model that has run on this node."
-    >
+    <Section eyebrow="Recent" meta={meta}>
       {!isLocalHost ? (
-        <EmptyState>Model comparison is currently available on localhost only. Open Wicklee on the node running inference.</EmptyState>
+        <EmptyState>Recent comparison is currently available on localhost only. Open Wicklee on the node running inference.</EmptyState>
       ) : !loaded ? (
         <EmptyState>Loading…</EmptyState>
       ) : sortedRows.length === 0 ? (
@@ -256,11 +298,11 @@ const ModelComparisonSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHos
   );
 };
 
-// ── Section: Model Switches ─────────────────────────────────────────────────
+// ── Section 3: SWAPS — model switching activity ───────────────────────────
 interface SwapEntry { ts_ms: number; from_model: string | null; to_model: string | null; gap_ms: number; }
 interface SwapsResponse { swaps: SwapEntry[]; total_swaps: number; total_gap_ms: number; total_gap_minutes: number; }
 
-const ModelSwitchesSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
+const SwapsSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
   const [data, setData] = useState<SwapsResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -291,137 +333,45 @@ const ModelSwitchesSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost 
     return `${(ms / 60_000).toFixed(1)}m`;
   };
 
+  const meta = !isLocalHost
+    ? 'localhost only'
+    : !loaded
+      ? 'loading'
+      : !data || data.swaps.length === 0
+        ? 'no swaps · last 24h'
+        : `${data.total_swaps} swap${data.total_swaps === 1 ? '' : 's'} · ${data.total_gap_minutes.toFixed(1)} min idle · last 24h`;
+
   return (
-    <Section
-      eyebrow="24h"
-      title="Model Switching Analysis"
-      icon={<ArrowRightLeft className="w-4 h-4" />}
-      subtitle="Swap frequency and idle time between model transitions."
-    >
+    <Section eyebrow="Swaps" meta={meta}>
       {!isLocalHost ? (
         <EmptyState>Swap analysis is currently available on localhost only.</EmptyState>
       ) : !loaded ? (
         <EmptyState>Loading…</EmptyState>
       ) : !data || data.swaps.length === 0 ? (
-        <EmptyState>No model swaps in the past 24 hours.</EmptyState>
+        <EmptyState>No model swaps in the past 24 hours. Each swap costs idle time while VRAM is reallocated — fewer is better.</EmptyState>
       ) : (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <Card className="p-4">
-              <p className="text-[10px] uppercase tracking-widest text-gray-500">Total swaps</p>
-              <p className="font-mono text-2xl text-white mt-1">{data.total_swaps}</p>
-            </Card>
-            <Card className="p-4">
-              <p className="text-[10px] uppercase tracking-widest text-gray-500">Total idle time</p>
-              <p className="font-mono text-2xl text-white mt-1">{data.total_gap_minutes.toFixed(1)}<span className="text-sm text-gray-400 ml-1">min</span></p>
-            </Card>
-          </div>
-          <Card>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
-                    <th className="text-left font-medium px-4 py-3">Time</th>
-                    <th className="text-left font-medium px-4 py-3">From</th>
-                    <th className="text-left font-medium px-4 py-3">To</th>
-                    <th className="text-right font-medium px-4 py-3">Idle gap</th>
+        <Card>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
+                  <th className="text-left font-medium px-4 py-3">Time</th>
+                  <th className="text-left font-medium px-4 py-3">From</th>
+                  <th className="text-left font-medium px-4 py-3">To</th>
+                  <th className="text-right font-medium px-4 py-3">Idle gap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.swaps.map((s, i) => (
+                  <tr key={`${s.ts_ms}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
+                    <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtTime(s.ts_ms)}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-200">{s.from_model ?? '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-white">{s.to_model ?? '—'}</td>
+                    <td className="px-4 py-3 text-right font-mono text-xs text-yellow-300">{fmtGap(s.gap_ms)}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {data.swaps.map((s, i) => (
-                    <tr key={`${s.ts_ms}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
-                      <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtTime(s.ts_ms)}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-200">{s.from_model ?? '—'}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-white">{s.to_model ?? '—'}</td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-yellow-300">{fmtGap(s.gap_ms)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
-      )}
-    </Section>
-  );
-};
-
-// ── Section: Cost by Model ──────────────────────────────────────────────────
-interface CostEntry {
-  model: string | null;
-  hours_active: number | null;
-  avg_watts: number | null;
-  cost_usd: number | null;
-  tok_s_avg: number | null;
-  sample_count: number;
-}
-
-const CostByModelSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost }) => {
-  const [models, setModels] = useState<CostEntry[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    if (!isLocalHost) return;
-    let cancelled = false;
-    const fetchData = async () => {
-      try {
-        const res = await fetch('http://localhost:7700/api/cost-by-model?hours=24');
-        if (!res.ok) { setLoaded(true); return; }
-        const data = await res.json();
-        if (cancelled) return;
-        setModels(data.models ?? []);
-        setTotal(data.total_cost_usd ?? 0);
-        setLoaded(true);
-      } catch {
-        if (!cancelled) setLoaded(true);
-      }
-    };
-    fetchData();
-    const id = setInterval(fetchData, 60_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [isLocalHost]);
-
-  const maxCost = useMemo(() => models.reduce((m, x) => Math.max(m, x.cost_usd ?? 0), 0), [models]);
-
-  return (
-    <Section
-      eyebrow="24h"
-      title="Cost by Model"
-      icon={<DollarSign className="w-4 h-4" />}
-      subtitle="Daily power cost breakdown by model, based on local kWh rate."
-    >
-      {!isLocalHost ? (
-        <EmptyState>Per-model cost breakdown is currently available on localhost only.</EmptyState>
-      ) : !loaded ? (
-        <EmptyState>Loading…</EmptyState>
-      ) : models.length === 0 ? (
-        <EmptyState>No cost data yet — Wicklee needs at least 1 hour of telemetry to compute daily costs.</EmptyState>
-      ) : (
-        <Card className="p-4 space-y-3">
-          <div className="flex items-baseline justify-between border-b border-gray-700 pb-3">
-            <p className="text-[10px] uppercase tracking-widest text-gray-500">Total (24h)</p>
-            <p className="font-mono text-xl text-emerald-300">${total.toFixed(4)}</p>
-          </div>
-          <div className="space-y-2">
-            {models.map((m, i) => {
-              const pct = maxCost > 0 ? ((m.cost_usd ?? 0) / maxCost) * 100 : 0;
-              return (
-                <div key={`${m.model}-${i}`} className="space-y-1">
-                  <div className="flex items-baseline justify-between gap-3 text-xs">
-                    <span className="font-mono text-white truncate">{m.model ?? '—'}</span>
-                    <span className="font-mono text-emerald-300 shrink-0">${(m.cost_usd ?? 0).toFixed(4)}</span>
-                  </div>
-                  <div className="h-2 bg-gray-700/50 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500/70" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="flex justify-between text-[10px] text-gray-500 font-mono">
-                    <span>{m.hours_active != null ? `${m.hours_active.toFixed(2)} hr` : '—'} · {m.tok_s_avg != null ? `${m.tok_s_avg.toFixed(1)} tok/s avg` : '—'}</span>
-                    <span>{m.avg_watts != null ? `${m.avg_watts.toFixed(1)} W avg` : '—'}</span>
-                  </div>
-                </div>
-              );
-            })}
+                ))}
+              </tbody>
+            </table>
           </div>
         </Card>
       )}
@@ -429,49 +379,41 @@ const CostByModelSection: React.FC<{ isLocalHost: boolean }> = ({ isLocalHost })
   );
 };
 
+// ── Section 4: BROWSE — HuggingFace GGUF catalog (lowest urgency, last) ────
+const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => (
+  <Section eyebrow="Browse" meta="HuggingFace GGUF catalog scored against your hardware">
+    {isLocalHost ? (
+      <ModelDiscoveryCard isLocalHost={isLocalHost} />
+    ) : getToken ? (
+      <FleetModelDiscovery getToken={getToken} />
+    ) : (
+      <EmptyState>Sign in to use Fleet Model Discovery.</EmptyState>
+    )}
+  </Section>
+);
+
 // ── Page ────────────────────────────────────────────────────────────────────
 const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, nodes }) => {
   return (
-    <div className="space-y-8 p-4 sm:p-6">
-      <header className="flex items-start gap-3">
+    <div className="space-y-6 p-4 sm:p-6">
+      {/* Page header — establishes identity, doesn't duplicate section subtitles */}
+      <header className="flex items-start gap-3 pb-2">
         <div className="h-10 w-10 rounded-xl bg-blue-600/10 border border-blue-600/20 flex items-center justify-center text-blue-400">
           <Boxes className="w-5 h-5" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-white">Models</h1>
           <p className="text-sm text-gray-400 mt-1">
-            Discover, compare, and track every model that runs on your fleet.
+            Live state, recent history, and discovery for every model on your fleet.
           </p>
         </div>
       </header>
 
-      {/* Section 1: Model Discovery */}
-      <Section
-        eyebrow="Discover"
-        title="Find a model that fits"
-        icon={<Search className="w-4 h-4" />}
-        subtitle="Browse the HuggingFace GGUF catalog scored against your hardware."
-      >
-        {isLocalHost ? (
-          <ModelDiscoveryCard isLocalHost={isLocalHost} />
-        ) : getToken ? (
-          <FleetModelDiscovery getToken={getToken} />
-        ) : (
-          <EmptyState>Sign in to use Fleet Model Discovery.</EmptyState>
-        )}
-      </Section>
-
-      {/* Section 2: Active Models */}
-      <ActiveModelsSection isLocalHost={isLocalHost} nodes={nodes} />
-
-      {/* Section 3: Model Comparison */}
-      <ModelComparisonSection isLocalHost={isLocalHost} />
-
-      {/* Section 4: Model Switching Analysis */}
-      <ModelSwitchesSection isLocalHost={isLocalHost} />
-
-      {/* Section 5: Cost by Model */}
-      <CostByModelSection isLocalHost={isLocalHost} />
+      {/* Builder-first section order: what's running NOW → what ran RECENTLY → SWAPS → DISCOVER */}
+      <LiveSection isLocalHost={isLocalHost} nodes={nodes} />
+      <RecentSection isLocalHost={isLocalHost} />
+      <SwapsSection isLocalHost={isLocalHost} />
+      <BrowseSection isLocalHost={isLocalHost} getToken={getToken} />
     </div>
   );
 };
