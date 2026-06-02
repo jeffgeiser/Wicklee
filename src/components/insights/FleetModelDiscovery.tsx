@@ -166,9 +166,16 @@ const FleetModelRow: React.FC<{
   getToken:       () => Promise<string | null>;
   focusNodeId:    string | null;
   history:        ComparisonRow[] | null;
+  /** True when ANY row in the visible set has projections — drives whether the
+   * speed/cost grid column appears at all. With no fleet-wide history yet
+   * (typical for fresh installs or post-schema-migration), the column would
+   * just render em-dash for every row. Hiding it lets identity/fit/popularity
+   * use the freed width and the page-level "Run a few models" callout speaks
+   * for the missing projections instead. */
+  hasFleetHistory: boolean;
   contextLength:  number;
   kwhRate:        number;
-}> = ({ model, focusNodeId, history, contextLength, kwhRate }) => {
+}> = ({ model, focusNodeId, history, hasFleetHistory, contextLength, kwhRate }) => {
   const [open, setOpen] = useState(false);
   // Max file size across all nodes' best-quant variants — proxy for model class.
   const maxFileSizeMb = model.nodes.reduce((m, n) => Math.max(m, n.file_size_mb), 0);
@@ -264,7 +271,16 @@ const FleetModelRow: React.FC<{
           visible. */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_auto] gap-3 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left"
+        className={[
+          'w-full grid gap-3 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
+          // Grid template adapts to whether projections are available
+          // fleet-wide. Without history, the speed/cost column would just be
+          // em-dash for every row — so we drop it and let identity/fit/
+          // popularity use the freed width.
+          hasFleetHistory
+            ? 'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
+            : 'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] lg:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,0.7fr)_auto] xl:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,0.7fr)_auto]',
+        ].join(' ')}
       >
         {/* Col 1 — identity (dot + stacked name/uploader) */}
         <div className="flex items-center gap-2 min-w-0">
@@ -320,28 +336,39 @@ const FleetModelRow: React.FC<{
           </span>
         </div>
 
-        {/* Col 4 — speed + cost projections (hidden on < lg) */}
-        <div className="text-[10px] tabular-nums hidden lg:flex items-center gap-2 min-w-0">
-          {projForRow ? (
-            <span
-              className="text-gray-400"
-              title={`Projected from ${projForRow.count} similar-size model${projForRow.count === 1 ? '' : 's'} (last 7 days fleet history)`}
-            >
-              ≈{((projForRow.min + projForRow.max) / 2).toFixed(0)} t/s
-            </span>
-          ) : null}
-          {costPerMRow != null ? (
-            <span
-              className="text-gray-500"
-              title={`Electricity at ${kwhRate.toFixed(3)} $/kWh · projected tok/s · ${avgWatts?.toFixed(0)} W avg`}
-            >
-              ${costPerMRow < 0.01 ? costPerMRow.toFixed(4) : costPerMRow.toFixed(3)}/M
-            </span>
-          ) : null}
-          {!projForRow && costPerMRow == null && (
-            <span className="text-gray-700">—</span>
-          )}
-        </div>
+        {/* Col 4 — speed + cost projections. Only rendered when fleet has any
+            history at all; otherwise the column is omitted from the grid
+            entirely (see grid-template logic above) so it doesn't render as
+            em-dash on every row. The page-level "Run a few models" callout
+            already explains why projections are missing. */}
+        {hasFleetHistory && (
+          <div className="text-[10px] tabular-nums hidden lg:flex items-center gap-2 min-w-0">
+            {projForRow ? (
+              <span
+                className="text-gray-400"
+                title={`Projected from ${projForRow.count} similar-size model${projForRow.count === 1 ? '' : 's'} (last 7 days fleet history)`}
+              >
+                ≈{((projForRow.min + projForRow.max) / 2).toFixed(0)} t/s
+              </span>
+            ) : null}
+            {costPerMRow != null ? (
+              <span
+                className="text-gray-500"
+                title={`Electricity at ${kwhRate.toFixed(3)} $/kWh · projected tok/s · ${avgWatts?.toFixed(0)} W avg`}
+              >
+                ${costPerMRow < 0.01 ? costPerMRow.toFixed(4) : costPerMRow.toFixed(3)}/M
+              </span>
+            ) : null}
+            {!projForRow && costPerMRow == null && (
+              <span
+                className="text-gray-700"
+                title="No similar-size models in fleet history yet — projection unavailable for this row."
+              >
+                —
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Col 5 — popularity (hidden on < xl, lowest decision value) */}
         <div className="text-[10px] tabular-nums hidden xl:flex items-center gap-2 min-w-0 justify-end">
@@ -903,6 +930,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
                 getToken={getToken}
                 focusNodeId={focusNodeId}
                 history={history}
+                hasFleetHistory={historyCount > 0}
                 contextLength={contextLength}
                 kwhRate={kwhRate}
               />
