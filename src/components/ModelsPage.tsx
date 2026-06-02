@@ -68,6 +68,14 @@ interface ActiveModelRow {
   node_id: string;
   node_label: string;
   model: ModelLiveMetrics;
+  /**
+   * Node-level penalized WES — used as a fallback when the per-model
+   * `model.wes` is null (e.g. on CPU-only nodes where per-model power
+   * attribution isn't possible, or on single-model nodes routed via
+   * the legacy singular fields). Always less precise than per-model
+   * but better than rendering em-dash.
+   */
+  node_wes?: number | null;
 }
 
 const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
@@ -120,17 +128,34 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
   const rows: ActiveModelRow[] = useMemo(() => {
     const out: ActiveModelRow[] = [];
     const collectFromSentinel = (s: SentinelMetrics, label: string) => {
+      // Compute node-level WES from tok/s and watts — used as a fallback
+      // for the WES column when per-model attribution isn't possible
+      // (CPU-only nodes, single-model nodes, nodes without the proxy).
+      // Matches the leaderboard's penalized formula but skips the model split.
+      const nodeTokS = (s as unknown as { tok_s?: number; ollama_tokens_per_second?: number }).tok_s
+        ?? s.ollama_tokens_per_second
+        ?? null;
+      const nodeWatts = (s as unknown as { watts?: number; apple_soc_power_w?: number; nvidia_power_draw_w?: number }).watts
+        ?? s.apple_soc_power_w
+        ?? s.nvidia_power_draw_w
+        ?? null;
+      const penalty = (s as unknown as { penalty_avg?: number }).penalty_avg ?? 1.0;
+      let nodeWes: number | null = null;
+      if (nodeTokS != null && nodeWatts != null && nodeWatts > 0.1 && nodeTokS > 0) {
+        nodeWes = nodeTokS / (nodeWatts * penalty);
+      }
+
       // Multi-model path
       if (s.active_models?.length) {
         for (const m of s.active_models) {
-          out.push({ node_id: s.node_id, node_label: label, model: m });
+          out.push({ node_id: s.node_id, node_label: label, model: m, node_wes: nodeWes });
         }
         return;
       }
       // Single-model fallback
       const fallback = singleModelFallback(s);
       if (fallback) {
-        out.push({ node_id: s.node_id, node_label: label, model: fallback });
+        out.push({ node_id: s.node_id, node_label: label, model: fallback, node_wes: nodeWes });
       }
     };
 
@@ -173,27 +198,49 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
                 <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
                   {!isLocalHost && <th className="text-left font-medium px-4 py-3">Node</th>}
                   <th className="text-left font-medium px-4 py-3">Model</th>
+                  <th className="text-left font-medium px-4 py-3">Quant</th>
                   <th className="text-right font-medium px-4 py-3">tok/s</th>
                   <th className="text-right font-medium px-4 py-3">WES</th>
-                  <th className="text-right font-medium px-4 py-3">VRAM</th>
+                  <th className="text-right font-medium px-4 py-3" title="GPU VRAM when available, else model file size in system memory">Memory</th>
                   <th className="text-right font-medium px-4 py-3">Requests</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => (
-                  <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
-                    {!isLocalHost && <td className="px-4 py-3 text-gray-300 text-xs">{r.node_label}</td>}
-                    <td className="px-4 py-3 font-mono text-xs text-white">{r.model.model}</td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.tok_s != null ? r.model.tok_s.toFixed(1) : '—'}</td>
-                    <td className={`px-4 py-3 text-right font-mono text-xs ${wesColorClass(r.model.wes ?? null)}`}>
-                      {r.model.wes != null ? r.model.wes.toFixed(2) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">
-                      {r.model.vram_mb != null ? `${(r.model.vram_mb / 1024).toFixed(1)} GB` : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.request_count || '—'}</td>
-                  </tr>
-                ))}
+                {rows.map((r, i) => {
+                  // WES: prefer per-model, fall back to node-level (less precise but useful)
+                  const wesValue = r.model.wes ?? r.node_wes ?? null;
+                  const wesIsFallback = r.model.wes == null && r.node_wes != null;
+
+                  // Memory: prefer VRAM (GPU nodes), fall back to size_gb (CPU nodes
+                  // where there's no VRAM but the model occupies system RAM).
+                  let memoryDisplay = '—';
+                  let memoryLabel: 'VRAM' | 'RAM' | null = null;
+                  if (r.model.vram_mb != null && r.model.vram_mb > 0) {
+                    memoryDisplay = `${(r.model.vram_mb / 1024).toFixed(1)} GB`;
+                    memoryLabel = 'VRAM';
+                  } else if (r.model.size_gb != null && r.model.size_gb > 0) {
+                    memoryDisplay = `${r.model.size_gb.toFixed(1)} GB`;
+                    memoryLabel = 'RAM';
+                  }
+
+                  return (
+                    <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
+                      {!isLocalHost && <td className="px-4 py-3 text-gray-300 text-xs">{r.node_label}</td>}
+                      <td className="px-4 py-3 font-mono text-xs text-white">{r.model.model}</td>
+                      <td className="px-4 py-3 font-mono text-[10px] text-gray-500">{r.model.quantization ?? '—'}</td>
+                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.tok_s != null ? r.model.tok_s.toFixed(1) : '—'}</td>
+                      <td className={`px-4 py-3 text-right font-mono text-xs ${wesColorClass(wesValue)}`}
+                          title={wesIsFallback ? 'Node-level WES (per-model attribution unavailable)' : undefined}>
+                        {wesValue != null ? `${wesValue.toFixed(2)}${wesIsFallback ? '*' : ''}` : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">
+                        {memoryDisplay}
+                        {memoryLabel && <span className="ml-1 text-[9px] text-gray-600">{memoryLabel}</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.request_count || '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
