@@ -4522,9 +4522,11 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
     // 200 gives heterogeneous fleets (mix of small + large nodes) enough
     // catalog depth that per-node fit filtering still surfaces a useful
     // number of models. Fan-out to /tree/main is concurrency-limited to
-    // 5 in-flight below, so 200 repos costs ~40 s — fine for startup +
-    // nightly refresh, never on the request path.
-    let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=200";
+    // 5 in-flight below, so 100 repos costs ~20 s — fine for startup +
+    // nightly refresh, never on the request path. Tuned 200 → 100 after
+    // observing the larger limit pulled in many low-quality fine-tunes
+    // that crowded out useful results without proportional UX benefit.
+    let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=100";
     let tok1 = hf_token.clone();
     let list_resp = match tokio::task::spawn_blocking(move || {
         let req = ureq::get(list_url);

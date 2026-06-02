@@ -592,17 +592,28 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   // least one node has score ≥40 (Tight or better). "All" requires every
   // node to score ≥40. Per-node focus bypasses the toggle — that view is
   // already implicitly single-node.
+  //
+  // Context-aware: at non-default context we recompute each node's score
+  // using vramAtContext + fitLabelAtContext so the displayed SET actually
+  // changes when the picker moves. The backend's n.fit_score uses a default
+  // context and would otherwise lock the membership at default-context fit.
   const displayModels = useMemo(() => {
     const all = data?.models ?? [];
     if (focusNodeId || onlineNodes.length <= 1) return all;
+    const isDefault = contextLength === DEFAULT_CONTEXT_LENGTH;
     return all.filter(m => {
-      const scores = m.nodes.map(n => n.fit_score);
+      const paramsB = parseParameterCountB(m.model_id) ?? 7;
+      const scores = m.nodes.map(n => {
+        if (isDefault) return n.fit_score;
+        const vramReq = vramAtContext(n.file_size_mb, paramsB, contextLength);
+        return fitLabelAtContext(vramReq, n.mem_budget_gb * 1024).score;
+      });
       if (scores.length === 0) return false;
       return fitMode === 'all'
         ? scores.every(s => s >= 40)
         : scores.some(s => s >= 40);
     });
-  }, [data, focusNodeId, onlineNodes.length, fitMode]);
+  }, [data, focusNodeId, onlineNodes.length, fitMode, contextLength]);
 
   const focusNodeLabel = focusNodeId
     ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)
@@ -613,31 +624,32 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   // (~8K-ish); once the user picks 32K or 128K, those scores drift. We
   // recompute per-node-per-model using the same vramAtContext helper as the
   // per-row fittingNodes calc — same source of truth, consistent badges.
+  // Counts models that are a "good fit" (score ≥60) given the current view's
+  // aggregation rule. Context-aware (recomputes scores at chosen context) and
+  // fit-mode-aware (Any = at least one node ≥60 via Math.max, All = every node
+  // ≥60 via Math.min). Single-node focus collapses both — scores has one entry.
   const fitCount = useMemo(() => {
-    const isDefault = contextLength === DEFAULT_CONTEXT_LENGTH;
-    if (isDefault) {
-      // Fast path: trust server scores at the default ctx.
-      return focusNodeId
-        ? displayModels.filter(m => {
-            const n = m.nodes.find(x => x.node_id === focusNodeId);
-            return (n?.fit_score ?? 0) >= 60;
-          }).length
-        : displayModels.filter(m => m.fleet_best_score >= 60).length;
-    }
-    // Recompute at non-default context.
     return displayModels.filter(m => {
       const paramsB = parseParameterCountB(m.model_id) ?? 7;
       const nodes = focusNodeId
         ? m.nodes.filter(n => n.node_id === focusNodeId)
         : m.nodes;
+      const isDefault = contextLength === DEFAULT_CONTEXT_LENGTH;
       const scores = nodes.map(n => {
+        if (isDefault) return n.fit_score;
         const vramReq = vramAtContext(n.file_size_mb, paramsB, contextLength);
         return fitLabelAtContext(vramReq, n.mem_budget_gb * 1024).score;
       });
-      const best = scores.length ? Math.max(...scores) : 0;
-      return best >= 60;
+      if (!scores.length) return false;
+      // Single-node focus: only one score, min == max. Multi-node fleet view
+      // respects the user's chosen aggregation: 'all' = intersection (worst
+      // node must fit), 'any' = union (best node only needs to fit).
+      const agg = focusNodeId || fitMode === 'any'
+        ? Math.max(...scores)
+        : Math.min(...scores);
+      return agg >= 60;
     }).length;
-  }, [displayModels, focusNodeId, contextLength]);
+  }, [displayModels, focusNodeId, contextLength, fitMode]);
 
   return (
     <div className="space-y-3">

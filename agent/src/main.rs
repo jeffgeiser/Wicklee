@@ -5217,7 +5217,11 @@ async fn refresh_model_catalog(store: store::Store) {
     // models even after per-node fit filtering. The /tree/main fan-out is
     // rate-limited to 1 req/sec server-side, so this refresh takes ~3–4
     // minutes — fine for a 24h background task, not on the request path.
-    let models = fetch_hf_gguf(None, 200).await;
+    // Catalog cache size — tuned 200 → 100 after observing the larger limit
+    // pulled in low-quality fine-tunes that crowded out useful results
+    // without proportional UX benefit. 100 is ~3x more than the original
+    // cap of 30 and refreshes in ~20s at 5-in-flight serial fetch.
+    let models = fetch_hf_gguf(None, 100).await;
     if models.is_empty() { return; }
 
     let now = std::time::SystemTime::now()
