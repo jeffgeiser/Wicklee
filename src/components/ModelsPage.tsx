@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Boxes } from 'lucide-react';
+import { Boxes, ChevronRight, ChevronDown } from 'lucide-react';
 import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
 import { wesColorClass } from '../utils/wes';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
 import FleetModelDiscovery from './insights/FleetModelDiscovery';
+import RuntimeConfigModal from './RuntimeConfigModal';
 
 interface ModelsPageProps {
   isLocalHost: boolean;
@@ -63,34 +64,24 @@ function singleModelFallback(s: SentinelMetrics): ModelLiveMetrics | null {
   } as ModelLiveMetrics;
 }
 
-// ── Section 1: LIVE — what's loaded right now ──────────────────────────────
-interface ActiveModelRow {
+// ── Section 1: LOADED — pure model-state view ───────────────────────────────
+// Reframe from "LIVE" inference metrics (tok/s, WES, requests) → pure
+// model-state: what's loaded, where, with what config, active vs idle.
+// Inference performance is already on the Intelligence tab at the node
+// level (with greater fidelity than we can offer per-model without the
+// optional Ollama proxy). The Models tab now answers a question Intelligence
+// can't: "what does my fleet have loaded right now, and which is active?"
+interface LoadedModelRow {
   node_id: string;
   node_label: string;
   model: ModelLiveMetrics;
-  /**
-   * Node-level penalized WES — fallback for per-model `model.wes` when
-   * attribution isn't available (CPU-only nodes, no-proxy nodes, singular path).
-   */
-  node_wes?: number | null;
-  /**
-   * Whether THIS node has the optional Ollama proxy enabled. Drives the
-   * "PROXY OFF — per-model data limited" tooltip on em-dash cells.
-   */
-  node_proxy_active: boolean;
-  /**
-   * Sidecar-probe tok/s (from `sentinel.ollama_tokens_per_second`) and
-   * the sentinel's current active model. Used to attribute the singular
-   * tok/s value to whichever active_models row matches — only on the row
-   * representing the currently-active model. Other rows on the same node
-   * get em-dash because we genuinely don't know per-model tok/s without
-   * the proxy.
-   */
-  sentinel_tok_s?: number | null;
-  sentinel_active_model?: string | null;
+  /** The node's current sentinel.ollama_active_model — used to decide Active vs Idle status. */
+  sentinel_active_model: string | null;
+  /** Local agent base URL for fetching runtime config via the Config modal. */
+  agent_base_url: string;
 }
 
-const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
+const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
   const [fleetNodes, setFleetNodes] = useState<Array<{ node_id: string; metrics: SentinelMetrics | null; display_name?: string | null }>>([]);
 
@@ -137,36 +128,19 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
     return () => { cancelled = true; clearInterval(id); };
   }, [isLocalHost, getToken]);
 
-  const rows: ActiveModelRow[] = useMemo(() => {
-    const out: ActiveModelRow[] = [];
-    const collectFromSentinel = (s: SentinelMetrics, label: string) => {
-      // Compute node-level WES from tok/s and watts — used as a fallback
-      // for the WES column when per-model attribution isn't possible
-      // (CPU-only nodes, single-model nodes, nodes without the proxy).
-      // Matches the leaderboard's penalized formula but skips the model split.
-      const nodeTokS = (s as unknown as { tok_s?: number; ollama_tokens_per_second?: number }).tok_s
-        ?? s.ollama_tokens_per_second
-        ?? null;
-      const nodeWatts = (s as unknown as { watts?: number; apple_soc_power_w?: number; nvidia_power_draw_w?: number }).watts
-        ?? s.apple_soc_power_w
-        ?? s.nvidia_power_draw_w
-        ?? null;
-      const penalty = (s as unknown as { penalty_avg?: number }).penalty_avg ?? 1.0;
-      let nodeWes: number | null = null;
-      if (nodeTokS != null && nodeWatts != null && nodeWatts > 0.1 && nodeTokS > 0) {
-        nodeWes = nodeTokS / (nodeWatts * penalty);
-      }
+  const rows: LoadedModelRow[] = useMemo(() => {
+    const out: LoadedModelRow[] = [];
+    // For Config modal: localhost agent vs fleet — fleet path doesn't currently
+    // expose runtime-config through the cloud (per-node localhost call only).
+    // Fleet rows will get a disabled Config link with a tooltip.
+    const agentBaseUrl = isLocalHost ? 'http://localhost:7700' : '';
 
-      const nodeProxyActive = !!s.ollama_proxy_active;
-      const sentinelTokS = s.ollama_tokens_per_second ?? null;
-      const sentinelActiveModel = s.ollama_active_model ?? null;
+    const collectFromSentinel = (s: SentinelMetrics, label: string) => {
       const shared = {
         node_id: s.node_id,
         node_label: label,
-        node_wes: nodeWes,
-        node_proxy_active: nodeProxyActive,
-        sentinel_tok_s: sentinelTokS,
-        sentinel_active_model: sentinelActiveModel,
+        sentinel_active_model: s.ollama_active_model ?? null,
+        agent_base_url: agentBaseUrl,
       };
 
       // Multi-model path
@@ -176,7 +150,7 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
         }
         return;
       }
-      // Single-model fallback
+      // Single-model fallback (legacy singular fields)
       const fallback = singleModelFallback(s);
       if (fallback) {
         out.push({ ...shared, model: fallback });
@@ -196,32 +170,25 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
     return out;
   }, [isLocalHost, localSentinel, fleetNodes]);
 
-  const { nodeCount, proxyOn, proxyTotal } = useMemo(() => {
-    const seen = new Map<string, boolean>();
-    for (const r of rows) {
-      if (!seen.has(r.node_id)) seen.set(r.node_id, r.node_proxy_active);
-    }
-    const total = seen.size;
-    const on = Array.from(seen.values()).filter(Boolean).length;
-    return { nodeCount: total, proxyOn: on, proxyTotal: total };
+  const nodeCount = useMemo(() => {
+    const seen = new Set(rows.map(r => r.node_id));
+    return seen.size;
   }, [rows]);
+
+  const activeCount = useMemo(() =>
+    rows.filter(r => r.model.model === r.sentinel_active_model).length,
+  [rows]);
 
   const meta = rows.length === 0
     ? 'no models loaded'
-    : (() => {
-        const base = rows.length === 1
-          ? '1 model active'
-          : `${rows.length} models active across ${nodeCount} node${nodeCount === 1 ? '' : 's'}`;
-        // Proxy coverage hint — surfaces the upgrade path without nagging.
-        // Skip when all nodes have proxy enabled (no action needed).
-        if (proxyTotal > 0 && proxyOn < proxyTotal) {
-          return `${base} · proxy enabled on ${proxyOn}/${proxyTotal} nodes`;
-        }
-        return base;
-      })();
+    : `${rows.length} model${rows.length === 1 ? '' : 's'} loaded across ${nodeCount} node${nodeCount === 1 ? '' : 's'} · ${activeCount} active`;
+
+  // Config modal state — clicking a row's "Config" link opens it
+  const [configModel, setConfigModel] = useState<{ name: string; baseUrl: string } | null>(null);
 
   return (
-    <Section eyebrow="Live" meta={meta}>
+    <>
+    <Section eyebrow="Loaded" meta={meta}>
       {rows.length === 0 ? (
         <EmptyState>
           No models currently loaded. Pull one with{' '}
@@ -236,45 +203,14 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
                   {!isLocalHost && <th className="text-left font-medium px-4 py-3">Node</th>}
                   <th className="text-left font-medium px-4 py-3">Model</th>
                   <th className="text-left font-medium px-4 py-3">Quant</th>
-                  <th className="text-right font-medium px-4 py-3">tok/s</th>
-                  <th className="text-right font-medium px-4 py-3">WES</th>
                   <th className="text-right font-medium px-4 py-3" title="GPU VRAM when available, else model file size in system memory">Memory</th>
-                  <th className="text-right font-medium px-4 py-3">Requests</th>
+                  <th className="text-left font-medium px-4 py-3">Status</th>
+                  <th className="text-right font-medium px-4 py-3">Config</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  // tok/s resolution:
-                  //   1. Prefer per-model tok_s (only set when proxy is on)
-                  //   2. Fall back to sidecar tok/s — but only if this row's
-                  //      model matches the node's currently-active model.
-                  //      Other multi-model rows on the same node can't be
-                  //      attributed without the proxy → em-dash.
-                  //   3. If neither, em-dash with a tooltip explaining why.
-                  let tokSValue: number | null = r.model.tok_s ?? null;
-                  let tokSIsSidecar = false;
-                  if (tokSValue == null
-                      && r.sentinel_tok_s != null
-                      && r.sentinel_active_model === r.model.model) {
-                    tokSValue = r.sentinel_tok_s;
-                    tokSIsSidecar = true;
-                  }
-                  const tokSTooltip = tokSIsSidecar
-                    ? 'Sidecar probe value (most-recently-active model). Enable the Ollama proxy for per-model tok/s.'
-                    : (tokSValue == null && !r.node_proxy_active)
-                      ? 'Per-model tok/s requires the Ollama proxy. Enable via [ollama_proxy] in config.toml.'
-                      : undefined;
-
-                  // WES: prefer per-model, fall back to node-level
-                  const wesValue = r.model.wes ?? r.node_wes ?? null;
-                  const wesIsFallback = r.model.wes == null && r.node_wes != null;
-                  const wesTooltip = wesIsFallback
-                    ? 'Node-level WES (per-model attribution requires proxy + GPU power data).'
-                    : (wesValue == null && !r.node_proxy_active)
-                      ? 'Per-model WES requires the Ollama proxy.'
-                      : undefined;
-
-                  // Memory: prefer VRAM, fall back to size_gb for CPU-only nodes
+                  // Memory: prefer VRAM (GPU nodes), fall back to size_gb (CPU nodes).
                   let memoryDisplay = '—';
                   let memoryLabel: 'VRAM' | 'RAM' | null = null;
                   if (r.model.vram_mb != null && r.model.vram_mb > 0) {
@@ -290,10 +226,14 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
                       ? 'GPU memory currently allocated to this model.'
                       : undefined;
 
-                  // Requests: only populated by the proxy
-                  const requestsTooltip = (!r.model.request_count && !r.node_proxy_active)
-                    ? 'Per-model request count requires the Ollama proxy.'
-                    : undefined;
+                  // Status: ● Active if this model is the node's currently-active one
+                  // (most-recently-inferenced per /api/ps), ○ Idle otherwise.
+                  const isActive = r.model.model === r.sentinel_active_model;
+
+                  // Config link: only functional on localhost mode (fleet cloud
+                  // doesn't proxy /api/runtime-config across nodes). Fleet rows
+                  // show a disabled link with an explanatory tooltip.
+                  const configEnabled = !!r.agent_base_url;
 
                   return (
                     <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
@@ -301,23 +241,29 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
                       <td className="px-4 py-3 font-mono text-xs text-white">{r.model.model}</td>
                       <td className="px-4 py-3 font-mono text-[10px] text-gray-500">{r.model.quantization ?? '—'}</td>
                       <td className="px-4 py-3 text-right font-mono text-xs text-gray-200"
-                          title={tokSTooltip}>
-                        {tokSValue != null
-                          ? <>{tokSValue.toFixed(1)}{tokSIsSidecar && <span className="ml-1 text-[10px] text-gray-500">◐</span>}</>
-                          : '—'}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-mono text-xs ${wesColorClass(wesValue)}`}
-                          title={wesTooltip}>
-                        {wesValue != null ? `${wesValue.toFixed(2)}${wesIsFallback ? '*' : ''}` : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200"
                           title={memoryTooltip}>
                         {memoryDisplay}
                         {memoryLabel && <span className="ml-1 text-[9px] text-gray-600">{memoryLabel}</span>}
                       </td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200"
-                          title={requestsTooltip}>
-                        {r.model.request_count || '—'}
+                      <td className="px-4 py-3 text-xs"
+                          title={isActive ? 'Most recently used model on this node' : 'Loaded in memory, not currently inferring'}>
+                        {isActive
+                          ? <span className="text-emerald-400">● Active</span>
+                          : <span className="text-gray-500">○ Idle</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right text-xs">
+                        {configEnabled ? (
+                          <button
+                            onClick={() => setConfigModel({ name: r.model.model, baseUrl: r.agent_base_url })}
+                            className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+                          >
+                            View →
+                          </button>
+                        ) : (
+                          <span className="text-gray-600" title="Runtime config is available via the localhost dashboard for each node.">
+                            View →
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -328,6 +274,14 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
         </Card>
       )}
     </Section>
+    {configModel && (
+      <RuntimeConfigModal
+        modelName={configModel.name}
+        agentBaseUrl={configModel.baseUrl}
+        onClose={() => setConfigModel(null)}
+      />
+    )}
+    </>
   );
 };
 
@@ -565,8 +519,48 @@ const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   </Section>
 );
 
+// ── Collapsible "Past activity" footer ─────────────────────────────────────
+// Recent (7-day comparison) and Swaps (24h transitions) are useful but
+// secondary — they answer "how did models perform historically" rather than
+// "what's loaded right now." Demoted below the primary Loaded + Browse view
+// to a collapsed-by-default disclosure that operators can expand when
+// they need the deeper history.
+//
+// Long-term: Swaps belongs in the Observability tab as a `model_swap_thrashing`
+// alert pattern (fires when swap frequency exceeds threshold). For now it
+// lives here as a manual deep-dive. See backlog.
+const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
+  const [openSection, setOpenSection] = useState<'recent' | 'swaps' | null>(null);
+
+  const ToggleButton: React.FC<{ id: 'recent' | 'swaps'; label: string; hint: string }> = ({ id, label, hint }) => {
+    const isOpen = openSection === id;
+    return (
+      <button
+        onClick={() => setOpenSection(isOpen ? null : id)}
+        className="w-full flex items-center justify-between text-left py-3 px-4 rounded-xl bg-gray-800/30 border border-gray-700 hover:bg-gray-800/60 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          {isOpen ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+          <span className="text-sm font-medium text-gray-200">{label}</span>
+          <span className="text-xs text-gray-500">· {hint}</span>
+        </span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="space-y-3 pt-6 border-t border-gray-800">
+      <p className="text-[10px] tracking-widest uppercase text-gray-600 font-medium">Past activity</p>
+      <ToggleButton id="recent" label="7-day model performance comparison" hint="WES, tok/s, watts, TTFT, cost per model" />
+      {openSection === 'recent' && <RecentSection isLocalHost={isLocalHost} getToken={getToken} />}
+      <ToggleButton id="swaps" label="Model swap activity" hint="last 24h · transitions and idle gaps" />
+      {openSection === 'swaps' && <SwapsSection isLocalHost={isLocalHost} getToken={getToken} />}
+    </div>
+  );
+};
+
 // ── Page ────────────────────────────────────────────────────────────────────
-const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, nodes }) => {
+const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
   return (
     <div className="space-y-6 p-4 sm:p-6">
       {/* Page header — establishes identity, doesn't duplicate section subtitles */}
@@ -577,16 +571,17 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, nodes })
         <div>
           <h1 className="text-2xl font-bold text-white">Models</h1>
           <p className="text-sm text-gray-400 mt-1">
-            Live state, recent history, and discovery for every model on your fleet.
+            What's loaded across your fleet, and what could you add. Inference performance lives on the Intelligence tab.
           </p>
         </div>
       </header>
 
-      {/* Builder-first section order: what's running NOW → what ran RECENTLY → SWAPS → DISCOVER */}
-      <LiveSection isLocalHost={isLocalHost} getToken={getToken} />
-      <RecentSection isLocalHost={isLocalHost} getToken={getToken} />
-      <SwapsSection isLocalHost={isLocalHost} getToken={getToken} />
+      {/* Two primary sections answering "what's running" and "what could I run". */}
+      <LoadedSection isLocalHost={isLocalHost} getToken={getToken} />
       <BrowseSection isLocalHost={isLocalHost} getToken={getToken} />
+
+      {/* Demoted secondary views — collapsed by default, expand for deep history. */}
+      <PastActivityFooter isLocalHost={isLocalHost} getToken={getToken} />
     </div>
   );
 };
