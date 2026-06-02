@@ -21,6 +21,7 @@ Auth: None required.
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for every model that has run |
 | GET | /api/model-switches?hours=24 | Model switching cost — swap frequency, idle gap per transition |
 | GET | /api/model-candidates?search=llama&limit=20 | Model discovery — GGUF models from HuggingFace scored against local hardware |
+| GET | /api/runtime-config?model=X | Runtime Config Surface (v0.9.0) — cached launch-time config for a named model (Ollama, vLLM, llama.cpp). 200 with JSON, 400 if `?model=` missing, 404 if not yet cached. Templates and system prompts stay local — never pushed to the fleet. |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
 | GET | /api/events/recent | Recent in-memory events |
@@ -141,6 +142,9 @@ Auth: `X-API-Key: wk_live_...` header.
 | GET | /api/v1/nodes/{id} | Single node deep dive | All |
 | GET | /api/v1/route/best | Routing recommendation (latency or efficiency). Optional `?model=` for per-model routing | All |
 | GET | /api/v1/models/discover | Model discovery — browse catalog, `?simulate_hw=` (Pro+), `?fleet=true` (Team+) | Tiered |
+| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720 hour window. | All |
+| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events (LAG window function over `metrics_raw`). 1–168 hour window, capped at 200 rows. | All |
+| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost using $0.16/kWh default. 1–168 hour window. | All |
 | GET | /api/v1/insights/latest | Fleet intelligence snapshot | Team+ |
 | POST | /api/v1/keys | Create API key | All |
 | GET | /api/v1/keys | List API keys | All |
@@ -167,6 +171,53 @@ Auth: `X-API-Key: wk_live_...` header.
   "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3, "reason": "Highest throughput" },
   "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
   "default":    "efficiency"
+}
+```
+
+### GET /api/runtime-config?model=llama3.1:8b
+```json
+{
+  "model": "llama3.1:8b",
+  "runtime": "ollama",
+  "captured_at_ms": 1774622475195,
+  "context_length": 131072,
+  "n_gpu_layers": 33,
+  "quantization": "Q4_K_M",
+  "parameter_count": 8030261312,
+  "template": "{{ if .System }}<|system|>{{ .System }}{{ end }}...",
+  "system_prompt": "You are a helpful assistant."
+}
+```
+
+### GET /api/v1/fleet/model-comparison?hours=168
+```json
+{
+  "models": [
+    { "model": "llama3.1:70b", "hours_active": 18.3, "avg_tok_s": 22.5, "avg_watts": 95.0, "wes": 0.24, "avg_ttft_ms": 245, "cost_per_hour": 0.0152, "total_cost": 0.278, "sample_count": 219 },
+    { "model": "phi3:mini",    "hours_active": 42.0, "avg_tok_s": 85.1, "avg_watts": 12.0, "wes": 7.09, "avg_ttft_ms":  34, "cost_per_hour": 0.0019, "total_cost": 0.081, "sample_count": 504 }
+  ]
+}
+```
+
+### GET /api/v1/fleet/model-switches?hours=24
+```json
+{
+  "swaps": [
+    { "ts_ms": 1774621630223, "node_id": "WK-XXXX", "from_model": "llama3.1:70b", "to_model": "phi3:mini", "gap_ms": 3200 }
+  ],
+  "total_swaps": 14,
+  "total_gap_ms": 480000,
+  "total_gap_minutes": 8.0
+}
+```
+
+### GET /api/v1/fleet/cost-by-model?hours=24
+```json
+{
+  "models": [
+    { "model": "llama3.1:70b", "hours_active": 6.2, "avg_watts": 95.0, "cost_usd": 0.0942, "tok_s_avg": 22.5, "sample_count": 744 }
+  ],
+  "total_cost_usd": 0.221
 }
 ```
 

@@ -170,6 +170,64 @@
         }
       }
     },
+    "/api/runtime-config": {
+      "get": {
+        "operationId": "getRuntimeConfig",
+        "summary": "Runtime Config Surface (v0.9.0) — cached launch-time config for a model",
+        "description": "Returns the cached RuntimeConfig for the named model. Available across Ollama (parsed from /api/show on model change), vLLM (5-min poller, tries /v1/server_info then falls back to ps aux), and llama.cpp (5-min poller, tries /props then falls back to ps aux). Reads in-memory cache only — never blocks on I/O and works regardless of DuckDB store health. Templates and system prompts stay local — the cloud telemetry push does NOT carry these fields.",
+        "servers": [{ "url": "http://localhost:7700" }],
+        "parameters": [
+          { "name": "model", "in": "query", "required": true, "schema": { "type": "string" }, "example": "llama3.1:8b" }
+        ],
+        "responses": {
+          "200": { "description": "Cached RuntimeConfig", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuntimeConfig" } } } },
+          "400": { "description": "Missing ?model= query param" },
+          "404": { "description": "No cached config for this model yet" }
+        }
+      }
+    },
+    "/api/v1/fleet/model-comparison": {
+      "get": {
+        "operationId": "getFleetModelComparison",
+        "summary": "Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost)",
+        "description": "Per-model aggregated stats across every node owned by the authenticated tenant. Reads metrics_5min for the long window plus a metrics_raw side query for TTFT (last 24h only). Empty array until new telemetry is ingested under the v0.9.x schema (ollama_active_model column).",
+        "parameters": [
+          { "name": "hours", "in": "query", "required": false, "schema": { "type": "integer", "default": 168, "minimum": 1, "maximum": 720 } }
+        ],
+        "responses": {
+          "200": { "description": "Per-model rollup", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetModelComparison" } } } },
+          "401": { "description": "Missing or invalid auth" }
+        }
+      }
+    },
+    "/api/v1/fleet/model-switches": {
+      "get": {
+        "operationId": "getFleetModelSwitches",
+        "summary": "Cross-node model swap events (LAG over metrics_raw)",
+        "description": "Returns model transitions detected via a Postgres LAG window function over metrics_raw partitioned by node_id. Capped at 200 rows.",
+        "parameters": [
+          { "name": "hours", "in": "query", "required": false, "schema": { "type": "integer", "default": 24, "minimum": 1, "maximum": 168 } }
+        ],
+        "responses": {
+          "200": { "description": "Swap events", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetModelSwitches" } } } },
+          "401": { "description": "Missing or invalid auth" }
+        }
+      }
+    },
+    "/api/v1/fleet/cost-by-model": {
+      "get": {
+        "operationId": "getFleetCostByModel",
+        "summary": "Fleet-wide per-model power cost",
+        "description": "Cost = avg_watts x hours_active x $0.16 / 1000. Uses metrics_raw at 30s granularity.",
+        "parameters": [
+          { "name": "hours", "in": "query", "required": false, "schema": { "type": "integer", "default": 24, "minimum": 1, "maximum": 168 } }
+        ],
+        "responses": {
+          "200": { "description": "Per-model cost rollup", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetCostByModel" } } } },
+          "401": { "description": "Missing or invalid auth" }
+        }
+      }
+    },
     "/api/v1/webhooks": {
       "post": {
         "operationId": "createWebhook",
@@ -408,6 +466,76 @@
           "secret":        { "type": "string", "description": "HMAC-SHA256 secret returned ONLY at creation. Used to verify X-Wicklee-Signature on incoming webhook calls." }
         }
       },
+      "RuntimeConfig": {
+        "type": "object",
+        "properties": {
+          "model":           { "type": "string", "example": "llama3.1:8b" },
+          "runtime":         { "type": "string", "enum": ["ollama", "vllm", "llamacpp"] },
+          "captured_at_ms":  { "type": "integer", "format": "int64" },
+          "context_length":  { "type": "integer", "format": "int64", "nullable": true },
+          "n_gpu_layers":    { "type": "integer", "nullable": true },
+          "quantization":    { "type": "string", "nullable": true, "example": "Q4_K_M" },
+          "parameter_count": { "type": "integer", "format": "int64", "nullable": true },
+          "template":        { "type": "string", "nullable": true, "description": "Ollama only. Stays local — never pushed to cloud." },
+          "system_prompt":   { "type": "string", "nullable": true, "description": "Ollama only. Stays local — never pushed to cloud." },
+          "process_args":    { "type": "array", "items": { "type": "string" }, "nullable": true, "description": "vLLM / llama.cpp — full command-line args." },
+          "raw":             { "type": "object", "nullable": true, "description": "Full raw runtime-introspection response." }
+        }
+      },
+      "FleetModelComparison": {
+        "type": "object",
+        "properties": {
+          "models": { "type": "array", "items": {
+            "type": "object",
+            "properties": {
+              "model":         { "type": "string" },
+              "hours_active":  { "type": "number", "format": "double" },
+              "avg_tok_s":     { "type": "number", "format": "float", "nullable": true },
+              "avg_watts":     { "type": "number", "format": "float", "nullable": true },
+              "wes":           { "type": "number", "format": "float", "nullable": true },
+              "avg_ttft_ms":   { "type": "number", "format": "float", "nullable": true },
+              "cost_per_hour": { "type": "number", "format": "double", "nullable": true },
+              "total_cost":    { "type": "number", "format": "double", "nullable": true },
+              "sample_count":  { "type": "integer", "format": "int64" }
+            }
+          }}
+        }
+      },
+      "FleetModelSwitches": {
+        "type": "object",
+        "properties": {
+          "swaps": { "type": "array", "items": {
+            "type": "object",
+            "properties": {
+              "ts_ms":      { "type": "integer", "format": "int64" },
+              "node_id":    { "type": "string" },
+              "from_model": { "type": "string", "nullable": true },
+              "to_model":   { "type": "string" },
+              "gap_ms":     { "type": "number", "format": "double" }
+            }
+          }},
+          "total_swaps":       { "type": "integer", "format": "int64" },
+          "total_gap_ms":      { "type": "number", "format": "double" },
+          "total_gap_minutes": { "type": "number", "format": "double" }
+        }
+      },
+      "FleetCostByModel": {
+        "type": "object",
+        "properties": {
+          "models": { "type": "array", "items": {
+            "type": "object",
+            "properties": {
+              "model":        { "type": "string" },
+              "hours_active": { "type": "number", "format": "double" },
+              "avg_watts":    { "type": "number", "format": "float", "nullable": true },
+              "cost_usd":     { "type": "number", "format": "double" },
+              "tok_s_avg":    { "type": "number", "format": "float", "nullable": true },
+              "sample_count": { "type": "integer", "format": "int64" }
+            }
+          }},
+          "total_cost_usd": { "type": "number", "format": "double" }
+        }
+      },
       "MetricsPayload": {
         "type": "object",
         "description": "Full telemetry payload. All fields optional (null when unavailable).",
@@ -433,6 +561,7 @@
           "vllm_tokens_per_sec": { "type": "number", "format": "float" },
           "vllm_avg_ttft_ms": { "type": "number", "format": "float" },
           "vllm_requests_waiting": { "type": "integer" },
+          "runtime_config_available": { "type": "boolean", "description": "v0.9.0+ — true when the agent has at least one cached RuntimeConfig. Fetch via GET /api/runtime-config?model=<name>." },
           "agent_version": { "type": "string" },
           "timestamp_ms": { "type": "integer", "format": "int64" }
         }

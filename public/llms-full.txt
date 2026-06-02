@@ -18,15 +18,25 @@ Wicklee consists of three components:
 ## Install
 
 ```bash
-# macOS / Linux
+# macOS / Linux — drops the binary at ~/.wicklee/bin/wicklee, no sudo (v0.8.0+).
 curl -fsSL https://wicklee.dev/install.sh | bash
+
+# Try it in the foreground, no service registration:
+~/.wicklee/bin/wicklee
+
+# Register as system service when ready (the only sudo step).
+# The installer auto-stops any foreground :7700 holder before promoting the
+# binary to /usr/local/bin/wicklee (v0.8.1+).
+sudo ~/.wicklee/bin/wicklee --install-service
 
 # Windows (PowerShell as Administrator)
 irm https://wicklee.dev/install.ps1 | iex
-
-# Register as system service (auto-starts on boot, runs as root)
-sudo wicklee --install-service
 ```
+
+Linux binaries target glibc 2.31 — built inside an `ubuntu:20.04` container
+(v0.8.3+). Compatible with Ubuntu 20.04+, Debian 11+, RHEL 8+, Fedora 33+.
+The default Linux build now uses glibc (not musl), restoring DuckDB and the
+14 store-backed routes that were silently stripped on musl (v0.8.2+).
 
 ---
 
@@ -116,6 +126,41 @@ Model discovery — GGUF models from HuggingFace scored against local hardware. 
 ```json
 { "node_id": "WK-1EFC", "hardware": { "vram_mb": 16384, "chip": "Apple M4 Pro", "power_budget_w": 18.2, "thermal_state": "Normal" }, "models": [{ "model_id": "bartowski/Llama-3.1-8B-GGUF", "downloads": 245000, "variants": [{ "quant": "Q4_K_M", "file_size_mb": 4920, "vram_required_mb": 5200, "fit_score": 92, "fit_label": "Excellent", "vram_headroom_pct": 68.3 }] }] }
 ```
+
+### GET /api/runtime-config?model=<name>
+Runtime Config Surface (v0.9.0). Returns the cached launch-time configuration
+for the named model from the in-memory `RuntimeConfigCache`. Ollama harvesters
+populate the cache on model change via `/api/show`. Dedicated vLLM and
+llama.cpp pollers run every 5 minutes — vLLM tries `/v1/server_info` first
+and falls back to `ps aux`; llama.cpp tries `/props` (llama-server) and falls
+back to `ps aux`. Reads in-memory cache only — available regardless of
+DuckDB / store health. Returns 400 if `?model=` is missing, 404 if the model
+isn't yet cached.
+
+**Privacy:** templates and system prompts can contain proprietary content.
+They live in the agent's local cache and are served only by this localhost
+endpoint to the localhost dashboard. The cloud telemetry push does NOT carry
+these fields.
+
+```json
+{
+  "model": "llama3.1:8b",
+  "runtime": "ollama",
+  "captured_at_ms": 1774622475195,
+  "context_length": 131072,
+  "n_gpu_layers": 33,
+  "quantization": "Q4_K_M",
+  "parameter_count": 8030261312,
+  "template": "{{ if .System }}<|system|>{{ .System }}{{ end }}...",
+  "system_prompt": "You are a helpful assistant.",
+  "process_args": null,
+  "raw": { "...": "full /api/show or /v1/server_info response" }
+}
+```
+
+The MetricsPayload carries a single boolean — `runtime_config_available` —
+so the frontend knows whether to render the "Config" affordance without
+having to hit the endpoint speculatively for every node.
 
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
@@ -251,6 +296,66 @@ Model discovery with tiered access:
 { "models": [{ "model_id": "bartowski/Llama-3.1-8B-GGUF", "downloads": 245000, "variants": [{ "quant": "Q4_K_M", "file_size_mb": 4920, "vram_required_mb": 5200, "fit_score": 92, "fit_label": "Excellent" }] }], "simulation": { "hardware": "nvidia_4090", "vram_mb": 24576, "power_w": 450.0 } }
 ```
 
+### GET /api/v1/fleet/model-comparison?hours=168
+Fleet-wide per-model rollup over the past N hours. Reads `metrics_5min`
+(rollup table) because the long 7-day window is too heavy on `metrics_raw`
+30-second granularity. TTFT lives in `metrics_raw` only, so the handler
+runs a side query over the last 24 hours of raw data and joins it in.
+Window: 1–720 hours (30 days). Returns one row per `ollama_active_model`.
+```json
+{
+  "models": [
+    {
+      "model": "llama3.1:70b",
+      "hours_active": 18.3,
+      "avg_tok_s": 22.5,
+      "avg_watts": 95.0,
+      "wes": 0.24,
+      "avg_ttft_ms": 245,
+      "cost_per_hour": 0.0152,
+      "total_cost": 0.278,
+      "sample_count": 219
+    }
+  ]
+}
+```
+Cost = `avg_watts × hours_active × $0.16 / 1000`. The kWh rate is a const
+in the cloud handler today (`DEFAULT_KWH_RATE_USD = 0.16`); the per-node
+`kwh_rate` setting is honored by the localhost equivalents but not yet
+plumbed through here. Empty array until new telemetry is ingested under
+the v0.9.x schema (the `ollama_active_model` column was added in this sprint).
+
+### GET /api/v1/fleet/model-switches?hours=24
+Cross-node model swap events. Uses Postgres `LAG()` window function over
+`metrics_raw` partitioned by `node_id` to detect transitions where
+`ollama_active_model` changes. Window: 1–168 hours, capped at 200 rows.
+```json
+{
+  "swaps": [
+    { "ts_ms": 1774621630223, "node_id": "WK-XXXX", "from_model": "llama3.1:70b", "to_model": "phi3:mini", "gap_ms": 3200 }
+  ],
+  "total_swaps": 14,
+  "total_gap_ms": 480000,
+  "total_gap_minutes": 8.0
+}
+```
+`gap_ms` is the time between consecutive `metrics_raw` samples — a proxy
+for the visible swap duration. Sub-30s swaps will round to a single sample
+interval since `metrics_raw` is at 30s cadence.
+
+### GET /api/v1/fleet/cost-by-model?hours=24
+Fleet-wide per-model cost rollup. Uses `metrics_raw` (not the 5-min
+rollup) because 24h × ~12 nodes is manageable at 30s granularity.
+Window: 1–168 hours. Cost = `avg_watts × hours_active × $0.16 / 1000`.
+```json
+{
+  "models": [
+    { "model": "llama3.1:70b", "hours_active": 6.2, "avg_watts": 95.0, "cost_usd": 0.0942, "tok_s_avg": 22.5, "sample_count": 744 }
+  ],
+  "total_cost_usd": 0.221
+}
+```
+
 ### GET /api/v1/insights/latest
 Fleet intelligence snapshot. Team tier and above only.
 ```json
@@ -343,8 +448,22 @@ The full telemetry payload sent every 1-2 seconds. All fields are optional (null
 - `wes_version`: u32 — Currently 2
 - `sample_count`: u32 — Samples in current WES window
 
+### Runtime Config Availability (v0.9.0+)
+- `runtime_config_available`: bool — true when the agent has at least one
+  cached RuntimeConfig. The full config payload is fetched on demand via
+  `GET /api/runtime-config?model=<name>` to keep the 1Hz SSE small.
+
+### Cloud-side schema (v0.9.x)
+The cloud's `metrics_raw` and `metrics_5min` tables now include
+`ollama_active_model TEXT` (additive, `ADD COLUMN IF NOT EXISTS`,
+zero-downtime). Old rows stay NULL until new ingestion populates them.
+The 5-min rollup query carries the column forward as
+`(array_agg(ollama_active_model) FILTER (WHERE ollama_active_model IS NOT NULL))[1]`.
+This column is what powers the new fleet model-comparison / model-switches /
+cost-by-model endpoints.
+
 ### Agent
-- `agent_version`: string — "0.8.2"
+- `agent_version`: string — "0.9.0"
 - `timestamp_ms`: u64 — Unix milliseconds
 
 ---

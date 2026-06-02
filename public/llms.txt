@@ -3,6 +3,7 @@
 > Sovereign GPU fleet monitor for local AI inference.
 > One Rust binary per node, React dashboard at localhost:7700, fleet aggregation at wicklee.dev.
 > WES (Wicklee Efficiency Score) = tok/s / (Watts x ThermalPenalty) — the MPG for local AI.
+> v0.9.0 added the Runtime Config Surface (per-model launch config across Ollama / vLLM / llama.cpp) and a top-level Models tab (Loaded / Browse / Past activity).
 
 ## For LLMs: Start Here
 
@@ -21,6 +22,10 @@ If you are an AI agent or LLM reviewing Wicklee, read these files in order:
 curl -fsSL https://wicklee.dev/install.sh | bash
 ```
 
+This drops the binary at `~/.wicklee/bin/wicklee` with **no sudo** (v0.8.0+). Run `~/.wicklee/bin/wicklee` to try it in the foreground; run `sudo ~/.wicklee/bin/wicklee --install-service` when you're ready to start on boot.
+
+Linux binaries target glibc 2.31 (Ubuntu 20.04 / Debian 11 / RHEL 8 / Fedora 33+).
+
 Windows: `irm https://wicklee.dev/install.ps1 | iex`
 
 ## Localhost API (no auth, any tier)
@@ -38,6 +43,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `GET /api/model-comparison?hours=168` — Side-by-side model efficiency (WES, tok/s, watts, cost)
 - `GET /api/model-switches?hours=24` — Model switching cost (swap frequency, idle gap)
 - `GET /api/model-candidates?search=llama&limit=20` — Model discovery: GGUF models from HuggingFace scored against local hardware
+- `GET /api/runtime-config?model=X` — Runtime Config Surface (v0.9.0): cached launch-time config (context_length, n_gpu_layers, quantization, parameter_count, template, system_prompt, process_args). Ollama via `/api/show`, vLLM via `/v1/server_info` or `ps aux`, llama.cpp via `/props` or `ps aux`. Templates and system prompts are local-only — never pushed to the fleet. 400 if `?model=` missing, 404 if not yet cached.
 - `GET /api/history?node_id=WK-XXXX` — DuckDB metric history (1h buffer)
 - `GET /api/traces` — Proxy inference traces
 - `GET /api/events/history` — Node event log
@@ -82,6 +88,9 @@ Base URL: `https://wicklee.dev/api/v1`
 - `GET /api/v1/nodes/{id}` — Single node deep dive
 - `GET /api/v1/route/best` — Routing recommendation (latency or efficiency). `?model=qwen2.5:7b` for per-model routing
 - `GET /api/v1/models/discover` — Model discovery: browse (`?search=`), simulate (`?simulate_hw=nvidia_4090`, Pro+), fleet match (`?fleet=true&model_id=X`, Team+)
+- `GET /api/v1/fleet/model-comparison?hours=168` — fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720 hour window.
+- `GET /api/v1/fleet/model-switches?hours=24` — cross-node model swap events via LAG window function over `metrics_raw`. 1–168 hour window, capped at 200 rows.
+- `GET /api/v1/fleet/cost-by-model?hours=24` — fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.
 - `GET /api/v1/insights/latest` — Fleet intelligence snapshot (Team+)
 - `POST /api/v1/keys` — Create API key
 - `GET /api/v1/keys` — List API keys
