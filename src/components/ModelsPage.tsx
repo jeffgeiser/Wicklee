@@ -69,13 +69,25 @@ interface ActiveModelRow {
   node_label: string;
   model: ModelLiveMetrics;
   /**
-   * Node-level penalized WES — used as a fallback when the per-model
-   * `model.wes` is null (e.g. on CPU-only nodes where per-model power
-   * attribution isn't possible, or on single-model nodes routed via
-   * the legacy singular fields). Always less precise than per-model
-   * but better than rendering em-dash.
+   * Node-level penalized WES — fallback for per-model `model.wes` when
+   * attribution isn't available (CPU-only nodes, no-proxy nodes, singular path).
    */
   node_wes?: number | null;
+  /**
+   * Whether THIS node has the optional Ollama proxy enabled. Drives the
+   * "PROXY OFF — per-model data limited" tooltip on em-dash cells.
+   */
+  node_proxy_active: boolean;
+  /**
+   * Sidecar-probe tok/s (from `sentinel.ollama_tokens_per_second`) and
+   * the sentinel's current active model. Used to attribute the singular
+   * tok/s value to whichever active_models row matches — only on the row
+   * representing the currently-active model. Other rows on the same node
+   * get em-dash because we genuinely don't know per-model tok/s without
+   * the proxy.
+   */
+  sentinel_tok_s?: number | null;
+  sentinel_active_model?: string | null;
 }
 
 const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
@@ -145,17 +157,29 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
         nodeWes = nodeTokS / (nodeWatts * penalty);
       }
 
+      const nodeProxyActive = !!s.ollama_proxy_active;
+      const sentinelTokS = s.ollama_tokens_per_second ?? null;
+      const sentinelActiveModel = s.ollama_active_model ?? null;
+      const shared = {
+        node_id: s.node_id,
+        node_label: label,
+        node_wes: nodeWes,
+        node_proxy_active: nodeProxyActive,
+        sentinel_tok_s: sentinelTokS,
+        sentinel_active_model: sentinelActiveModel,
+      };
+
       // Multi-model path
       if (s.active_models?.length) {
         for (const m of s.active_models) {
-          out.push({ node_id: s.node_id, node_label: label, model: m, node_wes: nodeWes });
+          out.push({ ...shared, model: m });
         }
         return;
       }
       // Single-model fallback
       const fallback = singleModelFallback(s);
       if (fallback) {
-        out.push({ node_id: s.node_id, node_label: label, model: fallback, node_wes: nodeWes });
+        out.push({ ...shared, model: fallback });
       }
     };
 
@@ -172,16 +196,29 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
     return out;
   }, [isLocalHost, localSentinel, fleetNodes]);
 
-  const nodeCount = useMemo(() => {
-    const ids = new Set(rows.map(r => r.node_id));
-    return ids.size;
+  const { nodeCount, proxyOn, proxyTotal } = useMemo(() => {
+    const seen = new Map<string, boolean>();
+    for (const r of rows) {
+      if (!seen.has(r.node_id)) seen.set(r.node_id, r.node_proxy_active);
+    }
+    const total = seen.size;
+    const on = Array.from(seen.values()).filter(Boolean).length;
+    return { nodeCount: total, proxyOn: on, proxyTotal: total };
   }, [rows]);
 
   const meta = rows.length === 0
     ? 'no models loaded'
-    : rows.length === 1
-      ? '1 model active'
-      : `${rows.length} models active across ${nodeCount} node${nodeCount === 1 ? '' : 's'}`;
+    : (() => {
+        const base = rows.length === 1
+          ? '1 model active'
+          : `${rows.length} models active across ${nodeCount} node${nodeCount === 1 ? '' : 's'}`;
+        // Proxy coverage hint — surfaces the upgrade path without nagging.
+        // Skip when all nodes have proxy enabled (no action needed).
+        if (proxyTotal > 0 && proxyOn < proxyTotal) {
+          return `${base} · proxy enabled on ${proxyOn}/${proxyTotal} nodes`;
+        }
+        return base;
+      })();
 
   return (
     <Section eyebrow="Live" meta={meta}>
@@ -207,12 +244,37 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  // WES: prefer per-model, fall back to node-level (less precise but useful)
+                  // tok/s resolution:
+                  //   1. Prefer per-model tok_s (only set when proxy is on)
+                  //   2. Fall back to sidecar tok/s — but only if this row's
+                  //      model matches the node's currently-active model.
+                  //      Other multi-model rows on the same node can't be
+                  //      attributed without the proxy → em-dash.
+                  //   3. If neither, em-dash with a tooltip explaining why.
+                  let tokSValue: number | null = r.model.tok_s ?? null;
+                  let tokSIsSidecar = false;
+                  if (tokSValue == null
+                      && r.sentinel_tok_s != null
+                      && r.sentinel_active_model === r.model.model) {
+                    tokSValue = r.sentinel_tok_s;
+                    tokSIsSidecar = true;
+                  }
+                  const tokSTooltip = tokSIsSidecar
+                    ? 'Sidecar probe value (most-recently-active model). Enable the Ollama proxy for per-model tok/s.'
+                    : (tokSValue == null && !r.node_proxy_active)
+                      ? 'Per-model tok/s requires the Ollama proxy. Enable via [ollama_proxy] in config.toml.'
+                      : undefined;
+
+                  // WES: prefer per-model, fall back to node-level
                   const wesValue = r.model.wes ?? r.node_wes ?? null;
                   const wesIsFallback = r.model.wes == null && r.node_wes != null;
+                  const wesTooltip = wesIsFallback
+                    ? 'Node-level WES (per-model attribution requires proxy + GPU power data).'
+                    : (wesValue == null && !r.node_proxy_active)
+                      ? 'Per-model WES requires the Ollama proxy.'
+                      : undefined;
 
-                  // Memory: prefer VRAM (GPU nodes), fall back to size_gb (CPU nodes
-                  // where there's no VRAM but the model occupies system RAM).
+                  // Memory: prefer VRAM, fall back to size_gb for CPU-only nodes
                   let memoryDisplay = '—';
                   let memoryLabel: 'VRAM' | 'RAM' | null = null;
                   if (r.model.vram_mb != null && r.model.vram_mb > 0) {
@@ -222,22 +284,41 @@ const LiveSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<str
                     memoryDisplay = `${r.model.size_gb.toFixed(1)} GB`;
                     memoryLabel = 'RAM';
                   }
+                  const memoryTooltip = memoryLabel === 'RAM'
+                    ? 'CPU-only inference: model is in system RAM. No GPU VRAM in use.'
+                    : memoryLabel === 'VRAM'
+                      ? 'GPU memory currently allocated to this model.'
+                      : undefined;
+
+                  // Requests: only populated by the proxy
+                  const requestsTooltip = (!r.model.request_count && !r.node_proxy_active)
+                    ? 'Per-model request count requires the Ollama proxy.'
+                    : undefined;
 
                   return (
                     <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
                       {!isLocalHost && <td className="px-4 py-3 text-gray-300 text-xs">{r.node_label}</td>}
                       <td className="px-4 py-3 font-mono text-xs text-white">{r.model.model}</td>
                       <td className="px-4 py-3 font-mono text-[10px] text-gray-500">{r.model.quantization ?? '—'}</td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.tok_s != null ? r.model.tok_s.toFixed(1) : '—'}</td>
+                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200"
+                          title={tokSTooltip}>
+                        {tokSValue != null
+                          ? <>{tokSValue.toFixed(1)}{tokSIsSidecar && <span className="ml-1 text-[10px] text-gray-500">◐</span>}</>
+                          : '—'}
+                      </td>
                       <td className={`px-4 py-3 text-right font-mono text-xs ${wesColorClass(wesValue)}`}
-                          title={wesIsFallback ? 'Node-level WES (per-model attribution unavailable)' : undefined}>
+                          title={wesTooltip}>
                         {wesValue != null ? `${wesValue.toFixed(2)}${wesIsFallback ? '*' : ''}` : '—'}
                       </td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">
+                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200"
+                          title={memoryTooltip}>
                         {memoryDisplay}
                         {memoryLabel && <span className="ml-1 text-[9px] text-gray-600">{memoryLabel}</span>}
                       </td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200">{r.model.request_count || '—'}</td>
+                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200"
+                          title={requestsTooltip}>
+                        {r.model.request_count || '—'}
+                      </td>
                     </tr>
                   );
                 })}
