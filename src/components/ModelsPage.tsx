@@ -185,14 +185,25 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       ) : (
         <Card>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            {/* table-fixed + explicit col widths prevent column shifting when a
+                row has an unusually long model name (e.g. fine-tunes with
+                very descriptive names). Model column gets the flexible space
+                via auto; everything else has a deterministic min width. */}
+            <table className="w-full text-sm table-fixed">
+              <colgroup>
+                {!isLocalHost && <col className="w-[18%]" />}{/* Node */}
+                <col />{/* Model — flexible */}
+                <col className="w-[12%]" />{/* Quant */}
+                <col className="w-[16%]" />{/* Memory */}
+                <col className="w-[14%]" />{/* Status */}
+              </colgroup>
               <thead>
                 <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
-                  {!isLocalHost && <th className="text-left font-medium px-4 py-3">Node</th>}
-                  <th className="text-left font-medium px-4 py-3">Model</th>
-                  <th className="text-left font-medium px-4 py-3">Quant</th>
-                  <th className="text-right font-medium px-4 py-3" title="GPU VRAM when available, else model file size in system memory">Memory</th>
-                  <th className="text-left font-medium px-4 py-3">Status</th>
+                  {!isLocalHost && <th className="text-left font-medium px-3 py-2">Node</th>}
+                  <th className="text-left font-medium px-3 py-2">Model</th>
+                  <th className="text-left font-medium px-3 py-2">Quant</th>
+                  <th className="text-right font-medium px-3 py-2" title="GPU VRAM when available, else model file size in system memory">Memory</th>
+                  <th className="text-left font-medium px-3 py-2">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -219,15 +230,15 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
 
                   return (
                     <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
-                      {!isLocalHost && <td className="px-4 py-3 text-gray-300 text-xs">{r.node_label}</td>}
-                      <td className="px-4 py-3 font-mono text-xs text-white">{r.model.model}</td>
-                      <td className="px-4 py-3 font-mono text-[10px] text-gray-500">{r.model.quantization ?? '—'}</td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-gray-200"
+                      {!isLocalHost && <td className="px-3 py-2 text-gray-300 text-xs truncate" title={r.node_label}>{r.node_label}</td>}
+                      <td className="px-3 py-2 font-mono text-xs text-white truncate" title={r.model.model}>{r.model.model}</td>
+                      <td className="px-3 py-2 font-mono text-[10px] text-gray-500">{r.model.quantization ?? '—'}</td>
+                      <td className="px-3 py-2 text-right font-mono text-xs text-gray-200 whitespace-nowrap"
                           title={memoryTooltip}>
                         {memoryDisplay}
                         {memoryLabel && <span className="ml-1 text-[9px] text-gray-600">{memoryLabel}</span>}
                       </td>
-                      <td className="px-4 py-3 text-xs"
+                      <td className="px-3 py-2 text-xs whitespace-nowrap"
                           title={isActive ? 'Most recently used model on this node' : 'Loaded in memory, not currently inferring'}>
                         {isActive
                           ? <span className="text-emerald-400">● Active</span>
@@ -523,7 +534,7 @@ const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Prom
 // ── Page ────────────────────────────────────────────────────────────────────
 const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6 p-4 sm:p-6 max-w-7xl mx-auto">
       {/* Page header — establishes identity, doesn't duplicate section subtitles */}
       <header className="flex items-start gap-3 pb-2">
         <div className="h-10 w-10 rounded-xl bg-blue-600/10 border border-blue-600/20 flex items-center justify-center text-blue-400">
