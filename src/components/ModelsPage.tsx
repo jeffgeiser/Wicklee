@@ -4,7 +4,6 @@ import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
 import { wesColorClass } from '../utils/wes';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
 import FleetModelDiscovery from './insights/FleetModelDiscovery';
-import RuntimeConfigModal from './RuntimeConfigModal';
 
 interface ModelsPageProps {
   isLocalHost: boolean;
@@ -77,8 +76,6 @@ interface LoadedModelRow {
   model: ModelLiveMetrics;
   /** The node's current sentinel.ollama_active_model — used to decide Active vs Idle status. */
   sentinel_active_model: string | null;
-  /** Local agent base URL for fetching runtime config via the Config modal. */
-  agent_base_url: string;
 }
 
 const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
@@ -130,17 +127,11 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
 
   const rows: LoadedModelRow[] = useMemo(() => {
     const out: LoadedModelRow[] = [];
-    // For Config modal: localhost agent vs fleet — fleet path doesn't currently
-    // expose runtime-config through the cloud (per-node localhost call only).
-    // Fleet rows will get a disabled Config link with a tooltip.
-    const agentBaseUrl = isLocalHost ? 'http://localhost:7700' : '';
-
     const collectFromSentinel = (s: SentinelMetrics, label: string) => {
       const shared = {
         node_id: s.node_id,
         node_label: label,
         sentinel_active_model: s.ollama_active_model ?? null,
-        agent_base_url: agentBaseUrl,
       };
 
       // Multi-model path
@@ -183,9 +174,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
     ? 'no models loaded'
     : `${rows.length} model${rows.length === 1 ? '' : 's'} loaded across ${nodeCount} node${nodeCount === 1 ? '' : 's'} · ${activeCount} active`;
 
-  // Config modal state — clicking a row's "Config" link opens it
-  const [configModel, setConfigModel] = useState<{ name: string; baseUrl: string } | null>(null);
-
   return (
     <>
     <Section eyebrow="Loaded" meta={meta}>
@@ -205,7 +193,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
                   <th className="text-left font-medium px-4 py-3">Quant</th>
                   <th className="text-right font-medium px-4 py-3" title="GPU VRAM when available, else model file size in system memory">Memory</th>
                   <th className="text-left font-medium px-4 py-3">Status</th>
-                  <th className="text-right font-medium px-4 py-3">Config</th>
                 </tr>
               </thead>
               <tbody>
@@ -230,11 +217,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
                   // (most-recently-inferenced per /api/ps), ○ Idle otherwise.
                   const isActive = r.model.model === r.sentinel_active_model;
 
-                  // Config link: only functional on localhost mode (fleet cloud
-                  // doesn't proxy /api/runtime-config across nodes). Fleet rows
-                  // show a disabled link with an explanatory tooltip.
-                  const configEnabled = !!r.agent_base_url;
-
                   return (
                     <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
                       {!isLocalHost && <td className="px-4 py-3 text-gray-300 text-xs">{r.node_label}</td>}
@@ -251,20 +233,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
                           ? <span className="text-emerald-400">● Active</span>
                           : <span className="text-gray-500">○ Idle</span>}
                       </td>
-                      <td className="px-4 py-3 text-right text-xs">
-                        {configEnabled ? (
-                          <button
-                            onClick={() => setConfigModel({ name: r.model.model, baseUrl: r.agent_base_url })}
-                            className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
-                          >
-                            View →
-                          </button>
-                        ) : (
-                          <span className="text-gray-600" title="Runtime config is available via the localhost dashboard for each node.">
-                            View →
-                          </span>
-                        )}
-                      </td>
                     </tr>
                   );
                 })}
@@ -274,13 +242,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
         </Card>
       )}
     </Section>
-    {configModel && (
-      <RuntimeConfigModal
-        modelName={configModel.name}
-        agentBaseUrl={configModel.baseUrl}
-        onClose={() => setConfigModel(null)}
-      />
-    )}
     </>
   );
 };
