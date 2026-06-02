@@ -113,8 +113,12 @@ const LiveSection: React.FC<{ isLocalHost: boolean; nodes: FleetNode[] }> = ({ i
       const s = localSentinel;
       if (s) collectFromSentinel(s, s.hostname || s.node_id);
     } else {
+      // Prefer node.metrics (already attached to FleetNode) and fall back to
+      // allNodeMetrics by node_id. Different upstream paths populate these
+      // at slightly different times during the SSE lifecycle; using both
+      // ensures we never miss a node that's online and reporting.
       for (const node of nodes) {
-        const m = allNodeMetrics[node.node_id];
+        const m = node.metrics ?? allNodeMetrics[node.node_id];
         if (!m) continue;
         const label = node.display_name || m.hostname || node.node_id;
         collectFromSentinel(m, label);
