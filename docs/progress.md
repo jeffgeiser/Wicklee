@@ -6,6 +6,148 @@
 
 ---
 
+## Late May 2026 — Sprint retrospective: Models tab, Discovery v2, fleet model endpoints, landing rewrite
+
+The week after v0.9.0 shipped. v0.9.0 itself is documented in the entry
+below — this one captures everything that landed *around* it during the
+same launch sprint. Substantial product expansion plus the positioning
+work that turned the dashboard from "fleet ops console" into "the home
+for everything model-related in your fleet."
+
+### Models — new top-level navigation tab
+Promoted Models from a subsection of Insights to a top-level
+`DashboardTab.MODELS` slot between Intelligence and Insights in both
+Sidebar.tsx and MobileTabBar (icon: Boxes). Three sections under one
+page:
+
+- **Loaded** — model-state view (NOT inference-state, which lives on the
+  Intelligence tab). Columns: Node · Model · Quant · Memory (VRAM if
+  available, else RAM with `ollama_model_size_gb` fallback) · Status
+  (Active ● vs Idle ○). First-principles rewrite — the prior version
+  conflated model state with inference state.
+- **Browse** — HuggingFace GGUF catalog (Discovery v2, see below).
+- **Past activity** — collapsible footer wiring the new cloud fleet
+  endpoints in fleet mode. Section 1 deduped with a Search icon + distinct
+  title so the page header doesn't read as two stacked headlines.
+
+Page subtitle reads: *"What's loaded across your fleet, and what could
+you add. Inference performance lives on the Intelligence tab."* —
+explicit framing for the question this page answers.
+
+Density polish landed last: page max-width + `table-fixed` on the Loaded
+grid so columns don't dance when the active model changes.
+
+### Discovery v2 — context picker, fleet projections, sweet-spot quants
+The Browse panel got the bulk of the sprint's work.
+
+- **HF catalog cap:** 30 → 200 (then tuned back to 100 after Phase 1
+  follow-up — the 200 pull was returning a lot of low-signal repos
+  that diluted the trending list).
+- **Context-length picker** (2K / 4K / 8K default / 16K / 32K / 128K).
+  Per-variant VRAM and fit re-calculate when changed, using
+  architecture-aware KV cache estimates per parameter class. Earlier
+  bugfix: the KV cache estimate was 4–8× too low.
+- **Fit-mode toggle:** *"Any node ✓"* (default) vs *"All nodes
+  (intersection)"*. Default-any unlocks heterogeneous fleets that the
+  implicit intersection was punishing.
+- **Two-line row layout:** line 1 = model_id · uploader · Copy-pull
+  button; line 2 = recommended quant (file size) · fit bars + label ·
+  projected tok/s · projected cost/M tokens · downloads · likes.
+  Dropped the node pills — too noisy at fleet scale.
+- **Projected tok/s + cost/M tokens:** the competitive moat. Sourced
+  from the fleet's own historical model-comparison data, only shown
+  when 2+ similar-size models have been observed. Empty-state copy
+  nudges *"Run a few models"* to seed projections. This is the
+  hardware-first positioning made concrete.
+- **Quant quality tooltips:** every variant hovers a label from the
+  QUANT_QUALITY map (*"Q4_K_M: ~97% quality. Standard sweet spot for
+  most models."*).
+- **Sweet-spot badge:** per-family `[Rec]` chip on the quant most
+  operators should reach for first.
+- **"Your hardware" header callout:** explicit framing that Wicklee
+  scores against actual hardware performance, not generic benchmarks.
+
+VRAM overhead estimate bumped 10% → 30% with a 256 MB → 512 MB floor —
+the previous numbers were too optimistic and led to "fits" labels for
+models that OOM'd at runtime.
+
+### Cloud fleet model endpoints
+Three new Bearer-authed routes on the cloud backend, mirroring the
+localhost shape exactly so the frontend re-uses the same rendering:
+
+- `GET /api/v1/fleet/model-comparison?hours=168` — per-model rollup
+  from `metrics_5min` for the long 7-day window, plus a `metrics_raw`
+  side query for TTFT (last 24h only — `metrics_raw` is the only place
+  TTFT survives that long at 30s cadence).
+- `GET /api/v1/fleet/model-switches?hours=24` — LAG window function
+  over `metrics_raw` partitioned by node_id, capped at 200 rows. Two
+  late fixes: cast `gap_ms` to DOUBLE PRECISION so sqlx decodes (was
+  silently failing as NUMERIC); decode `to_model` as `Option<String>`
+  because Postgres considers the un-cast column nullable even though
+  the CTE filter guarantees NOT NULL — the prior version's
+  `unwrap_or_default()` swallowed the decode error and returned an
+  empty Vec.
+- `GET /api/v1/fleet/cost-by-model?hours=24` — per-model cost from
+  `metrics_raw` at $0.16/kWh default.
+
+### Schema migration — `ollama_active_model` column
+Additive `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ollama_active_model
+TEXT` against both `metrics_raw` and `metrics_5min`. Zero-downtime; old
+rows stay NULL until new ingestion populates them. The 5-min rollup
+query carries the column forward as `(array_agg(...) FILTER (WHERE ...
+IS NOT NULL))[1]` — pick any non-null sample in the bucket. This is
+what powers the three new fleet endpoints; they all filter on
+`ollama_active_model IS NOT NULL` so they return empty arrays until
+new telemetry has been ingested under the new schema.
+
+### Live activity table — work around fleet stream gaps
+LIVE table now polls `/api/fleet` directly instead of going through
+`useFleetStream` (some nodes were missing from the stream payload in
+fleet mode). Also: sidecar tok/s fallback, proxy-state tooltips, and
+CPU-only-node rendering — three small fixes to make the table robust
+across the full hardware matrix.
+
+### Landing page repositioning
+- New hero: *"Self-hosted AI inference, fully observable."*
+- New subtitle: *"WES (thermally-honest MPG for AI), 18 observation
+  patterns, instant model fit checks, and programmable APIs for Ollama,
+  vLLM, and llama.cpp."*
+- New Model Fit / Model Discovery section under the fold with a
+  live-feeling mocked panel.
+- Replaced the "Grows With You" tier-ladder narrative with an "Enriches
+  your existing stack" ecosystem narrative — *best-of-breed
+  observability that complements Datadog/Grafana, not a replacement.*
+- Hero CTA aligned with the local-first install path. Post-v0.8.0
+  install snippet fix included.
+
+### Blog posts (4)
+Launch-week content drop, all in `/public/blog/`:
+
+- `wes-the-mpg-for-local-ai-inference` — polished with a "What's
+  shipped since" section.
+- `hardware-aware-observability` — positioning manifesto.
+- `apple-silicon-thermal-throttling` — technical credibility piece.
+- `runtime-config-surface` — v0.9.0 launch post.
+
+### Files touched (high level)
+- `src/components/ModelsPage.tsx` — new page (Loaded / Browse / Past
+  activity), with `LoadedSection`, `BrowseSection`, `RecentSection`,
+  `SwapsSection`.
+- `src/components/Sidebar.tsx`, `MobileTabBar.tsx`, `types.ts` — new
+  `DashboardTab.MODELS` enum + nav entry.
+- `src/components/discovery/*` — context picker, fit-mode toggle,
+  two-line row layout, quant quality tooltips, recommended badges,
+  projected tok/s + cost.
+- `cloud/src/main.rs` — three new handlers + `ollama_active_model`
+  ingestion path + 5-min rollup CTE.
+- Postgres migration — `ALTER TABLE ... ADD COLUMN IF NOT EXISTS
+  ollama_active_model TEXT` on `metrics_raw` and `metrics_5min`.
+- `index.html` / landing components — hero, subtitle, Model Fit
+  section, ecosystem narrative.
+- `public/blog/*.html` — four new posts.
+
+---
+
 ## May 28, 2026 — v0.9.0: Runtime Config Surface
 
 ### Why
