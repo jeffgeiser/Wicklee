@@ -79,6 +79,56 @@ function shortModelName(model_id: string): string {
   return model_id.split('/').pop() ?? model_id;
 }
 
+function uploaderName(model_id: string): string | null {
+  const parts = model_id.split('/');
+  return parts.length > 1 ? parts[0] : null;
+}
+
+function fitGradeLabel(score: number): string {
+  if (score >= 80) return 'Excellent';
+  if (score >= 60) return 'Good';
+  if (score >= 40) return 'Tight';
+  if (score > 0)   return 'Marginal';
+  return "Won't Fit";
+}
+
+function fitBarClass(score: number): string {
+  if (score >= 80) return 'bg-emerald-500';
+  if (score >= 60) return 'bg-green-500';
+  if (score >= 40) return 'bg-yellow-500';
+  if (score > 0)   return 'bg-orange-500';
+  return 'bg-red-500';
+}
+
+/**
+ * Per-row inline copy button — stops propagation so clicking it doesn't
+ * also toggle the row's expand state.
+ */
+const RowCopyButton: React.FC<{ text: string; title?: string }> = ({ text, title }) => {
+  const [copied, setCopied] = useState(false);
+  const handle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button
+      onClick={handle}
+      title={title ?? 'Copy pull command'}
+      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border transition-colors ${
+        copied
+          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+          : 'bg-gray-800/60 border-gray-700/60 text-gray-400 hover:text-cyan-300 hover:border-cyan-500/30'
+      }`}
+    >
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      <span>{copied ? 'Copied!' : 'Copy pull'}</span>
+    </button>
+  );
+};
+
 function hfUrl(model_id: string): string {
   return `https://huggingface.co/${model_id}`;
 }
@@ -336,65 +386,105 @@ const ModelRow: React.FC<{
   const best = model.variants[0];
   if (!best) return null;
   const colors = fitColors(best.fit_score);
+  const uploader = uploaderName(model.model_id);
+
+  // Recommended quant for line 2. Falls back to best variant when no rec.
+  const maxSize = model.variants.reduce((m, v) => Math.max(m, v.file_size_mb), 0);
+  const recQuantName = recommendedQuant(maxSize);
+  const recVariant = model.variants.find(v => v.quant?.toUpperCase() === recQuantName.toUpperCase()) ?? best;
+
+  // Projections + cost — use best (top-scored) variant for the row line.
+  const proj = history ? projectTpsForVariant(history, best.file_size_mb, best.quant) : null;
+  const avgWatts = (() => {
+    if (!history || !history.length) return null;
+    const w = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
+    if (!w.length) return null;
+    return w.reduce((s, r) => s + (r.avg_watts as number), 0) / w.length;
+  })();
+  let costPerM: number | null = null;
+  if (proj && avgWatts != null) {
+    const tpsAvg = (proj.min + proj.max) / 2;
+    if (tpsAvg > 0) costPerM = (avgWatts / 1000) * (1_000_000 / tpsAvg / 3600) * kwhRate;
+  }
 
   return (
     <div className="border border-gray-700/60 rounded-lg overflow-hidden">
-      {/* Summary row */}
+      {/* Summary row — two lines mirroring the fleet variant. */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700/20 transition-colors text-left"
+        className="w-full flex flex-col gap-1 px-3 py-2 hover:bg-gray-700/20 transition-colors text-left"
       >
-        <div className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
+        {/* Line 1 — identity + copy CTA */}
+        <div className="flex items-center gap-2 w-full">
+          <div className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
+          <span className="text-xs text-gray-200 font-mono truncate min-w-0 flex-1">
+            {shortModelName(model.model_id)}
+            {uploader && (
+              <span className="text-gray-600 font-sans"> · {uploader}</span>
+            )}
+          </span>
+          {best.pull_cmd && best.fit_score >= 40 && (
+            <RowCopyButton
+              text={best.pull_cmd}
+              title={`Copy pull command for recommended quant`}
+            />
+          )}
+          {open
+            ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
+            : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
+        </div>
 
-        <span className="text-xs text-gray-300 font-mono truncate flex-1 min-w-0">
-          {shortModelName(model.model_id)}
-        </span>
+        {/* Line 2 — quant, size, fit grade, speed, cost, downloads, likes */}
+        <div className="flex items-center gap-2 w-full flex-wrap text-[10px] pl-4">
+          <span
+            className="text-gray-400 font-mono tabular-nums"
+            title={quantQualityHint(recVariant.quant ?? '')}
+          >
+            <span className="text-gray-300">{recVariant.quant && recVariant.quant !== 'unknown' ? recVariant.quant : 'GGUF'}</span>
+            <span className="text-gray-600"> ({(recVariant.file_size_mb / 1024).toFixed(1)} GB)</span>
+          </span>
 
-        {/* Right-side columns — all fixed-width, right-aligned, tabular-nums
-            so they stack cleanly across every row regardless of how long
-            the model name on the left is. Reserved space shown as a faint
-            dash when the metric is absent (e.g. no quant, no likes), so
-            adjacent columns don't shift between rows. */}
+          <span className="text-gray-600">·</span>
+          <span className="inline-flex items-center gap-1.5" title={`Fit score ${best.fit_score}/100`}>
+            <span className={`inline-block w-1.5 h-3 rounded-sm ${fitBarClass(best.fit_score)}`} />
+            <span className={colors.text}>{fitGradeLabel(best.fit_score)}</span>
+            <span className="text-gray-600">fit</span>
+          </span>
 
-        {/* Best-fit badge — fixed slot for label (Excellent/Good/Tight/Won't Fit). */}
-        <span
-          title={`Fit score ${best.fit_score}/100 · Excellent ≥80 · Good ≥60 · Tight ≥40 · Won't Fit <40`}
-          className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${colors.badge} shrink-0 whitespace-nowrap cursor-default text-center w-[78px]`}
-        >
-          {best.fit_label}
-        </span>
+          {proj && (
+            <>
+              <span className="text-gray-600">·</span>
+              <span
+                className="text-gray-400 tabular-nums"
+                title={`Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} (last 7 days)`}
+              >
+                ≈{((proj.min + proj.max) / 2).toFixed(0)} tok/s
+              </span>
+            </>
+          )}
 
-        {/* Best quant — fixed slot. */}
-        <span className="text-[10px] text-gray-500 font-mono shrink-0 hidden sm:inline text-right w-[72px] truncate">
-          {best.quant && best.quant !== 'unknown' ? best.quant : <span className="text-gray-800">—</span>}
-        </span>
+          {costPerM != null && (
+            <>
+              <span className="text-gray-600">·</span>
+              <span
+                className="text-gray-500 tabular-nums"
+                title={`Electricity at ${kwhRate.toFixed(3)} $/kWh · projected tok/s · ${avgWatts?.toFixed(0)} W avg`}
+              >
+                ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)}/M
+              </span>
+            </>
+          )}
 
-        {/* Size — fixed slot. */}
-        <span className="text-[10px] text-gray-600 tabular-nums shrink-0 hidden sm:inline text-right w-[56px]">
-          {(best.file_size_mb / 1024).toFixed(1)} GB
-        </span>
+          <span className="text-gray-700 tabular-nums ml-auto" title="HuggingFace downloads (all time)">
+            {fmtDl(model.downloads)}↓
+          </span>
 
-        {/* Downloads — fixed slot. */}
-        <span
-          className="text-[10px] text-gray-700 tabular-nums shrink-0 text-right w-[56px]"
-          title="HuggingFace downloads (all time)"
-        >
-          {fmtDl(model.downloads)}↓
-        </span>
-
-        {/* Likes — fixed slot reserved even when 0 so the chevron stays put. */}
-        <span
-          className="text-[10px] tabular-nums shrink-0 text-right w-[48px]"
-          title="HuggingFace likes (current bookmark interest)"
-        >
-          {model.likes != null && model.likes > 0
-            ? <span className="text-rose-400/70">{fmtDl(model.likes)}♥</span>
-            : <span className="text-gray-800">—</span>}
-        </span>
-
-        {open
-          ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
-          : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
+          {model.likes != null && model.likes > 0 && (
+            <span className="text-rose-400/50 tabular-nums" title="HuggingFace likes">
+              {fmtDl(model.likes)}♥
+            </span>
+          )}
+        </div>
       </button>
 
       {/* Expanded: variants + pull command, no separate HF link row */}

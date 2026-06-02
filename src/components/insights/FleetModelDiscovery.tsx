@@ -76,6 +76,20 @@ function shortName(model_id: string): string {
   return model_id.split('/').pop() ?? model_id;
 }
 
+function uploaderName(model_id: string): string | null {
+  const parts = model_id.split('/');
+  return parts.length > 1 ? parts[0] : null;
+}
+
+/** Word label for a fit score, used in the line-2 "Excellent fit on 3 nodes". */
+function fitGradeLabel(score: number): string {
+  if (score >= 80) return 'Excellent';
+  if (score >= 60) return 'Good';
+  if (score >= 40) return 'Tight';
+  if (score > 0)   return 'Marginal';
+  return "Won't Fit";
+}
+
 // ── Copy button ───────────────────────────────────────────────────────────────
 
 const CopyButton: React.FC<{ text: string }> = ({ text }) => {
@@ -94,25 +108,56 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
-// ── Node fit pill ─────────────────────────────────────────────────────────────
-
-const NodePill: React.FC<{ node: NodeFit; highlighted?: boolean }> = ({ node, highlighted }) => {
-  const c = fitColors(node.fit_score);
-  const label = node.hostname ?? node.node_id.slice(0, 8);
+/**
+ * Per-row inline copy button. Used on line 1 of the summary row — must
+ * not propagate the click to the row's expand toggle. Renders as a
+ * compact button with icon + "Copy" label that flips to "Copied!" for
+ * 1.5 s on success.
+ */
+const RowCopyButton: React.FC<{ text: string; title?: string }> = ({ text, title }) => {
+  const [copied, setCopied] = useState(false);
+  const handle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   return (
-    <span
-      title={`${label}: ${node.fit_label} (${node.best_quant}, ${(node.file_size_mb / 1024).toFixed(1)} GB)`}
-      // Fixed-width pills so dots line up vertically across rows even when
-      // hostnames vary in length. 88px = comfortable fit for typical 8-12
-      // char hostnames; truncate with ellipsis past that. Full hostname
-      // stays available on hover via the title attribute above.
-      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${c.badge} whitespace-nowrap transition-opacity w-[88px] overflow-hidden ${highlighted === false ? 'opacity-30' : ''}`}
+    <button
+      onClick={handle}
+      title={title ?? 'Copy pull command'}
+      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border transition-colors ${
+        copied
+          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+          : 'bg-gray-800/60 border-gray-700/60 text-gray-400 hover:text-cyan-300 hover:border-cyan-500/30'
+      }`}
     >
-      <span className={`w-1.5 h-1.5 rounded-full ${c.dot} shrink-0`} />
-      <span className="truncate">{label}</span>
-    </span>
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      <span>{copied ? 'Copied!' : 'Copy pull'}</span>
+    </button>
   );
 };
+
+/**
+ * Visual fit-bars — one colored bar per node in the fleet, color-coded
+ * by that node's fit score. Width is uniform so the strip is a quick
+ * at-a-glance fleet compatibility heatmap.
+ */
+const FitBars: React.FC<{ nodes: NodeFit[]; getScore: (n: NodeFit) => number }> = ({ nodes, getScore }) => (
+  <span className="inline-flex items-center gap-0.5">
+    {nodes.map(n => {
+      const c = fitColors(getScore(n));
+      return (
+        <span
+          key={n.node_id}
+          title={`${n.hostname ?? n.node_id}: ${fitGradeLabel(getScore(n))}`}
+          className={`inline-block w-1.5 h-3 rounded-sm ${c.bar}`}
+        />
+      );
+    })}
+  </span>
+);
 
 // ── Fleet model row ───────────────────────────────────────────────────────────
 
@@ -179,74 +224,131 @@ const FleetModelRow: React.FC<{
   // Best node for the pull command — focused node first, then highest scorer.
   const pullNode = focusedNode ?? model.nodes[0];
 
+  // Find the recommended-quant file size from any node that selected it.
+  // Falls back to the smallest variant across nodes when none have rec.
+  const recQuantFileSizeMb = (() => {
+    const recNode = model.nodes.find(n => n.best_quant?.toUpperCase() === recQuant.toUpperCase());
+    if (recNode) return recNode.file_size_mb;
+    if (!model.nodes.length) return 0;
+    return Math.min(...model.nodes.map(n => n.file_size_mb));
+  })();
+  const recQuantToShow = (() => {
+    const recNode = model.nodes.find(n => n.best_quant?.toUpperCase() === recQuant.toUpperCase());
+    return recNode ? recNode.best_quant : (pullNode?.best_quant ?? recQuant);
+  })();
+
+  // Speed + cost projections — use the best-fitting node's variant.
+  const projForRow = history && pullNode
+    ? projectTpsForVariant(history, pullNode.file_size_mb, pullNode.best_quant)
+    : null;
+  let costPerMRow: number | null = null;
+  if (projForRow && avgWatts != null) {
+    const tpsAvg = (projForRow.min + projForRow.max) / 2;
+    if (tpsAvg > 0) {
+      costPerMRow = (avgWatts / 1000) * (1_000_000 / tpsAvg / 3600) * kwhRate;
+    }
+  }
+
+  const uploader = uploaderName(model.model_id);
+  const bestPullCmd = pullNode?.pull_cmd ?? '';
+
   return (
     <div className="border border-gray-700/60 rounded-xl overflow-hidden">
-      {/* Summary row */}
+      {/* Summary row — two lines. Line 1: identity + copy CTA. Line 2:
+          dense decision info (quant/size/fit/speed/cost/downloads/likes). */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-700/20 transition-colors text-left"
+        className="w-full flex flex-col gap-1 px-3 py-2 hover:bg-gray-700/20 transition-colors text-left"
       >
-        <div className={`w-2 h-2 rounded-full ${best.dot} shrink-0`} />
-
-        <span className="text-xs text-gray-300 font-mono truncate flex-1 min-w-0">
-          {shortName(model.model_id)}
-        </span>
-
-        {/* Right-side stats — all fixed-width slots so columns align cleanly
-            across every row, regardless of content length. Reserved space
-            shown as "—" when a metric is absent (likes = 0). */}
-
-        {/* Node pills — fixed slot, left-justified inside the slot so pills
-            anchor at the same x-position across rows. Each pill is 88px;
-            slot fits 2 pills + gap. Beyond 2 nodes, the slot will overflow
-            horizontally on small fleets — acceptable since fleets > 2 are
-            the minority and the spacer ("+N") indicator handles the rest. */}
-        <div className="hidden sm:flex items-center gap-1 shrink-0 w-[188px]">
-          {model.nodes.slice(0, 2).map(n => (
-            <NodePill
-              key={n.node_id}
-              node={n}
-              highlighted={focusNodeId == null ? undefined : n.node_id === focusNodeId}
+        {/* Line 1 — model identity */}
+        <div className="flex items-center gap-2 w-full">
+          <div className={`w-2 h-2 rounded-full ${best.dot} shrink-0`} />
+          <span className="text-xs text-gray-200 font-mono truncate min-w-0 flex-1">
+            {shortName(model.model_id)}
+            {uploader && (
+              <span className="text-gray-600 font-sans"> · {uploader}</span>
+            )}
+          </span>
+          {bestPullCmd && (effectiveScore >= 40) && (
+            <RowCopyButton
+              text={bestPullCmd}
+              title={`Copy pull command for ${recQuantToShow} on ${pullNode?.hostname ?? pullNode?.node_id ?? 'best-fitting node'}`}
             />
-          ))}
-          {model.nodes.length > 2 && (
-            <span className="text-[10px] text-gray-600 tabular-nums">+{model.nodes.length - 2}</span>
           )}
+          {open
+            ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
+            : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
         </div>
 
-        {/* Fit summary — fixed-width right-aligned column. */}
-        <span
-          title="Nodes with fit score ≥40 (Tight or better). Green = Excellent/Good (≥60). Yellow = Tight (40–59). Orange = Marginal (1–39). Red = Won't Fit."
-          className={`text-[10px] whitespace-nowrap shrink-0 cursor-default text-right tabular-nums w-[88px] ${
-            focusNodeId
-              ? fittingNodes.length > 0 ? 'text-emerald-500' : 'text-red-500/70'
-              : 'text-gray-600'
-          }`}
-        >
-          {fitSummary}
-        </span>
+        {/* Line 2 — dense decision info, left → right by priority. */}
+        <div className="flex items-center gap-2 w-full flex-wrap text-[10px] pl-4">
+          {/* Recommended quant + size */}
+          {recQuantFileSizeMb > 0 && (
+            <span
+              className="text-gray-400 font-mono tabular-nums"
+              title={quantQualityHint(recQuantToShow)}
+            >
+              <span className="text-gray-300">{recQuantToShow}</span>
+              <span className="text-gray-600"> ({(recQuantFileSizeMb / 1024).toFixed(1)} GB)</span>
+            </span>
+          )}
 
-        {/* Downloads — fixed-width right-aligned. */}
-        <span
-          className="text-[10px] text-gray-700 tabular-nums shrink-0 text-right w-[56px]"
-          title="HuggingFace downloads (all time)"
-        >
-          {fmtDl(model.downloads)}↓
-        </span>
+          {/* Fit grade visual + label */}
+          <span className="text-gray-600">·</span>
+          <span
+            className="inline-flex items-center gap-1.5"
+            title={focusNodeId
+              ? `Fit on ${focusedNode?.hostname ?? focusNodeId}`
+              : `Highest fit grade across ${model.nodes.length} fleet node${model.nodes.length === 1 ? '' : 's'}`}
+          >
+            <FitBars
+              nodes={model.nodes}
+              getScore={n => nodeScoresAtCtx.get(n.node_id)?.score ?? n.fit_score}
+            />
+            <span className={best.badge.split(' ').find(c => c.startsWith('text-')) ?? 'text-gray-400'}>
+              {fitGradeLabel(effectiveScore)}
+            </span>
+            <span className="text-gray-600">{focusNodeId ? fitSummary : `on ${fittingNodes.length}/${model.nodes.length} node${model.nodes.length === 1 ? '' : 's'}`}</span>
+          </span>
 
-        {/* Likes — fixed slot reserved even when 0 so adjacent columns don't shift. */}
-        <span
-          className="text-[10px] tabular-nums shrink-0 text-right w-[48px]"
-          title="HuggingFace likes (current bookmark interest)"
-        >
-          {model.likes != null && model.likes > 0
-            ? <span className="text-rose-400/70">{fmtDl(model.likes)}♥</span>
-            : <span className="text-gray-800">—</span>}
-        </span>
+          {/* Speed projection */}
+          {projForRow && (
+            <>
+              <span className="text-gray-600">·</span>
+              <span
+                className="text-gray-400 tabular-nums"
+                title={`Projected from ${projForRow.count} similar-size model${projForRow.count === 1 ? '' : 's'} (last 7 days fleet history)`}
+              >
+                ≈{((projForRow.min + projForRow.max) / 2).toFixed(0)} tok/s
+              </span>
+            </>
+          )}
 
-        {open
-          ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
-          : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
+          {/* Cost projection */}
+          {costPerMRow != null && (
+            <>
+              <span className="text-gray-600">·</span>
+              <span
+                className="text-gray-500 tabular-nums"
+                title={`Electricity at ${kwhRate.toFixed(3)} $/kWh · projected tok/s · ${avgWatts?.toFixed(0)} W avg`}
+              >
+                ${costPerMRow < 0.01 ? costPerMRow.toFixed(4) : costPerMRow.toFixed(3)}/M
+              </span>
+            </>
+          )}
+
+          {/* Downloads — de-emphasized */}
+          <span className="text-gray-700 tabular-nums ml-auto" title="HuggingFace downloads (all time)">
+            {fmtDl(model.downloads)}↓
+          </span>
+
+          {/* Likes — only if non-zero */}
+          {model.likes != null && model.likes > 0 && (
+            <span className="text-rose-400/50 tabular-nums" title="HuggingFace likes">
+              {fmtDl(model.likes)}♥
+            </span>
+          )}
+        </div>
       </button>
 
       {/* Expanded: per-node breakdown */}
