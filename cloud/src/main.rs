@@ -4519,7 +4519,12 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
         .filter(|t| !t.is_empty());
 
     // Step 1: List top GGUF repos by downloads
-    let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=30";
+    // 200 gives heterogeneous fleets (mix of small + large nodes) enough
+    // catalog depth that per-node fit filtering still surfaces a useful
+    // number of models. Fan-out to /tree/main is concurrency-limited to
+    // 5 in-flight below, so 200 repos costs ~40 s — fine for startup +
+    // nightly refresh, never on the request path.
+    let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=200";
     let tok1 = hf_token.clone();
     let list_resp = match tokio::task::spawn_blocking(move || {
         let req = ureq::get(list_url);
@@ -4944,7 +4949,7 @@ async fn handle_fleet_model_candidates(
         .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
     let search          = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
-    let limit: i32      = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20_i32).min(40);
+    let limit: i32      = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20_i32).min(200);
     // Optional: when set, results are ranked + filtered for this specific node_id.
     let filter_node_id  = params.get("node_id").filter(|s| !s.trim().is_empty()).cloned();
 

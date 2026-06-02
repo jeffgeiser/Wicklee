@@ -5212,7 +5212,12 @@ async fn fetch_hf_gguf(
 /// Called on first /api/model-candidates request if cache is stale, and by a 24h background task.
 #[cfg(not(target_env = "musl"))]
 async fn refresh_model_catalog(store: store::Store) {
-    let models = fetch_hf_gguf(None, 30).await;
+    // 200 keeps the trending catalog broad enough that fleets with mixed
+    // VRAM (e.g. a 64 GB Mac alongside an 8 GB Pi) still see plenty of
+    // models even after per-node fit filtering. The /tree/main fan-out is
+    // rate-limited to 1 req/sec server-side, so this refresh takes ~3–4
+    // minutes — fine for a 24h background task, not on the request path.
+    let models = fetch_hf_gguf(None, 200).await;
     if models.is_empty() { return; }
 
     let now = std::time::SystemTime::now()
@@ -5248,7 +5253,7 @@ async fn handle_model_candidates(
     axum::extract::Extension(wes_m): axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
 ) -> impl IntoResponse {
     let search = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
-    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(50);
+    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(200);
 
     // Build hardware profile from live metrics
     let apple = apple_m.lock().map(|g| g.clone()).unwrap_or_default();
