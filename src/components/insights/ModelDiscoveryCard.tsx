@@ -22,8 +22,43 @@ import {
   DEFAULT_CONTEXT_LENGTH,
   contextLengthLabel,
 } from '../../utils/quantQuality';
-import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
+import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow, type TpsProjection } from '../../utils/modelHistory';
 import { inferCategory, categoryDescription, ALL_CATEGORIES, type ModelCategory } from '../../utils/modelCategory';
+import DiscoveryHoverCard, { type DiscoveryHoverRow } from './DiscoveryHoverCard';
+
+// ── Projection-tier helpers (shared with FleetModelDiscovery — when those
+// stabilise, lift these into modelHistory.ts) ─────────────────────────────
+
+/** Single-word label for a projection's confidence tier. */
+function projConfidenceLabel(c: TpsProjection['confidence']): string {
+  switch (c) {
+    case 'cohort':      return 'measured';
+    case 'sample':      return 'measured (1 sample)';
+    case 'bandwidth':   return 'scaled estimate';
+    case 'theoretical': return 'spec estimate';
+  }
+}
+/** One-line body explaining how this projection was produced. */
+function projConfidenceBody(p: TpsProjection): string {
+  switch (p.confidence) {
+    case 'cohort':
+      return `Average across ${p.count} similar-size models that have actually run on this node. Highest fidelity.`;
+    case 'sample':
+      return `Single similar-size measurement on this node, shown as a point estimate ±10%.`;
+    case 'bandwidth':
+      return `Scaled from your node's measured throughput on a different-size model. Inference is memory-bandwidth-bound: tok/s ∝ 1/size.`;
+    case 'theoretical':
+      return `Estimated from this chip's published memory bandwidth and the model's file size. No telemetry needed — refines once you run a model.`;
+  }
+}
+/** Structured rows summarising the projection range + method. */
+function projConfidenceRows(p: TpsProjection): DiscoveryHoverRow[] {
+  return [
+    { label: 'Range',  value: `${p.min} – ${p.max} tok/s` },
+    { label: 'Source', value: projConfidenceLabel(p.confidence), accent: p.confidence === 'theoretical' ? 'amber' : 'cyan' },
+    ...(p.count > 0 ? [{ label: 'Samples', value: `${p.count}` } as DiscoveryHoverRow] : []),
+  ];
+}
 
 /** Sort modes for the Discovery results list. Default = 'fit' (current behavior). */
 type SortMode = 'fit' | 'popularity' | 'speed' | 'cost' | 'size_asc' | 'size_desc';
@@ -389,7 +424,12 @@ const ModelRow: React.FC<{
   contextLength: number;
   vramBudgetMb: number;
   kwhRate: number;
-}> = ({ model, history, contextLength, vramBudgetMb, kwhRate }) => {
+  /** Chip name (e.g. "Apple M4 Pro") — enables theoretical-fallback tok/s
+   *  when no telemetry history exists. */
+  chipName: string | null;
+  /** When false, suppress the cost-per-M column (user has not set kWh rate). */
+  showCost: boolean;
+}> = ({ model, history, contextLength, vramBudgetMb, kwhRate, chipName, showCost }) => {
   const [open, setOpen] = useState(false);
   const best = model.variants[0];
   if (!best) return null;
@@ -402,7 +442,9 @@ const ModelRow: React.FC<{
   const recVariant = model.variants.find(v => v.quant?.toUpperCase() === recQuantName.toUpperCase()) ?? best;
 
   // Projections + cost — use best (top-scored) variant for the row line.
-  const proj = history ? projectTpsForVariant(history, best.file_size_mb, best.quant) : null;
+  // Pass chipName so the projection falls back to a theoretical bandwidth-based
+  // estimate when no telemetry history exists yet (Phase 3).
+  const proj = projectTpsForVariant(history ?? [], best.file_size_mb, best.quant, chipName);
   const avgWatts = (() => {
     if (!history || !history.length) return null;
     const w = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
@@ -462,28 +504,34 @@ const ModelRow: React.FC<{
           {proj && (
             <>
               <span className="text-gray-600">·</span>
-              <span
-                className="text-gray-400 tabular-nums"
-                title={proj.confidence === 'cohort'
-                  ? `Projected from ${proj.count} similar-size models (last 7 days, high fidelity)`
-                  : proj.confidence === 'sample'
-                    ? `Projected from 1 similar-size model (point estimate ±10%)`
-                    : `Scaled via memory-bandwidth heuristic from a different-size measurement (tok/s ∝ 1/size)`}
+              <DiscoveryHoverCard
+                heading={`≈${((proj.min + proj.max) / 2).toFixed(0)} tok/s · ${projConfidenceLabel(proj.confidence)}`}
+                body={projConfidenceBody(proj)}
+                rows={projConfidenceRows(proj)}
               >
-                ≈{((proj.min + proj.max) / 2).toFixed(0)} tok/s
-              </span>
+                <span className={`tabular-nums ${proj.confidence === 'theoretical' ? 'text-gray-500 italic' : 'text-gray-400'}`}>
+                  ≈{((proj.min + proj.max) / 2).toFixed(0)} tok/s
+                </span>
+              </DiscoveryHoverCard>
             </>
           )}
 
-          {costPerM != null && (
+          {showCost && costPerM != null && (
             <>
               <span className="text-gray-600">·</span>
-              <span
-                className="text-gray-500 tabular-nums"
-                title={`Electricity at ${kwhRate.toFixed(3)} $/kWh · projected tok/s · ${avgWatts?.toFixed(0)} W avg`}
+              <DiscoveryHoverCard
+                heading="Cost per million tokens"
+                body="Estimated electricity cost to generate 1M tokens at this node's projected tok/s and average power draw."
+                rows={[
+                  { label: 'Power rate',  value: `$${kwhRate.toFixed(3)}/kWh` },
+                  { label: 'Avg watts',   value: avgWatts != null ? `${avgWatts.toFixed(0)} W (measured)` : '—' },
+                  { label: 'Formula',     value: 'watts × $/kWh ÷ (tok/s × 3600) × 1M' },
+                ]}
               >
-                ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)}/M
-              </span>
+                <span className="text-gray-500 tabular-nums">
+                  ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)}/M
+                </span>
+              </DiscoveryHoverCard>
             </>
           )}
 
@@ -528,11 +576,14 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   const [error, setError]           = useState<string | null>(null);
   const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
   const history                     = useModelComparisonHistory(isLocalHost);
+  // useSettings exposes `isKwhRateConfigured` so cost-per-M only shows when
+  // the user has actually entered their power rate in Settings — not when
+  // they're seeing the default $0.12 placeholder they never engaged with.
   const [contextLength, setContextLength] = useState<number>(DEFAULT_CONTEXT_LENGTH);
   // Phase 2: category + sort. 'All' shows everything; sort defaults to 'fit'.
   const [category, setCategory] = useState<ModelCategory | 'All'>('All');
   const [sortMode, setSortMode] = useState<SortMode>('fit');
-  const { settings }                = useSettings();
+  const { settings, isKwhRateConfigured } = useSettings();
   const kwhRate                     = settings.fleet.kwhRate || 0.16;
   const historyCount                = history?.length ?? 0;
 
@@ -665,15 +716,23 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         <Sparkles className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-px" />
         <p className="text-[11px] text-gray-400 leading-snug">
           {historyCount > 0 ? (
-            <>
-              Wicklee scores models against <span className="text-gray-200 font-medium">YOUR hardware's actual performance</span> —
-              not generic benchmarks. Projections scaled from telemetry on{' '}
-              <span className="text-blue-300 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} you've run.
-            </>
+            isKwhRateConfigured ? (
+              <>
+                Wicklee scores models against <span className="text-gray-200 font-medium">YOUR hardware's actual performance</span> —
+                not generic benchmarks. Tok/s and cost projections use telemetry from{' '}
+                <span className="text-blue-300 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} you've run.
+              </>
+            ) : (
+              <>
+                Tok/s projections are scaled from your <span className="text-gray-200 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} of telemetry.{' '}
+                <a href="/settings" className="text-cyan-300 hover:text-cyan-200 underline-offset-2 hover:underline">Set your $/kWh in Settings</a> to see estimated cost per million tokens on each candidate.
+              </>
+            )
           ) : (
             <>
               Wicklee scores fit against this node's <span className="text-gray-200 font-medium">measured VRAM and thermal headroom</span>.
-              Once any model runs here, tok/s and cost projections turn on for every candidate.
+              Tok/s shown is a spec-derived estimate; it refines to <span className="text-gray-200 font-medium">measured</span> values the moment you run a model.
+              {!isKwhRateConfigured && <> <a href="/settings" className="text-cyan-300 hover:text-cyan-200 underline-offset-2 hover:underline">Set your $/kWh</a> to see cost per million tokens.</>}
             </>
           )}
         </p>
@@ -877,6 +936,8 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
                 contextLength={contextLength}
                 vramBudgetMb={hw?.vram_mb ?? 0}
                 kwhRate={kwhRate}
+                chipName={hw?.chip ?? null}
+                showCost={isKwhRateConfigured}
               />
             ));
           })()}

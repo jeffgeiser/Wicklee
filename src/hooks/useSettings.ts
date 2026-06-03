@@ -197,9 +197,30 @@ export function useSettings() {
     [settings],
   );
 
+  /**
+   * True when the user has explicitly set their fleet kwhRate via Settings.
+   * Distinguishes "user accepted/set their power rate" from "shown the default
+   * placeholder $0.12/kWh and never engaged." Used by Discovery to gate the
+   * cost-per-million-tokens column — showing a confident dollar number based
+   * on a default someone never saw was misleading.
+   *
+   * Detection: parse the raw localStorage payload (not the defaults-merged
+   * settings) and check whether fleet.kwhRate was present in the saved object.
+   * Re-evaluated on each render so a Settings save flips the flag immediately.
+   */
+  const isKwhRateConfigured = (() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      const p = JSON.parse(raw) as Partial<WickleeSettings>;
+      return p?.fleet?.kwhRate != null;
+    } catch { return false; }
+  })();
+
   return {
     settings,
     savedToast,
+    isKwhRateConfigured,
     getNodeSettings,
     updateFleet,
     setNodeOverride,

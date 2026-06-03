@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { estimateModelFileSizeMb, quantFamily } from './quantQuality';
+import { theoreticalTpsForChip } from './chipBandwidth';
 
 export interface ComparisonRow {
   model: string;
@@ -75,11 +76,15 @@ export interface TpsProjection {
   count: number;
   /**
    * Confidence tier — drives UI tooltip phrasing:
-   *   'cohort'    — 2+ observations in same size class + same quant family (highest fidelity)
-   *   'sample'    — 1+ observations in same size class (modest fidelity)
-   *   'bandwidth' — scaled from any-size observation via memory-bandwidth heuristic (lowest fidelity but always works)
+   *   'cohort'      — 2+ observations in same size class + same quant family (highest fidelity)
+   *   'sample'      — 1+ observations in same size class (modest fidelity)
+   *   'bandwidth'   — scaled from any-size observation via memory-bandwidth heuristic (lowest fidelity but always works once any history exists)
+   *   'theoretical' — pure-spec estimate from chip memory bandwidth, no telemetry required.
+   *                   Always available as long as the chip is in the bandwidth lookup table.
+   *                   This is the "ceiling" runthisllm-style estimate — real tok/s lands
+   *                   ~80-95% of this number under healthy thermals.
    */
-  confidence: 'cohort' | 'sample' | 'bandwidth';
+  confidence: 'cohort' | 'sample' | 'bandwidth' | 'theoretical';
 }
 
 /**
@@ -107,8 +112,31 @@ export function projectTpsForVariant(
   history: ComparisonRow[],
   variantFileSizeMb: number,
   variantQuant: string,
+  /** Optional — chip name used for the 4th-tier theoretical fallback when
+   *  no history exists. When omitted, behavior matches the prior 3-tier
+   *  contract (returns null on empty history). */
+  chipName?: string | null,
 ): TpsProjection | null {
-  if (!history.length || variantFileSizeMb <= 0) return null;
+  // Theoretical-fallback path when no telemetry is available. Used by the
+  // empty-fleet case so Discovery shows a useful tok/s estimate from the
+  // moment a node comes online — same physics as the bandwidth heuristic
+  // below, just sourced from the chip's spec sheet rather than measurement.
+  const theoreticalFallback = (): TpsProjection | null => {
+    if (!chipName || variantFileSizeMb <= 0) return null;
+    const tps = theoreticalTpsForChip(chipName, variantFileSizeMb / 1024);
+    if (tps == null || !isFinite(tps) || tps <= 0) return null;
+    // ±20% spread reflects the uncertainty of a pure-spec estimate — thermals,
+    // KV cache pressure, and longer-than-spec context all push the real
+    // number down from this ceiling.
+    return {
+      min: Math.round(tps * 0.80),
+      max: Math.round(tps * 1.00),  // theoretical is the ceiling, not a band midpoint
+      count: 0,
+      confidence: 'theoretical',
+    };
+  };
+
+  if (!history.length || variantFileSizeMb <= 0) return theoreticalFallback();
   const targetFamily = quantFamily(variantQuant);
   const lo = variantFileSizeMb * 0.6;
   const hi = variantFileSizeMb * 1.4;
@@ -121,7 +149,7 @@ export function projectTpsForVariant(
     if (sizeMb == null) continue;
     sized.push({ row, sizeMb });
   }
-  if (sized.length === 0) return null;
+  if (sized.length === 0) return theoreticalFallback();
 
   // Tier 1+2: same-size matches (within ±40%)
   const sameSize = sized.filter(s => s.sizeMb >= lo && s.sizeMb <= hi);
