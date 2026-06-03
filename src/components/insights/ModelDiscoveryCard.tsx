@@ -471,10 +471,14 @@ const ModelRow: React.FC<{
       <button
         onClick={() => setOpen(v => !v)}
         className={[
-          'w-full grid gap-3 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
-          'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto]',
-          'lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto]',
-          'xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_auto]',
+          'w-full grid gap-2 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
+          // Identity gets ~47% of the row; right-side columns tightened so
+          // fit/speed/popularity/actions group visually together. Same
+          // proportions as the cloud Fleet panel so users moving between
+          // localhost and the fleet dashboard see consistent column widths.
+          'grid-cols-[minmax(0,3fr)_minmax(0,1.1fr)_auto]',
+          'lg:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_auto]',
+          'xl:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.5fr)_auto]',
         ].join(' ')}
       >
         {/* Col 1 — identity (dot + stacked name/uploader) */}

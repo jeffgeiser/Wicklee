@@ -320,14 +320,20 @@ const FleetModelRow: React.FC<{
       <button
         onClick={() => setOpen(v => !v)}
         className={[
-          'w-full grid gap-3 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
+          'w-full grid gap-2 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
           // Grid template adapts to whether projections are available
           // fleet-wide. Without history, the speed/cost column would just be
           // em-dash for every row — so we drop it and let identity/fit/
           // popularity use the freed width.
+          //
+          // Tuned to give identity ~47% of the row when all columns visible
+          // (was ~33%) — long model names like Gemma-3-1B-it-GLM-4.7-Flash-
+          // Heretic-Uncensored-Thinking truncated too aggressively before.
+          // Right-side columns tightened up so fit/speed/popularity/actions
+          // group visually together rather than spreading across the row.
           hasFleetHistory
-            ? 'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_auto]'
-            : 'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto] lg:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,0.7fr)_auto] xl:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,0.7fr)_auto]',
+            ? 'grid-cols-[minmax(0,3fr)_minmax(0,1.1fr)_auto] lg:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_auto] xl:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.5fr)_auto]'
+            : 'grid-cols-[minmax(0,3fr)_minmax(0,1.1fr)_auto] lg:grid-cols-[minmax(0,3.4fr)_minmax(0,0.9fr)_minmax(0,1.3fr)_minmax(0,0.5fr)_auto] xl:grid-cols-[minmax(0,3.4fr)_minmax(0,0.9fr)_minmax(0,1.3fr)_minmax(0,0.5fr)_auto]',
         ].join(' ')}
       >
         {/* Col 1 — identity (dot + stacked name/uploader) */}
