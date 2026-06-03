@@ -67,6 +67,12 @@ interface NodeFit {
   hostname:     string | null;
   mem_budget_gb: number;
   thermal:      string;
+  /** Apple/NVIDIA chip identifier (e.g. "Apple M4 Pro", "NVIDIA RTX 4090").
+   *  Enables the theoretical tok/s fallback via chipBandwidth.ts when the
+   *  fleet has no telemetry for this candidate's size class yet. Optional
+   *  to remain backward-compatible with older agents that pre-date this
+   *  field. */
+  chip_name?:   string | null;
   fit_score:    number;
   fit_label:    string;
   best_quant:   string;
@@ -283,8 +289,12 @@ const FleetModelRow: React.FC<{
   })();
 
   // Speed + cost projections — use the best-fitting node's variant.
-  const projForRow = history && pullNode
-    ? projectTpsForVariant(history, pullNode.file_size_mb, pullNode.best_quant)
+  // Pass the node's chip so projectTpsForVariant can fall back to the
+  // theoretical (spec-derived) bandwidth estimate when no telemetry exists
+  // yet for this size class — same Phase 3 behavior the localhost panel
+  // already has.
+  const projForRow = pullNode
+    ? projectTpsForVariant(history ?? [], pullNode.file_size_mb, pullNode.best_quant, pullNode.chip_name ?? null)
     : null;
   let costPerMRow: number | null = null;
   if (projForRow && avgWatts != null) {
@@ -481,7 +491,7 @@ const FleetModelRow: React.FC<{
               const displayName = node.hostname ?? node.node_id;
               const isFocused = focusNodeId === node.node_id;
               const isRecommended = hasRecQuant && node.best_quant?.toUpperCase() === recQuant.toUpperCase();
-              const proj = history ? projectTpsForVariant(history, node.file_size_mb, node.best_quant) : null;
+              const proj = projectTpsForVariant(history ?? [], node.file_size_mb, node.best_quant, node.chip_name ?? null);
               let costPerM: number | null = null;
               if (proj && avgWatts != null) {
                 const tpsAvg = (proj.min + proj.max) / 2;
@@ -1084,8 +1094,8 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
                 : m.nodes[0];
               const projOf = (m: FleetModel) => {
                 const n = pullNodeOf(m);
-                if (!history || !n) return null;
-                return projectTpsForVariant(history, n.file_size_mb, n.best_quant);
+                if (!n) return null;
+                return projectTpsForVariant(history ?? [], n.file_size_mb, n.best_quant, n.chip_name ?? null);
               };
               const sizeOf = (m: FleetModel) => pullNodeOf(m)?.file_size_mb ?? 0;
               // Compose: primary key by sortMode, tiebreak on fit (or popularity for fit-mode).

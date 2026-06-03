@@ -5010,7 +5010,7 @@ async fn handle_fleet_model_candidates(
 
     // Snapshot online fleet node hardware
     let now = now_ms();
-    struct NodeHw { node_id: String, hostname: Option<String>, mem_mb: u64, power_w: f32, thermal: String }
+    struct NodeHw { node_id: String, hostname: Option<String>, mem_mb: u64, power_w: f32, thermal: String, chip: Option<String> }
     let node_hw: Vec<NodeHw> = {
         let snap = state.metrics.read().unwrap();
         node_ids.iter().filter_map(|nid| {
@@ -5021,7 +5021,12 @@ async fn handle_fleet_model_candidates(
             let mem_mb    = if vram == 0 { m.total_memory_mb * 3 / 4 } else { vram };
             let power_w   = m.apple_soc_power_w.or(m.nvidia_power_draw_w).unwrap_or(0.0);
             let thermal   = m.thermal_state.clone().unwrap_or_else(|| "Normal".into());
-            Some(NodeHw { node_id: nid.clone(), hostname: m.hostname.clone(), mem_mb, power_w, thermal })
+            // Chip identifier used by the frontend's theoretical tok/s lookup
+            // (chipBandwidth.ts). Apple Silicon reports a "chip_name" like
+            // "Apple M4 Pro"; NVIDIA reports "gpu_name" like "NVIDIA H100".
+            // Prefer chip_name (more specific to Apple), then gpu_name.
+            let chip = m.chip_name.clone().or(m.gpu_name.clone());
+            Some(NodeHw { node_id: nid.clone(), hostname: m.hostname.clone(), mem_mb, power_w, thermal, chip })
         }).collect()
     };
     let online_count = node_hw.len();
@@ -5063,6 +5068,7 @@ async fn handle_fleet_model_candidates(
                 "hostname":     hw.hostname,
                 "mem_budget_gb": (hw.mem_mb as f64 / 1024.0 * 10.0).round() / 10.0,
                 "thermal":      hw.thermal,
+                "chip_name":    hw.chip,
                 "fit_score":    best_score,
                 "fit_label":    best_label,
                 "best_quant":   best_quant,

@@ -457,93 +457,121 @@ const ModelRow: React.FC<{
     if (tpsAvg > 0) costPerM = (avgWatts / 1000) * (1_000_000 / tpsAvg / 3600) * kwhRate;
   }
 
+  // Localhost always has a single node — there's no "hasFleetHistory" toggle,
+  // but the same grid template makes the row visually consistent with the
+  // cloud Fleet panel. Phase 3 theoretical fallback means tok/s ~always~
+  // renders here (chip lookup almost always succeeds on Apple/NVIDIA), so we
+  // use the wider speed-column variant of the grid unconditionally.
   return (
-    <div className="border border-gray-700/60 rounded-lg overflow-hidden">
-      {/* Summary row — two lines mirroring the fleet variant. */}
+    <div className="border border-gray-700/60 rounded-xl overflow-hidden">
+      {/* Single-line grid summary — column proportions mirror the cloud Fleet
+          variant exactly so users moving between localhost and the fleet
+          dashboard see the same layout. Responsive: popularity hides first,
+          then projection, then quant. Identity + fit + action always visible. */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex flex-col gap-1 px-3 py-2 hover:bg-gray-700/20 transition-colors text-left"
+        className={[
+          'w-full grid gap-3 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
+          'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_auto]',
+          'lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto]',
+          'xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_auto]',
+        ].join(' ')}
       >
-        {/* Line 1 — identity + copy CTA */}
-        <div className="flex items-center gap-2 w-full">
+        {/* Col 1 — identity (dot + stacked name/uploader) */}
+        <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
-          <span className="text-xs text-gray-200 font-mono truncate min-w-0 flex-1">
-            {shortModelName(model.model_id)}
+          <div className="min-w-0 flex-1">
+            <div
+              className="text-xs text-gray-200 font-mono truncate"
+              title={shortModelName(model.model_id)}
+            >
+              {shortModelName(model.model_id)}
+            </div>
             {uploader && (
-              <span className="text-gray-600 font-sans"> · {uploader}</span>
+              <div className="text-[10px] text-gray-600 truncate" title={uploader}>
+                {uploader}
+              </div>
             )}
-          </span>
-          {best.pull_cmd && best.fit_score >= 40 && (
-            <RowCopyButton
-              text={best.pull_cmd}
-              title={`Copy pull command for recommended quant`}
-            />
-          )}
-          {open
-            ? <ChevronDown className="w-3 h-3 text-gray-600 shrink-0" />
-            : <ChevronRight className="w-3 h-3 text-gray-600 shrink-0" />}
+          </div>
         </div>
 
-        {/* Line 2 — quant, size, fit grade, speed, cost, downloads, likes */}
-        <div className="flex items-center gap-2 w-full flex-wrap text-[10px] pl-4">
-          <span
-            className="text-gray-400 font-mono tabular-nums"
-            title={quantQualityHint(recVariant.quant ?? '')}
-          >
-            <span className="text-gray-300">{recVariant.quant && recVariant.quant !== 'unknown' ? recVariant.quant : 'GGUF'}</span>
-            <span className="text-gray-600"> ({(recVariant.file_size_mb / 1024).toFixed(1)} GB)</span>
-          </span>
+        {/* Col 2 — recommended quant + size (hidden on < md) */}
+        <div
+          className="text-[10px] font-mono tabular-nums hidden md:block min-w-0"
+          title={quantQualityHint(recVariant.quant ?? '')}
+        >
+          <span className="text-gray-300">{recVariant.quant && recVariant.quant !== 'unknown' ? recVariant.quant : 'GGUF'}</span>
+          <span className="text-gray-600"> · {(recVariant.file_size_mb / 1024).toFixed(1)} GB</span>
+        </div>
 
-          <span className="text-gray-600">·</span>
-          <span className="inline-flex items-center gap-1.5" title={`Fit score ${best.fit_score}/100`}>
-            <span className={`inline-block w-1.5 h-3 rounded-sm ${fitBarClass(best.fit_score)}`} />
-            <span className={colors.text}>{fitGradeLabel(best.fit_score)}</span>
-            <span className="text-gray-600">fit</span>
-          </span>
+        {/* Col 3 — fit grade */}
+        <div
+          className="flex items-center gap-1.5 text-[10px] min-w-0"
+          title={`Fit score ${best.fit_score}/100`}
+        >
+          <span className={`inline-block w-1.5 h-3 rounded-sm shrink-0 ${fitBarClass(best.fit_score)}`} />
+          <span className={`${colors.text} truncate`}>{fitGradeLabel(best.fit_score)}</span>
+          <span className="text-gray-600 tabular-nums whitespace-nowrap">fit</span>
+        </div>
 
-          {proj && (
-            <>
-              <span className="text-gray-600">·</span>
-              <DiscoveryHoverCard
-                heading={`≈${((proj.min + proj.max) / 2).toFixed(0)} tok/s · ${projConfidenceLabel(proj.confidence)}`}
-                body={projConfidenceBody(proj)}
-                rows={projConfidenceRows(proj)}
-              >
-                <span className={`tabular-nums ${proj.confidence === 'theoretical' ? 'text-gray-500 italic' : 'text-gray-400'}`}>
-                  ≈{((proj.min + proj.max) / 2).toFixed(0)} tok/s
-                </span>
-              </DiscoveryHoverCard>
-            </>
+        {/* Col 4 — speed + (optional) cost projection. Hidden on < lg. */}
+        <div className="text-[10px] tabular-nums hidden lg:flex items-center gap-2 min-w-0">
+          {proj ? (
+            <DiscoveryHoverCard
+              heading={`≈${((proj.min + proj.max) / 2).toFixed(0)} tok/s · ${projConfidenceLabel(proj.confidence)}`}
+              body={projConfidenceBody(proj)}
+              rows={projConfidenceRows(proj)}
+            >
+              <span className={proj.confidence === 'theoretical' ? 'text-gray-500 italic' : 'text-gray-400'}>
+                ≈{((proj.min + proj.max) / 2).toFixed(0)} t/s
+              </span>
+            </DiscoveryHoverCard>
+          ) : null}
+          {showCost && costPerM != null ? (
+            <DiscoveryHoverCard
+              heading="Cost per million tokens"
+              body="Estimated electricity cost to generate 1M tokens at this node's projected tok/s and average power draw."
+              rows={[
+                { label: 'Power rate',  value: `$${kwhRate.toFixed(3)}/kWh` },
+                { label: 'Avg watts',   value: avgWatts != null ? `${avgWatts.toFixed(0)} W (measured)` : '—' },
+                { label: 'Formula',     value: 'watts × $/kWh ÷ (tok/s × 3600) × 1M' },
+              ]}
+            >
+              <span className="text-gray-500">
+                ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)}/M
+              </span>
+            </DiscoveryHoverCard>
+          ) : null}
+          {!proj && (
+            <span className="text-gray-700" title="Projection unavailable for this row.">
+              —
+            </span>
           )}
+        </div>
 
-          {showCost && costPerM != null && (
-            <>
-              <span className="text-gray-600">·</span>
-              <DiscoveryHoverCard
-                heading="Cost per million tokens"
-                body="Estimated electricity cost to generate 1M tokens at this node's projected tok/s and average power draw."
-                rows={[
-                  { label: 'Power rate',  value: `$${kwhRate.toFixed(3)}/kWh` },
-                  { label: 'Avg watts',   value: avgWatts != null ? `${avgWatts.toFixed(0)} W (measured)` : '—' },
-                  { label: 'Formula',     value: 'watts × $/kWh ÷ (tok/s × 3600) × 1M' },
-                ]}
-              >
-                <span className="text-gray-500 tabular-nums">
-                  ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)}/M
-                </span>
-              </DiscoveryHoverCard>
-            </>
-          )}
-
-          <span className="text-gray-700 tabular-nums ml-auto" title="HuggingFace downloads (all time)">
+        {/* Col 5 — popularity (hidden on < xl) */}
+        <div className="text-[10px] tabular-nums hidden xl:flex items-center gap-2 min-w-0 justify-end">
+          <span className="text-gray-700" title="HuggingFace downloads (all time)">
             {fmtDl(model.downloads)}↓
           </span>
-
           {model.likes != null && model.likes > 0 && (
-            <span className="text-rose-400/50 tabular-nums" title="HuggingFace likes">
+            <span className="text-rose-400/50" title="HuggingFace likes">
               {fmtDl(model.likes)}♥
             </span>
           )}
+        </div>
+
+        {/* Col 6 — actions (always visible, right-aligned) */}
+        <div className="flex items-center gap-1 shrink-0">
+          {best.pull_cmd && best.fit_score >= 40 && (
+            <RowCopyButton
+              text={best.pull_cmd}
+              title={`Copy pull command for ${recVariant.quant && recVariant.quant !== 'unknown' ? recVariant.quant : 'recommended quant'}`}
+            />
+          )}
+          {open
+            ? <ChevronDown className="w-3 h-3 text-gray-600" />
+            : <ChevronRight className="w-3 h-3 text-gray-600" />}
         </div>
       </button>
 
