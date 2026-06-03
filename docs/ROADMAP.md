@@ -129,6 +129,9 @@ Four pieces shipped together: `/blog/wes-the-mpg-for-local-ai-inference` (polish
 
 ## Planned
 
+### Subscription Tier Gating on Fleet Model Endpoints
+The three new cloud endpoints shipped with the Models tab — `/api/v1/fleet/model-comparison`, `/api/v1/fleet/model-switches`, `/api/v1/fleet/cost-by-model` — are Bearer-auth-gated but not tier-gated. Any signed-in user gets the same 168-hour ceiling on the `hours` parameter regardless of plan. Intent per pricing: Community 24h, Pro 7d (168h), Team 90d, Business 365d. Implementation: extract `subscription_tier` from the user record at the handler, clamp `hours` against a per-tier max, and return a `tier_limit_hit` flag in the response envelope so the frontend can surface an upgrade nudge when a request was truncated. Low priority — small user base today, simple fix when revenue justifies it.
+
 ### Fleet SLA Aggregation (Pro/Team)
 `GET /api/v1/fleet/sla` — fleet-wide aggregation of the per-node SLA Monitor. Cloud backend pulls each node's `inference_traces` via the existing telemetry path and computes fleet-wide p95/p99 across all requests, plus a per-node breakdown ranked by p95 TTFT. Surfaces on `wicklee.dev` as the fleet-level companion to the Performance tab's SLA Monitor card. Pro for single-node SLA on the cloud dashboard; Team for the fleet roll-up + cross-node compliance reporting.
 

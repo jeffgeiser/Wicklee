@@ -817,13 +817,13 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           {historyCount > 0 ? (
             <>
               Wicklee scores models against <span className="text-gray-200 font-medium">YOUR fleet's actual performance</span> —
-              not generic benchmarks. Projections use telemetry from{' '}
+              not generic benchmarks. Projections scaled from telemetry on{' '}
               <span className="text-blue-300 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} you've run.
             </>
           ) : (
             <>
-              Run a few models on your fleet — Wicklee will then project tok/s and cost for
-              candidates based on your <span className="text-gray-200 font-medium">actual hardware's performance</span>.
+              Wicklee scores fit against your fleet's <span className="text-gray-200 font-medium">measured VRAM and thermal headroom</span>.
+              Once any model runs on a node, tok/s and cost projections turn on for every candidate.
             </>
           )}
         </p>
