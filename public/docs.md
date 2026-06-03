@@ -289,9 +289,57 @@ Four components, weighted to favor models that leave significant headroom for co
 
 **Context-length picker (Discovery v2):** 2K / 4K / 8K (default) / 16K / 32K / 128K. Each variant's VRAM requirement and fit score re-calculate when changed, using architecture-aware KV cache estimates per parameter class. Lets you compare "this model at 8K context" vs "this model at 32K" without leaving the page.
 
-**Projected tok/s and cost/M tokens (Discovery v2):** every row shows a projected throughput and cost-per-million-tokens estimate sourced from your fleet's own historical model-comparison data — only displayed when 2+ similar-size models have been observed running on similar hardware. This is the competitive moat against generic "can you run this LLM?" calculators: Wicklee scores against what *your* hardware actually delivers, not synthetic benchmarks. Empty-state copy nudges users to "Run a few models" to seed projections.
-
 **Quant quality tooltips + sweet-spot badge (Discovery v2):** every quant label hovers a quality tooltip from the QUANT_QUALITY map (e.g. *"Q4_K_M: ~97% quality. Standard sweet spot for most models."*). The sweet-spot quant for each model family carries a `[Rec]` badge so newcomers don't end up downloading Q8 by accident.
+
+### Tok/s Projection Methodology
+
+Every Discovery row carries a projected tok/s number. There is no empty state — even on a fresh node with zero telemetry, the value renders from a four-tier fallback stack. The tooltip on each row tells you which tier produced its number.
+
+**The physics.** LLM inference at batch=1 is memory-bandwidth-bound. To generate one token, the engine must stream every weight from VRAM through the GPU once. So the theoretical ceiling is:
+
+```
+max_tps ≈ memory_bandwidth_GB_s / model_size_GB
+```
+
+Real-world tok/s lands at ~30–45% of that ceiling because of activation memory traffic, KV cache reads, framework overhead, and sub-optimal kernel scheduling for single-stream GGUF inference. Wicklee uses **0.40** as a conservative efficiency factor — the middle of the observed range.
+
+**Four-tier fallback (first tier that produces a number wins):**
+
+| Tier | When it fires | Range | Source |
+|---|---|---|---|
+| 1 · `cohort` | ≥2 historical models within ±40% of the candidate's file size and same quant family | empirical min/max | your telemetry |
+| 2 · `sample` | 1 historical model within ±40% of candidate size | point estimate ±10% | your telemetry |
+| 3 · `bandwidth` | Any historical observation, any size class | `baseline_tps × (baseline_size / candidate_size)` ±15% | scaled from your telemetry |
+| 4 · `theoretical` | Always available when the chip is in the lookup table | `bandwidth × 0.40 / size` ±0%/+0% | chip spec sheet |
+
+The Phase 3 `theoretical` tier is the day-one answer — it kicks in when no telemetry exists yet. It uses the chip's published memory bandwidth from a lookup covering every Apple M1/M2/M3/M4 variant (M1: 68–800 GB/s, M4 Pro: 273 GB/s, M2 Ultra: 800 GB/s) and NVIDIA H100/H200/A100/L40/L4/A40, RTX 30/40/50 consumer cards, and RTX A-series workstation cards.
+
+Theoretical rows render in italicized gray and the tooltip carries an amber accent so the spec-derived origin is unmissable. As telemetry accumulates, candidates near your historical sizes promote to higher-fidelity tiers automatically.
+
+### Cost-per-Million-Tokens Methodology
+
+Cost is only displayed when the user has explicitly set their `$/kWh` rate in **Settings** (a non-default value, persisted to localStorage). Showing a confident dollar number based on the system default would be misleading.
+
+Formula:
+
+```
+cost_per_M = avg_watts × $/kWh ÷ (3600 × tok_s) × 1M
+```
+
+- `avg_watts` — the fleet's measured average power draw during inference, computed from telemetry. Without telemetry there is no cost projection (the watts term has no value).
+- `$/kWh` — your configured power rate.
+- `tok_s` — same projection used for the speed column, including theoretical fallback.
+
+Cost-per-M is highly correlated with tok/s on the same hardware (watts is roughly constant during inference; the divisor does the work). It's shown for users who care about the dollars framing — the comparison against commercial APIs ($0.50/M Claude Haiku, $3/M GPT-4o) is what makes it independently useful. Users who don't want it can leave the kWh rate unset and the column disappears.
+
+### Why fit and tok/s use different signal sources
+
+A row may show `Excellent fit · ≈45 tok/s (spec estimate)`. That's intentional and honest:
+
+- **Fit** is fully telemetry-driven — VRAM headroom (measured), thermal state (measured), WES history (measured), power-fraction-of-budget (measured). It always reflects your actual hardware.
+- **Tok/s** uses telemetry when available and falls back to the chip's bandwidth spec when not. The tier label in the hover tooltip tells you which.
+
+Both numbers are accurate; they just come from different places. The page-level Discovery banner that used to over-claim "uses telemetry from N models you've run" was removed — per-row hovers now carry that information per-row at the right granularity.
 
 ### Search behavior
 

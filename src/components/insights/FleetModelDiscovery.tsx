@@ -14,7 +14,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle } from 'lucide-react';
 import {
   quantQualityHint,
   recommendedQuant,
@@ -898,32 +898,9 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </button>
       </form>
 
-      {/* "Your hardware" positioning callout */}
-      <div className="flex items-start gap-2 px-3 py-2 bg-blue-500/5 border border-blue-500/20 rounded-lg">
-        <Sparkles className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-px" />
-        <p className="text-[11px] text-gray-400 leading-snug">
-          {historyCount > 0 ? (
-            isKwhRateConfigured ? (
-              <>
-                Wicklee scores models against <span className="text-gray-200 font-medium">YOUR fleet's actual performance</span> —
-                not generic benchmarks. Tok/s and cost projections use telemetry from{' '}
-                <span className="text-blue-300 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} you've run.
-              </>
-            ) : (
-              <>
-                Tok/s projections are scaled from your fleet's <span className="text-gray-200 font-medium">{historyCount}</span> model{historyCount === 1 ? '' : 's'} of telemetry.{' '}
-                <a href="/settings" className="text-cyan-300 hover:text-cyan-200 underline-offset-2 hover:underline">Set your $/kWh in Settings</a> to see estimated cost per million tokens on each candidate.
-              </>
-            )
-          ) : (
-            <>
-              Wicklee scores fit against your fleet's <span className="text-gray-200 font-medium">measured VRAM and thermal headroom</span>.
-              Tok/s shown is a spec-derived estimate; it refines to <span className="text-gray-200 font-medium">measured</span> values the moment a model runs.
-              {!isKwhRateConfigured && <> <a href="/settings" className="text-cyan-300 hover:text-cyan-200 underline-offset-2 hover:underline">Set your $/kWh</a> to see cost per million tokens.</>}
-            </>
-          )}
-        </p>
-      </div>
+      {/* Page-level methodology callout removed — per-row hover tooltips now
+          explain how each tok/s projection was derived, and the full
+          methodology lives in docs/docs.md under "Model Discovery Scoring". */}
 
       {/* Context length picker */}
       <div className="flex items-center gap-2 flex-wrap">

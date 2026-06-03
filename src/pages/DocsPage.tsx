@@ -1018,7 +1018,95 @@ WES Version:     2
               </div>
             </div>
 
-            <div className="mt-4">
+            {/* ── Tok/s Projection Methodology ───────────────────────────── */}
+            <div className="mt-6">
+              <p className="font-semibold text-white mb-1">Tok/s Projection Methodology</p>
+              <p className="text-xs text-gray-500 mb-3">Every Discovery row carries a projected tok/s number — even on a fresh node with zero telemetry. The hover tooltip on each row tells you which tier produced the number.</p>
+
+              <p className="text-xs text-gray-500 mb-3">
+                <strong className="text-gray-300">The physics:</strong> LLM inference at batch=1 is memory-bandwidth-bound. To generate one token, the engine must stream every weight from VRAM through the GPU once. The theoretical ceiling is{' '}
+                <code className="font-mono text-[11px] text-gray-400">max_tps ≈ memory_bandwidth_GB_s / model_size_GB</code>. Real-world tok/s lands at ~30–45% of that ceiling because of activation memory traffic, KV cache reads, framework overhead, and sub-optimal kernel scheduling. Wicklee uses <strong className="text-gray-300">0.40</strong> as a conservative efficiency factor — the middle of the observed range.
+              </p>
+
+              <table className="w-full mt-3">
+                <thead>
+                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
+                    <th className="pb-2 pr-4">Tier</th>
+                    <th className="pb-2 pr-4">When it fires</th>
+                    <th className="pb-2 pr-4">Range</th>
+                    <th className="pb-2">Source</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs divide-y divide-gray-800/50">
+                  <tr>
+                    <td className="py-2 pr-4 text-cyan-400 font-mono">cohort</td>
+                    <td className="py-2 pr-4 text-gray-400">≥2 historical models within ±40% size + same quant family</td>
+                    <td className="py-2 pr-4 text-gray-500">empirical min/max</td>
+                    <td className="py-2 text-gray-500">your telemetry</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-cyan-400 font-mono">sample</td>
+                    <td className="py-2 pr-4 text-gray-400">1 historical model within ±40% size</td>
+                    <td className="py-2 pr-4 text-gray-500">point estimate ±10%</td>
+                    <td className="py-2 text-gray-500">your telemetry</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-cyan-400 font-mono">bandwidth</td>
+                    <td className="py-2 pr-4 text-gray-400">Any historical observation, any size class</td>
+                    <td className="py-2 pr-4 text-gray-500"><code className="font-mono text-[11px]">baseline_tps × (baseline_size / candidate_size)</code> ±15%</td>
+                    <td className="py-2 text-gray-500">scaled from your telemetry</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-amber-400 font-mono">theoretical</td>
+                    <td className="py-2 pr-4 text-gray-400">Always — when the chip is in the bandwidth lookup table</td>
+                    <td className="py-2 pr-4 text-gray-500"><code className="font-mono text-[11px]">bandwidth × 0.40 / size</code></td>
+                    <td className="py-2 text-gray-500">chip spec sheet</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <p className="text-xs text-gray-500 mt-3">
+                The first tier that produces a number wins. <strong className="text-amber-400">Theoretical</strong> is the day-one answer — it kicks in when no telemetry exists yet. The bandwidth lookup covers every Apple M1/M2/M3/M4 variant (M1: 68–800 GB/s, M4 Pro: 273 GB/s, M2 Ultra: 800 GB/s) and NVIDIA H100/H200/A100/L40/L4/A40, RTX 30/40/50 consumer cards, and RTX A-series workstation cards.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                Theoretical rows render in italicized gray and the tooltip carries an amber accent so the spec-derived origin is unmissable. As telemetry accumulates, candidates near your historical sizes promote to higher-fidelity tiers automatically.
+              </p>
+            </div>
+
+            {/* ── Cost-per-Million-Tokens ───────────────────────────────── */}
+            <div className="mt-6">
+              <p className="font-semibold text-white mb-1">Cost-per-Million-Tokens Methodology</p>
+              <p className="text-xs text-gray-500 mb-3">Cost is only displayed when the user has explicitly set their <code className="font-mono text-[11px] text-gray-400">$/kWh</code> rate in <strong className="text-gray-300">Settings</strong> (a non-default value, persisted to localStorage). Showing a confident dollar number based on the system default would be misleading.</p>
+
+              <Code>{`cost_per_M = avg_watts × $/kWh ÷ (3600 × tok_s) × 1M`}</Code>
+
+              <ul className="text-xs text-gray-500 mt-3 space-y-1 list-disc pl-5">
+                <li><code className="font-mono text-[11px] text-gray-400">avg_watts</code> — the fleet's measured average power draw during inference, computed from telemetry. Without telemetry there is no cost projection.</li>
+                <li><code className="font-mono text-[11px] text-gray-400">$/kWh</code> — your configured power rate.</li>
+                <li><code className="font-mono text-[11px] text-gray-400">tok_s</code> — same projection used for the speed column, including theoretical fallback.</li>
+              </ul>
+
+              <p className="text-xs text-gray-500 mt-3">
+                Cost-per-M is highly correlated with tok/s on the same hardware (watts is roughly constant during inference; the divisor does the work). It's shown for users who care about the dollars framing — the comparison against commercial APIs ($0.50/M Claude Haiku, $3/M GPT-4o) is what makes it independently useful. Users who don't want it can leave the kWh rate unset and the column disappears.
+              </p>
+            </div>
+
+            {/* ── Why fit and tok/s use different signals ───────────────── */}
+            <div className="mt-6">
+              <p className="font-semibold text-white mb-1">Why fit and tok/s use different signal sources</p>
+              <p className="text-xs text-gray-500">
+                A row may show <span className="text-emerald-400">Excellent fit</span> · <span className="text-gray-500 italic">≈45 tok/s (spec estimate)</span>. That's intentional and honest:
+              </p>
+              <ul className="text-xs text-gray-500 mt-2 space-y-1 list-disc pl-5">
+                <li><strong className="text-gray-300">Fit</strong> is fully telemetry-driven — VRAM headroom (measured), thermal state (measured), WES history (measured), power-fraction-of-budget (measured). It always reflects your actual hardware.</li>
+                <li><strong className="text-gray-300">Tok/s</strong> uses telemetry when available and falls back to the chip's bandwidth spec when not. The tier label in the hover tooltip tells you which.</li>
+              </ul>
+              <p className="text-xs text-gray-500 mt-2">
+                Both numbers are accurate; they just come from different places.
+              </p>
+            </div>
+
+            <div className="mt-6">
               <p className="font-semibold text-white mb-2">Search behavior</p>
               <div className="text-xs text-gray-500 space-y-1">
                 <p><strong className="text-gray-300">No search term</strong> — returns cached top-20 GGUF repos by HuggingFace downloads (24h TTL). Works offline after first cache fill.</p>
