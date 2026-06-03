@@ -67,25 +67,41 @@ export function useModelComparisonHistory(
 }
 
 export interface TpsProjection {
-  /** Lower bound (min observed tok/s in the matching cohort). */
+  /** Lower bound. For 'cohort'/'sample' = min observed. For 'bandwidth' = scaled value with ±10% spread. */
   min: number;
-  /** Upper bound (max observed tok/s in the matching cohort). */
+  /** Upper bound. */
   max: number;
-  /** Number of historical models in the cohort. Always >= 2 when returned. */
+  /** Number of historical models the projection is derived from. */
   count: number;
+  /**
+   * Confidence tier — drives UI tooltip phrasing:
+   *   'cohort'    — 2+ observations in same size class + same quant family (highest fidelity)
+   *   'sample'    — 1+ observations in same size class (modest fidelity)
+   *   'bandwidth' — scaled from any-size observation via memory-bandwidth heuristic (lowest fidelity but always works)
+   */
+  confidence: 'cohort' | 'sample' | 'bandwidth';
 }
 
 /**
- * Project a tok/s range for a candidate variant based on the user's
- * historical performance on similar-sized models.
+ * Project a tok/s range for a candidate variant.
  *
- * Returns null if fewer than 2 historical models match (no guessing
- * from N=1, per spec).
+ * Three-tier fallback:
+ *   1. Same-size cohort (≥2 observations within ±40% file size, same quant family)
+ *      → empirical min/max range (highest fidelity)
+ *   2. Same-size sample (1 observation within ±40%)
+ *      → use that single sample's tok/s as a point estimate ±10% spread
+ *   3. Bandwidth heuristic (any observation, any size)
+ *      → tok/s scales inversely with model size (LLM inference is memory-
+ *        bandwidth-bound at batch=1). Pick the closest-size historical
+ *        observation and scale: projected = baseline × baseline_size / candidate_size.
+ *        Always works as long as the fleet has any single historical model.
  *
- * Matching:
- *   1. Historical model's estimated file size within ±40% of candidate's
- *   2. Prefer same quant family (Q4↔Q4, Q5/Q6↔Q5/Q6, Q8/F16↔Q8/F16);
- *      fall back to any quant if the same-family cohort is too small.
+ * Returns null only when there's literally no usable historical data.
+ *
+ * The previous implementation required ≥2 same-cohort models which meant
+ * a 4-model fleet history showed projections for 0 candidates if no two
+ * models happened to share a size class. The bandwidth fallback fixes that
+ * — any single observation unlocks projections for every candidate.
  */
 export function projectTpsForVariant(
   history: ComparisonRow[],
@@ -103,24 +119,50 @@ export function projectTpsForVariant(
     if (row.avg_tok_s == null || row.avg_tok_s <= 0) continue;
     const sizeMb = estimateModelFileSizeMb(row.model);
     if (sizeMb == null) continue;
-    if (sizeMb < lo || sizeMb > hi) continue;
     sized.push({ row, sizeMb });
   }
   if (sized.length === 0) return null;
 
-  // Prefer same quant family; fall back to any.
-  let cohort = sized;
-  if (targetFamily) {
-    const sameFam = sized.filter(s => quantFamily(extractQuant(s.row.model) ?? '') === targetFamily);
-    if (sameFam.length >= 2) cohort = sameFam;
+  // Tier 1+2: same-size matches (within ±40%)
+  const sameSize = sized.filter(s => s.sizeMb >= lo && s.sizeMb <= hi);
+  if (sameSize.length > 0) {
+    // Tier 1: prefer same quant family with ≥2 observations
+    if (targetFamily) {
+      const sameFam = sameSize.filter(s => quantFamily(extractQuant(s.row.model) ?? '') === targetFamily);
+      if (sameFam.length >= 2) {
+        const tps = sameFam.map(c => c.row.avg_tok_s as number);
+        return { min: Math.min(...tps), max: Math.max(...tps), count: sameFam.length, confidence: 'cohort' };
+      }
+    }
+    // Still in same-size — return range from all same-size matches (any quant)
+    if (sameSize.length >= 2) {
+      const tps = sameSize.map(c => c.row.avg_tok_s as number);
+      return { min: Math.min(...tps), max: Math.max(...tps), count: sameSize.length, confidence: 'cohort' };
+    }
+    // Tier 2: single same-size sample → point estimate ±10%
+    const single = sameSize[0].row.avg_tok_s as number;
+    return { min: Math.round(single * 0.9), max: Math.round(single * 1.1), count: 1, confidence: 'sample' };
   }
-  if (cohort.length < 2) return null;
 
-  const tps = cohort.map(c => c.row.avg_tok_s as number);
+  // Tier 3: bandwidth-scaling fallback. Use the closest-size historical
+  // observation and scale linearly by inverse size ratio. The assumption:
+  // LLM inference at batch=1 is memory-bandwidth-bound, so tok/s ∝ 1/size
+  // on the same hardware. This is the same physics quantSweet.ts uses for
+  // its quant-recommendation projections — borrowing the technique here so
+  // Discovery shows useful numbers from day one rather than waiting for
+  // cohorts to form organically.
+  sized.sort((a, b) => Math.abs(a.sizeMb - variantFileSizeMb) - Math.abs(b.sizeMb - variantFileSizeMb));
+  const baseline = sized[0];
+  const baselineTps = baseline.row.avg_tok_s as number;
+  const projected = baselineTps * (baseline.sizeMb / variantFileSizeMb);
+  // ±15% spread acknowledges the bandwidth heuristic's inherent imprecision
+  // (model architecture variations, varying quant overhead) without being so
+  // wide it becomes useless guidance.
   return {
-    min: Math.min(...tps),
-    max: Math.max(...tps),
-    count: cohort.length,
+    min: Math.round(projected * 0.85),
+    max: Math.round(projected * 1.15),
+    count: sized.length,
+    confidence: 'bandwidth',
   };
 }
 

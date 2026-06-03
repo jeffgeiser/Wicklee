@@ -276,9 +276,13 @@ const VariantTable: React.FC<{
                 {proj && (
                   <span
                     className="ml-2 text-gray-500"
-                    title={`Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} you've run in the last 7 days.`}
+                    title={proj.confidence === 'cohort'
+                      ? `Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} you've run in the last 7 days (high fidelity).`
+                      : proj.confidence === 'sample'
+                        ? `Projected from 1 similar-size model — point estimate ±10%.`
+                        : `Scaled from your measured tok/s on a different-size model. LLM inference is memory-bandwidth-bound (tok/s ∝ 1/size). Lowest-fidelity tier; precision improves as you run more models in this size class.`}
                   >
-                    ≈ {proj.min.toFixed(0)}-{proj.max.toFixed(0)} tok/s ({proj.count})
+                    ≈ {proj.min.toFixed(0)}-{proj.max.toFixed(0)} tok/s
                   </span>
                 )}
                 {costPerM != null && (
@@ -456,7 +460,11 @@ const ModelRow: React.FC<{
               <span className="text-gray-600">·</span>
               <span
                 className="text-gray-400 tabular-nums"
-                title={`Projected from ${proj.count} similar-size model${proj.count === 1 ? '' : 's'} (last 7 days)`}
+                title={proj.confidence === 'cohort'
+                  ? `Projected from ${proj.count} similar-size models (last 7 days, high fidelity)`
+                  : proj.confidence === 'sample'
+                    ? `Projected from 1 similar-size model (point estimate ±10%)`
+                    : `Scaled via memory-bandwidth heuristic from a different-size measurement (tok/s ∝ 1/size)`}
               >
                 ≈{((proj.min + proj.max) / 2).toFixed(0)} tok/s
               </span>

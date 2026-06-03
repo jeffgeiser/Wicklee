@@ -346,7 +346,11 @@ const FleetModelRow: React.FC<{
             {projForRow ? (
               <span
                 className="text-gray-400"
-                title={`Projected from ${projForRow.count} similar-size model${projForRow.count === 1 ? '' : 's'} (last 7 days fleet history)`}
+                title={projForRow.confidence === 'cohort'
+                  ? `Projected from ${projForRow.count} similar-size models in your fleet history (high fidelity)`
+                  : projForRow.confidence === 'sample'
+                    ? 'Projected from 1 similar-size model — single sample, less precise.'
+                    : 'Scaled from your fleet\'s measured tok/s on a different-size model. LLM inference is memory-bandwidth-bound (tok/s ∝ 1/size on the same hardware). Lowest-fidelity tier; precision improves as you run more models in this size class.'}
               >
                 ≈{((projForRow.min + projForRow.max) / 2).toFixed(0)} t/s
               </span>
