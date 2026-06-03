@@ -23,6 +23,10 @@ import {
   contextLengthLabel,
 } from '../../utils/quantQuality';
 import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
+import { inferCategory, categoryDescription, ALL_CATEGORIES, type ModelCategory } from '../../utils/modelCategory';
+
+/** Sort modes for the Discovery results list. Default = 'fit' (current behavior). */
+type SortMode = 'fit' | 'popularity' | 'speed' | 'cost' | 'size_asc' | 'size_desc';
 
 interface VariantResult {
   quant:              string;
@@ -525,6 +529,9 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
   const history                     = useModelComparisonHistory(isLocalHost);
   const [contextLength, setContextLength] = useState<number>(DEFAULT_CONTEXT_LENGTH);
+  // Phase 2: category + sort. 'All' shows everything; sort defaults to 'fit'.
+  const [category, setCategory] = useState<ModelCategory | 'All'>('All');
+  const [sortMode, setSortMode] = useState<SortMode>('fit');
   const { settings }                = useSettings();
   const kwhRate                     = settings.fleet.kwhRate || 0.16;
   const historyCount                = history?.length ?? 0;
@@ -582,6 +589,19 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
 
   const fittingCount = data?.models.filter(m => m.variants.some(v => v.fit_score >= 60)).length ?? 0;
   const hw = data?.hardware;
+
+  // ── Phase 2: category + sort plumbing ────────────────────────────────────
+  // Base pool: everything the agent returned. Localhost has a single node so
+  // there's no fit-mode filter to layer on first (unlike the fleet variant).
+  const basePool = data?.models ?? [];
+  const categoryCounts: Record<ModelCategory | 'All', number> = {
+    All: basePool.length,
+    General: 0, Code: 0, Reasoning: 0, Vision: 0, Embedding: 0, Audio: 0,
+  };
+  for (const m of basePool) categoryCounts[inferCategory(m.model_id)]++;
+  const displayModels = category === 'All'
+    ? basePool
+    : basePool.filter(m => inferCategory(m.model_id) === category);
 
   return (
     <div className="space-y-3">
@@ -678,12 +698,83 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         ))}
       </div>
 
+      {/* Category chip row — inferred client-side from model_id (Phase 2). */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Category:</span>
+        <button
+          onClick={() => setCategory('All')}
+          title="Show all categories"
+          className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+            category === 'All'
+              ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+              : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+          }`}
+        >
+          All <span className="text-gray-600 font-mono">{categoryCounts.All}</span>
+        </button>
+        {ALL_CATEGORIES.map(cat => {
+          const count = categoryCounts[cat];
+          const disabled = count === 0;
+          return (
+            <button
+              key={cat}
+              onClick={() => !disabled && setCategory(cat)}
+              disabled={disabled}
+              title={categoryDescription(cat) + (disabled ? ' — no matches in current view.' : '')}
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                category === cat
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : disabled
+                    ? 'bg-transparent border-gray-800 text-gray-700 cursor-not-allowed opacity-50'
+                    : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+              }`}
+            >
+              {cat} <span className="text-gray-600 font-mono">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Sort chip row. 'speed' and 'cost' degrade gracefully — models without
+          a projection sink to the bottom rather than disappearing. */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Sort:</span>
+        {([
+          { key: 'fit',        label: 'Fit',        hint: 'Highest fit score first (default).' },
+          { key: 'popularity', label: 'Popularity', hint: 'Most-downloaded on HuggingFace first.' },
+          { key: 'speed',      label: 'Speed',      hint: 'Projected tok/s — fastest first. Requires at least one model run.' },
+          { key: 'cost',       label: 'Cost',       hint: 'Cheapest tokens per dollar first. Requires at least one model run.' },
+          { key: 'size_asc',   label: 'Size ↑',     hint: 'Smallest model first.' },
+          { key: 'size_desc',  label: 'Size ↓',     hint: 'Largest model first.' },
+        ] as { key: SortMode; label: string; hint: string }[]).map(s => {
+          const needsHistory = s.key === 'speed' || s.key === 'cost';
+          const disabled = needsHistory && historyCount === 0;
+          return (
+            <button
+              key={s.key}
+              onClick={() => !disabled && setSortMode(s.key)}
+              disabled={disabled}
+              title={s.hint + (disabled ? ' Unavailable until at least one model has run.' : '')}
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                sortMode === s.key
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : disabled
+                    ? 'bg-transparent border-gray-800 text-gray-700 cursor-not-allowed opacity-50'
+                    : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+              }`}
+            >
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Source label */}
       <div className="text-[10px] text-gray-700">
         {data?.is_live_search
-          ? `Live HuggingFace search · ${data.models.length} model${data.models.length !== 1 ? 's' : ''} scored against your hardware`
+          ? `Live HuggingFace search · ${displayModels.length} model${displayModels.length !== 1 ? 's' : ''} scored against your hardware`
           : !search
-            ? <span><span className="text-gray-400 font-semibold">Recommended for your hardware</span> — sorted by fit, then popularity</span>
+            ? <span><span className="text-gray-400 font-semibold">Recommended for your hardware</span> — {displayModels.length} model{displayModels.length !== 1 ? 's' : ''} {category !== 'All' ? `in ${category}` : 'across all categories'}</span>
             : `Trending GGUF models by downloads · scored against your hardware`}
       </div>
 
@@ -693,9 +784,11 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
       )}
 
       {/* Empty */}
-      {data && data.models.length === 0 && !loading && (
+      {data && displayModels.length === 0 && !loading && (
         <p className="text-xs text-gray-600 py-6 text-center">
-          No GGUF models found for "{search}". Try a different search term.
+          {data.models.length === 0
+            ? `No GGUF models found for "${search}". Try a different search term.`
+            : `No ${category} models in the current view. Try a different category or "All".`}
         </p>
       )}
 
@@ -708,17 +801,72 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
       )}
 
       {/* Results */}
-      {data && data.models.length > 0 && (
+      {data && displayModels.length > 0 && (
         <div className="space-y-1">
           {(() => {
-            const list = [...data.models];
-            // When no search query, re-sort by best fit then by downloads.
+            const list = [...displayModels];
+            // Hoist avgWatts here so 'cost' sort uses the same value the rows
+            // render — fleet-wide average from history, identical for every model.
+            const avgWatts = history && history.length
+              ? (() => {
+                  const w = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
+                  return w.length
+                    ? w.reduce((s, r) => s + (r.avg_watts as number), 0) / w.length
+                    : null;
+                })()
+              : null;
+            // The "best variant" — highest fit_score — drives speed/cost/size sorts.
+            const bestVariantOf = (m: ModelResult) =>
+              m.variants.reduce<VariantResult | null>(
+                (best, v) => (!best || v.fit_score > best.fit_score) ? v : best,
+                null,
+              );
+            const fitOf = (m: ModelResult) =>
+              m.variants.reduce((acc, v) => Math.max(acc, v.fit_score), 0);
+            const projOf = (m: ModelResult) => {
+              const best = bestVariantOf(m);
+              if (!history || !best) return null;
+              return projectTpsForVariant(history, best.file_size_mb, best.quant);
+            };
+            const sizeOf = (m: ModelResult) => bestVariantOf(m)?.file_size_mb ?? 0;
+            // When no search query, sort by the user's selected sort mode.
+            // Search results stay in HF's download-rank order so the relevance
+            // signal from HF's search isn't overridden.
             if (!search) {
               list.sort((a, b) => {
-                const aFit = a.variants.reduce((m, v) => Math.max(m, v.fit_score), 0);
-                const bFit = b.variants.reduce((m, v) => Math.max(m, v.fit_score), 0);
-                if (bFit !== aFit) return bFit - aFit;
-                return (b.downloads ?? 0) - (a.downloads ?? 0);
+                switch (sortMode) {
+                  case 'popularity':
+                    return (b.downloads ?? 0) - (a.downloads ?? 0);
+                  case 'size_asc':
+                    return sizeOf(a) - sizeOf(b);
+                  case 'size_desc':
+                    return sizeOf(b) - sizeOf(a);
+                  case 'speed': {
+                    const pa = projOf(a), pb = projOf(b);
+                    const ta = pa ? (pa.min + pa.max) / 2 : -1;
+                    const tb = pb ? (pb.min + pb.max) / 2 : -1;
+                    if (tb !== ta) return tb - ta;
+                    return fitOf(b) - fitOf(a);
+                  }
+                  case 'cost': {
+                    const pa = projOf(a), pb = projOf(b);
+                    const costOf = (proj: ReturnType<typeof projOf>) => {
+                      if (!proj || avgWatts == null) return Number.POSITIVE_INFINITY;
+                      const tps = (proj.min + proj.max) / 2;
+                      if (tps <= 0) return Number.POSITIVE_INFINITY;
+                      return (avgWatts / 1000) * (1_000_000 / tps / 3600) * kwhRate;
+                    };
+                    const ca = costOf(pa), cb = costOf(pb);
+                    if (ca !== cb) return ca - cb;
+                    return fitOf(b) - fitOf(a);
+                  }
+                  case 'fit':
+                  default: {
+                    const aFit = fitOf(a), bFit = fitOf(b);
+                    if (bFit !== aFit) return bFit - aFit;
+                    return (b.downloads ?? 0) - (a.downloads ?? 0);
+                  }
+                }
               });
             }
             return list.map(model => (

@@ -26,7 +26,11 @@ import {
   contextLengthLabel,
 } from '../../utils/quantQuality';
 import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
+import { inferCategory, categoryDescription, ALL_CATEGORIES, type ModelCategory } from '../../utils/modelCategory';
 import { useSettings } from '../../hooks/useSettings';
+
+/** Sort modes for the Discovery results list. Default = 'fit' (current behavior). */
+type SortMode = 'fit' | 'popularity' | 'speed' | 'cost' | 'size_asc' | 'size_desc';
 
 interface NodeFit {
   node_id:      string;
@@ -554,6 +558,9 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   // node shrinks the catalog. Default to "any" so the model list reflects
   // the largest box in the fleet, not the smallest.
   const [fitMode, setFitMode] = useState<'any' | 'all'>('any');
+  // Phase 2: category + sort. 'All' shows everything; sort defaults to 'fit'.
+  const [category, setCategory] = useState<ModelCategory | 'All'>('All');
+  const [sortMode, setSortMode] = useState<SortMode>('fit');
   const { settings }                   = useSettings();
   const kwhRate                        = settings.fleet.kwhRate || 0.16;
   const historyCount                   = history?.length ?? 0;
@@ -646,7 +653,10 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   // using vramAtContext + fitLabelAtContext so the displayed SET actually
   // changes when the picker moves. The backend's n.fit_score uses a default
   // context and would otherwise lock the membership at default-context fit.
-  const displayModels = useMemo(() => {
+  // Pre-category filter: only fit-mode + context-aware membership. The
+  // category filter is applied after so chip counts can reflect what's
+  // *available* in the current fit view (not what's left after category).
+  const fitFilteredModels = useMemo(() => {
     const all = data?.models ?? [];
     if (focusNodeId || onlineNodes.length <= 1) return all;
     const isDefault = contextLength === DEFAULT_CONTEXT_LENGTH;
@@ -663,6 +673,26 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         : scores.some(s => s >= 40);
     });
   }, [data, focusNodeId, onlineNodes.length, fitMode, contextLength]);
+
+  // Per-category counts for the chip badges, evaluated against the
+  // fit-filtered set. 'All' is the total — every model survives.
+  const categoryCounts = useMemo<Record<ModelCategory | 'All', number>>(() => {
+    const counts: Record<ModelCategory | 'All', number> = {
+      All: fitFilteredModels.length,
+      General: 0, Code: 0, Reasoning: 0, Vision: 0, Embedding: 0, Audio: 0,
+    };
+    for (const m of fitFilteredModels) {
+      const c = inferCategory(m.model_id);
+      counts[c]++;
+    }
+    return counts;
+  }, [fitFilteredModels]);
+
+  // Final displayed list: fit filter + category filter.
+  const displayModels = useMemo(() => {
+    if (category === 'All') return fitFilteredModels;
+    return fitFilteredModels.filter(m => inferCategory(m.model_id) === category);
+  }, [fitFilteredModels, category]);
 
   const focusNodeLabel = focusNodeId
     ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)
@@ -848,10 +878,77 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         ))}
       </div>
 
-      {/* The fit-mode toggle that used to live here was merged into the unified
-          "View:" pill row above. Both questions ("which node to focus on" and
-          "any-or-all aggregation") collapse into a single set of mutually-
-          exclusive options where every choice is self-explanatory. */}
+      {/* Category chip row — inferred client-side from model_id (Phase 2).
+          Backend-sourced HF pipeline_tag tracked as Phase 2.5 in ROADMAP. */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Category:</span>
+        <button
+          onClick={() => setCategory('All')}
+          title="Show all categories"
+          className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+            category === 'All'
+              ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+              : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+          }`}
+        >
+          All <span className="text-gray-600 font-mono">{categoryCounts.All}</span>
+        </button>
+        {ALL_CATEGORIES.map(cat => {
+          const count = categoryCounts[cat];
+          const disabled = count === 0;
+          return (
+            <button
+              key={cat}
+              onClick={() => !disabled && setCategory(cat)}
+              disabled={disabled}
+              title={categoryDescription(cat) + (disabled ? ' — no matches in current view.' : '')}
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                category === cat
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : disabled
+                    ? 'bg-transparent border-gray-800 text-gray-700 cursor-not-allowed opacity-50'
+                    : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+              }`}
+            >
+              {cat} <span className="text-gray-600 font-mono">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Sort chip row. 'speed' and 'cost' degrade gracefully — models without
+          a projection sink to the bottom rather than disappearing. */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Sort:</span>
+        {([
+          { key: 'fit',        label: 'Fit',        hint: 'Highest fit score first (default).' },
+          { key: 'popularity', label: 'Popularity', hint: 'Most-downloaded on HuggingFace first.' },
+          { key: 'speed',      label: 'Speed',      hint: 'Projected tok/s — fastest first. Requires fleet history.' },
+          { key: 'cost',       label: 'Cost',       hint: 'Cheapest tokens per dollar first. Requires fleet history.' },
+          { key: 'size_asc',   label: 'Size ↑',     hint: 'Smallest model first.' },
+          { key: 'size_desc',  label: 'Size ↓',     hint: 'Largest model first.' },
+        ] as { key: SortMode; label: string; hint: string }[]).map(s => {
+          const needsHistory = s.key === 'speed' || s.key === 'cost';
+          const disabled = needsHistory && historyCount === 0;
+          return (
+            <button
+              key={s.key}
+              onClick={() => !disabled && setSortMode(s.key)}
+              disabled={disabled}
+              title={s.hint + (disabled ? ' Unavailable until you run a model — projections need ≥1 measurement.' : '')}
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                sortMode === s.key
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : disabled
+                    ? 'bg-transparent border-gray-800 text-gray-700 cursor-not-allowed opacity-50'
+                    : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+              }`}
+            >
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
 
       {/* Source label */}
       {data && (
@@ -916,15 +1013,68 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           {(() => {
             const list = [...displayModels];
             if (!pendingSearch) {
+              // Hoist avgWatts here so 'cost' sort uses the same value the rows
+              // render — fleet-wide average from history, identical for every model.
+              const avgWatts = history && history.length
+                ? (() => {
+                    const w = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
+                    return w.length
+                      ? w.reduce((s, r) => s + (r.avg_watts as number), 0) / w.length
+                      : null;
+                  })()
+                : null;
+
+              // Per-model fit score under the current view (focus or fleet aggregate).
+              const fitOf = (m: FleetModel) => focusNodeId
+                ? (m.nodes.find(n => n.node_id === focusNodeId)?.fit_score ?? 0)
+                : m.fleet_best_score;
+              // "Pull node" — the row's headline node used for projection + size.
+              const pullNodeOf = (m: FleetModel) => focusNodeId
+                ? (m.nodes.find(n => n.node_id === focusNodeId) ?? m.nodes[0])
+                : m.nodes[0];
+              const projOf = (m: FleetModel) => {
+                const n = pullNodeOf(m);
+                if (!history || !n) return null;
+                return projectTpsForVariant(history, n.file_size_mb, n.best_quant);
+              };
+              const sizeOf = (m: FleetModel) => pullNodeOf(m)?.file_size_mb ?? 0;
+              // Compose: primary key by sortMode, tiebreak on fit (or popularity for fit-mode).
               list.sort((a, b) => {
-                const aFit = focusNodeId
-                  ? (a.nodes.find(n => n.node_id === focusNodeId)?.fit_score ?? 0)
-                  : a.fleet_best_score;
-                const bFit = focusNodeId
-                  ? (b.nodes.find(n => n.node_id === focusNodeId)?.fit_score ?? 0)
-                  : b.fleet_best_score;
-                if (bFit !== aFit) return bFit - aFit;
-                return (b.downloads ?? 0) - (a.downloads ?? 0);
+                switch (sortMode) {
+                  case 'popularity':
+                    return (b.downloads ?? 0) - (a.downloads ?? 0);
+                  case 'size_asc':
+                    return sizeOf(a) - sizeOf(b);
+                  case 'size_desc':
+                    return sizeOf(b) - sizeOf(a);
+                  case 'speed': {
+                    const pa = projOf(a), pb = projOf(b);
+                    // null projections sink to bottom; among nulls, fall back to fit.
+                    const ta = pa ? (pa.min + pa.max) / 2 : -1;
+                    const tb = pb ? (pb.min + pb.max) / 2 : -1;
+                    if (tb !== ta) return tb - ta;
+                    return fitOf(b) - fitOf(a);
+                  }
+                  case 'cost': {
+                    const pa = projOf(a), pb = projOf(b);
+                    const costOf = (proj: ReturnType<typeof projOf>) => {
+                      if (!proj || avgWatts == null) return Number.POSITIVE_INFINITY;
+                      const tps = (proj.min + proj.max) / 2;
+                      if (tps <= 0) return Number.POSITIVE_INFINITY;
+                      return (avgWatts / 1000) * (1_000_000 / tps / 3600) * kwhRate;
+                    };
+                    const ca = costOf(pa), cb = costOf(pb);
+                    // Cheaper wins (asc); Infinity buckets sink. Tiebreak on fit.
+                    if (ca !== cb) return ca - cb;
+                    return fitOf(b) - fitOf(a);
+                  }
+                  case 'fit':
+                  default: {
+                    const aFit = fitOf(a), bFit = fitOf(b);
+                    if (bFit !== aFit) return bFit - aFit;
+                    return (b.downloads ?? 0) - (a.downloads ?? 0);
+                  }
+                }
               });
             }
             return list.map(model => (
