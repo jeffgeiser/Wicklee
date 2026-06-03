@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Defeats Safari Reader Mode auto-trigger on slow hard refreshes.
+         Reader's heuristic scans for article-like content (headings + body
+         text) during the pre-hydration paint window. format-detection
+         + the role="application" on root below mark this as an app, not
+         prose — Safari skips the article scan entirely. -->
+    <meta name="format-detection" content="telephone=no, address=no, email=no, date=no" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://*.paddle.com https://*.profitwell.com https://clerk.wicklee.dev https://*.clerk.accounts.dev https://challenges.cloudflare.com https://static.cloudflareinsights.com; worker-src 'self' blob:; style-src 'self' https://fonts.googleapis.com https://*.paddle.com 'unsafe-inline'; font-src https://fonts.gstatic.com; connect-src 'self' ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:* https://*.up.railway.app https://wicklee.dev https://api.clerk.dev https://*.clerk.accounts.dev https://clerk.wicklee.dev https://challenges.cloudflare.com https://*.paddle.com https://static.cloudflareinsights.com; img-src 'self' data: https:; frame-src https://*.paddle.com https://*.clerk.accounts.dev https://clerk.wicklee.dev https://challenges.cloudflare.com;" />
     <title>Wicklee — Local AI inference, finally observable.</title>
     <meta name="description" content="Routing intelligence. True inference cost. Thermal state. Live, across every node. Built for Ollama and vLLM. Install in 60 seconds — nothing to configure." />
@@ -64,7 +70,7 @@
     </style>
 </head>
   <body>
-    <div id="root"></div>
+    <div id="root" role="application" aria-label="Wicklee dashboard"></div>
   <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
   <script type="module" src="/src/index.tsx"></script>
 </body>
