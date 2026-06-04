@@ -750,26 +750,69 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
           drifting toward over-claim now that theoretical fallback can produce
           tok/s estimates without any telemetry input. */}
 
-      {/* Context length picker */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[10px] text-gray-600 uppercase tracking-widest">Context length:</span>
-        {CONTEXT_LENGTH_OPTIONS.map(ctx => (
-          <button
-            key={ctx}
-            onClick={() => setContextLength(ctx)}
-            title={`Recalculate VRAM and fit assuming ${contextLengthLabel(ctx)} token context window`}
-            className={`text-[10px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
-              contextLength === ctx
-                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
-                : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
-            }`}
-          >
-            {contextLengthLabel(ctx)}
-          </button>
-        ))}
+      {/* Context length + Sort — paired on one row at ≥lg widths; restack
+          via flex-wrap on narrower viewports. Mirrors FleetModelDiscovery
+          so the two panels stay visually identical. */}
+      <div className="flex items-start gap-x-6 gap-y-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] text-gray-600 uppercase tracking-widest">Context length:</span>
+          {CONTEXT_LENGTH_OPTIONS.map(ctx => (
+            <button
+              key={ctx}
+              onClick={() => setContextLength(ctx)}
+              title={`Recalculate VRAM and fit assuming ${contextLengthLabel(ctx)} token context window`}
+              className={`text-[10px] font-mono px-2 py-0.5 rounded-full border transition-colors ${
+                contextLength === ctx
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+              }`}
+            >
+              {contextLengthLabel(ctx)}
+            </button>
+          ))}
+        </div>
+
+        {/* Vertical separator between the paired groups, lg+ only. */}
+        <div className="hidden lg:block w-px self-stretch bg-gray-700/40" aria-hidden="true" />
+
+        {/* Sort chip row. 'speed' and 'cost' degrade gracefully — models
+            without a projection sink to the bottom rather than disappearing. */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Sort:</span>
+          {([
+            { key: 'fit',        label: 'Fit',        hint: 'Highest fit score first (default).' },
+            { key: 'popularity', label: 'Popularity', hint: 'Most-downloaded on HuggingFace first.' },
+            { key: 'speed',      label: 'Speed',      hint: 'Projected tok/s — fastest first. Requires at least one model run.' },
+            { key: 'cost',       label: 'Cost',       hint: 'Cheapest tokens per dollar first. Requires at least one model run.' },
+            { key: 'size_asc',   label: 'Size ↑',     hint: 'Smallest model first.' },
+            { key: 'size_desc',  label: 'Size ↓',     hint: 'Largest model first.' },
+          ] as { key: SortMode; label: string; hint: string }[]).map(s => {
+            const needsHistory = s.key === 'speed' || s.key === 'cost';
+            const disabled = needsHistory && historyCount === 0;
+            return (
+              <button
+                key={s.key}
+                onClick={() => !disabled && setSortMode(s.key)}
+                disabled={disabled}
+                title={s.hint + (disabled ? ' Unavailable until at least one model has run.' : '')}
+                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                  sortMode === s.key
+                    ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                    : disabled
+                      ? 'bg-transparent border-gray-800 text-gray-700 cursor-not-allowed opacity-50'
+                      : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+                }`}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Category chip row — inferred client-side from model_id (Phase 2). */}
+      {/* Category chip row — own row because counts in the chips give it
+          variable width and 7 chips need breathing room. Inferred client-
+          side from model_id (Phase 2). */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Category:</span>
         <button
@@ -801,40 +844,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
               }`}
             >
               {cat} <span className="text-gray-600 font-mono">{count}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Sort chip row. 'speed' and 'cost' degrade gracefully — models without
-          a projection sink to the bottom rather than disappearing. */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Sort:</span>
-        {([
-          { key: 'fit',        label: 'Fit',        hint: 'Highest fit score first (default).' },
-          { key: 'popularity', label: 'Popularity', hint: 'Most-downloaded on HuggingFace first.' },
-          { key: 'speed',      label: 'Speed',      hint: 'Projected tok/s — fastest first. Requires at least one model run.' },
-          { key: 'cost',       label: 'Cost',       hint: 'Cheapest tokens per dollar first. Requires at least one model run.' },
-          { key: 'size_asc',   label: 'Size ↑',     hint: 'Smallest model first.' },
-          { key: 'size_desc',  label: 'Size ↓',     hint: 'Largest model first.' },
-        ] as { key: SortMode; label: string; hint: string }[]).map(s => {
-          const needsHistory = s.key === 'speed' || s.key === 'cost';
-          const disabled = needsHistory && historyCount === 0;
-          return (
-            <button
-              key={s.key}
-              onClick={() => !disabled && setSortMode(s.key)}
-              disabled={disabled}
-              title={s.hint + (disabled ? ' Unavailable until at least one model has run.' : '')}
-              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                sortMode === s.key
-                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
-                  : disabled
-                    ? 'bg-transparent border-gray-800 text-gray-700 cursor-not-allowed opacity-50'
-                    : 'bg-transparent border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-700'
-              }`}
-            >
-              {s.label}
             </button>
           );
         })}
