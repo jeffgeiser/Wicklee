@@ -311,6 +311,111 @@ fn parse_quant_from_filename(filename: &str) -> Option<String> {
     None
 }
 
+/// Returns true when this GGUF filename is an auxiliary file the catalog
+/// should drop — multimodal projector, tokenizer-only, control vector,
+/// imatrix calibration, LoRA adapter, draft model for speculative decoding.
+///
+/// Symptom this filter prevents: DavidAU's Qwen3.6-27B-Heretic repo
+/// publishes a small auxiliary GGUF (~1.7 GB) alongside the actual
+/// quantized 27B variants. Without this filter the small file gets
+/// picked as the "best fit" because it trivially fits the VRAM budget —
+/// every model in the repo shows up as "F32 · 1.7 GB · Excellent" no
+/// matter the actual parameter count. Match cloud's parallel filter at
+/// cloud/src/main.rs ~line 4609.
+fn is_auxiliary_gguf(filename: &str) -> bool {
+    let lower = filename.to_lowercase();
+    lower.contains("mmproj")
+        || lower.contains("projector")
+        || lower.contains("imatrix")
+        || lower.starts_with("tokenizer")
+        || lower.contains(".draft.")
+        || lower.contains("-draft-")
+        || lower.contains("lora")
+        || lower.contains("adapter")
+        || lower.contains("control-vector")
+        || lower.contains("embedding-only")
+}
+
+/// Extract a parameter count (in billions) from a HuggingFace model_id.
+/// Matches patterns like "Llama-3.2-3B-Instruct", "Qwen3-27B-Heretic",
+/// "Mixtral-8x7B" (returns 8×7=56), "DeepSeek-67B".
+///
+/// Used by `is_plausible_size_for_quant` to detect mislabeled auxiliary
+/// files where the declared quant doesn't match the file size at all.
+fn extract_params_b(model_id: &str) -> Option<f32> {
+    let lower = model_id.to_lowercase();
+    // First try "NxMB" (MoE expert count × per-expert params) — e.g. "8x7b" → 56
+    if let Some(idx) = lower.find('x') {
+        if idx > 0 && idx + 1 < lower.len() {
+            let before: String = lower[..idx].chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
+            let after_start = idx + 1;
+            let after_substr = &lower[after_start..];
+            // Match "Nb" or "N.Mb" after the 'x'
+            let after_num: String = after_substr.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let suffix_ok = after_substr[after_num.len()..].starts_with('b');
+            if !before.is_empty() && !after_num.is_empty() && suffix_ok {
+                if let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
+                    return Some(e * p);
+                }
+            }
+        }
+    }
+    // Fallback: plain "NB" or "N.MB"
+    // Find "Nb" or "N.Mb" patterns, word-boundaried so "1b" in "1binary" doesn't match.
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') { i += 1; }
+            if i < bytes.len() && bytes[i] == b'b' {
+                // Boundary check: next char (if any) is not alphanumeric
+                let is_boundary = i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_alphanumeric();
+                if is_boundary {
+                    if let Ok(p) = lower[start..i].parse::<f32>() {
+                        if p > 0.0 && p < 10000.0 { return Some(p); }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Approximate bytes-per-parameter for a quant string. Used to compute the
+/// expected file size of a model variant — anything ≤30% of expected is
+/// almost certainly an auxiliary file mislabeled by the filename parser.
+fn bytes_per_param_for_quant(quant: &str) -> Option<f32> {
+    let q = quant.to_ascii_uppercase();
+    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(3.0); }
+    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(3.5); }
+    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(4.5); }
+    if q.starts_with("Q5") { return Some(5.5); }
+    if q.starts_with("Q6") { return Some(6.5); }
+    if q.starts_with("Q8") { return Some(9.0); }
+    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(16.0); }
+    if q == "F32" { return Some(32.0); }
+    None
+}
+
+/// Returns true if the file size is plausible for a model of the given
+/// parameter count + quant. Anything under 30% of expected is dropped as
+/// likely auxiliary. Anything over 200% of expected is also dropped (sharded
+/// repos where the catalog accidentally summed shards twice, etc).
+///
+/// Returns true when the quant or param count can't be parsed — be
+/// conservative, only drop when we have high confidence the file is wrong.
+fn is_plausible_size_for_quant(params_b: Option<f32>, quant: &str, file_size_bytes: u64) -> bool {
+    let Some(p) = params_b else { return true; };
+    let Some(bpp) = bytes_per_param_for_quant(quant) else { return true; };
+    let expected = (p * 1e9 * bpp) as u64;
+    if expected == 0 { return true; }
+    let lower = expected.saturating_mul(30) / 100;
+    let upper = expected.saturating_mul(200) / 100;
+    file_size_bytes >= lower && file_size_bytes <= upper
+}
+
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
@@ -5185,6 +5290,17 @@ async fn fetch_hf_gguf(
         };
         let files: Vec<serde_json::Value> = tree_resp.json().await.unwrap_or_default();
 
+        // Variant filtering pipeline (mirrors cloud at cloud/src/main.rs:4609):
+        //   1. .gguf extension + non-zero size
+        //   2. Drop auxiliary GGUFs (mmproj/lora/projector/tokenizer/etc)
+        //   3. Drop variants whose size is implausible for the declared
+        //      quant — e.g. a "F32 · 1.7 GB" entry on a 27B model is
+        //      almost certainly an embedding-only export mislabeled by
+        //      the filename parser. Without this filter, those tiny files
+        //      score "Excellent fit" because they trivially fit VRAM,
+        //      then surface as the "best variant" — surfacing wrong-model
+        //      data to the UI.
+        let params_b = extract_params_b(model_id);
         let mut variants: Vec<(String, String, u64)> = Vec::new();
         for file in &files {
             let path = file["path"].as_str().unwrap_or("");
@@ -5192,7 +5308,9 @@ async fn fetch_hf_gguf(
             let size = file["size"].as_u64().unwrap_or(0);
             if size == 0 { continue; }
             let filename = path.rsplit('/').next().unwrap_or(path);
+            if is_auxiliary_gguf(filename) { continue; }
             let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
+            if !is_plausible_size_for_quant(params_b, &quant, size) { continue; }
             variants.push((filename.to_string(), quant, size));
         }
         // Sort variants largest-first (highest quality first)

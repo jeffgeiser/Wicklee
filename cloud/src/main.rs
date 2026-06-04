@@ -4596,6 +4596,12 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
         struct VariantAgg { canonical_filename: String, total_size: i64, quant: String }
         let mut variants: std::collections::HashMap<String, VariantAgg> = std::collections::HashMap::new();
 
+        // Pre-compute per-repo param count so the plausibility check can
+        // run against every variant in this batch. Both signals (param
+        // count from model_id, quant from filename) must be present for
+        // the filter to act — be conservative when either is missing.
+        let params_b_for_repo = extract_params_b_cloud(&model_id);
+
         for file in &files {
             let path = file["path"].as_str().unwrap_or("");
             if !path.ends_with(".gguf") { continue; }
@@ -4604,8 +4610,9 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
             let filename = path.rsplit('/').next().unwrap_or(path).to_string();
 
             // Skip non-model GGUF files: mmproj (vision adapters), tokenizer-only,
-            // imatrix calibration files, draft models for speculative decoding.
-            // These are commonly bundled with multimodal repos but aren't standalone runnable.
+            // imatrix calibration files, draft models for speculative decoding,
+            // LoRA / adapter weights, and embedding-only exports. These ride
+            // along inside many repos but aren't standalone runnable models.
             let lower = filename.to_lowercase();
             if lower.contains("mmproj")
                 || lower.contains("projector")
@@ -4613,6 +4620,10 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
                 || lower.starts_with("tokenizer")
                 || lower.contains(".draft.")
                 || lower.contains("-draft-")
+                || lower.contains("lora")
+                || lower.contains("adapter")
+                || lower.contains("control-vector")
+                || lower.contains("embedding-only")
             { continue; }
 
             // Detect shard pattern: "...-NNNNN-of-MMMMM.gguf"
@@ -4655,6 +4666,15 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
         }
 
         for (_key, v) in variants {
+            // Plausibility check runs on the *aggregated* size so multi-shard
+            // variants (each shard ~10 GB on a 27B model) aren't individually
+            // judged too-small. Drops variants whose total size doesn't match
+            // their declared quant — i.e. the "F32 · 1.7 GB · 27B model"
+            // class of mislabeling that bypassed the auxiliary-filename
+            // filter above.
+            if !is_plausible_size_for_quant_cloud(params_b_for_repo, &v.quant, v.total_size) {
+                continue;
+            }
             match sqlx::query(
                 "INSERT INTO model_catalog (model_id, filename, quant_level, file_size, downloads, likes)
                  VALUES ($1, $2, $3, $4, $5, $6)
@@ -4819,6 +4839,85 @@ fn lookup_kld(model_id: &str, quant: &str) -> Option<f64> {
 ///
 /// Applied as a multiplier on the raw fit score during variant selection so
 /// that a Q4_K_M with 30% headroom beats an IQ1_M with 90% headroom.
+/// Extract parameter count (billions) from a HuggingFace model_id.
+/// Matches "Llama-3.2-3B", "Qwen3-27B", "Mixtral-8x7B" (→ 56), etc.
+/// Mirror of agent/src/main.rs::extract_params_b. Used to validate that
+/// each catalog GGUF's declared quant + observed size are mutually
+/// plausible, dropping mislabeled auxiliary files before they become
+/// catalog rows.
+fn extract_params_b_cloud(model_id: &str) -> Option<f32> {
+    let lower = model_id.to_lowercase();
+    // MoE expert pattern: "8x7b" → 56
+    if let Some(idx) = lower.find('x') {
+        if idx > 0 && idx + 1 < lower.len() {
+            let before: String = lower[..idx].chars().rev()
+                .take_while(|c| c.is_ascii_digit()).collect::<String>()
+                .chars().rev().collect();
+            let after_substr = &lower[idx + 1..];
+            let after_num: String = after_substr.chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let suffix_ok = after_substr[after_num.len()..].starts_with('b');
+            if !before.is_empty() && !after_num.is_empty() && suffix_ok {
+                if let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
+                    return Some(e * p);
+                }
+            }
+        }
+    }
+    // Plain "NB" / "N.MB"
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') { i += 1; }
+            if i < bytes.len() && bytes[i] == b'b' {
+                let is_boundary = i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_alphanumeric();
+                if is_boundary {
+                    if let Ok(p) = lower[start..i].parse::<f32>() {
+                        if p > 0.0 && p < 10000.0 { return Some(p); }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Approximate bytes-per-parameter per quant. Mirror of
+/// agent/src/main.rs::bytes_per_param_for_quant — both must match so the
+/// catalog filters identically in both backends.
+fn bytes_per_param_for_quant_cloud(quant: &str) -> Option<f32> {
+    let q = quant.to_ascii_uppercase();
+    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(3.0); }
+    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(3.5); }
+    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(4.5); }
+    if q.starts_with("Q5") { return Some(5.5); }
+    if q.starts_with("Q6") { return Some(6.5); }
+    if q.starts_with("Q8") { return Some(9.0); }
+    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(16.0); }
+    if q == "F32" { return Some(32.0); }
+    None
+}
+
+/// True when the file size is plausible for `params_b` at `quant`.
+/// Drops mislabeled auxiliary files (e.g. "F32 · 1.7 GB" on a 27B model
+/// — actually F32 of a 27B model is ~108 GB, so 1.7 GB is impossibly
+/// small and is almost certainly an embedding-only or projection-only
+/// export). Conservative: returns true when we can't parse param count
+/// or quant — only drops when both signals are available and disagree.
+fn is_plausible_size_for_quant_cloud(params_b: Option<f32>, quant: &str, file_size_bytes: i64) -> bool {
+    let Some(p) = params_b else { return true; };
+    let Some(bpp) = bytes_per_param_for_quant_cloud(quant) else { return true; };
+    if file_size_bytes <= 0 { return false; }
+    let expected = (p * 1e9 * bpp) as i64;
+    if expected == 0 { return true; }
+    let lower = expected.saturating_mul(30) / 100;
+    let upper = expected.saturating_mul(200) / 100;
+    file_size_bytes >= lower && file_size_bytes <= upper
+}
+
 fn quant_quality_factor(model_id: &str, quant: &str) -> f32 {
     if let Some(kld) = lookup_kld(model_id, quant) {
         let mult = (1.0 - (kld / 0.15)).clamp(0.0, 1.0) as f32;
