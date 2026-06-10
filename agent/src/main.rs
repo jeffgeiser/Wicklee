@@ -391,16 +391,21 @@ fn extract_params_b(model_id: &str) -> Option<f32> {
 /// Approximate bytes-per-parameter for a quant string. Used to compute the
 /// expected file size of a model variant — anything ≤30% of expected is
 /// almost certainly an auxiliary file mislabeled by the filename parser.
+///
+/// Values are bits-per-weight ÷ 8 (F16 = 16 bits = 2.0 bytes). An earlier
+/// revision stored the bit counts directly while the caller multiplied them
+/// as bytes — every correctly-sized GGUF came out at ~12% of "expected" and
+/// was rejected by the 30% floor, silently emptying model discovery.
 fn bytes_per_param_for_quant(quant: &str) -> Option<f32> {
     let q = quant.to_ascii_uppercase();
-    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(3.0); }
-    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(3.5); }
-    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(4.5); }
-    if q.starts_with("Q5") { return Some(5.5); }
-    if q.starts_with("Q6") { return Some(6.5); }
-    if q.starts_with("Q8") { return Some(9.0); }
-    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(16.0); }
-    if q == "F32" { return Some(32.0); }
+    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(0.375); }  // ~3 bits
+    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.4375); } // ~3.5 bits
+    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(0.5625); } // ~4.5 bits
+    if q.starts_with("Q5") { return Some(0.6875); }                          // ~5.5 bits
+    if q.starts_with("Q6") { return Some(0.8125); }                          // ~6.5 bits
+    if q.starts_with("Q8") { return Some(1.125); }                           // ~9 bits
+    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(2.0); }
+    if q == "F32" { return Some(4.0); }
     None
 }
 
@@ -7704,3 +7709,57 @@ async fn main() {
     eprintln!("[agent] clean shutdown complete");
 }
 
+
+#[cfg(test)]
+mod fit_math_tests {
+    use super::*;
+
+    // Real-world reference: Llama 3.1 8B Instruct GGUF file sizes.
+    const PARAMS_8B: Option<f32> = Some(8.03);
+
+    #[test]
+    fn plausibility_accepts_real_gguf_sizes() {
+        // Published file sizes must pass — this is the regression test for the
+        // bits-vs-bytes error that rejected every well-formed variant.
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q2_K",   3_180_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 4_920_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q6_K",   6_600_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q8_0",   8_540_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "F16",   16_070_000_000));
+        // 70B Q4_K_M ≈ 42.5 GB
+        assert!(is_plausible_size_for_quant(Some(70.6), "Q4_K_M", 42_500_000_000));
+    }
+
+    #[test]
+    fn plausibility_rejects_auxiliary_and_mislabeled_files() {
+        // The doc-comment example: "F32 · 1.7 GB" on a 27B model (real F32 ≈ 108 GB).
+        assert!(!is_plausible_size_for_quant(Some(27.0), "F32", 1_700_000_000));
+        // Tiny mmproj/embedding export mislabeled as a full Q4 model.
+        assert!(!is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 100_000_000));
+        // Double-counted shards: > 200% of expected.
+        assert!(!is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 12_000_000_000));
+    }
+
+    #[test]
+    fn plausibility_is_conservative_when_signals_missing() {
+        assert!(is_plausible_size_for_quant(None, "Q4_K_M", 123));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "unknown", 123));
+    }
+
+    #[test]
+    fn bytes_per_param_is_bits_over_eight() {
+        // F16 is definitionally 16 bits = 2.0 bytes; everything else scales.
+        assert_eq!(bytes_per_param_for_quant("F16"), Some(2.0));
+        assert_eq!(bytes_per_param_for_quant("F32"), Some(4.0));
+        assert_eq!(bytes_per_param_for_quant("Q4_K_M"), Some(0.5625));
+        assert_eq!(bytes_per_param_for_quant("Q8_0"), Some(1.125));
+    }
+
+    #[test]
+    fn estimate_vram_adds_30pct_with_512mb_floor() {
+        // 7 GiB file → 7168 MB base + 30% = 9318 MB.
+        assert_eq!(estimate_vram_mb(7 * 1024 * 1024 * 1024), 7168 + 2150);
+        // Tiny model: floor binds.
+        assert_eq!(estimate_vram_mb(100 * 1024 * 1024), 100 + 512);
+    }
+}

@@ -4888,16 +4888,21 @@ fn extract_params_b_cloud(model_id: &str) -> Option<f32> {
 /// Approximate bytes-per-parameter per quant. Mirror of
 /// agent/src/main.rs::bytes_per_param_for_quant — both must match so the
 /// catalog filters identically in both backends.
+///
+/// Values are bits-per-weight ÷ 8 (F16 = 16 bits = 2.0 bytes). An earlier
+/// revision stored the bit counts directly while the caller multiplied them
+/// as bytes — every correctly-sized GGUF came out at ~12% of "expected" and
+/// was rejected by the 30% floor, silently emptying the model catalog.
 fn bytes_per_param_for_quant_cloud(quant: &str) -> Option<f32> {
     let q = quant.to_ascii_uppercase();
-    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(3.0); }
-    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(3.5); }
-    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(4.5); }
-    if q.starts_with("Q5") { return Some(5.5); }
-    if q.starts_with("Q6") { return Some(6.5); }
-    if q.starts_with("Q8") { return Some(9.0); }
-    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(16.0); }
-    if q == "F32" { return Some(32.0); }
+    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(0.375); }  // ~3 bits
+    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.4375); } // ~3.5 bits
+    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(0.5625); } // ~4.5 bits
+    if q.starts_with("Q5") { return Some(0.6875); }                          // ~5.5 bits
+    if q.starts_with("Q6") { return Some(0.8125); }                          // ~6.5 bits
+    if q.starts_with("Q8") { return Some(1.125); }                           // ~9 bits
+    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(2.0); }
+    if q == "F32" { return Some(4.0); }
     None
 }
 
@@ -4944,7 +4949,13 @@ fn quant_quality_factor(model_id: &str, quant: &str) -> f32 {
 /// Mirrors agent's tightened scoring (75% headroom for max VRAM points,
 /// vram_fraction-based power score). Used by fleet matching and Pro simulation.
 fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, _power_w: f32, thermal: &str) -> (u8, String) {
-    let vram_required = (file_size_bytes as u64 / (1024 * 1024)) + ((file_size_bytes as u64 / (1024 * 1024)) / 10).max(256);
+    // Working-set estimate: weights + 30% overhead (KV cache at typical 8K
+    // context, activation buffers, framework scratch) with a 512 MB floor —
+    // MUST stay identical to agent estimate_vram_mb() or the same model
+    // grades differently on the cloud fleet view vs the localhost dashboard.
+    // (Previously 10% + 256 MB here while the agent had already moved to 30%.)
+    let base_mb = file_size_bytes as u64 / (1024 * 1024);
+    let vram_required = base_mb + (base_mb * 30 / 100).max(512);
 
     // Hard gate: model does not fit in the available VRAM pool.
     if vram_required > vram_mb {
@@ -8455,4 +8466,60 @@ async fn main() {
     println!("  Wicklee Cloud — Postgres listening on {addr}");
 
     axum::serve(listener, app).await.expect("Server exited unexpectedly");
+}
+
+#[cfg(test)]
+mod fit_math_tests {
+    use super::*;
+
+    const PARAMS_8B: Option<f32> = Some(8.03);
+
+    #[test]
+    fn plausibility_accepts_real_gguf_sizes() {
+        // Published Llama 3.1 8B file sizes must pass — regression test for the
+        // bits-vs-bytes error that rejected every well-formed variant.
+        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "Q2_K",   3_180_000_000));
+        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "Q4_K_M", 4_920_000_000));
+        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "Q8_0",   8_540_000_000));
+        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "F16",   16_070_000_000));
+    }
+
+    #[test]
+    fn plausibility_rejects_auxiliary_and_mislabeled_files() {
+        // The doc-comment example: "F32 · 1.7 GB" on a 27B model (real F32 ≈ 108 GB).
+        assert!(!is_plausible_size_for_quant_cloud(Some(27.0), "F32", 1_700_000_000));
+        assert!(!is_plausible_size_for_quant_cloud(PARAMS_8B, "Q4_K_M", 100_000_000));
+    }
+
+    #[test]
+    fn bytes_per_param_matches_agent_table() {
+        // Contract with agent/src/main.rs::bytes_per_param_for_quant — the two
+        // tables must stay identical so the catalog filters the same way on
+        // both backends.
+        for (q, expected) in [
+            ("Q2_K", 0.375f32), ("Q3_K_M", 0.4375), ("Q4_K_M", 0.5625),
+            ("Q5_K_M", 0.6875), ("Q6_K", 0.8125), ("Q8_0", 1.125),
+            ("F16", 2.0), ("BF16", 2.0), ("F32", 4.0),
+        ] {
+            assert_eq!(bytes_per_param_for_quant_cloud(q), Some(expected), "{q}");
+        }
+    }
+
+    #[test]
+    fn fit_score_vram_requirement_matches_agent_estimate() {
+        // Contract with agent estimate_vram_mb(): weights + 30% (512 MB floor).
+        // Llama 3.1 8B Q4_K_M (4.92 GB) on a 24 GB GPU, Normal thermal:
+        // base = 4692 MB, required = 6099 MB, headroom 75.2% → 40 pts VRAM +
+        // 20 thermal + 10 neutral WES + 16 capacity (fraction 0.25) = 86.
+        let (score, label) = cloud_fit_score(4_920_000_000, 24_576, 0.0, "Normal");
+        assert_eq!(score, 86);
+        assert_eq!(label, "Excellent");
+    }
+
+    #[test]
+    fn fit_score_hard_gates_models_that_dont_fit() {
+        let (score, label) = cloud_fit_score(16_070_000_000, 8_192, 0.0, "Normal");
+        assert_eq!(score, 0);
+        assert_eq!(label, "Won't Fit");
+    }
 }
