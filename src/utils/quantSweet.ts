@@ -42,71 +42,22 @@
 import type { SentinelMetrics } from '../types';
 import { lookupPerplexity, QUALITY_BAND_LABEL } from './perplexity';
 import { quantCompressionRatio } from './quantSize';
+import { chipBandwidthGBs } from './chipBandwidth';
 
 // ── Chip bandwidth lookup ──────────────────────────────────────────────────────
 
 /**
- * Memory bandwidth in GB/s for known chip families.
+ * Memory bandwidth in GB/s for the node's chip.
  * Used for display context only ("your M4 Max — 546 GB/s").
  * The speed estimate uses observed tok/s, not this value, for accuracy.
  *
- * Apple Silicon: Apple silicon spec sheets.
- * NVIDIA: official product pages (HBM2e / GDDR6X rated bandwidth).
+ * Delegates to the canonical table in chipBandwidth.ts — this file used to
+ * carry its own copy, which drifted (M3 Max 300 vs 400, RTX 4080 736 vs
+ * 717, missing 50-series) so the Sweet Spot card and the discovery
+ * estimator quoted different bandwidths for the same node.
  */
-const BANDWIDTH_TABLE: [RegExp, number][] = [
-  // Apple — M4 family
-  [/m4\s+max/i,          546],
-  [/m4\s+pro/i,          273],
-  [/\bm4\b/i,            120],
-  // Apple — M3 family
-  [/m3\s+ultra/i,        800],
-  [/m3\s+max/i,          300],
-  [/m3\s+pro/i,          150],
-  [/\bm3\b/i,            100],
-  // Apple — M2 family
-  [/m2\s+ultra/i,        800],
-  [/m2\s+max/i,          400],
-  [/m2\s+pro/i,          200],
-  [/\bm2\b/i,            100],
-  // Apple — M1 family
-  [/m1\s+ultra/i,        800],
-  [/m1\s+max/i,          400],
-  [/m1\s+pro/i,          200],
-  [/\bm1\b/i,             68],
-  // NVIDIA — datacenter
-  [/h100\s+sxm/i,      3_350],
-  [/h100/i,            2_000],
-  [/a100.*80/i,        2_000],
-  [/a100/i,            1_555],
-  [/l40s/i,              864],
-  [/l40\b/i,             864],
-  // NVIDIA — consumer Ada (RTX 40xx)
-  [/rtx\s*4090/i,      1_008],
-  [/rtx\s*4080\s+super/i, 736],
-  [/rtx\s*4080/i,        736],
-  [/rtx\s*4070\s+ti\s+super/i, 672],
-  [/rtx\s*4070\s+ti/i,   504],
-  [/rtx\s*4070\s+super/i, 504],
-  [/rtx\s*4070/i,        504],
-  [/rtx\s*4060\s+ti/i,   288],
-  [/rtx\s*4060/i,        272],
-  // NVIDIA — consumer Ampere (RTX 30xx)
-  [/rtx\s*3090\s+ti/i,   936],
-  [/rtx\s*3090/i,        936],
-  [/rtx\s*3080\s+ti/i,   912],
-  [/rtx\s*3080/i,        760],
-  [/rtx\s*3070\s+ti/i,   608],
-  [/rtx\s*3070/i,        448],
-  [/rtx\s*3060\s+ti/i,   448],
-  [/rtx\s*3060/i,        360],
-];
-
 export function chipBandwidthGbs(node: SentinelMetrics): number | null {
-  const name = node.chip_name ?? node.gpu_name ?? '';
-  for (const [pattern, bw] of BANDWIDTH_TABLE) {
-    if (pattern.test(name)) return bw;
-  }
-  return null;
+  return chipBandwidthGBs(node.chip_name ?? node.gpu_name ?? null);
 }
 
 // ── Quant compression ratios ──────────────────────────────────────────────────

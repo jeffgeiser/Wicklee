@@ -4873,39 +4873,67 @@ fn evaluate_vram_overcommit(
 /// so the pattern never fires with a guessed ceiling.
 #[cfg(not(target_env = "musl"))]
 fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<&str>) -> Option<f32> {
+    // Chip-identifier match at word boundaries. Plain `contains` mis-binds
+    // short Apple tokens inside NVML form-factor codes: "A100-SXM4-80GB"
+    // contains "m4" and was resolved as a base Apple M4 (120 GB/s instead
+    // of 2039); "V100-SXM2" likewise contains "m2".
+    fn word(key: &str, pat: &str) -> bool {
+        key.match_indices(pat).any(|(i, _)| {
+            let b = key.as_bytes();
+            let before_ok = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+            let end = i + pat.len();
+            let after_ok = end == key.len() || !b[end].is_ascii_alphanumeric();
+            before_ok && after_ok
+        })
+    }
+    // Dash-normalize so NVML names like "A100-SXM4-80GB" match keyword checks.
     let key = format!(
         "{} {}",
         gpu_name.unwrap_or(""),
         chip_name.unwrap_or(""),
-    ).to_lowercase();
-    if key.trim().is_empty() { return None; }
+    ).to_lowercase().replace('-', " ");
+    let key = key.trim();
+    if key.is_empty() { return None; }
     // Match longest names first to avoid e.g. "m4 max" being shadowed by "m4".
-    if key.contains("m3 ultra")  { return Some(819.0); }
-    if key.contains("m2 ultra")  { return Some(800.0); }
-    if key.contains("m4 max")    { return Some(546.0); }
-    if key.contains("m3 max")    { return Some(400.0); }
-    if key.contains("m2 max")    { return Some(400.0); }
-    if key.contains("m1 max")    { return Some(400.0); }
-    if key.contains("m4 pro")    { return Some(273.0); }
-    if key.contains("m3 pro")    { return Some(150.0); }
-    if key.contains("m2 pro")    { return Some(200.0); }
-    if key.contains("m1 pro")    { return Some(200.0); }
-    if key.contains("m4")        { return Some(120.0); }   // base M4
-    if key.contains("m3")        { return Some(100.0); }   // base M3
-    if key.contains("m2")        { return Some(100.0); }   // base M2
-    if key.contains("m1")        { return Some(68.0); }    // base M1
-    if key.contains("gb10") || key.contains("spark") { return Some(273.0); } // DGX Spark
-    if key.contains("h200")      { return Some(4800.0); }
-    if key.contains("h100")      { return Some(3350.0); }
-    if key.contains("a100 80")   { return Some(2039.0); }
-    if key.contains("a100")      { return Some(1555.0); }
-    if key.contains("rtx 5090")  { return Some(1792.0); }
-    if key.contains("rtx 4090")  { return Some(1008.0); }
-    if key.contains("rtx 4080")  { return Some(717.0); }
-    if key.contains("rtx 3090")  { return Some(936.0); }
-    if key.contains("rtx 3080")  { return Some(760.0); }
-    if key.contains("l40s")      { return Some(864.0); }
-    if key.contains("l4")        { return Some(300.0); }
+    if word(key, "m3 ultra")  { return Some(819.0); }
+    if word(key, "m2 ultra")  { return Some(800.0); }
+    if word(key, "m4 max")    { return Some(546.0); }
+    if word(key, "m3 max")    { return Some(400.0); }
+    if word(key, "m2 max")    { return Some(400.0); }
+    if word(key, "m1 max")    { return Some(400.0); }
+    if word(key, "m4 pro")    { return Some(273.0); }
+    if word(key, "m3 pro")    { return Some(150.0); }
+    if word(key, "m2 pro")    { return Some(200.0); }
+    if word(key, "m1 pro")    { return Some(200.0); }
+    if word(key, "m4")        { return Some(120.0); }   // base M4
+    if word(key, "m3")        { return Some(100.0); }   // base M3
+    if word(key, "m2")        { return Some(100.0); }   // base M2
+    if word(key, "m1")        { return Some(68.0); }    // base M1
+    if word(key, "gb10") || word(key, "spark") { return Some(273.0); } // DGX Spark
+    if word(key, "h200")      { return Some(4800.0); }
+    // H100 variants: NVML reports "H100 PCIe", "H100 NVL", or "H100 80GB HBM3" (SXM).
+    if word(key, "h100") {
+        if word(key, "pcie") { return Some(2000.0); }
+        if word(key, "nvl")  { return Some(3938.0); }
+        return Some(3350.0);
+    }
+    // A100: 80GB parts (SXM4 2039 / PCIe 1935 — close enough); 40GB parts 1555.
+    // Capacity check is a plain substring ("80gb" must match "80").
+    if word(key, "a100") {
+        return Some(if key.contains("80") { 2039.0 } else { 1555.0 });
+    }
+    if word(key, "v100")           { return Some(900.0); }
+    if word(key, "rtx 5090")       { return Some(1792.0); }
+    if word(key, "rtx 4090")       { return Some(1008.0); }
+    if word(key, "rtx 4080 super") { return Some(736.0); }
+    if word(key, "rtx 4080")       { return Some(717.0); }
+    if word(key, "rtx 3090 ti")    { return Some(1008.0); }
+    if word(key, "rtx 3090")       { return Some(936.0); }
+    if word(key, "rtx 3080 ti")    { return Some(912.0); }
+    if word(key, "rtx 3080")       { return Some(760.0); }
+    if word(key, "l40s")      { return Some(864.0); }
+    if word(key, "l40")       { return Some(864.0); }
+    if word(key, "l4")        { return Some(300.0); }
     None
 }
 
@@ -7761,5 +7789,34 @@ mod fit_math_tests {
         assert_eq!(estimate_vram_mb(7 * 1024 * 1024 * 1024), 7168 + 2150);
         // Tiny model: floor binds.
         assert_eq!(estimate_vram_mb(100 * 1024 * 1024), 100 + 512);
+    }
+}
+
+#[cfg(all(test, not(target_env = "musl")))]
+mod bandwidth_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_dashed_nvml_names_and_variants() {
+        // NVML reports dashed names — the A100 80GB entry never matched before
+        // dash normalization was added.
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA A100-SXM4-80GB"), None), Some(2039.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA A100-PCIE-40GB"), None), Some(1555.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA H100 PCIe"), None), Some(2000.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA H100 80GB HBM3"), None), Some(3350.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA GeForce RTX 4080 SUPER"), None), Some(736.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA GeForce RTX 3090 Ti"), None), Some(1008.0));
+        // Bare L40 must not fall through to the L4 entry (864 vs 300).
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA L40"), None), Some(864.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA L4"), None), Some(300.0));
+        // "V100-SXM2" contains "m2" — must not resolve as a base Apple M2.
+        assert_eq!(hardware_bandwidth_gbps(Some("Tesla V100-SXM2-16GB"), None), Some(900.0));
+    }
+
+    #[test]
+    fn resolves_apple_chips_and_unknowns() {
+        assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M3 Ultra")), Some(819.0));
+        assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M2 Pro")), Some(200.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("AMD Radeon RX 7900 XTX"), None), None);
     }
 }
