@@ -2780,6 +2780,8 @@ async fn handle_resolve_observation(
 // All three filter on `ollama_active_model IS NOT NULL`, so they will return
 // empty arrays until new telemetry has been ingested under the new schema.
 
+// Keep in sync with the frontend's ELECTRICITY_RATE_USD_PER_KWH
+// (src/utils/efficiency.ts) and the agent's kwh_rate defaults — all 0.16.
 const DEFAULT_KWH_RATE_USD: f32 = 0.16;
 
 /// GET /api/v1/fleet/model-comparison?hours=168

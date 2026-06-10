@@ -226,12 +226,16 @@ function deriveModelEntry(
   // WES — canonical formula tps / (watts × PUE × thermal_penalty).
   // Prefer the agent-provided per-model WES when present (active_models[].wes
   // carries proxy-based per-model attribution that node-level math can't
-  // reproduce).  When absent, compute against the same inputs Overview uses.
-  const wes = modelWes ?? (
-    tps != null && watts != null && tps > 0 && watts > 0
-      ? computeWES(tps, watts, thermalState, pue)
-      : null
-  );
+  // reproduce).  The agent computes it WITHOUT PUE (it doesn't know the
+  // user's facility multiplier), so divide by PUE here — WES is linear in
+  // 1/watts, so wes/pue equals exactly what computeWES would produce.
+  // Without this, a table could mix PUE-adjusted (computed) and unadjusted
+  // (agent) rows whenever the user sets PUE ≠ 1.0.
+  const wes = modelWes != null
+    ? (pue > 0 ? modelWes / pue : modelWes)
+    : (tps != null && watts != null && tps > 0 && watts > 0
+        ? computeWES(tps, watts, thermalState, pue)
+        : null);
 
   // Estimated VRAM savings vs FP16 baseline.
   // fp16Est = what this model would require at full FP16 precision.

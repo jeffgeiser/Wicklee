@@ -11,6 +11,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Cpu, Loader2 } from 'lucide-react';
+import { ELECTRICITY_RATE_USD_PER_KWH } from '../../utils/efficiency';
 import { useSettings } from '../../hooks/useSettings';
 import {
   quantQualityHint,
@@ -616,7 +617,7 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   const [category, setCategory] = useState<ModelCategory | 'All'>('All');
   const [sortMode, setSortMode] = useState<SortMode>('fit');
   const { settings, isKwhRateConfigured } = useSettings();
-  const kwhRate                     = settings.fleet.kwhRate || 0.16;
+  const kwhRate                     = settings.fleet.kwhRate || ELECTRICITY_RATE_USD_PER_KWH;
   const historyCount                = history?.length ?? 0;
 
   const fetchModels = useCallback(async (query?: string) => {

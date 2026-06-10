@@ -3679,8 +3679,10 @@ fn evaluate_local_observations(
             let avg_watts: f64 = phantom_samples.iter()
                 .filter_map(|s| s.gpu_power_w.or(s.cpu_power_w))
                 .sum::<f64>() / phantom_samples.len().max(1) as f64;
-            // Cost estimate: $/day at $0.12/kWh default
-            let kwh_rate = 0.12;
+            // Cost estimate: $/day at the fleet-wide default rate. Keep in
+            // sync with cloud DEFAULT_KWH_RATE_USD and the frontend's
+            // ELECTRICITY_RATE_USD_PER_KWH (utils/efficiency.ts) — all 0.16.
+            let kwh_rate = 0.16;
             let cost_per_day = (avg_watts / 1000.0) * 24.0 * kwh_rate;
             let model_name = phantom_samples.last()
                 .and_then(|s| s.model.as_deref())
@@ -5003,8 +5005,18 @@ fn evaluate_bandwidth_ceiling(
         gpu_name_owned.as_deref(),
         chip_name,
     )?;
+    // Raw ceiling = every weight streamed once per token at full rated
+    // bandwidth. Real batch=1 GGUF decode tops out at ~30–45% of that
+    // (activation traffic, KV reads, framework overhead) — the frontend's
+    // INFERENCE_EFFICIENCY constant (chipBandwidth.ts) uses 0.40 for the
+    // same physics. The achievable ceiling is what utilization must be
+    // measured against: the previous code compared observed tok/s to the
+    // RAW ceiling with a 0.65 trigger, a level real hardware can't reach,
+    // so this pattern never fired.
+    const INFERENCE_EFFICIENCY: f32 = 0.40;
     let theoretical_max_tps = bandwidth_gbps / model_size_gb;
     if theoretical_max_tps <= 0.0 { return None; }
+    let achievable_ceiling_tps = theoretical_max_tps * INFERENCE_EFFICIENCY;
 
     // Need at least 5 minutes of sustained inference samples to fire confidently.
     let now_ms = now_ms() as i64;
@@ -5019,7 +5031,7 @@ fn evaluate_bandwidth_ceiling(
     let observed_tps_p50 = obs_mean(&tps_vals);
     if observed_tps_p50 <= 0.0 { return None; }
 
-    let utilization = observed_tps_p50 / theoretical_max_tps as f64;
+    let utilization = observed_tps_p50 / achievable_ceiling_tps as f64;
     if utilization < 0.65 { return None; }   // not bandwidth-bound — something else limits
 
     // Confirmation: GPU not pegged at 100% (compute-bound is a different story —
@@ -5042,14 +5054,15 @@ fn evaluate_bandwidth_ceiling(
         severity:         "info",
         title:            "Memory-Bandwidth Ceiling Reached".into(),
         hook:             format!(
-            "{:.1} tok/s · {:.0}% of {:.1} tok/s ceiling",
-            observed_tps_p50, utilization * 100.0, theoretical_max_tps,
+            "{:.1} tok/s · {:.0}% of {:.1} tok/s achievable ceiling",
+            observed_tps_p50, utilization * 100.0, achievable_ceiling_tps,
         ),
         body:             format!(
             "{hostname} is decoding {model_name} at {observed_tps_p50:.1} tok/s — \
-             {pct:.0}% of the theoretical memory-bandwidth ceiling for {hw_label} \
+             {pct:.0}% of the achievable memory-bandwidth ceiling for {hw_label} \
              ({model_size_gb:.1} GB resident weights at {quant}, \
-             {bandwidth_gbps:.0} GB/s memory bandwidth). The 'Low' tok/W reading is \
+             {bandwidth_gbps:.0} GB/s rated bandwidth, ~40% realizable at batch=1). \
+             The 'Low' tok/W reading is \
              expected: at batch=1, fixed GPU baseline power dominates and efficiency \
              cannot improve without changing quant or batch size. The node is healthy.",
             pct = utilization * 100.0,
@@ -5178,7 +5191,7 @@ async fn handle_profile(
     }
 }
 
-/// GET /api/cost-by-model?hours=24&kwh_rate=0.12 — cost attribution per model.
+/// GET /api/cost-by-model?hours=24&kwh_rate=0.16 — cost attribution per model.
 #[cfg(not(target_env = "musl"))]
 async fn handle_cost_by_model(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -5186,7 +5199,7 @@ async fn handle_cost_by_model(
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
 ) -> impl IntoResponse {
     let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(24).min(720);
-    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.12);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.16);
     let node_id = node_id_ext.0.as_str().to_owned();
     let result = tokio::task::spawn_blocking(move || store.query_cost_by_model(&node_id, hours, kwh_rate)).await;
     match result {
@@ -5216,7 +5229,7 @@ async fn handle_explain_slowdown(
     }
 }
 
-/// GET /api/model-comparison?hours=168&kwh_rate=0.12 — side-by-side model efficiency data.
+/// GET /api/model-comparison?hours=168&kwh_rate=0.16 — side-by-side model efficiency data.
 #[cfg(not(target_env = "musl"))]
 async fn handle_model_comparison(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -5224,7 +5237,7 @@ async fn handle_model_comparison(
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
 ) -> impl IntoResponse {
     let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(168).min(720);
-    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.12);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.16);
     let node_id = node_id_ext.0.as_str().to_owned();
     let result = tokio::task::spawn_blocking(move || store.query_model_comparison(&node_id, hours, kwh_rate)).await;
     match result {

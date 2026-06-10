@@ -15,6 +15,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle } from 'lucide-react';
+import { ELECTRICITY_RATE_USD_PER_KWH } from '../../utils/efficiency';
 import {
   quantQualityHint,
   recommendedQuant,
@@ -620,7 +621,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   const [category, setCategory] = useState<ModelCategory | 'All'>('All');
   const [sortMode, setSortMode] = useState<SortMode>('fit');
   const { settings, isKwhRateConfigured } = useSettings();
-  const kwhRate                        = settings.fleet.kwhRate || 0.16;
+  const kwhRate                        = settings.fleet.kwhRate || ELECTRICITY_RATE_USD_PER_KWH;
   const historyCount                   = history?.length ?? 0;
 
   const fetchModels = useCallback(async (query?: string, nodeId?: string | null) => {

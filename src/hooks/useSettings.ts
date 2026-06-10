@@ -11,6 +11,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
 
 // ── Currency catalogue ────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ export interface NodeEffectiveSettings {
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
 export const FLEET_DEFAULTS: FleetSettings = {
-  kwhRate: 0.12,
+  kwhRate: ELECTRICITY_RATE_USD_PER_KWH,
   currency: 'USD',
   pue: 1.0,
   temperatureUnit: 'C',
