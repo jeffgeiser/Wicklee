@@ -43,6 +43,7 @@ import { computeWES, formatWES, wesColorClass } from '../../../utils/wes';
 import { getNodePowerW } from '../../../utils/power';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../../utils/kvCache';
 import { computeQuantRecommendation } from '../../../utils/quantSweet';
+import { parseQuantFromAnyModelName, quantFamily, quantCompressionRatio } from '../../../utils/quantSize';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE, type QualityCost } from '../../../utils/perplexity';
 import { pushAndGetSmoothed } from '../../../utils/sharedSmoothing';
 
@@ -93,43 +94,11 @@ const Tip: React.FC<TipProps> = ({ text, children, side = 'top', width = 'w-56' 
 };
 
 // ── Quantization helpers ───────────────────────────────────────────────────────
-
-function parseQuantFromName(modelName: string): string | null {
-  const m = modelName.match(/[._-](q\d[\w]*)/i);
-  return m ? m[1].toUpperCase() : null;
-}
-
-function quantFamily(label: string): string {
-  if (/^q2/i.test(label)) return 'Q2';
-  if (/^q3/i.test(label)) return 'Q3';
-  if (/^q4/i.test(label)) return 'Q4';
-  if (/^q5/i.test(label)) return 'Q5';
-  if (/^q6/i.test(label)) return 'Q6';
-  if (/^q8/i.test(label)) return 'Q8';
-  if (/^f16/i.test(label)) return 'F16';
-  if (/^f32/i.test(label)) return 'F32';
-  return 'Unknown';
-}
-
-/**
- * VRAM size relative to FP16 full-precision weights.
- * ratio < 1.0 → smaller than FP16 baseline
- * ratio = 1.0 → FP16 baseline
- * ratio > 1.0 → larger than FP16 (F32 only)
- */
-function quantCompressionRatio(family: string): number {
-  switch (family) {
-    case 'Q2':  return 0.25; // ~2 bits/weight average
-    case 'Q3':  return 0.35; // ~3 bits/weight average
-    case 'Q4':  return 0.45; // ~4.5 bits/weight avg (K-quant mixed precision overhead)
-    case 'Q5':  return 0.55; // ~5 bits/weight average
-    case 'Q6':  return 0.65; // ~6 bits/weight average
-    case 'Q8':  return 0.80; // ~8 bits/weight (slight overhead vs pure int8)
-    case 'F16': return 1.0;  // FP16 baseline — 16 bits/weight
-    case 'F32': return 2.0;  // FP32 — double the FP16 footprint
-    default:    return 0.5;  // Unknown — conservative mid-range estimate
-  }
-}
+// Quant parsing, family bucketing, and compression ratios all come from
+// src/utils/quantSize.ts — the single source of truth shared with the fit
+// scorer and the agent. The parser there also handles IQ-quants, FP8/BF16,
+// and AWQ/GPTQ tags that the old local regex missed (vLLM models showed
+// "Unknown" quant in this card while the fit math parsed them fine).
 
 /**
  * Quant tradeoff summary shown in tooltips and quant insight rows.
@@ -241,9 +210,11 @@ function deriveModelEntry(
   pue:          number,
   thermalState: string | null,
 ): ModelEntry {
-  const quant  = quantRaw?.toUpperCase() ?? parseQuantFromName(modelName)?.toUpperCase() ?? null;
-  const family = quant ? quantFamily(quant) : 'Unknown';
-  const ratio  = quantCompressionRatio(family);
+  const quant  = quantRaw?.toUpperCase() ?? parseQuantFromAnyModelName(modelName) ?? null;
+  const family = quantFamily(quant);
+  // Ratio from the concrete quant tag (handles AWQ/FP8/etc. whose family is
+  // "Unknown"); null when the quant itself is unknown — no fabricated savings.
+  const ratio  = quantCompressionRatio(quant);
 
   // W/1K tkn — facility-load adjusted to match Overview row formula.
   // Overview's per-row W/1K omits PUE, so we mirror that exactly here:
@@ -255,18 +226,22 @@ function deriveModelEntry(
   // WES — canonical formula tps / (watts × PUE × thermal_penalty).
   // Prefer the agent-provided per-model WES when present (active_models[].wes
   // carries proxy-based per-model attribution that node-level math can't
-  // reproduce).  When absent, compute against the same inputs Overview uses.
-  const wes = modelWes ?? (
-    tps != null && watts != null && tps > 0 && watts > 0
-      ? computeWES(tps, watts, thermalState, pue)
-      : null
-  );
+  // reproduce).  The agent computes it WITHOUT PUE (it doesn't know the
+  // user's facility multiplier), so divide by PUE here — WES is linear in
+  // 1/watts, so wes/pue equals exactly what computeWES would produce.
+  // Without this, a table could mix PUE-adjusted (computed) and unadjusted
+  // (agent) rows whenever the user sets PUE ≠ 1.0.
+  const wes = modelWes != null
+    ? (pue > 0 ? modelWes / pue : modelWes)
+    : (tps != null && watts != null && tps > 0 && watts > 0
+        ? computeWES(tps, watts, thermalState, pue)
+        : null);
 
   // Estimated VRAM savings vs FP16 baseline.
   // fp16Est = what this model would require at full FP16 precision.
   // Only meaningful when current quant is below FP16 (ratio < 1.0)
   // and we have an observed model size to anchor the estimate.
-  const fp16Est     = sizeGb != null && ratio > 0 && ratio < 1.0 ? sizeGb / ratio : null;
+  const fp16Est     = sizeGb != null && ratio != null && ratio > 0 && ratio < 1.0 ? sizeGb / ratio : null;
   const vramSavedGb = fp16Est != null && sizeGb != null && fp16Est > sizeGb
     ? fp16Est - sizeGb
     : null;
@@ -369,7 +344,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
       primary,
       combinedTpsFor(n),
       null,
-      n.ollama_quantization ?? parseQuantFromName(primary),
+      n.ollama_quantization ?? parseQuantFromAnyModelName(primary),
       n.ollama_model_size_gb ?? null,
       watts,
       pue,
@@ -528,7 +503,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                     </Tip>
                   </th>
                   <th className="text-right pb-1.5 font-semibold">
-                    <Tip text="Largest context window where the KV cache fits in memory headroom. ~ = estimated from param count. — = no architecture data (vLLM nodes always show —)." side="bottom" width="w-64">
+                    <Tip text="Largest context window where the KV cache fits in memory headroom. ~ = estimated from param count. — = no architecture data and no parseable parameter count." side="bottom" width="w-64">
                       Max Ctx
                     </Tip>
                   </th>
@@ -604,7 +579,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                       </td>
                       <td className="py-2 text-right font-mono">
                         {row.maxFitsCtx === undefined ? (
-                          <span className="text-gray-700" title="Context runway not available — requires architecture data (layers, KV heads) from Ollama /api/show, or a parameter count for estimation. vLLM nodes always show —.">—</span>
+                          <span className="text-gray-700" title="Context runway not available — requires architecture data (layers, KV heads) from Ollama /api/show, or a parameter count parseable from the model name.">—</span>
                         ) : row.maxFitsCtx === null ? (
                           <span className="text-red-500 text-[10px]">swap</span>
                         ) : (
@@ -704,7 +679,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         const quantStr   = primary.quant ?? 'unknown quant';
         const headroomStr = `${memFit.headroomPct.toFixed(0)}% memory headroom`;
         const rec        = primary.tps != null && primary.family !== 'Unknown'
-          ? computeQuantRecommendation(primary.family, memFit.modelSizeGb, memFit.headroomGb, primary.tps, node)
+          ? computeQuantRecommendation(primary.family, memFit.modelSizeGb, memFit.headroomGb, primary.tps, node, memFit.totalGb)
           : null;
         const recTail    = (() => {
           if (!rec) return null;
@@ -965,6 +940,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 memFit.headroomGb,
                 e.tps,
                 node,
+                memFit.totalGb,
               );
               if (rec.kind === 'none') return null;
 

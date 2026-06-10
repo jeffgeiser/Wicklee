@@ -23,6 +23,7 @@ import { computeQuantRecommendation } from '../../utils/quantSweet';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../utils/kvCache';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE } from '../../utils/perplexity';
 import { pushAndGetSmoothed } from '../../utils/sharedSmoothing';
+import { quantFamily, parseQuantFromAnyModelName } from '../../utils/quantSize';
 
 // ── Score → colour helpers ──────────────────────────────────────────────────
 
@@ -62,21 +63,9 @@ const RECOMMENDATION_TONE: Record<string, string> = {
   none:       'text-gray-500',
 };
 
-// ── Quant family extraction (mirrors ModelFitAnalysis) ───────────────────────
-
-function extractQuantFamily(quant: string | null | undefined): string {
-  if (!quant) return 'unknown';
-  const q = quant.toUpperCase();
-  if (q.startsWith('Q2') || q.startsWith('IQ2'))  return 'Q2';
-  if (q.startsWith('Q3') || q.startsWith('IQ3'))  return 'Q3';
-  if (q.startsWith('Q4') || q.startsWith('IQ4'))  return 'Q4';
-  if (q.startsWith('Q5'))                          return 'Q5';
-  if (q.startsWith('Q6'))                          return 'Q6';
-  if (q.startsWith('Q8'))                          return 'Q8';
-  if (q === 'F16' || q === 'BF16' || q === 'FP16') return 'F16';
-  if (q === 'F32' || q === 'FP32')                 return 'F32';
-  return 'unknown';
-}
+// Quant family bucketing comes from src/utils/quantSize.ts — the shared
+// implementation also folds FP8/INT8 into Q8 and handles UD-/GGUF suffixes,
+// matching ModelFitAnalysis exactly.
 
 // ── Component ───────────────────────────────────────────────────────────────
 
@@ -151,9 +140,13 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
   if (!fit) return null;
 
   const observedTps = smoothedCombinedTps(node);
-  const currentFamily = extractQuantFamily(node.ollama_quantization);
-  const rec = currentFamily !== 'unknown'
-    ? computeQuantRecommendation(currentFamily, fit.modelSizeGb, fit.headroomGb, observedTps, node)
+  const quantTag = node.ollama_quantization
+    ?? parseQuantFromAnyModelName(
+         node.ollama_active_model ?? node.vllm_model_name ?? node.llamacpp_model_name,
+       );
+  const currentFamily = quantFamily(quantTag);
+  const rec = currentFamily !== 'Unknown'
+    ? computeQuantRecommendation(currentFamily, fit.modelSizeGb, fit.headroomGb, observedTps, node, fit.totalGb)
     : null;
 
   const runway = computeContextRunway(node, fit.headroomGb);

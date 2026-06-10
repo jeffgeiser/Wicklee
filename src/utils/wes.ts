@@ -19,6 +19,18 @@
  *   - Model Fit Analysis card (Insights)   → src/components/insights/tier2/ModelFitAnalysis.tsx
  *   - WES Trend / Leaderboard charts       → src/components/insights/*.tsx
  *
+ * Cross-tier conventions (from the calculation-consistency audit):
+ *   - Agent per-model WES (active_models[].wes) and cloud-stored
+ *     wes_raw/wes_penalized are computed WITHOUT PUE — neither backend knows
+ *     the user's facility setting. Consumers that mix agent-attributed WES
+ *     with locally computed WES must divide the agent value by PUE first
+ *     (see ModelFitAnalysis.deriveModelEntry).
+ *   - The agent's NVML throttle-bitmask and AMD clock-ratio paths can yield
+ *     numeric penalties up to 2.5; this string-keyed table caps at 2.0. An
+ *     agent-computed WES can therefore read slightly lower than a frontend
+ *     recomputation on a hard-throttling NVIDIA node — the agent value is
+ *     the more accurate one (it sees the raw throttle reasons).
+ *
  * The "MPG for local AI inference": a unitless score that collapses thermal
  * throttling, power draw, and throughput into a single comparable number.
  * Higher is always better. A thermally stressed node's WES drops even when

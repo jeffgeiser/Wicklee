@@ -43,7 +43,16 @@ export function calculateWES(
   return computeWES(toks, adjustedWatts, thermalState, 1.0);
 }
 
-export const ELECTRICITY_RATE_USD_PER_KWH = 0.13;
+/**
+ * Canonical default electricity rate, used wherever the user hasn't
+ * configured a per-node or fleet rate. Roughly the current US average
+ * residential rate. MUST stay in sync with the cloud's
+ * DEFAULT_KWH_RATE_USD (cloud/src/main.rs) and the agent's kwh_rate
+ * defaults (agent/src/main.rs) — an audit found 0.12 / 0.13 / 0.16
+ * coexisting, so the same fleet showed three different "default" costs
+ * depending on which card you read.
+ */
+export const ELECTRICITY_RATE_USD_PER_KWH = 0.16;
 
 /**
  * Fleet Health Score.

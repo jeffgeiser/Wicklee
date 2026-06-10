@@ -168,9 +168,11 @@ Used to estimate FP16-equivalent model size, VRAM savings, and weight-size proje
 | Quant family | Bits/weight avg | Size vs FP16 | Recognised tags |
 |---|---|---|---|
 | Q1 / IQ1 | ~1 | 12% | `Q1_K`, `IQ1_S`, `IQ1_M` |
-| Q2 / IQ2 | ~2 | 17% | `Q2_K`, `Q2_K_L`, `IQ2_XXS`, `IQ2_XS`, `IQ2_M` |
+| Q2 | ~3.2 (K-quant mixed) | 20% | `Q2_K`, `Q2_K_L` |
+| IQ2 | ~2.7 | 17% | `IQ2_XXS`, `IQ2_XS`, `IQ2_M` |
 | Q3 / IQ3 | ~3 | 22% | `Q3_K_S`, `Q3_K_M`, `Q3_K_L`, `IQ3_XXS`, `IQ3_XS`, `IQ3_M` |
-| Q4 / IQ4 | ~4.5 (K-quant mixed) | 28% | `Q4_0`, `Q4_K_S`, `Q4_K_M`, `IQ4_XS`, `IQ4_NL` |
+| Q4 | ~4.85 (K-quant mixed) | 30% | `Q4_0`, `Q4_K_S`, `Q4_K_M` |
+| IQ4 | ~4.5 | 28% | `IQ4_XS`, `IQ4_NL` |
 | Q5 | ~5 | 35% | `Q5_K_S`, `Q5_K_M` |
 | Q6 | ~6 | 41% | `Q6_K` |
 | Q8 / FP8 / INT8 | 8 | 50% | `Q8_0`, `FP8`, `INT8` |
@@ -191,11 +193,11 @@ Ratios are approximate (±10%); actual values vary by model architecture (attent
 When a node doesn't report explicit model size, Wicklee estimates it via a priority chain (each step is strictly more accurate than the next):
 
 1. **Ollama `/api/show` exact value** (`ollama_model_size_gb`) — exact, used when present
-2. **Parameter-count × bytes-per-weight from the model name** (±10–20%) — the common path for vLLM and llama.cpp. Recognises `Llama-3.1-8B`, `qwen2.5-32b-FP8`, `Mixtral-8x7B-AWQ`, etc. When the quant tag can't be parsed, defaults to FP16/BF16 (vLLM's default dtype).
-3. **`nvidia_vram_used_mb` proxy** — last resort. Inflated on vLLM (KV cache reservation), but better than nothing for un-tagged models.
+2. **Parameter-count × bytes-per-weight from the model name** (±10–20%) — the common path for vLLM and llama.cpp. Recognises `Llama-3.1-8B`, `qwen2.5-32b-FP8`, `Mixtral-8x7B-AWQ`, etc. When the quant tag can't be parsed, vLLM/llama.cpp names default to FP16/BF16 (vLLM's default dtype); Ollama names default to Q4_K_M (Ollama's default quant for un-tagged pulls).
+3. **`nvidia_vram_used_mb` proxy** — last resort. Inflated on vLLM (KV cache reservation), but better than nothing for un-parseable models. When this path is taken, the working-set overhead below is *not* added on top — the measurement already includes it.
 4. **50 % of used system RAM** — CPU-only llama.cpp.
 
-For vLLM/llama.cpp, the Memory Fit headroom uses `model_size + 10 %` as the "used" baseline rather than `nvidia_vram_used_mb` — answering *"does my model fit with room for context?"* not *"how much has the engine pre-allocated?"*
+For vLLM, the Memory Fit headroom uses `model_size + 30 %` (512 MB minimum) as the "used" baseline rather than `nvidia_vram_used_mb` — answering *"does my model fit with room for context?"* not *"how much has the engine pre-allocated?"*. The 30 % working-set figure matches the agent's `estimate_vram_mb()`: KV cache at a typical 8K context (~15 %), activation buffers (~5 %), framework overhead (~10 %). llama.cpp does not eagerly reserve VRAM, so its measured `nvidia_vram_used_mb` is used directly.
 
 **Source:** `src/utils/quantSize.ts` (browser) · `agent/src/main.rs :: bytes_per_weight()` (Rust agent — kept in sync)
 **GGUF spec reference:** https://github.com/ggerganov/llama.cpp/blob/master/docs/development/gguf.md

@@ -6,6 +6,107 @@
 
 ---
 
+## Early June 2026 — Cross-stack calculation consistency audit
+
+Reviewed every metric formula across the three tiers — frontend
+TypeScript, localhost Rust agent, cloud Rust backend — and fixed the
+findings in severity order. The good news first: the load-bearing
+formulas were already consistent. Thermal penalties (1.0/1.25/1.75/2.0),
+WES algebra, the GQA-aware KV cache formula, KLD→quality scaling
+(shared `perplexity_baseline.json`), cost algebra, and the MiB unit
+conventions all match exactly across tiers. The findings were in the
+duplicated tables and constants around them.
+
+### Critical: GGUF plausibility filter rejected every valid file
+`bytes_per_param_for_quant` (duplicated agent + cloud) stored
+bits-per-weight — Q4 = 4.5, F16 = 16.0 — while
+`is_plausible_size_for_quant` multiplied them as **bytes**. Expected
+sizes came out 8× too large, so a real 4.9 GB Q4 8B landed at ~12% of
+"expected", below the 30% auxiliary-file floor, and was dropped. Net
+effect: model discovery silently emptied for any repo where both the
+param count and quant tag parsed (i.e., most well-named HF repos). The
+function's own doc comment proved the intent ("F32 of a 27B model is
+~108 GB" = 4 bytes/param vs the stored 32.0). Tables now store bits/8
+in both binaries, with regression tests pinned to published Llama 3.1
+8B GGUF sizes. Lesson: a two-sided sanity filter that rejects
+*everything* looks identical to a filter that's working, unless
+something asserts on known-good inputs.
+
+### Fit-score parity: cloud was still on the old overhead
+`cloud_fit_score` used 10% + 256 MB working-set overhead; the agent's
+`estimate_vram_mb()` had moved to 30% + 512 MB precisely because 10%
+under-estimated 2–3×. Same model, same hardware, different grade
+depending on which dashboard you looked at — exactly the drift the
+roadmap's "unify fit-scoring" item predicted. Now identical, and locked
+with cross-binary contract tests (cloud tests assert the agent's
+canonical values). The shared `wicklee-scoring` crate remains the
+structural fix; the contract tests are the interim tripwire.
+
+### One bandwidth table, with word boundaries
+Three chip-bandwidth tables had drifted: `chipBandwidth.ts` vs a
+private copy in `quantSweet.ts` (M3 Max 400 vs 300, RTX 4080 717 vs
+736, no 50-series) vs the agent's `hardware_bandwidth_gbps`. The
+quantSweet copy is deleted; everything frontend reads the canonical
+table. Fixing the tests surfaced a live mis-bind that predates the
+audit: NVML reports "A100-SXM4-80GB", which *contains "m4"* — substring
+matching resolved an A100 as a base Apple M4 (120 GB/s instead of
+2039). "V100-SXM2" likewise read as an Apple M2. Both matchers are now
+word-boundary based and dash-normalized; A100/H100 split by variant
+(SXM/PCIe/NVL); RTX 3090 Ti (1008, was shadowed by the 3090's 936),
+Super variants, V100, and GB10/Spark added.
+
+### Defaults and conventions
+- **$0.16/kWh everywhere.** Five default electricity rates coexisted
+  (settings 0.12, `efficiency.ts` 0.13, Overview fallbacks 0.12, agent
+  0.12, cloud + discovery 0.16). `ELECTRICITY_RATE_USD_PER_KWH = 0.16`
+  is now the single frontend source, and agent/cloud match. User-set
+  rates unaffected.
+- **PUE-consistent WES.** Agent per-model WES (`active_models[].wes`)
+  is computed without PUE; the Model Fit Analysis table mixed it with
+  PUE-adjusted `computeWES()` rows. Agent values are now divided by PUE
+  (exact, since WES is linear in 1/watts). Cross-tier conventions —
+  PUE exclusion agent/cloud-side, the agent's 2.5-max NVML throttle
+  penalties vs the 2.0-capped string table — are documented in
+  `wes.ts`.
+- **Bandwidth-ceiling pattern was dead code.** It required observed
+  tok/s ≥ 65% of the *raw* ceiling (bandwidth ÷ model size), but real
+  batch=1 decode tops out at ~30–45% of raw — the docs' own
+  `INFERENCE_EFFICIENCY = 0.40` said so. Utilization now measures
+  against the achievable ceiling (raw × 0.40).
+
+### Model-fit accuracy pass (same sprint, preceding commit)
+The audit grew out of a model-fit review that fixed: quant compression
+ratios ~1.5× off vs FP16 (two hand-maintained tables disagreed with
+their own comments; now derived from `bytesPerWeight()/2` — VRAM-saved
+estimates were understated by half); frontend still using the 10%
+overhead the agent had abandoned; llama.cpp scored with synthetic usage
+when its measured VRAM is trustworthy; un-tagged Ollama names sized as
+FP16 when Ollama's default is Q4_K_M (3.3× overestimate, false "Poor"
+on well-fitted nodes); Quant Sweet Spot upgrades that could consume all
+headroom and land the node in its own Poor band (now reserve 10% of
+capacity); Context Runway gated to Ollama despite working vLLM
+estimation code; Q4_K 0.56→0.60 and Q2_K 0.34→0.39 B/W refinements
+validated against published GGUF sizes; MoE names get a 0.83
+shared-weight factor (Mixtral 8x7B is 46.7B, not 56B).
+
+### Test infrastructure
+The repo had zero tests for this math. Now: vitest wired into the
+frontend (`npm test`, 71 tests across modelFit / quantSize / kvCache /
+quantSweet / chipBandwidth, including a consistency test asserting
+compression ratios equal `bytesPerWeight()/2` — the class of test that
+would have caught the ratio drift automatically), plus `#[cfg(test)]`
+suites in both Rust binaries (33 tests: plausibility regression against
+real GGUF sizes, NVML name-matching, cloud↔agent contract tests).
+
+### Deliberately left alone
+Cloud-stored WES staying PUE-less (the cloud can't know a user's
+facility multiplier — it's a display-time adjustment), the cloud's
+30s online threshold vs the frontend's 60s reachable window, and the
+GiB-vs-GB mixing in tok/s ceilings (~7% optimism, within estimate
+noise) — documented rather than changed.
+
+---
+
 ## Late May 2026 — Sprint retrospective: Models tab, Discovery v2, fleet model endpoints, landing rewrite
 
 The week after v0.9.0 shipped. v0.9.0 itself is documented in the entry

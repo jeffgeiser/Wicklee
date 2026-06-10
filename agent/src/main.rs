@@ -234,9 +234,14 @@ fn score_fit(
         None => 10, // neutral — no data
     };
 
-    // ── Power efficiency (20 points) ──────────────────────────────────────
+    // ── Capacity utilization (20 points) ──────────────────────────────────
     // Score based on what fraction of total VRAM the model consumes —
     // larger models relative to hardware capacity get penalized.
+    // NOTE: this revisits the same VRAM dimension as the headroom score
+    // above (memory is effectively 60 of the 100 points) — a deliberate
+    // weighting choice, not a power measurement. If a watts-based
+    // efficiency signal becomes available per candidate model, it should
+    // replace this block.
     let vram_fraction = vram_required as f32 / vram_available.max(1) as f32;
     let power_score: u8 = if vram_fraction < 0.2 { 20 }
         else if vram_fraction < 0.35 { 16 }
@@ -386,16 +391,21 @@ fn extract_params_b(model_id: &str) -> Option<f32> {
 /// Approximate bytes-per-parameter for a quant string. Used to compute the
 /// expected file size of a model variant — anything ≤30% of expected is
 /// almost certainly an auxiliary file mislabeled by the filename parser.
+///
+/// Values are bits-per-weight ÷ 8 (F16 = 16 bits = 2.0 bytes). An earlier
+/// revision stored the bit counts directly while the caller multiplied them
+/// as bytes — every correctly-sized GGUF came out at ~12% of "expected" and
+/// was rejected by the 30% floor, silently emptying model discovery.
 fn bytes_per_param_for_quant(quant: &str) -> Option<f32> {
     let q = quant.to_ascii_uppercase();
-    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(3.0); }
-    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(3.5); }
-    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(4.5); }
-    if q.starts_with("Q5") { return Some(5.5); }
-    if q.starts_with("Q6") { return Some(6.5); }
-    if q.starts_with("Q8") { return Some(9.0); }
-    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(16.0); }
-    if q == "F32" { return Some(32.0); }
+    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(0.375); }  // ~3 bits
+    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.4375); } // ~3.5 bits
+    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(0.5625); } // ~4.5 bits
+    if q.starts_with("Q5") { return Some(0.6875); }                          // ~5.5 bits
+    if q.starts_with("Q6") { return Some(0.8125); }                          // ~6.5 bits
+    if q.starts_with("Q8") { return Some(1.125); }                           // ~9 bits
+    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(2.0); }
+    if q == "F32" { return Some(4.0); }
     None
 }
 
@@ -3669,8 +3679,10 @@ fn evaluate_local_observations(
             let avg_watts: f64 = phantom_samples.iter()
                 .filter_map(|s| s.gpu_power_w.or(s.cpu_power_w))
                 .sum::<f64>() / phantom_samples.len().max(1) as f64;
-            // Cost estimate: $/day at $0.12/kWh default
-            let kwh_rate = 0.12;
+            // Cost estimate: $/day at the fleet-wide default rate. Keep in
+            // sync with cloud DEFAULT_KWH_RATE_USD and the frontend's
+            // ELECTRICITY_RATE_USD_PER_KWH (utils/efficiency.ts) — all 0.16.
+            let kwh_rate = 0.16;
             let cost_per_day = (avg_watts / 1000.0) * 24.0 * kwh_rate;
             let model_name = phantom_samples.last()
                 .and_then(|s| s.model.as_deref())
@@ -4863,39 +4875,67 @@ fn evaluate_vram_overcommit(
 /// so the pattern never fires with a guessed ceiling.
 #[cfg(not(target_env = "musl"))]
 fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<&str>) -> Option<f32> {
+    // Chip-identifier match at word boundaries. Plain `contains` mis-binds
+    // short Apple tokens inside NVML form-factor codes: "A100-SXM4-80GB"
+    // contains "m4" and was resolved as a base Apple M4 (120 GB/s instead
+    // of 2039); "V100-SXM2" likewise contains "m2".
+    fn word(key: &str, pat: &str) -> bool {
+        key.match_indices(pat).any(|(i, _)| {
+            let b = key.as_bytes();
+            let before_ok = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+            let end = i + pat.len();
+            let after_ok = end == key.len() || !b[end].is_ascii_alphanumeric();
+            before_ok && after_ok
+        })
+    }
+    // Dash-normalize so NVML names like "A100-SXM4-80GB" match keyword checks.
     let key = format!(
         "{} {}",
         gpu_name.unwrap_or(""),
         chip_name.unwrap_or(""),
-    ).to_lowercase();
-    if key.trim().is_empty() { return None; }
+    ).to_lowercase().replace('-', " ");
+    let key = key.trim();
+    if key.is_empty() { return None; }
     // Match longest names first to avoid e.g. "m4 max" being shadowed by "m4".
-    if key.contains("m3 ultra")  { return Some(819.0); }
-    if key.contains("m2 ultra")  { return Some(800.0); }
-    if key.contains("m4 max")    { return Some(546.0); }
-    if key.contains("m3 max")    { return Some(400.0); }
-    if key.contains("m2 max")    { return Some(400.0); }
-    if key.contains("m1 max")    { return Some(400.0); }
-    if key.contains("m4 pro")    { return Some(273.0); }
-    if key.contains("m3 pro")    { return Some(150.0); }
-    if key.contains("m2 pro")    { return Some(200.0); }
-    if key.contains("m1 pro")    { return Some(200.0); }
-    if key.contains("m4")        { return Some(120.0); }   // base M4
-    if key.contains("m3")        { return Some(100.0); }   // base M3
-    if key.contains("m2")        { return Some(100.0); }   // base M2
-    if key.contains("m1")        { return Some(68.0); }    // base M1
-    if key.contains("gb10") || key.contains("spark") { return Some(273.0); } // DGX Spark
-    if key.contains("h200")      { return Some(4800.0); }
-    if key.contains("h100")      { return Some(3350.0); }
-    if key.contains("a100 80")   { return Some(2039.0); }
-    if key.contains("a100")      { return Some(1555.0); }
-    if key.contains("rtx 5090")  { return Some(1792.0); }
-    if key.contains("rtx 4090")  { return Some(1008.0); }
-    if key.contains("rtx 4080")  { return Some(717.0); }
-    if key.contains("rtx 3090")  { return Some(936.0); }
-    if key.contains("rtx 3080")  { return Some(760.0); }
-    if key.contains("l40s")      { return Some(864.0); }
-    if key.contains("l4")        { return Some(300.0); }
+    if word(key, "m3 ultra")  { return Some(819.0); }
+    if word(key, "m2 ultra")  { return Some(800.0); }
+    if word(key, "m4 max")    { return Some(546.0); }
+    if word(key, "m3 max")    { return Some(400.0); }
+    if word(key, "m2 max")    { return Some(400.0); }
+    if word(key, "m1 max")    { return Some(400.0); }
+    if word(key, "m4 pro")    { return Some(273.0); }
+    if word(key, "m3 pro")    { return Some(150.0); }
+    if word(key, "m2 pro")    { return Some(200.0); }
+    if word(key, "m1 pro")    { return Some(200.0); }
+    if word(key, "m4")        { return Some(120.0); }   // base M4
+    if word(key, "m3")        { return Some(100.0); }   // base M3
+    if word(key, "m2")        { return Some(100.0); }   // base M2
+    if word(key, "m1")        { return Some(68.0); }    // base M1
+    if word(key, "gb10") || word(key, "spark") { return Some(273.0); } // DGX Spark
+    if word(key, "h200")      { return Some(4800.0); }
+    // H100 variants: NVML reports "H100 PCIe", "H100 NVL", or "H100 80GB HBM3" (SXM).
+    if word(key, "h100") {
+        if word(key, "pcie") { return Some(2000.0); }
+        if word(key, "nvl")  { return Some(3938.0); }
+        return Some(3350.0);
+    }
+    // A100: 80GB parts (SXM4 2039 / PCIe 1935 — close enough); 40GB parts 1555.
+    // Capacity check is a plain substring ("80gb" must match "80").
+    if word(key, "a100") {
+        return Some(if key.contains("80") { 2039.0 } else { 1555.0 });
+    }
+    if word(key, "v100")           { return Some(900.0); }
+    if word(key, "rtx 5090")       { return Some(1792.0); }
+    if word(key, "rtx 4090")       { return Some(1008.0); }
+    if word(key, "rtx 4080 super") { return Some(736.0); }
+    if word(key, "rtx 4080")       { return Some(717.0); }
+    if word(key, "rtx 3090 ti")    { return Some(1008.0); }
+    if word(key, "rtx 3090")       { return Some(936.0); }
+    if word(key, "rtx 3080 ti")    { return Some(912.0); }
+    if word(key, "rtx 3080")       { return Some(760.0); }
+    if word(key, "l40s")      { return Some(864.0); }
+    if word(key, "l40")       { return Some(864.0); }
+    if word(key, "l4")        { return Some(300.0); }
     None
 }
 
@@ -4907,16 +4947,23 @@ fn bytes_per_weight(quant: &str) -> f32 {
     let q = quant.to_lowercase();
     let q = q.strip_prefix("ud-").unwrap_or(&q);
     if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.25; }
-    if q.starts_with("iq2") || q.starts_with("q2")      { return 0.34; }
+    // IQ2 variants are genuinely 2–2.7 bit; Q2_K is mixed-precision and lands
+    // at ~3.2 bits in practice (Llama 3.1 8B Q2_K = 3.18 GB / 8.03B = 0.40 B/W).
+    if q.starts_with("iq2")                             { return 0.34; }
+    if q.starts_with("q2")                              { return 0.39; }
     if q.starts_with("iq3") || q.starts_with("q3")      { return 0.45; }
-    if q.starts_with("q4")  || q.starts_with("iq4")     { return 0.56; }
+    // IQ4_XS/IQ4_NL sit at ~4.25–4.5 bits; the modal GGUF quant Q4_K_M is
+    // ~4.85 bits (Llama 3.1 8B Q4_K_M = 4.92 GB / 8.03B params = 0.61 B/W).
+    if q.starts_with("iq4")                             { return 0.56; }
+    if q.starts_with("q4")                              { return 0.60; }
     if q.starts_with("q5")  { return 0.69; }
     if q.starts_with("q6")  { return 0.82; }
     if q.starts_with("q8") || q == "fp8" || q == "int8" { return 1.0; }
     if q.starts_with("f16") || q == "bf16" || q.starts_with("fp16") { return 2.0; }
     if q.starts_with("f32") || q.starts_with("fp32") { return 4.0; }
     // Production vLLM/HF quant tags — mirror src/utils/quantSize.ts.
-    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights ≈ 0.56 B/W like Q4_K_M.
+    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights + group scales ≈ 0.56 B/W
+    // (closer to Q4_0/IQ4 than the heavier mixed-precision Q4_K_M).
     // GPTQ-int8 / BNB-8bit: 8-bit weights ≈ 1.0 B/W like Q8_0/FP8.
     // AQLM / HQQ-2bit: 2-bit aggressive quants ≈ 0.34 B/W like Q2_K.
     if q == "awq" || q.starts_with("awq-int4") || q == "awq-4bit"     { return 0.56; }
@@ -4958,8 +5005,18 @@ fn evaluate_bandwidth_ceiling(
         gpu_name_owned.as_deref(),
         chip_name,
     )?;
+    // Raw ceiling = every weight streamed once per token at full rated
+    // bandwidth. Real batch=1 GGUF decode tops out at ~30–45% of that
+    // (activation traffic, KV reads, framework overhead) — the frontend's
+    // INFERENCE_EFFICIENCY constant (chipBandwidth.ts) uses 0.40 for the
+    // same physics. The achievable ceiling is what utilization must be
+    // measured against: the previous code compared observed tok/s to the
+    // RAW ceiling with a 0.65 trigger, a level real hardware can't reach,
+    // so this pattern never fired.
+    const INFERENCE_EFFICIENCY: f32 = 0.40;
     let theoretical_max_tps = bandwidth_gbps / model_size_gb;
     if theoretical_max_tps <= 0.0 { return None; }
+    let achievable_ceiling_tps = theoretical_max_tps * INFERENCE_EFFICIENCY;
 
     // Need at least 5 minutes of sustained inference samples to fire confidently.
     let now_ms = now_ms() as i64;
@@ -4974,7 +5031,7 @@ fn evaluate_bandwidth_ceiling(
     let observed_tps_p50 = obs_mean(&tps_vals);
     if observed_tps_p50 <= 0.0 { return None; }
 
-    let utilization = observed_tps_p50 / theoretical_max_tps as f64;
+    let utilization = observed_tps_p50 / achievable_ceiling_tps as f64;
     if utilization < 0.65 { return None; }   // not bandwidth-bound — something else limits
 
     // Confirmation: GPU not pegged at 100% (compute-bound is a different story —
@@ -4997,14 +5054,15 @@ fn evaluate_bandwidth_ceiling(
         severity:         "info",
         title:            "Memory-Bandwidth Ceiling Reached".into(),
         hook:             format!(
-            "{:.1} tok/s · {:.0}% of {:.1} tok/s ceiling",
-            observed_tps_p50, utilization * 100.0, theoretical_max_tps,
+            "{:.1} tok/s · {:.0}% of {:.1} tok/s achievable ceiling",
+            observed_tps_p50, utilization * 100.0, achievable_ceiling_tps,
         ),
         body:             format!(
             "{hostname} is decoding {model_name} at {observed_tps_p50:.1} tok/s — \
-             {pct:.0}% of the theoretical memory-bandwidth ceiling for {hw_label} \
+             {pct:.0}% of the achievable memory-bandwidth ceiling for {hw_label} \
              ({model_size_gb:.1} GB resident weights at {quant}, \
-             {bandwidth_gbps:.0} GB/s memory bandwidth). The 'Low' tok/W reading is \
+             {bandwidth_gbps:.0} GB/s rated bandwidth, ~40% realizable at batch=1). \
+             The 'Low' tok/W reading is \
              expected: at batch=1, fixed GPU baseline power dominates and efficiency \
              cannot improve without changing quant or batch size. The node is healthy.",
             pct = utilization * 100.0,
@@ -5133,7 +5191,7 @@ async fn handle_profile(
     }
 }
 
-/// GET /api/cost-by-model?hours=24&kwh_rate=0.12 — cost attribution per model.
+/// GET /api/cost-by-model?hours=24&kwh_rate=0.16 — cost attribution per model.
 #[cfg(not(target_env = "musl"))]
 async fn handle_cost_by_model(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -5141,7 +5199,7 @@ async fn handle_cost_by_model(
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
 ) -> impl IntoResponse {
     let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(24).min(720);
-    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.12);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.16);
     let node_id = node_id_ext.0.as_str().to_owned();
     let result = tokio::task::spawn_blocking(move || store.query_cost_by_model(&node_id, hours, kwh_rate)).await;
     match result {
@@ -5171,7 +5229,7 @@ async fn handle_explain_slowdown(
     }
 }
 
-/// GET /api/model-comparison?hours=168&kwh_rate=0.12 — side-by-side model efficiency data.
+/// GET /api/model-comparison?hours=168&kwh_rate=0.16 — side-by-side model efficiency data.
 #[cfg(not(target_env = "musl"))]
 async fn handle_model_comparison(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -5179,7 +5237,7 @@ async fn handle_model_comparison(
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
 ) -> impl IntoResponse {
     let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(168).min(720);
-    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.12);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|v| v.parse().ok()).unwrap_or(0.16);
     let node_id = node_id_ext.0.as_str().to_owned();
     let result = tokio::task::spawn_blocking(move || store.query_model_comparison(&node_id, hours, kwh_rate)).await;
     match result {
@@ -7692,3 +7750,86 @@ async fn main() {
     eprintln!("[agent] clean shutdown complete");
 }
 
+
+#[cfg(test)]
+mod fit_math_tests {
+    use super::*;
+
+    // Real-world reference: Llama 3.1 8B Instruct GGUF file sizes.
+    const PARAMS_8B: Option<f32> = Some(8.03);
+
+    #[test]
+    fn plausibility_accepts_real_gguf_sizes() {
+        // Published file sizes must pass — this is the regression test for the
+        // bits-vs-bytes error that rejected every well-formed variant.
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q2_K",   3_180_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 4_920_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q6_K",   6_600_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q8_0",   8_540_000_000));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "F16",   16_070_000_000));
+        // 70B Q4_K_M ≈ 42.5 GB
+        assert!(is_plausible_size_for_quant(Some(70.6), "Q4_K_M", 42_500_000_000));
+    }
+
+    #[test]
+    fn plausibility_rejects_auxiliary_and_mislabeled_files() {
+        // The doc-comment example: "F32 · 1.7 GB" on a 27B model (real F32 ≈ 108 GB).
+        assert!(!is_plausible_size_for_quant(Some(27.0), "F32", 1_700_000_000));
+        // Tiny mmproj/embedding export mislabeled as a full Q4 model.
+        assert!(!is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 100_000_000));
+        // Double-counted shards: > 200% of expected.
+        assert!(!is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 12_000_000_000));
+    }
+
+    #[test]
+    fn plausibility_is_conservative_when_signals_missing() {
+        assert!(is_plausible_size_for_quant(None, "Q4_K_M", 123));
+        assert!(is_plausible_size_for_quant(PARAMS_8B, "unknown", 123));
+    }
+
+    #[test]
+    fn bytes_per_param_is_bits_over_eight() {
+        // F16 is definitionally 16 bits = 2.0 bytes; everything else scales.
+        assert_eq!(bytes_per_param_for_quant("F16"), Some(2.0));
+        assert_eq!(bytes_per_param_for_quant("F32"), Some(4.0));
+        assert_eq!(bytes_per_param_for_quant("Q4_K_M"), Some(0.5625));
+        assert_eq!(bytes_per_param_for_quant("Q8_0"), Some(1.125));
+    }
+
+    #[test]
+    fn estimate_vram_adds_30pct_with_512mb_floor() {
+        // 7 GiB file → 7168 MB base + 30% = 9318 MB.
+        assert_eq!(estimate_vram_mb(7 * 1024 * 1024 * 1024), 7168 + 2150);
+        // Tiny model: floor binds.
+        assert_eq!(estimate_vram_mb(100 * 1024 * 1024), 100 + 512);
+    }
+}
+
+#[cfg(all(test, not(target_env = "musl")))]
+mod bandwidth_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_dashed_nvml_names_and_variants() {
+        // NVML reports dashed names — the A100 80GB entry never matched before
+        // dash normalization was added.
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA A100-SXM4-80GB"), None), Some(2039.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA A100-PCIE-40GB"), None), Some(1555.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA H100 PCIe"), None), Some(2000.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA H100 80GB HBM3"), None), Some(3350.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA GeForce RTX 4080 SUPER"), None), Some(736.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA GeForce RTX 3090 Ti"), None), Some(1008.0));
+        // Bare L40 must not fall through to the L4 entry (864 vs 300).
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA L40"), None), Some(864.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA L4"), None), Some(300.0));
+        // "V100-SXM2" contains "m2" — must not resolve as a base Apple M2.
+        assert_eq!(hardware_bandwidth_gbps(Some("Tesla V100-SXM2-16GB"), None), Some(900.0));
+    }
+
+    #[test]
+    fn resolves_apple_chips_and_unknowns() {
+        assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M3 Ultra")), Some(819.0));
+        assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M2 Pro")), Some(200.0));
+        assert_eq!(hardware_bandwidth_gbps(Some("AMD Radeon RX 7900 XTX"), None), None);
+    }
+}

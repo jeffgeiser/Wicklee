@@ -3,7 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint, Clock, HardDrive } from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
 import { getNodePowerW, hasPowerData } from '../utils/power';
 import { pushAndGetSmoothed, pruneBuffers } from '../utils/sharedSmoothing';
 import { CLOUD_URL } from '../utils/cloudUrl';
@@ -1319,7 +1319,7 @@ const DiagnosticRail: React.FC<{
 };
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = 0.12, getToken, onNavigateToObservability, onNavigateToInsights }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, getToken, onNavigateToObservability, onNavigateToInsights }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -2162,7 +2162,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           // Node Cost/Day: watts × 24h × kWhRate / 1000
           const nodeWatts = sentinel?.apple_soc_power_w ?? sentinel?.nvidia_power_draw_w ?? sentinel?.cpu_power_w ?? null;
           const ns = getNodeSettings?.(sentinel?.node_id ?? '');
-          const kwhRate = ns?.kwhRate ?? 0.12;
+          const kwhRate = ns?.kwhRate ?? fleetKwhRate;
           const dailyCost = nodeWatts != null ? (nodeWatts * 24 / 1000) * kwhRate : null;
           return (
             <InsightTile
@@ -2353,7 +2353,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             const w = m.nvidia_power_draw_w ?? m.apple_soc_power_w ?? m.cpu_power_w ?? null;
             if (w != null && w > 0) {
               const ns = getNodeSettings?.(m.node_id);
-              const rate = ns?.kwhRate ?? 0.12;
+              const rate = ns?.kwhRate ?? fleetKwhRate;
               totalFleetWatts += w;
               fleetDailyCost = (fleetDailyCost ?? 0) + (w * 24 / 1000) * rate;
               costNodeCount++;
