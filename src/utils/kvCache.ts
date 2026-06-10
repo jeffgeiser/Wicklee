@@ -113,7 +113,7 @@ function archFromPayload(node: SentinelMetrics): KVArchitecture | null {
  *   "qwen2.5-32b"               → 32_000_000_000
  *   "Llama-3.1-8B-Instruct"     → 8_000_000_000
  *   "phi-3-mini"                → null  (no numeric tag)
- *   "Mixtral-8x7B-Instruct"     → 56_000_000_000  (8×7 expert MoE — total params)
+ *   "Mixtral-8x7B-Instruct"     → 46_480_000_000  (8×7B MoE × 0.83 shared-weight factor)
  *   "deepseek-coder-6.7b"       → 6_700_000_000
  *
  * Used as a fallback path for vLLM and llama.cpp models where the agent does
@@ -124,12 +124,15 @@ export function parseParamCountFromModelName(name: string | null | undefined): n
   if (!name) return null;
   const lower = name.toLowerCase();
 
-  // Mixtral-style "8x7b" / "16x17b" — sum of expert params.
+  // Mixtral-style "8x7b" / "16x17b" — experts × per-expert size, discounted
+  // for the attention/embedding weights shared across experts. The naive
+  // product overstates real totals by ~20%: Mixtral 8x7B is 46.7B (not 56B),
+  // 8x22B is 141B (not 176B) → shared-weight factor ≈ 0.83/0.80.
   const moe = lower.match(/(\d+)x(\d+(?:\.\d+)?)b\b/);
   if (moe) {
     const experts = parseInt(moe[1], 10);
     const perExpert = parseFloat(moe[2]);
-    if (experts > 0 && perExpert > 0) return Math.round(experts * perExpert * 1e9);
+    if (experts > 0 && perExpert > 0) return Math.round(experts * perExpert * 0.83 * 1e9);
   }
 
   // Standard "<num>b" or "<num>B" tag — e.g. 8b, 70B, 6.7b, 32b.
@@ -175,7 +178,7 @@ function archFromParamCount(node: SentinelMetrics): KVArchitecture | null {
   // Pattern table: [minB, maxB, layers, kvHeads, headDim]
   // GQA values from Llama 3 architecture variants.
   const patterns: [number, number, number, number, number][] = [
-    [0,    2,   22, 8,  64],  // ~1B  (Llama 3.2 1B: 16 layers, 8 KV, h=64)
+    [0,    2,   16, 8,  64],  // ~1B  (Llama 3.2 1B: 16 layers, 8 KV, h=64)
     [2,    4.5, 28, 8, 128],  // ~3B  (Llama 3.2 3B: 28 layers, 8 KV, h=128)
     [4.5,  9,   32, 8, 128],  // ~7B  (Llama 3.1 8B: 32 layers, 8 KV, h=128)
     [9,   18,   40, 8, 128],  // ~13B (Llama 3 13B-ish)
@@ -209,16 +212,32 @@ function kvCacheBytes(arch: KVArchitecture, ctxTokens: number): number {
 /**
  * Compute the Context Runway for a node's current model.
  *
+ * Works for all runtimes: Ollama gets exact architecture from /api/show
+ * when available; vLLM and llama.cpp fall back to parameter-count
+ * estimation from the model name (±30%, flagged via arch.isExact).
+ *
  * Returns null when:
- *   - No model is loaded (no Ollama model)
+ *   - No model is loaded on any runtime
  *   - Architecture cannot be determined (no /api/show data AND no param count)
  *   - headroomGb is zero or negative (can't project meaningfully)
+ *
+ * Known conservative bias (Ollama): the runtime pre-allocates KV cache for
+ * the configured num_ctx at load time, so measured VRAM usage — and hence
+ * the headroom passed in — already contains a KV allocation. Projecting a
+ * full KV cache against that headroom effectively asks whether a *second*
+ * cache fits, understating the true runway. We accept the bias: it errs
+ * toward "tighter than reality", never toward a false "fits".
  */
 export function computeContextRunway(
   node: SentinelMetrics,
   headroomGb: number,
 ): ContextRunway | null {
-  if (!node.ollama_active_model) return null;
+  const hasModel =
+    node.ollama_active_model
+    ?? node.vllm_model_name
+    ?? node.llamacpp_model_name
+    ?? null;
+  if (!hasModel) return null;
   if (headroomGb <= 0) return null;
 
   const arch = archFromPayload(node) ?? archFromParamCount(node);

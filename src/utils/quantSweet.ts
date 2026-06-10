@@ -11,7 +11,7 @@
  *
  *   tok/s ∝ bandwidth / model_size_in_memory
  *
- * So going from Q4_K_M → Q6_K (~+45% model size) costs roughly 30% tok/s.
+ * So going from Q4_K_M → Q6_K (~+37% model size) costs roughly 25–30% tok/s.
  * The bandwidth lookup provides context ("your chip does X GB/s") but the
  * speed estimate is anchored to observed tok/s, not theoretical bandwidth,
  * for accuracy:
@@ -20,8 +20,8 @@
  *
  * ── What we never recommend ───────────────────────────────────────────────────
  *
- * - "Your chip has high bandwidth, run Q8" — Q8 is ~78% larger than Q4_K_M,
- *   meaning ~44% slower tok/s. That's rarely worth it vs Q6_K.
+ * - "Your chip has high bandwidth, run Q8" — Q8 is ~67% larger than Q4_K_M,
+ *   meaning ~40% slower tok/s. That's rarely worth it vs Q6_K.
  * - Upgrades that don't fit in available headroom.
  * - Upgrades when the user is already at Q5/Q6 (already near-lossless).
  *
@@ -41,6 +41,7 @@
 
 import type { SentinelMetrics } from '../types';
 import { lookupPerplexity, QUALITY_BAND_LABEL } from './perplexity';
+import { quantCompressionRatio } from './quantSize';
 
 // ── Chip bandwidth lookup ──────────────────────────────────────────────────────
 
@@ -108,16 +109,17 @@ export function chipBandwidthGbs(node: SentinelMetrics): number | null {
   return null;
 }
 
-// ── Quant compression ratios (mirrored from ModelFitAnalysis) ─────────────────
+// ── Quant compression ratios ──────────────────────────────────────────────────
 
 /**
- * VRAM footprint relative to FP16 baseline.
- * Source: GGUF spec averages (±10%); see ModelFitAnalysis.tsx for full citation.
+ * VRAM footprint relative to FP16 baseline, derived from the canonical
+ * `bytesPerWeight()` table in quantSize.ts (ratio = bpw / 2.0) so the fit
+ * card, the sweet-spot card, and the agent all agree on size math.
+ * Unknown families fall back to 0.5 (mid-range).
  */
-const COMPRESSION_RATIO: Record<string, number> = {
-  Q2: 0.25, Q3: 0.35, Q4: 0.45, Q5: 0.55,
-  Q6: 0.65, Q8: 0.80, F16: 1.0,  F32: 2.0,
-};
+function compressionRatio(family: string): number {
+  return quantCompressionRatio(family) ?? 0.5;
+}
 
 /**
  * Conservative perplexity delta vs FP16 (heuristic fallback).
@@ -238,6 +240,10 @@ export interface QuantRecommendation {
  * @param headroomGb     Available memory headroom after model load.
  * @param observedTps    Current tok/s from probe (null if idle).
  * @param node           SentinelMetrics for chip name lookup.
+ * @param totalGb        Total memory capacity (VRAM or unified) in GB. When
+ *                       provided, upgrade recommendations reserve 10% of it
+ *                       so a "fits" verdict can't land the node in the
+ *                       Poor band (<10% headroom) of computeModelFitScore.
  */
 export function computeQuantRecommendation(
   currentFamily: string,
@@ -245,9 +251,10 @@ export function computeQuantRecommendation(
   headroomGb:    number,
   observedTps:   number | null,
   node:          SentinelMetrics,
+  totalGb:       number | null = null,
 ): QuantRecommendation {
   const bw             = chipBandwidthGbs(node);
-  const currentRatio   = COMPRESSION_RATIO[currentFamily] ?? 0.5;
+  const currentRatio   = compressionRatio(currentFamily);
   const modelName      = activeModelName(node);
   const currentQuality = qualityDeltaFor(modelName, representativeQuantForFamily(currentFamily), currentFamily);
   const qFor = (family: string) => qualityDeltaFor(modelName, representativeQuantForFamily(family), family);
@@ -257,7 +264,7 @@ export function computeQuantRecommendation(
   const fp16Gb = modelSizeGb / currentRatio;
 
   function sizeAt(family: string): number {
-    return fp16Gb * (COMPRESSION_RATIO[family] ?? 0.5);
+    return fp16Gb * compressionRatio(family);
   }
 
   function estTps(targetSizeGb: number): number | null {
@@ -267,9 +274,13 @@ export function computeQuantRecommendation(
   }
 
   function fits(targetSizeGb: number): boolean {
-    // Target fits if the additional VRAM it needs is within headroom.
-    const delta = targetSizeGb - modelSizeGb;
-    return delta <= headroomGb;
+    // Target fits if the additional VRAM it needs is within headroom, minus
+    // a reserve of 10% of total capacity — recommending an upgrade that
+    // consumes all headroom would push the node straight into the Poor
+    // band of computeModelFitScore (<10% free).
+    const delta   = targetSizeGb - modelSizeGb;
+    const reserve = totalGb != null ? totalGb * 0.10 : 0;
+    return delta <= headroomGb - reserve;
   }
 
   const base: Pick<QuantRecommendation, 'currentFamily' | 'currentTps' | 'bandwidthGbs' | 'currentQuality'> = {

@@ -234,9 +234,14 @@ fn score_fit(
         None => 10, // neutral — no data
     };
 
-    // ── Power efficiency (20 points) ──────────────────────────────────────
+    // ── Capacity utilization (20 points) ──────────────────────────────────
     // Score based on what fraction of total VRAM the model consumes —
     // larger models relative to hardware capacity get penalized.
+    // NOTE: this revisits the same VRAM dimension as the headroom score
+    // above (memory is effectively 60 of the 100 points) — a deliberate
+    // weighting choice, not a power measurement. If a watts-based
+    // efficiency signal becomes available per candidate model, it should
+    // replace this block.
     let vram_fraction = vram_required as f32 / vram_available.max(1) as f32;
     let power_score: u8 = if vram_fraction < 0.2 { 20 }
         else if vram_fraction < 0.35 { 16 }
@@ -4907,16 +4912,23 @@ fn bytes_per_weight(quant: &str) -> f32 {
     let q = quant.to_lowercase();
     let q = q.strip_prefix("ud-").unwrap_or(&q);
     if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.25; }
-    if q.starts_with("iq2") || q.starts_with("q2")      { return 0.34; }
+    // IQ2 variants are genuinely 2–2.7 bit; Q2_K is mixed-precision and lands
+    // at ~3.2 bits in practice (Llama 3.1 8B Q2_K = 3.18 GB / 8.03B = 0.40 B/W).
+    if q.starts_with("iq2")                             { return 0.34; }
+    if q.starts_with("q2")                              { return 0.39; }
     if q.starts_with("iq3") || q.starts_with("q3")      { return 0.45; }
-    if q.starts_with("q4")  || q.starts_with("iq4")     { return 0.56; }
+    // IQ4_XS/IQ4_NL sit at ~4.25–4.5 bits; the modal GGUF quant Q4_K_M is
+    // ~4.85 bits (Llama 3.1 8B Q4_K_M = 4.92 GB / 8.03B params = 0.61 B/W).
+    if q.starts_with("iq4")                             { return 0.56; }
+    if q.starts_with("q4")                              { return 0.60; }
     if q.starts_with("q5")  { return 0.69; }
     if q.starts_with("q6")  { return 0.82; }
     if q.starts_with("q8") || q == "fp8" || q == "int8" { return 1.0; }
     if q.starts_with("f16") || q == "bf16" || q.starts_with("fp16") { return 2.0; }
     if q.starts_with("f32") || q.starts_with("fp32") { return 4.0; }
     // Production vLLM/HF quant tags — mirror src/utils/quantSize.ts.
-    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights ≈ 0.56 B/W like Q4_K_M.
+    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights + group scales ≈ 0.56 B/W
+    // (closer to Q4_0/IQ4 than the heavier mixed-precision Q4_K_M).
     // GPTQ-int8 / BNB-8bit: 8-bit weights ≈ 1.0 B/W like Q8_0/FP8.
     // AQLM / HQQ-2bit: 2-bit aggressive quants ≈ 0.34 B/W like Q2_K.
     if q == "awq" || q.starts_with("awq-int4") || q == "awq-4bit"     { return 0.56; }
