@@ -15,6 +15,7 @@
 //! the first run.
 
 use std::future::Future;
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 /// Restart-on-failure backoff bounds.
@@ -25,12 +26,37 @@ const BACKOFF_MAX:   Duration = Duration::from_secs(30);
 const HEALTHY_RUN:   Duration = Duration::from_secs(60);
 
 /// Spawn `make()` under a supervisor that restarts it on panic or unexpected
-/// return. Never returns until the runtime shuts down (the supervising task is
-/// itself cancelled), so it's `tokio::spawn`ed internally — call and forget.
+/// return. Use for **pure infinite loops** that should never end on their own;
+/// any return is treated as a fault and restarted. For tasks that can decide to
+/// stop permanently (e.g. node removed from fleet), use [`supervise_until`].
+///
+/// Never returns until the runtime shuts down, so it's `tokio::spawn`ed
+/// internally — call and forget.
 pub(crate) fn supervise<F, Fut>(name: &'static str, make: F)
 where
     F:   Fn() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
+{
+    // Adapt a `-> ()` factory to the ControlFlow core: a clean return is a
+    // fault here, so always ask to continue (restart).
+    supervise_until(name, move || {
+        let fut = make();
+        async move {
+            fut.await;
+            ControlFlow::Continue(())
+        }
+    });
+}
+
+/// Like [`supervise`], but the task returns [`ControlFlow`]: `Break(())` means
+/// "this was a deliberate, permanent stop — do NOT restart" (e.g. `cloud_push`
+/// breaking on a 410-Gone when the node is removed from the fleet), while
+/// `Continue(())` is treated as an unexpected exit and restarted with backoff.
+/// A panic is always restarted.
+pub(crate) fn supervise_until<F, Fut>(name: &'static str, make: F)
+where
+    F:   Fn() -> Fut + Send + 'static,
+    Fut: Future<Output = ControlFlow<()>> + Send + 'static,
 {
     tokio::spawn(async move {
         let mut backoff = BACKOFF_START;
@@ -42,6 +68,11 @@ where
             let ran_for = started.elapsed();
 
             match outcome {
+                Ok(ControlFlow::Break(())) => {
+                    // Deliberate permanent stop — done supervising.
+                    eprintln!("[supervisor] task '{name}' stopped intentionally; not restarting");
+                    break;
+                }
                 Err(e) if e.is_cancelled() => {
                     // Runtime is shutting down — stop supervising.
                     break;
@@ -52,7 +83,7 @@ where
                         ran_for, backoff,
                     );
                 }
-                Ok(()) => {
+                Ok(ControlFlow::Continue(())) => {
                     // Infinite loops shouldn't return; if one does, treat it as
                     // a fault and restart so the subsystem doesn't go dark.
                     eprintln!(
@@ -98,6 +129,24 @@ mod tests {
         assert!(
             runs.load(Ordering::SeqCst) >= 2,
             "supervisor should have restarted the task after the panic",
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_restart_on_intentional_break() {
+        let runs = Arc::new(AtomicU32::new(0));
+        let r = runs.clone();
+        supervise_until("test-break", move || {
+            let r = r.clone();
+            async move {
+                r.fetch_add(1, Ordering::SeqCst);
+                ControlFlow::Break(()) // deliberate permanent stop
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert_eq!(
+            runs.load(Ordering::SeqCst), 1,
+            "an intentional Break must not be restarted",
         );
     }
 

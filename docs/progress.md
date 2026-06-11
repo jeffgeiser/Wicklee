@@ -301,6 +301,26 @@ the remaining work on the roadmap item. The helper itself is the reusable
 core; finishing the adopters is mechanical once the don't-restart signal
 is added.
 
+### Supervisor: don't-restart signal + cloud_push adopter
+Added `supervise_until(name, factory)` — the supervised future returns
+`ControlFlow`, so a task can signal a deliberate permanent stop
+(`Break`, not restarted) vs. an unexpected exit/panic (restarted with
+backoff). `supervise` is now a thin adapter over it. Converted
+`cloud_push` to use it: its two terminal exits — the broadcast channel
+closing and a 410-Gone (node removed from fleet) — return `Break` so a
+deliberate stop can't become an idle restart-spin. New unit test asserts
+`Break` is not restarted; 40 agent tests green.
+
+Finding that refined the remaining work: the vLLM/Ollama harvester main
+loops are NOT pure infinite loops either — each does `if
+port_rx.changed().await.is_err() { return; }`, a terminal exit when the
+discovery watch-channel's senders drop at shutdown. So they too need
+`supervise_until` with those returns mapped to `Break`, not plain
+`supervise` (which would restart-spin on shutdown). Documented precisely
+on the roadmap with the exact exit to convert, left as the next focused
+pass since classifying each loop's exits is judgment work better done
+reviewably than bundled untested.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's
