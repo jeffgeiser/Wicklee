@@ -1089,6 +1089,25 @@ fn tenant_scope<'a>(user_id: &'a str, org_id: &'a Option<String>) -> (&'static s
     }
 }
 
+/// True when `node_id` is visible to the authenticated tenant.
+///
+/// Org members share the org's nodes; solo users see only their own. Scopes
+/// by the same column `tenant_scope` picks, so a node paired under an org
+/// (org_id set) is reachable by any member, and a personal node (org_id NULL)
+/// only by its owner. The column is a hardcoded literal — never caller data —
+/// so the format!() carries no injection surface.
+async fn node_in_tenant(
+    node_id: &str,
+    user_id: &str,
+    org_id: &Option<String>,
+    pool: &sqlx::PgPool,
+) -> bool {
+    let (tcol, tval) = tenant_scope(user_id, org_id);
+    sqlx::query_scalar::<_, i64>(
+        &format!("SELECT COUNT(*) FROM nodes WHERE wk_id = $1 AND {tcol} = $2")
+    ).bind(node_id).bind(tval).fetch_one(pool).await.unwrap_or(0) > 0
+}
+
 /// Resolve subscription tier — checks organizations table for org users,
 /// falls back to users table for solo users.
 async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPool) -> String {
@@ -1373,15 +1392,18 @@ async fn handle_delete_node(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
+    // Org members can remove any node in the shared fleet; solo users only
+    // their own. tenant_id on the metrics tables is the same scope column.
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let result = sqlx::query(
-        "DELETE FROM nodes WHERE wk_id = $1 AND user_id = $2"
-    ).bind(&node_id).bind(&user_id).execute(&state.pool).await;
+        &format!("DELETE FROM nodes WHERE wk_id = $1 AND {tcol} = $2")
+    ).bind(&node_id).bind(tval).execute(&state.pool).await;
 
     match result {
         Ok(r) if r.rows_affected() == 0 => {
@@ -1389,11 +1411,11 @@ async fn handle_delete_node(
                 Json(serde_json::json!({ "error": "Node not found" }))).into_response();
         }
         Ok(_) => {
-            // Purge stored metrics.
+            // Purge stored metrics (tenant_id = org_id for org nodes).
             let _ = sqlx::query("DELETE FROM metrics_raw WHERE node_id = $1 AND tenant_id = $2")
-                .bind(&node_id).bind(&user_id).execute(&state.pool).await;
+                .bind(&node_id).bind(tval).execute(&state.pool).await;
             let _ = sqlx::query("DELETE FROM metrics_5min WHERE node_id = $1 AND tenant_id = $2")
-                .bind(&node_id).bind(&user_id).execute(&state.pool).await;
+                .bind(&node_id).bind(tval).execute(&state.pool).await;
 
             // Evict from in-memory cache.
             state.metrics.write().unwrap().remove(&node_id);
@@ -2419,8 +2441,8 @@ async fn handle_fleet_events_history(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -2444,7 +2466,7 @@ async fn handle_fleet_events_history(
         (Some(nid), Some(et)) => {
             let sql = format!("{base} AND node_id = $3 AND event_type = $4 ORDER BY ts DESC LIMIT $5");
             sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
-                .bind(&user_id).bind(before).bind(nid).bind(et).bind(limit)
+                .bind(tenant_scope(&user_id, &org_id).1).bind(before).bind(nid).bind(et).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
                     serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
@@ -2453,7 +2475,7 @@ async fn handle_fleet_events_history(
         (Some(nid), None) => {
             let sql = format!("{base} AND node_id = $3 ORDER BY ts DESC LIMIT $4");
             sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
-                .bind(&user_id).bind(before).bind(nid).bind(limit)
+                .bind(tenant_scope(&user_id, &org_id).1).bind(before).bind(nid).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
                     serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
@@ -2462,7 +2484,7 @@ async fn handle_fleet_events_history(
         (None, Some(et)) => {
             let sql = format!("{base} AND event_type = $3 ORDER BY ts DESC LIMIT $4");
             sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
-                .bind(&user_id).bind(before).bind(et).bind(limit)
+                .bind(tenant_scope(&user_id, &org_id).1).bind(before).bind(et).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
                     serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
@@ -2471,7 +2493,7 @@ async fn handle_fleet_events_history(
         (None, None) => {
             let sql = format!("{base} ORDER BY ts DESC LIMIT $3");
             sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(&sql)
-                .bind(&user_id).bind(before).bind(limit)
+                .bind(tenant_scope(&user_id, &org_id).1).bind(before).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts_ms, node_id, level, event_type, message)| {
                     serde_json::json!({ "ts_ms": ts_ms, "node_id": node_id, "level": level, "event_type": event_type, "message": message })
@@ -2584,8 +2606,8 @@ async fn handle_fleet_observations(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -2605,22 +2627,22 @@ async fn handle_fleet_observations(
     let rows: Vec<(String, String, String, String, String, String, String, Option<String>, i64, Option<i64>, Option<i64>, Option<String>)> = match (state_filter.as_str(), &node_id_filter) {
         ("all", Some(nid)) => {
             let sql = format!("{base} AND node_id = $3 ORDER BY fired_at_ms DESC LIMIT $4");
-            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(nid).bind(limit)
+            sqlx::query_as(&sql).bind(tenant_scope(&user_id, &org_id).1).bind(&allowed).bind(nid).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
         ("all", None) => {
             let sql = format!("{base} ORDER BY fired_at_ms DESC LIMIT $3");
-            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(limit)
+            sqlx::query_as(&sql).bind(tenant_scope(&user_id, &org_id).1).bind(&allowed).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
         (st, Some(nid)) => {
             let sql = format!("{base} AND state = $3 AND node_id = $4 ORDER BY fired_at_ms DESC LIMIT $5");
-            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(st).bind(nid).bind(limit)
+            sqlx::query_as(&sql).bind(tenant_scope(&user_id, &org_id).1).bind(&allowed).bind(st).bind(nid).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
         (st, None) => {
             let sql = format!("{base} AND state = $3 ORDER BY fired_at_ms DESC LIMIT $4");
-            sqlx::query_as(&sql).bind(&user_id).bind(&allowed).bind(st).bind(limit)
+            sqlx::query_as(&sql).bind(tenant_scope(&user_id, &org_id).1).bind(&allowed).bind(st).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
     };
@@ -2650,8 +2672,8 @@ async fn handle_acknowledge_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -2660,7 +2682,7 @@ async fn handle_acknowledge_observation(
     let result = sqlx::query(
         "UPDATE fleet_observations SET state = 'acknowledged', ack_at_ms = $1, acknowledged_by = $4
          WHERE id = $2 AND tenant_id = $3 AND state = 'open'"
-    ).bind(now).bind(&obs_id).bind(&user_id).bind(&user_id)
+    ).bind(now).bind(&obs_id).bind(tenant_scope(&user_id, &org_id).1).bind(&user_id)
     .execute(&state.pool).await;
 
     match result {
@@ -2686,8 +2708,8 @@ async fn handle_submit_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -2714,9 +2736,8 @@ async fn handle_submit_observation(
     }
 
     // Verify node belongs to user
-    let owns: bool = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM nodes WHERE wk_id = $1 AND user_id = $2"
-    ).bind(&node_id).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0) > 0;
+    let owns = node_in_tenant(&node_id, &user_id, &org_id, &state.pool).await;
+    let tenant = tenant_scope(&user_id, &org_id).1.to_string();
     if !owns {
         return (StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": "Node not found or not owned by you" }))).into_response();
@@ -2725,7 +2746,7 @@ async fn handle_submit_observation(
     // Dedup: skip if same (node, alert_type) already open
     let already_open: bool = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM fleet_observations WHERE tenant_id = $1 AND node_id = $2 AND alert_type = $3 AND state = 'open'"
-    ).bind(&user_id).bind(&node_id).bind(&alert_type).fetch_one(&state.pool).await.unwrap_or(0) > 0;
+    ).bind(&tenant).bind(&node_id).bind(&alert_type).fetch_one(&state.pool).await.unwrap_or(0) > 0;
     if already_open {
         return Json(serde_json::json!({ "ok": true, "dedup": true, "message": "Already open" })).into_response();
     }
@@ -2738,14 +2759,14 @@ async fn handle_submit_observation(
         "INSERT INTO fleet_observations (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
          VALUES ($1, $2, $3, $4, $5, 'open', $6, $7, $8::jsonb, $9)
          ON CONFLICT DO NOTHING"
-    ).bind(&obs_id).bind(&user_id).bind(&node_id).bind(&alert_type)
+    ).bind(&obs_id).bind(&tenant).bind(&node_id).bind(&alert_type)
     .bind(&severity).bind(&title).bind(&detail)
     .bind(&context_str).bind(now)
     .execute(&state.pool).await;
 
     // Also write to node_events for timeline visibility
     let _ = state.events_tx.try_send(EventRow {
-        ts_ms: now, node_id: node_id.clone(), tenant_id: user_id.clone(),
+        ts_ms: now, node_id: node_id.clone(), tenant_id: tenant.clone(),
         level: if severity == "critical" { "error" } else { "warning" }.into(),
         event_type: Some(alert_type.clone()), message: title.clone(),
     });
@@ -2766,8 +2787,8 @@ async fn handle_resolve_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -2776,7 +2797,7 @@ async fn handle_resolve_observation(
     let result = sqlx::query(
         "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1
          WHERE id = $2 AND tenant_id = $3 AND state = 'open'"
-    ).bind(now).bind(&obs_id).bind(&user_id)
+    ).bind(now).bind(&obs_id).bind(tenant_scope(&user_id, &org_id).1)
     .execute(&state.pool).await;
 
     match result {
@@ -3063,8 +3084,8 @@ async fn handle_fleet_export(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -3091,12 +3112,12 @@ async fn handle_fleet_export(
     let events: Vec<(i64, String, String, Option<String>, String)> = match &node_filter {
         Some(nid) => {
             let sql = format!("{base} AND node_id = $4 ORDER BY ts DESC LIMIT $5");
-            sqlx::query_as(&sql).bind(&user_id).bind(from_ms).bind(to_ms).bind(nid).bind(limit)
+            sqlx::query_as(&sql).bind(tenant_scope(&user_id, &org_id).1).bind(from_ms).bind(to_ms).bind(nid).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
         None => {
             let sql = format!("{base} ORDER BY ts DESC LIMIT $4");
-            sqlx::query_as(&sql).bind(&user_id).bind(from_ms).bind(to_ms).bind(limit)
+            sqlx::query_as(&sql).bind(tenant_scope(&user_id, &org_id).1).bind(from_ms).bind(to_ms).bind(limit)
                 .fetch_all(&state.pool).await.unwrap_or_default()
         }
     };
@@ -3167,8 +3188,8 @@ async fn handle_wes_history(
     let (bucket_secs, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -3189,9 +3210,10 @@ async fn handle_wes_history(
     }
 
     // Enumerate user's nodes
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let node_rows: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT wk_id, hostname FROM nodes WHERE user_id = $1 ORDER BY last_seen DESC"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id, hostname FROM nodes WHERE {tcol} = $1 ORDER BY last_seen DESC")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     if node_rows.is_empty() {
         return Json(serde_json::json!({ "range": range, "nodes": [] })).into_response();
@@ -3239,7 +3261,7 @@ async fn handle_wes_history(
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<i32>)>(&sql)
-                .bind(&user_id).bind(node_id)
+                .bind(tval).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts, rw, pw, tr)| {
                     let thermal = match tr { Some(3) => "Critical", Some(2) => "Serious", Some(1) => "Fair", _ => "Normal" };
@@ -3261,7 +3283,7 @@ async fn handle_wes_history(
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<i32>)>(&sql)
-                .bind(&user_id).bind(node_id)
+                .bind(tval).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts, rw, pw, tr)| {
                     let thermal = match tr { Some(3) => "Critical", Some(2) => "Serious", Some(1) => "Fair", _ => "Normal" };
@@ -3311,8 +3333,8 @@ async fn handle_thermal_budget(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -3330,10 +3352,8 @@ async fn handle_thermal_budget(
     }
 
     // Verify ownership.
-    let owns: Option<String> = sqlx::query_scalar(
-        "SELECT wk_id FROM nodes WHERE wk_id = $1 AND user_id = $2"
-    ).bind(&node_id).bind(&user_id).fetch_optional(&state.pool).await.unwrap_or(None);
-    if owns.is_none() {
+    let owns = node_in_tenant(&node_id, &user_id, &org_id, &state.pool).await;
+    if !owns {
         return (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Node not found" }))).into_response();
     }
@@ -3531,8 +3551,8 @@ async fn handle_webhook_create(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -3566,10 +3586,8 @@ async fn handle_webhook_create(
 
     // If a node_id is supplied, verify the user owns it.
     if let Some(ref nid) = body.node_id {
-        let owns: Option<String> = sqlx::query_scalar(
-            "SELECT wk_id FROM nodes WHERE wk_id = $1 AND user_id = $2"
-        ).bind(nid).bind(&user_id).fetch_optional(&state.pool).await.unwrap_or(None);
-        if owns.is_none() {
+        let owns = node_in_tenant(nid, &user_id, &org_id, &state.pool).await;
+        if !owns {
             return (StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": "Node not found in your fleet" }))).into_response();
         }
@@ -3579,9 +3597,7 @@ async fn handle_webhook_create(
     // 32-byte HMAC secret, hex-encoded → 64 chars. Returned ONCE on creation.
     let secret_bytes: [u8; 32] = std::array::from_fn(|_| rand::random());
     let secret = hex::encode(secret_bytes);
-    let tenant_id: String = sqlx::query_scalar(
-        "SELECT COALESCE(org_id, user_id) FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| user_id.clone());
+    let tenant_id: String = tenant_scope(&user_id, &org_id).1.to_string();
 
     let _ = sqlx::query(
         "INSERT INTO webhook_subscriptions
@@ -3770,8 +3786,8 @@ async fn handle_metrics_history(
     let (bucket_secs, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -3791,9 +3807,10 @@ async fn handle_metrics_history(
             Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
     }
 
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let node_rows: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT wk_id, hostname FROM nodes WHERE user_id = $1 ORDER BY last_seen DESC"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id, hostname FROM nodes WHERE {tcol} = $1 ORDER BY last_seen DESC")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     if node_rows.is_empty() {
         return Json(serde_json::json!({ "range": range, "nodes": [] })).into_response();
@@ -3844,7 +3861,7 @@ async fn handle_metrics_history(
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
-                .bind(&user_id).bind(node_id)
+                .bind(tval).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e, wes)| {
                     serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e, "wes_score": wes })
@@ -3869,7 +3886,7 @@ async fn handle_metrics_history(
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>(&sql)
-                .bind(&user_id).bind(node_id)
+                .bind(tval).bind(node_id)
                 .fetch_all(&state.pool).await.unwrap_or_default()
                 .into_iter().map(|(ts, toks, toksp95, w, gpu, mem, duty, cpu, swap, ttft, e2e, wes)| {
                     serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e, "wes_score": wes })
@@ -3899,15 +3916,16 @@ async fn handle_fleet_duty(
     let (_bucket, lookback_interval, use_raw) = time_bucket_for_range(&range);
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(uid) => uid,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid token" }))).into_response(),
     };
 
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let target_nodes: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT wk_id, hostname FROM nodes WHERE user_id = $1"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id, hostname FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     if target_nodes.is_empty() {
         return Json(serde_json::json!({ "range": range, "duty_pct": null, "total_samples": 0, "live_samples": 0, "nodes": [] })).into_response();
@@ -3927,7 +3945,7 @@ async fn handle_fleet_duty(
                 lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, i64)>(&sql)
-                .bind(&user_id).bind(nid)
+                .bind(tval).bind(nid)
                 .fetch_one(&state.pool).await.unwrap_or((0, 0))
         } else {
             let sql = format!(
@@ -3938,7 +3956,7 @@ async fn handle_fleet_duty(
                 lookback = lookback_interval
             );
             sqlx::query_as::<_, (i64, i64)>(&sql)
-                .bind(&user_id).bind(nid)
+                .bind(tval).bind(nid)
                 .fetch_one(&state.pool).await.unwrap_or((0, 0))
         };
 
@@ -4915,12 +4933,14 @@ async fn handle_fleet_model_candidates(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(uid) => uid,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response(),
     };
-    let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
-        .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let node_ids: Vec<String> = sqlx::query_scalar(
+        &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let search          = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
     let limit: i32      = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20_i32).min(200);
@@ -6936,8 +6956,8 @@ async fn handle_update_node(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
@@ -6951,10 +6971,8 @@ async fn handle_update_node(
     }
 
     // Verify the node belongs to this user
-    let owns: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM nodes WHERE wk_id = $1 AND user_id = $2"
-    ).bind(&node_id).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0);
-    if owns == 0 {
+    let owns = node_in_tenant(&node_id, &user_id, &org_id, &state.pool).await;
+    if !owns {
         return (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Node not found" }))).into_response();
     }

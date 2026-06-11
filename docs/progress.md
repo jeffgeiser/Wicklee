@@ -215,6 +215,32 @@ exposure until they re-pair under a fresh id; the risk decays as new
 installs dominate. A forced re-pair migration wasn't done — too
 disruptive for the benefit.
 
+### Security pass 1 — org-scoping the shared-fleet handlers
+Following the two criticals, addressed the systemic gap the audit flagged:
+Clerk-JWT handlers hardcoded `WHERE user_id = $2` and ignored the org, so
+(post-Critical-1, fail-closed) an org/team member couldn't manage or view
+resources a teammate created in the shared fleet. Per the chosen model —
+**org-scope shared resources, keep API keys per-user** — added a
+`node_in_tenant()` helper and routed every Clerk-authed node/observation/
+webhook handler through `tenant_scope`: delete/update node, submit/list/
+ack/resolve observations, webhook create (+ its tenant_id now comes from
+the verified claim, not a `users`-table COALESCE), thermal budget, fleet
+duty, wes-history, metrics-history, model-candidates, events-history,
+export. Each also fixes the downstream `tenant_id = $1` metric/event binds
+that would otherwise return empty for org nodes (whose stored tenant_id is
+the org_id). A node paired under an org is now reachable by any member; a
+solo user's personal nodes only by them — standard personal/org
+separation.
+
+**Intentionally left per-user** (the chosen model): API keys and every
+API-key-authed endpoint (`/api/v1/*`, Prometheus `/metrics`) — a key
+belongs to a user, so a Team member's personal key still sees only their
+own nodes, not the org's. The OTEL push loop stays keyed by stored-config
+rows. If org-wide API keys are wanted later, that's a keys-table schema
+change, tracked separately. Cloud 13 tests green; SQL stays parameterized
+(the only format!() interpolations are the hardcoded tenant column
+literal).
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's
