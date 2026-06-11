@@ -2070,15 +2070,49 @@ fn save_config(cfg: &WickleeConfig) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(content) = toml::to_string(cfg) {
-        let _ = std::fs::write(&path, &content);
-        // Restrict config file to owner-only (0600) — it contains session_token.
+    let Ok(content) = toml::to_string(cfg) else { return };
+    // Atomic write: write a sibling temp file, fsync, then rename over the
+    // target. A plain fs::write can truncate config.toml if the agent crashes
+    // mid-write, permanently losing the session_token / node identity. Rename
+    // is atomic on the same filesystem, so a reader always sees either the old
+    // or the new complete file.
+    let tmp = path.with_extension("toml.tmp");
+    {
+        use std::io::Write;
+        let Ok(mut f) = std::fs::File::create(&tmp) else { return };
+        // 0600 before the rename so the published file is never world-readable.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
         }
+        if f.write_all(content.as_bytes()).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        let _ = f.sync_all();
     }
+    if std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Process-global serialization for config read-modify-write sequences.
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Atomically load → mutate → save the config under [`CONFIG_LOCK`].
+///
+/// The pairing/disconnect handlers each do `load → set a few fields → save`;
+/// run concurrently (e.g. a user clicks "generate code" then "disconnect")
+/// they could interleave and clobber each other's fields, silently dropping
+/// the session token. Funnelling every mutation through here makes the whole
+/// sequence atomic. Poison-tolerant: a panic elsewhere shouldn't wedge config
+/// saves forever.
+fn update_config(mutate: impl FnOnce(&mut WickleeConfig)) {
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut cfg = load_or_create_config();
+    mutate(&mut cfg);
+    save_config(&cfg);
 }
 
 fn generate_code() -> String {
@@ -2921,15 +2955,19 @@ async fn handle_pair_generate(
     tokio::spawn(async move {
         if let Some(token) = register_pair_code(&node_id, &code).await {
             let fleet_url = "https://wicklee.dev".to_string();
-            let mut state = ps.lock().unwrap();
-            state.cloud_session_token = Some(token.clone());
-            state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
-            // Merge pairing fields into existing config — preserve proxy, ports, bind settings.
-            let mut cfg = load_or_create_config();
-            cfg.node_id = state.node_id.clone();
-            cfg.fleet_url = Some(fleet_url);
-            cfg.session_token = Some(token);
-            save_config(&cfg);
+            let nid = {
+                let mut state = ps.lock().unwrap();
+                state.cloud_session_token = Some(token.clone());
+                state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
+                state.node_id.clone()
+            };
+            // Merge pairing fields into existing config — preserve proxy, ports,
+            // bind settings — atomically (see update_config).
+            update_config(|cfg| {
+                cfg.node_id = nid;
+                cfg.fleet_url = Some(fleet_url);
+                cfg.session_token = Some(token);
+            });
         }
     });
     Json(response)
@@ -2951,11 +2989,14 @@ async fn handle_pair_claim(
     };
     if valid {
         let fleet_url = "https://wicklee.dev".to_string();
-        let mut cfg = load_or_create_config();
-        cfg.node_id = state.node_id.clone();
-        cfg.fleet_url = Some(fleet_url.clone());
-        cfg.session_token = state.cloud_session_token.clone();
-        save_config(&cfg);
+        let nid = state.node_id.clone();
+        let tok = state.cloud_session_token.clone();
+        let fu = fleet_url.clone();
+        update_config(|cfg| {
+            cfg.node_id = nid;
+            cfg.fleet_url = Some(fu);
+            cfg.session_token = tok;
+        });
         state.status = PairingStatus::Connected { fleet_url };
     }
     Json(pairing_response(&state))
@@ -2967,12 +3008,13 @@ async fn handle_pair_disconnect(
     let mut state = pairing_state.lock().unwrap();
     state.status              = PairingStatus::Unpaired;
     state.cloud_session_token = None;
-    // Merge — clear pairing fields but preserve proxy, ports, bind settings.
-    let mut cfg = load_or_create_config();
-    cfg.node_id = state.node_id.clone();
-    cfg.fleet_url = None;
-    cfg.session_token = None;
-    save_config(&cfg);
+    // Clear pairing fields but preserve proxy, ports, bind settings — atomically.
+    let nid = state.node_id.clone();
+    update_config(|cfg| {
+        cfg.node_id = nid;
+        cfg.fleet_url = None;
+        cfg.session_token = None;
+    });
     Json(pairing_response(&state))
 }
 
@@ -6885,14 +6927,17 @@ async fn main() {
         match register_pair_code(&config.node_id, &code).await {
             Some(token) => {
                 let fleet_url = "https://wicklee.dev".to_string();
-                let mut state = pairing_state.lock().unwrap();
-                state.cloud_session_token = Some(token.clone());
-                state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
-                let mut cfg = load_or_create_config();
-                cfg.node_id = state.node_id.clone();
-                cfg.fleet_url = Some(fleet_url);
-                cfg.session_token = Some(token);
-                save_config(&cfg);
+                let nid = {
+                    let mut state = pairing_state.lock().unwrap();
+                    state.cloud_session_token = Some(token.clone());
+                    state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
+                    state.node_id.clone()
+                };
+                update_config(|cfg| {
+                    cfg.node_id = nid;
+                    cfg.fleet_url = Some(fleet_url);
+                    cfg.session_token = Some(token);
+                });
             }
             None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
         }
