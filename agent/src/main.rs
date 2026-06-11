@@ -24,6 +24,7 @@ use sysinfo::System;
 use tokio::sync::{broadcast, watch};
 
 mod process_discovery;
+mod scoring;
 #[cfg(not(target_env = "musl"))]
 mod store;
 mod inference;
@@ -167,31 +168,6 @@ pub(crate) struct FitResult {
     pub(crate) recommendation: String,
 }
 
-/// VRAM overhead estimate for a candidate model that hasn't been loaded yet.
-///
-/// Real VRAM usage = weights + KV cache + activation buffers + framework overhead.
-/// The KV cache alone scales with context length and architecture — Llama 3 8B
-/// at 8K context uses ~1 GB for KV; at 32K context, ~4 GB. The previous 10%
-/// heuristic systematically underestimated by 2-3x, causing "Excellent" fit
-/// labels on models that would OOM in production.
-///
-/// 30% overhead covers a realistic working set: KV cache at typical 8K context
-/// for a 7-13B class model (~15% of weights), activation buffers (~5%),
-/// framework alignment + scratch space (~10%). Conservative is correct here —
-/// better to slightly underrate fit than tell a user "Excellent" on a model
-/// that crashes their node.
-///
-/// Floor: 512 MB. Smaller models still need framework + minimum context overhead.
-///
-/// Future improvement: when the GGUF metadata is reliably available
-/// (block_count, attention_head_count_kv, embedding_length), compute the exact
-/// KV cache size. For now we don't have that for candidate models (only for
-/// loaded ones via /api/show), so the heuristic is the floor.
-fn estimate_vram_mb(file_size_bytes: u64) -> u64 {
-    let base_mb = file_size_bytes / (1024 * 1024);
-    base_mb + (base_mb * 30 / 100).max(512)
-}
-
 /// Pure function: score a model variant against a hardware profile.
 /// Returns 0-100 fit score with human-readable label and recommendation.
 fn score_fit(
@@ -200,71 +176,30 @@ fn score_fit(
     hw: &HardwareProfile,
     historical_wes: Option<f32>,
 ) -> FitResult {
-    let vram_required = estimate_vram_mb(variant.file_size_bytes);
+    // All component math lives in the shared scoring module (mirrored
+    // agent<->cloud by scripts/sync-scoring.mjs) so both dashboards grade
+    // identically. This wrapper only adds the recommendation strings.
+    let fit = scoring::fit_components(
+        variant.file_size_bytes,
+        hw.vram_mb,
+        &hw.thermal_state,
+        historical_wes,
+    );
+    let vram_required = fit.vram_required_mb;
     let vram_available = hw.vram_mb;
-    let headroom_pct = if vram_available > 0 {
-        ((vram_available as f32 - vram_required as f32) / vram_available as f32 * 100.0).max(-100.0)
-    } else { -100.0 };
+    let headroom_pct = fit.headroom_pct;
+    let total = fit.total;
 
-    // ── VRAM headroom (40 points) ─────────────────────────────────────────
-    // Tighter curve: reserve top score for 75%+ headroom, create more spread.
-    let vram_score = if headroom_pct >= 75.0 { 40 }
-        else if headroom_pct >= 60.0 { 36 }
-        else if headroom_pct >= 45.0 { 32 }
-        else if headroom_pct >= 30.0 { 26 }
-        else if headroom_pct >= 15.0 { 20 }
-        else if headroom_pct >= 5.0 { 12 }
-        else if headroom_pct >= 0.0 { 6 }
-        else { 0u8 }; // won't fit
-
-    // ── Thermal margin (20 points) ────────────────────────────────────────
-    let thermal_score: u8 = match hw.thermal_state.as_str() {
-        "Normal" => 20,
-        "Fair" => 10,
-        "Serious" => 5,
-        _ => 0,
-    };
-
-    // ── Historical WES (20 points) ────────────────────────────────────────
-    let wes_score: u8 = match historical_wes {
-        Some(w) if w > 10.0 => 20,
-        Some(w) if w > 3.0 => 15,
-        Some(w) if w > 1.0 => 10,
-        Some(_) => 5,
-        None => 10, // neutral — no data
-    };
-
-    // ── Capacity utilization (20 points) ──────────────────────────────────
-    // Score based on what fraction of total VRAM the model consumes —
-    // larger models relative to hardware capacity get penalized.
-    // NOTE: this revisits the same VRAM dimension as the headroom score
-    // above (memory is effectively 60 of the 100 points) — a deliberate
-    // weighting choice, not a power measurement. If a watts-based
-    // efficiency signal becomes available per candidate model, it should
-    // replace this block.
-    let vram_fraction = vram_required as f32 / vram_available.max(1) as f32;
-    let power_score: u8 = if vram_fraction < 0.2 { 20 }
-        else if vram_fraction < 0.35 { 16 }
-        else if vram_fraction < 0.5 { 12 }
-        else if vram_fraction < 0.7 { 8 }
-        else if vram_fraction < 0.9 { 5 }
-        else { 2 };
-
-    let total = vram_score + thermal_score + wes_score + power_score;
-
-    let (label, recommendation) = if vram_required > vram_available {
-        ("Won't Fit".to_string(), format!(
+    let label = fit.label.to_string();
+    let recommendation: String = match fit.label {
+        "Won't Fit" => format!(
             "Requires {}G VRAM, you have {}G. Try a smaller quantization or a lower parameter model.",
             vram_required / 1024, vram_available / 1024
-        ))
-    } else if total >= 80 {
-        ("Excellent".to_string(), "Runs comfortably with headroom for context scaling.".into())
-    } else if total >= 60 {
-        ("Good".to_string(), "Fits well. Monitor VRAM under long-context workloads.".into())
-    } else if total >= 40 {
-        ("Tight".to_string(), "Will run but may thermal throttle under sustained load. Consider a lower quantization.".into())
-    } else {
-        ("Marginal".to_string(), "Barely fits. Expect swap pressure and reduced throughput.".into())
+        ),
+        "Excellent" => "Runs comfortably with headroom for context scaling.".into(),
+        "Good"      => "Fits well. Monitor VRAM under long-context workloads.".into(),
+        "Tight"     => "Will run but may thermal throttle under sustained load. Consider a lower quantization.".into(),
+        _           => "Barely fits. Expect swap pressure and reduced throughput.".into(),
     };
 
     FitResult {
@@ -341,90 +276,6 @@ fn is_auxiliary_gguf(filename: &str) -> bool {
         || lower.contains("embedding-only")
 }
 
-/// Extract a parameter count (in billions) from a HuggingFace model_id.
-/// Matches patterns like "Llama-3.2-3B-Instruct", "Qwen3-27B-Heretic",
-/// "Mixtral-8x7B" (returns 8×7=56), "DeepSeek-67B".
-///
-/// Used by `is_plausible_size_for_quant` to detect mislabeled auxiliary
-/// files where the declared quant doesn't match the file size at all.
-fn extract_params_b(model_id: &str) -> Option<f32> {
-    let lower = model_id.to_lowercase();
-    // First try "NxMB" (MoE expert count × per-expert params) — e.g. "8x7b" → 56
-    if let Some(idx) = lower.find('x') {
-        if idx > 0 && idx + 1 < lower.len() {
-            let before: String = lower[..idx].chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
-            let after_start = idx + 1;
-            let after_substr = &lower[after_start..];
-            // Match "Nb" or "N.Mb" after the 'x'
-            let after_num: String = after_substr.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-            let suffix_ok = after_substr[after_num.len()..].starts_with('b');
-            if !before.is_empty() && !after_num.is_empty() && suffix_ok {
-                if let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
-                    return Some(e * p);
-                }
-            }
-        }
-    }
-    // Fallback: plain "NB" or "N.MB"
-    // Find "Nb" or "N.Mb" patterns, word-boundaried so "1b" in "1binary" doesn't match.
-    let bytes = lower.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_digit() {
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') { i += 1; }
-            if i < bytes.len() && bytes[i] == b'b' {
-                // Boundary check: next char (if any) is not alphanumeric
-                let is_boundary = i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_alphanumeric();
-                if is_boundary {
-                    if let Ok(p) = lower[start..i].parse::<f32>() {
-                        if p > 0.0 && p < 10000.0 { return Some(p); }
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Approximate bytes-per-parameter for a quant string. Used to compute the
-/// expected file size of a model variant — anything ≤30% of expected is
-/// almost certainly an auxiliary file mislabeled by the filename parser.
-///
-/// Values are bits-per-weight ÷ 8 (F16 = 16 bits = 2.0 bytes). An earlier
-/// revision stored the bit counts directly while the caller multiplied them
-/// as bytes — every correctly-sized GGUF came out at ~12% of "expected" and
-/// was rejected by the 30% floor, silently emptying model discovery.
-fn bytes_per_param_for_quant(quant: &str) -> Option<f32> {
-    let q = quant.to_ascii_uppercase();
-    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(0.375); }  // ~3 bits
-    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.4375); } // ~3.5 bits
-    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(0.5625); } // ~4.5 bits
-    if q.starts_with("Q5") { return Some(0.6875); }                          // ~5.5 bits
-    if q.starts_with("Q6") { return Some(0.8125); }                          // ~6.5 bits
-    if q.starts_with("Q8") { return Some(1.125); }                           // ~9 bits
-    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(2.0); }
-    if q == "F32" { return Some(4.0); }
-    None
-}
-
-/// Returns true if the file size is plausible for a model of the given
-/// parameter count + quant. Anything under 30% of expected is dropped as
-/// likely auxiliary. Anything over 200% of expected is also dropped (sharded
-/// repos where the catalog accidentally summed shards twice, etc).
-///
-/// Returns true when the quant or param count can't be parsed — be
-/// conservative, only drop when we have high confidence the file is wrong.
-fn is_plausible_size_for_quant(params_b: Option<f32>, quant: &str, file_size_bytes: u64) -> bool {
-    let Some(p) = params_b else { return true; };
-    let Some(bpp) = bytes_per_param_for_quant(quant) else { return true; };
-    let expected = (p * 1e9 * bpp) as u64;
-    if expected == 0 { return true; }
-    let lower = expected.saturating_mul(30) / 100;
-    let upper = expected.saturating_mul(200) / 100;
-    file_size_bytes >= lower && file_size_bytes <= upper
-}
 
 // Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
 // All fields are Option/bool-default so the payload serialises cleanly when absent.
@@ -5369,7 +5220,7 @@ async fn fetch_hf_gguf(
         //      score "Excellent fit" because they trivially fit VRAM,
         //      then surface as the "best variant" — surfacing wrong-model
         //      data to the UI.
-        let params_b = extract_params_b(model_id);
+        let params_b = scoring::extract_params_b(model_id);
         let mut variants: Vec<(String, String, u64)> = Vec::new();
         for file in &files {
             let path = file["path"].as_str().unwrap_or("");
@@ -5379,7 +5230,7 @@ async fn fetch_hf_gguf(
             let filename = path.rsplit('/').next().unwrap_or(path);
             if is_auxiliary_gguf(filename) { continue; }
             let quant = parse_quant_from_filename(filename).unwrap_or_else(|| "unknown".to_string());
-            if !is_plausible_size_for_quant(params_b, &quant, size) { continue; }
+            if !scoring::is_plausible_size_for_quant(params_b, &quant, size) { continue; }
             variants.push((filename.to_string(), quant, size));
         }
         // Sort variants largest-first (highest quality first)
@@ -7762,60 +7613,6 @@ async fn main() {
     eprintln!("[agent] clean shutdown complete");
 }
 
-
-#[cfg(test)]
-mod fit_math_tests {
-    use super::*;
-
-    // Real-world reference: Llama 3.1 8B Instruct GGUF file sizes.
-    const PARAMS_8B: Option<f32> = Some(8.03);
-
-    #[test]
-    fn plausibility_accepts_real_gguf_sizes() {
-        // Published file sizes must pass — this is the regression test for the
-        // bits-vs-bytes error that rejected every well-formed variant.
-        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q2_K",   3_180_000_000));
-        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 4_920_000_000));
-        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q6_K",   6_600_000_000));
-        assert!(is_plausible_size_for_quant(PARAMS_8B, "Q8_0",   8_540_000_000));
-        assert!(is_plausible_size_for_quant(PARAMS_8B, "F16",   16_070_000_000));
-        // 70B Q4_K_M ≈ 42.5 GB
-        assert!(is_plausible_size_for_quant(Some(70.6), "Q4_K_M", 42_500_000_000));
-    }
-
-    #[test]
-    fn plausibility_rejects_auxiliary_and_mislabeled_files() {
-        // The doc-comment example: "F32 · 1.7 GB" on a 27B model (real F32 ≈ 108 GB).
-        assert!(!is_plausible_size_for_quant(Some(27.0), "F32", 1_700_000_000));
-        // Tiny mmproj/embedding export mislabeled as a full Q4 model.
-        assert!(!is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 100_000_000));
-        // Double-counted shards: > 200% of expected.
-        assert!(!is_plausible_size_for_quant(PARAMS_8B, "Q4_K_M", 12_000_000_000));
-    }
-
-    #[test]
-    fn plausibility_is_conservative_when_signals_missing() {
-        assert!(is_plausible_size_for_quant(None, "Q4_K_M", 123));
-        assert!(is_plausible_size_for_quant(PARAMS_8B, "unknown", 123));
-    }
-
-    #[test]
-    fn bytes_per_param_is_bits_over_eight() {
-        // F16 is definitionally 16 bits = 2.0 bytes; everything else scales.
-        assert_eq!(bytes_per_param_for_quant("F16"), Some(2.0));
-        assert_eq!(bytes_per_param_for_quant("F32"), Some(4.0));
-        assert_eq!(bytes_per_param_for_quant("Q4_K_M"), Some(0.5625));
-        assert_eq!(bytes_per_param_for_quant("Q8_0"), Some(1.125));
-    }
-
-    #[test]
-    fn estimate_vram_adds_30pct_with_512mb_floor() {
-        // 7 GiB file → 7168 MB base + 30% = 9318 MB.
-        assert_eq!(estimate_vram_mb(7 * 1024 * 1024 * 1024), 7168 + 2150);
-        // Tiny model: floor binds.
-        assert_eq!(estimate_vram_mb(100 * 1024 * 1024), 100 + 512);
-    }
-}
 
 #[cfg(all(test, not(target_env = "musl")))]
 mod bandwidth_tests {

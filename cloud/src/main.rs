@@ -18,6 +18,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+
+mod scoring;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use tokio::sync::mpsc;
 
@@ -4607,7 +4609,7 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
         // run against every variant in this batch. Both signals (param
         // count from model_id, quant from filename) must be present for
         // the filter to act — be conservative when either is missing.
-        let params_b_for_repo = extract_params_b_cloud(&model_id);
+        let params_b_for_repo = scoring::extract_params_b(&model_id);
 
         for file in &files {
             let path = file["path"].as_str().unwrap_or("");
@@ -4679,7 +4681,7 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
             // their declared quant — i.e. the "F32 · 1.7 GB · 27B model"
             // class of mislabeling that bypassed the auxiliary-filename
             // filter above.
-            if !is_plausible_size_for_quant_cloud(params_b_for_repo, &v.quant, v.total_size) {
+            if !scoring::is_plausible_size_for_quant(params_b_for_repo, &v.quant, v.total_size.max(0) as u64) {
                 continue;
             }
             match sqlx::query(
@@ -4833,103 +4835,6 @@ fn lookup_kld(model_id: &str, quant: &str) -> Option<f64> {
     None
 }
 
-/// Quality factor for a GGUF quantisation level — empirical when possible.
-///
-/// Maps KL divergence to a [0.0, 1.0] multiplier:
-///   KLD = 0     → 1.0   (no penalty)
-///   KLD = 0.15  → 0.0   (unusable)
-///   linear in between, clamped.
-///
-/// When perplexity data is unavailable for this (model, quant) pair, falls
-/// back to the prior coarse hand-tuned heuristic so we never regress on
-/// model families the baseline doesn't cover yet.
-///
-/// Applied as a multiplier on the raw fit score during variant selection so
-/// that a Q4_K_M with 30% headroom beats an IQ1_M with 90% headroom.
-/// Extract parameter count (billions) from a HuggingFace model_id.
-/// Matches "Llama-3.2-3B", "Qwen3-27B", "Mixtral-8x7B" (→ 56), etc.
-/// Mirror of agent/src/main.rs::extract_params_b. Used to validate that
-/// each catalog GGUF's declared quant + observed size are mutually
-/// plausible, dropping mislabeled auxiliary files before they become
-/// catalog rows.
-fn extract_params_b_cloud(model_id: &str) -> Option<f32> {
-    let lower = model_id.to_lowercase();
-    // MoE expert pattern: "8x7b" → 56
-    if let Some(idx) = lower.find('x') {
-        if idx > 0 && idx + 1 < lower.len() {
-            let before: String = lower[..idx].chars().rev()
-                .take_while(|c| c.is_ascii_digit()).collect::<String>()
-                .chars().rev().collect();
-            let after_substr = &lower[idx + 1..];
-            let after_num: String = after_substr.chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-            let suffix_ok = after_substr[after_num.len()..].starts_with('b');
-            if !before.is_empty() && !after_num.is_empty() && suffix_ok {
-                if let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
-                    return Some(e * p);
-                }
-            }
-        }
-    }
-    // Plain "NB" / "N.MB"
-    let bytes = lower.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_digit() {
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') { i += 1; }
-            if i < bytes.len() && bytes[i] == b'b' {
-                let is_boundary = i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_alphanumeric();
-                if is_boundary {
-                    if let Ok(p) = lower[start..i].parse::<f32>() {
-                        if p > 0.0 && p < 10000.0 { return Some(p); }
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Approximate bytes-per-parameter per quant. Mirror of
-/// agent/src/main.rs::bytes_per_param_for_quant — both must match so the
-/// catalog filters identically in both backends.
-///
-/// Values are bits-per-weight ÷ 8 (F16 = 16 bits = 2.0 bytes). An earlier
-/// revision stored the bit counts directly while the caller multiplied them
-/// as bytes — every correctly-sized GGUF came out at ~12% of "expected" and
-/// was rejected by the 30% floor, silently emptying the model catalog.
-fn bytes_per_param_for_quant_cloud(quant: &str) -> Option<f32> {
-    let q = quant.to_ascii_uppercase();
-    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(0.375); }  // ~3 bits
-    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.4375); } // ~3.5 bits
-    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(0.5625); } // ~4.5 bits
-    if q.starts_with("Q5") { return Some(0.6875); }                          // ~5.5 bits
-    if q.starts_with("Q6") { return Some(0.8125); }                          // ~6.5 bits
-    if q.starts_with("Q8") { return Some(1.125); }                           // ~9 bits
-    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(2.0); }
-    if q == "F32" { return Some(4.0); }
-    None
-}
-
-/// True when the file size is plausible for `params_b` at `quant`.
-/// Drops mislabeled auxiliary files (e.g. "F32 · 1.7 GB" on a 27B model
-/// — actually F32 of a 27B model is ~108 GB, so 1.7 GB is impossibly
-/// small and is almost certainly an embedding-only or projection-only
-/// export). Conservative: returns true when we can't parse param count
-/// or quant — only drops when both signals are available and disagree.
-fn is_plausible_size_for_quant_cloud(params_b: Option<f32>, quant: &str, file_size_bytes: i64) -> bool {
-    let Some(p) = params_b else { return true; };
-    let Some(bpp) = bytes_per_param_for_quant_cloud(quant) else { return true; };
-    if file_size_bytes <= 0 { return false; }
-    let expected = (p * 1e9 * bpp) as i64;
-    if expected == 0 { return true; }
-    let lower = expected.saturating_mul(30) / 100;
-    let upper = expected.saturating_mul(200) / 100;
-    file_size_bytes >= lower && file_size_bytes <= upper
-}
-
 fn quant_quality_factor(model_id: &str, quant: &str) -> f32 {
     if let Some(kld) = lookup_kld(model_id, quant) {
         let mult = (1.0 - (kld / 0.15)).clamp(0.0, 1.0) as f32;
@@ -4944,61 +4849,15 @@ fn quant_quality_factor(model_id: &str, quant: &str) -> f32 {
     1.0
 }
 
-/// Compute fit score (mirrors agent logic).
-///
-/// Hard rule: when the model's estimated VRAM requirement exceeds the node's
-/// VRAM budget the score is 0 and the label is "Won't Fit".  Previously the
-/// thermal/WES/power sub-scores were still added even for non-fitting models,
-/// producing scores of 30–40 for models the node literally cannot load.  That
-/// caused `retain(score > 0)` in the per-node filter to keep *all* models,
-/// making the per-node view identical to the fleet-wide view.
-/// Fit score for a model variant on a given hardware profile.
-/// Mirrors agent's tightened scoring (75% headroom for max VRAM points,
-/// vram_fraction-based power score). Used by fleet matching and Pro simulation.
+/// Fit score for a model variant on a given hardware profile — thin wrapper
+/// over the shared scoring module (mirrored agent<->cloud by
+/// scripts/sync-scoring.mjs), which owns the component math, the won't-fit
+/// hard gate, and the 30% + 512 MB working-set estimate. Cloud has no
+/// per-node history during simulation, so historical WES is None (neutral
+/// 10/20 points). Used by fleet matching and Pro simulation.
 fn cloud_fit_score(file_size_bytes: i64, vram_mb: u64, _power_w: f32, thermal: &str) -> (u8, String) {
-    // Working-set estimate: weights + 30% overhead (KV cache at typical 8K
-    // context, activation buffers, framework scratch) with a 512 MB floor —
-    // MUST stay identical to agent estimate_vram_mb() or the same model
-    // grades differently on the cloud fleet view vs the localhost dashboard.
-    // (Previously 10% + 256 MB here while the agent had already moved to 30%.)
-    let base_mb = file_size_bytes as u64 / (1024 * 1024);
-    let vram_required = base_mb + (base_mb * 30 / 100).max(512);
-
-    // Hard gate: model does not fit in the available VRAM pool.
-    if vram_required > vram_mb {
-        return (0, "Won't Fit".into());
-    }
-
-    let headroom_pct = if vram_mb > 0 {
-        ((vram_mb as f32 - vram_required as f32) / vram_mb as f32 * 100.0).max(0.0)
-    } else { 0.0 };
-
-    // Tightened curve — matches agent: 75%+ for max score, more granular at the top.
-    let vram_score: u8 = if headroom_pct >= 75.0 { 40 }
-        else if headroom_pct >= 60.0 { 36 }
-        else if headroom_pct >= 45.0 { 32 }
-        else if headroom_pct >= 30.0 { 26 }
-        else if headroom_pct >= 15.0 { 20 }
-        else if headroom_pct >= 5.0  { 12 }
-        else { 6 }; // 0–5 % still fits, very tight
-
-    let thermal_score: u8 = match thermal { "Normal" => 20, "Fair" => 10, "Serious" => 5, _ => 0 };
-    let wes_score: u8 = 10; // neutral — no historical data for simulation
-
-    // Power score = VRAM fraction (matches agent). Larger models relative to
-    // hardware get penalized regardless of absolute wattage.
-    let vram_fraction = vram_required as f32 / vram_mb.max(1) as f32;
-    let power_score: u8 = if vram_fraction < 0.2 { 20 }
-        else if vram_fraction < 0.35 { 16 }
-        else if vram_fraction < 0.5 { 12 }
-        else if vram_fraction < 0.7 { 8 }
-        else if vram_fraction < 0.9 { 5 }
-        else { 2 };
-
-    let total = vram_score + thermal_score + wes_score + power_score;
-    let label = if total >= 80 { "Excellent".into() } else if total >= 60 { "Good".into() }
-        else if total >= 40 { "Tight".into() } else { "Marginal".into() };
-    (total, label)
+    let fit = scoring::fit_components(file_size_bytes.max(0) as u64, vram_mb, thermal, None);
+    (fit.total, fit.label.to_string())
 }
 
 /// Parse a quant level from a GGUF filename (mirrors agent-side logic).
@@ -8476,48 +8335,17 @@ async fn main() {
 }
 
 #[cfg(test)]
-mod fit_math_tests {
+mod fit_wrapper_tests {
     use super::*;
 
-    const PARAMS_8B: Option<f32> = Some(8.03);
+    // The component math, plausibility filter, and value-pinning regression
+    // tests live in src/scoring.rs (shared module, mirrored agent<->cloud by
+    // scripts/sync-scoring.mjs). These only cover the cloud-side wrapper.
 
     #[test]
-    fn plausibility_accepts_real_gguf_sizes() {
-        // Published Llama 3.1 8B file sizes must pass — regression test for the
-        // bits-vs-bytes error that rejected every well-formed variant.
-        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "Q2_K",   3_180_000_000));
-        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "Q4_K_M", 4_920_000_000));
-        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "Q8_0",   8_540_000_000));
-        assert!(is_plausible_size_for_quant_cloud(PARAMS_8B, "F16",   16_070_000_000));
-    }
-
-    #[test]
-    fn plausibility_rejects_auxiliary_and_mislabeled_files() {
-        // The doc-comment example: "F32 · 1.7 GB" on a 27B model (real F32 ≈ 108 GB).
-        assert!(!is_plausible_size_for_quant_cloud(Some(27.0), "F32", 1_700_000_000));
-        assert!(!is_plausible_size_for_quant_cloud(PARAMS_8B, "Q4_K_M", 100_000_000));
-    }
-
-    #[test]
-    fn bytes_per_param_matches_agent_table() {
-        // Contract with agent/src/main.rs::bytes_per_param_for_quant — the two
-        // tables must stay identical so the catalog filters the same way on
-        // both backends.
-        for (q, expected) in [
-            ("Q2_K", 0.375f32), ("Q3_K_M", 0.4375), ("Q4_K_M", 0.5625),
-            ("Q5_K_M", 0.6875), ("Q6_K", 0.8125), ("Q8_0", 1.125),
-            ("F16", 2.0), ("BF16", 2.0), ("F32", 4.0),
-        ] {
-            assert_eq!(bytes_per_param_for_quant_cloud(q), Some(expected), "{q}");
-        }
-    }
-
-    #[test]
-    fn fit_score_vram_requirement_matches_agent_estimate() {
-        // Contract with agent estimate_vram_mb(): weights + 30% (512 MB floor).
+    fn fit_score_wrapper_matches_shared_components() {
         // Llama 3.1 8B Q4_K_M (4.92 GB) on a 24 GB GPU, Normal thermal:
-        // base = 4692 MB, required = 6099 MB, headroom 75.2% → 40 pts VRAM +
-        // 20 thermal + 10 neutral WES + 16 capacity (fraction 0.25) = 86.
+        // 40 vram + 20 thermal + 10 neutral WES + 16 capacity = 86.
         let (score, label) = cloud_fit_score(4_920_000_000, 24_576, 0.0, "Normal");
         assert_eq!(score, 86);
         assert_eq!(label, "Excellent");
@@ -8528,5 +8356,12 @@ mod fit_math_tests {
         let (score, label) = cloud_fit_score(16_070_000_000, 8_192, 0.0, "Normal");
         assert_eq!(score, 0);
         assert_eq!(label, "Won't Fit");
+    }
+
+    #[test]
+    fn negative_file_sizes_clamp_safely() {
+        let (score, label) = cloud_fit_score(-1, 24_576, 0.0, "Normal");
+        // 0-byte clamp -> 512 MB floor still "fits"; just must not panic.
+        assert!(score > 0, "{label}");
     }
 }
