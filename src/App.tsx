@@ -405,7 +405,15 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   }
 
   // Metrics reference route — public, no auth required
-  if (currentPath === '/metrics') {
+  // Metrics reference lives at /metrics-reference: on wicklee.dev, nginx
+  // exact-matches /metrics to the cloud's Prometheus scrape endpoint, so a
+  // hard refresh on the old path returned scrape text instead of this page.
+  // /metrics stays as a client-side alias for old bookmarks (SPA navigation
+  // and localhost agents still resolve it).
+  if (
+    currentPath === '/metrics-reference' || currentPath === '/metrics-reference/' ||
+    currentPath === '/metrics' || currentPath === '/metrics/'
+  ) {
     return <MetricsPage onNavigate={navigate} />;
   }
 
