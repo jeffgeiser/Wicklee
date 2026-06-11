@@ -43,7 +43,7 @@ import { computeWES, formatWES, wesColorClass } from '../../../utils/wes';
 import { getNodePowerW } from '../../../utils/power';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../../utils/kvCache';
 import { computeQuantRecommendation } from '../../../utils/quantSweet';
-import { parseQuantFromAnyModelName, quantFamily, quantCompressionRatio } from '../../../utils/quantSize';
+import { parseQuantFromAnyModelName, quantFamily, quantCompressionRatio, resolveModelSizeHints } from '../../../utils/quantSize';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE, type QualityCost } from '../../../utils/perplexity';
 import { pushAndGetSmoothed } from '../../../utils/sharedSmoothing';
 
@@ -344,7 +344,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
       primary,
       combinedTpsFor(n),
       null,
-      n.ollama_quantization ?? parseQuantFromAnyModelName(primary),
+      resolveModelSizeHints(n).quantHint,
       n.ollama_model_size_gb ?? null,
       watts,
       pue,

@@ -198,6 +198,74 @@ pub fn default_port_for(name: &str) -> Option<u16> {
     RUNTIME_SPECS.iter().find(|s| s.name == name).map(|s| s.default_port)
 }
 
+// ── vLLM CLI flag capture (dtype / quantization) ──────────────────────────────
+//
+// vLLM's /v1/models and Prometheus endpoints omit the engine's runtime dtype
+// and quantization, so the Model Fit calculator had to assume FP16 for
+// un-tagged model names — overestimating weight size up to 4× for AWQ/GPTQ
+// deployments. The flags ARE visible on the process command line, which this
+// scanner already reads. Captured once per scan cycle and exposed via
+// `vllm_effective_dtype()` for the metrics payload (`vllm_dtype` on the wire).
+
+static VLLM_DTYPE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The effective weight dtype/quant of the running vLLM server, normalized to
+/// the quant-tag vocabulary `bytes_per_weight()` understands (FP16 / BF16 /
+/// FP8 / AWQ / GPTQ / …). None when vLLM isn't running, the flags are absent
+/// (`--dtype auto` with no quantization), or the cmdline is unreadable.
+pub fn vllm_effective_dtype() -> Option<String> {
+    VLLM_DTYPE.lock().unwrap().clone()
+}
+
+/// Extract the value of `--flag value` or `--flag=value` from argv.
+fn extract_string_flag(cmd: &[String], flag: &str) -> Option<String> {
+    let eq_prefix = format!("{flag}=");
+    for (i, arg) in cmd.iter().enumerate() {
+        if arg == flag {
+            if let Some(v) = cmd.get(i + 1) {
+                if !v.starts_with('-') { return Some(v.clone()); }
+            }
+        }
+        if let Some(suffix) = arg.strip_prefix(&eq_prefix) {
+            if !suffix.is_empty() { return Some(suffix.to_string()); }
+        }
+    }
+    None
+}
+
+/// Normalize vLLM `--quantization` / `--dtype` values to the canonical quant
+/// tags used by `bytes_per_weight()` across the agent, cloud, and frontend.
+///
+/// Quantization wins over dtype when both are present (weights are stored at
+/// the quantized width; dtype then describes activations). `--dtype auto` —
+/// vLLM's default, meaning "use the model config's torch_dtype" — yields
+/// None so downstream sizing falls back to name parsing / the FP16 default.
+fn normalize_vllm_dtype(quantization: Option<&str>, dtype: Option<&str>) -> Option<String> {
+    if let Some(q) = quantization {
+        let q = q.to_ascii_lowercase();
+        return Some(match q.as_str() {
+            "awq" | "awq_marlin"                      => "AWQ".into(),
+            "gptq" | "gptq_marlin" | "gptq_bitblas"   => "GPTQ".into(),
+            "fp8" | "fp8_e4m3" | "fp8_e5m2"           => "FP8".into(),
+            "bitsandbytes"                            => "BNB-4BIT".into(),
+            "aqlm"                                    => "AQLM".into(),
+            "hqq"                                     => "HQQ".into(),
+            // Unknown scheme — pass through uppercased; sizing treats
+            // unrecognized tags as FP16 (conservative overestimate).
+            _ => q.to_ascii_uppercase(),
+        });
+    }
+    let d = dtype?.to_ascii_lowercase();
+    match d.as_str() {
+        "auto"                 => None, // model-config default — nothing learned
+        "half" | "float16"     => Some("FP16".into()),
+        "bfloat16"             => Some("BF16".into()),
+        "float" | "float32"    => Some("F32".into()),
+        "fp8" | "fp8_e4m3" | "fp8_e5m2" => Some("FP8".into()),
+        _ => Some(d.to_ascii_uppercase()),
+    }
+}
+
 // ── Watch channel types ───────────────────────────────────────────────────────
 
 /// Receives the current state of a runtime: `Some(port)` = running, `None` = not found.
@@ -347,6 +415,12 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
     }
     let mut candidates: HashMap<&'static str, Candidate> = HashMap::new();
 
+    // vLLM dtype/quantization flags, captured from the matched process's argv.
+    // The explicit-port process is the main server; workers inherit the same
+    // argv, so a non-explicit match is an acceptable source too.
+    let mut vllm_dtype: Option<String> = None;
+    let mut vllm_dtype_from_explicit = false;
+
     for process in sys.processes().values() {
         // Short-circuit only once every runtime has an explicit-port match.
         let all_confirmed = candidates.len() == RUNTIME_SPECS.len()
@@ -365,6 +439,17 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
 
             let explicit = spec.has_explicit_port(&cmd);
             let port     = spec.extract_port(&cmd);
+
+            if spec.name == "vllm" && (explicit || !vllm_dtype_from_explicit) {
+                let quant_flag = extract_string_flag(&cmd, "--quantization")
+                    .or_else(|| extract_string_flag(&cmd, "-q"));
+                let dtype_flag = extract_string_flag(&cmd, "--dtype");
+                let captured = normalize_vllm_dtype(quant_flag.as_deref(), dtype_flag.as_deref());
+                if captured.is_some() || explicit {
+                    vllm_dtype = captured;
+                    vllm_dtype_from_explicit = explicit;
+                }
+            }
 
             match candidates.get_mut(spec.name) {
                 Some(c) if explicit => {
@@ -385,6 +470,10 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
             break; // a process matches at most one runtime
         }
     }
+
+    // Publish the captured vLLM flags (None when vLLM isn't running or its
+    // cmdline carried no dtype/quantization information).
+    *VLLM_DTYPE.lock().unwrap() = vllm_dtype;
 
     // Tier 3: for any runtime whose port is still unconfirmed (no explicit --port
     // flag found in any process's argv), attempt a socket-inode scan on EVERY
@@ -465,4 +554,51 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
             first_scan = false;
         }
     });
+}
+
+#[cfg(test)]
+mod vllm_flag_tests {
+    use super::*;
+
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn extracts_space_and_equals_forms() {
+        let cmd = argv("vllm serve Qwen/Qwen2.5-32B --dtype bfloat16 --port 8000");
+        assert_eq!(extract_string_flag(&cmd, "--dtype").as_deref(), Some("bfloat16"));
+        let cmd = argv("python -m vllm.entrypoints.openai.api_server --quantization=awq");
+        assert_eq!(extract_string_flag(&cmd, "--quantization").as_deref(), Some("awq"));
+        // Next-arg-is-a-flag must not be consumed as a value.
+        let cmd = argv("vllm serve model --dtype --port 8000");
+        assert_eq!(extract_string_flag(&cmd, "--dtype"), None);
+    }
+
+    #[test]
+    fn quantization_wins_over_dtype() {
+        // Weights are stored at the quantized width; dtype describes activations.
+        assert_eq!(
+            normalize_vllm_dtype(Some("awq_marlin"), Some("float16")).as_deref(),
+            Some("AWQ"),
+        );
+    }
+
+    #[test]
+    fn normalizes_to_canonical_quant_tags() {
+        assert_eq!(normalize_vllm_dtype(Some("gptq_marlin"), None).as_deref(), Some("GPTQ"));
+        assert_eq!(normalize_vllm_dtype(Some("fp8"), None).as_deref(),         Some("FP8"));
+        assert_eq!(normalize_vllm_dtype(Some("bitsandbytes"), None).as_deref(), Some("BNB-4BIT"));
+        assert_eq!(normalize_vllm_dtype(None, Some("half")).as_deref(),        Some("FP16"));
+        assert_eq!(normalize_vllm_dtype(None, Some("bfloat16")).as_deref(),    Some("BF16"));
+        assert_eq!(normalize_vllm_dtype(None, Some("float32")).as_deref(),     Some("F32"));
+    }
+
+    #[test]
+    fn dtype_auto_yields_none() {
+        // "--dtype auto" is vLLM's default and means "use the model config's
+        // torch_dtype" — nothing learned, fall back to name-based sizing.
+        assert_eq!(normalize_vllm_dtype(None, Some("auto")), None);
+        assert_eq!(normalize_vllm_dtype(None, None), None);
+    }
 }

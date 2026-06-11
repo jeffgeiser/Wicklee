@@ -112,6 +112,25 @@ the Gatekeeper `com.apple.quarantine` xattr is cleared once at the download
 path so no later promotion can carry it to `/usr/local/bin` and get
 SIGKILLed. Notarization stays on the roadmap as the proper fix.
 
+### vLLM dtype capture + the shared scoring module
+Next two roadmap items, same sprint. (1) `vllm_dtype`: the discovery
+scanner now reads `--quantization`/`--dtype` off the vLLM process
+command line, normalizes to canonical quant tags, and ships it on the
+wire (three-way agent/cloud/frontend sync) — closing the FP16-assumption
+gap that overestimated AWQ/GPTQ weight sizes up to 4×. A new
+`resolveModelSizeHints()` keeps quant hints matched to the runtime the
+model name came from. (2) The agent↔cloud fit-scoring duplication is
+gone: `shared/scoring.rs` is the single source, mirrored into both
+binaries by `scripts/sync-scoring.mjs` with a CI `--check` guard (cargo
+path-dep ruled out: the cloud's Docker build context is `cloud/` only).
+Writing the shared tests caught two more live bugs the duplication had
+been hiding: `extract_params_b` used `find('x')` and matched the 'x' in
+"miXtral" — Mixtral-8x7B parsed as **7B**, so its ~26 GB Q4 files failed
+the plausibility band and were dropped from discovery; and the agent
+still scored won't-fit models 30–40 points (no hard gate) while the
+cloud gated to 0. Both fixed in the shared module. Running tally for the
+sprint: four bugs found by writing tests for code that had none.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's

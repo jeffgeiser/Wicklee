@@ -204,6 +204,13 @@ export interface SentinelMetrics {
    * /v1/models endpoint is unreachable or returns an unexpected shape.
    */
   vllm_max_model_len?:    number | null;
+  /**
+   * Effective vLLM weight dtype/quant captured from the process cmdline
+   * (canonical tags: AWQ / GPTQ / FP8 / BF16 / ...; --quantization wins over
+   * --dtype). Preferred over name-based quant parsing when sizing vLLM
+   * weights. Null when flags are absent (--dtype auto) or cmdline unreadable.
+   */
+  vllm_dtype?:            string | null;
   /** Avg generation throughput from vLLM Prometheus /metrics. Null until first probe. */
   vllm_tokens_per_sec?:   number | null;
   /** KV cache utilisation 0–100%. Agent multiplies vLLM's 0–1 value by 100. */

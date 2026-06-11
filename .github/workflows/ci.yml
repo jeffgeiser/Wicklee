@@ -36,6 +36,9 @@ jobs:
       - name: Perplexity baseline in sync (frontend copy matches cloud/data)
         run: npm run check:perplexity-sync
 
+      - name: Scoring module in sync (agent + cloud mirrors match shared/scoring.rs)
+        run: npm run check:scoring-sync
+
       - name: Typecheck
         run: npx tsc --noEmit
 

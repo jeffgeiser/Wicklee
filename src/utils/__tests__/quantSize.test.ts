@@ -6,6 +6,7 @@ import {
   parseQuantFromAnyModelName,
   estimateModelSizeGbFromName,
   estimateModelSizeGb,
+  resolveModelSizeHints,
   FP16_BYTES_PER_WEIGHT,
   OLLAMA_DEFAULT_BYTES_PER_WEIGHT,
 } from '../quantSize';
@@ -165,5 +166,41 @@ describe('estimateModelSizeGb (node-level)', () => {
 
   it('returns null when no model name is present', () => {
     expect(estimateModelSizeGb(makeNode())).toBeNull();
+  });
+});
+
+describe('resolveModelSizeHints (vllm_dtype capture)', () => {
+  it('prefers the cmdline-captured vllm_dtype over name parsing', () => {
+    // Un-tagged vLLM name + FP8 engine: without vllm_dtype this sized as
+    // FP16 (64 GB); the cmdline capture halves it to the true 32 GB.
+    const node = makeNode({
+      vllm_model_name: 'Qwen/Qwen2.5-32B-Instruct',
+      vllm_dtype: 'FP8',
+    });
+    expect(resolveModelSizeHints(node).quantHint).toBe('FP8');
+    expect(estimateModelSizeGb(node)).toBeCloseTo(32, 1);
+  });
+
+  it('sizes AWQ vLLM deployments at 4-bit instead of FP16', () => {
+    const node = makeNode({
+      vllm_model_name: 'Qwen/Qwen2.5-32B-Instruct',
+      vllm_dtype: 'AWQ',
+    });
+    expect(estimateModelSizeGb(node)).toBeCloseTo(32 * 0.56, 0); // ~17.9 GB (0.56 B/W)
+  });
+
+  it('keeps hints matched to the runtime the name came from', () => {
+    // A stale Ollama quant field must not leak onto a vLLM model name.
+    const node = makeNode({
+      vllm_model_name: 'Qwen/Qwen2.5-32B-Instruct',
+      ollama_quantization: 'Q4_K_M',
+    });
+    expect(resolveModelSizeHints(node).quantHint).toBeNull();
+    expect(estimateModelSizeGb(node)).toBeCloseTo(64, 1); // FP16 fallback
+  });
+
+  it('falls back to name parsing when vllm_dtype is absent (--dtype auto)', () => {
+    const node = makeNode({ vllm_model_name: 'qwen2.5-32b-instruct-fp8' });
+    expect(resolveModelSizeHints(node).quantHint).toBe('FP8');
   });
 });

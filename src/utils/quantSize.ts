@@ -199,26 +199,54 @@ export const OLLAMA_DEFAULT_BYTES_PER_WEIGHT = 0.60;
  *      a last resort, knowing it's contaminated by KV cache reservation on
  *      vLLM nodes.
  */
+/**
+ * Resolve the model name, quant hint, and unknown-quant fallback for a node,
+ * keeping each hint matched to the runtime the name came from:
+ *
+ *   - Ollama:    explicit ollama_quantization, else name parse;
+ *                un-tagged pulls default to Q4_K_M bytes-per-weight.
+ *   - vLLM:      vllm_dtype captured from the process cmdline (ground truth
+ *                for the running engine), else name parse; FP16 fallback
+ *                (vLLM's default dtype).
+ *   - llama.cpp: name parse only; FP16 fallback.
+ *
+ * Before this existed, callers chained `ollama_quantization ?? parse(name)`
+ * even when the name came from vLLM — a stale Ollama quant could mis-size a
+ * vLLM model.
+ */
+export interface ModelSizeHints {
+  modelName:   string | null;
+  quantHint:   string | null;
+  fallbackBpw: number;
+}
+
+export function resolveModelSizeHints(node: SentinelMetrics): ModelSizeHints {
+  if (node.ollama_active_model) {
+    return {
+      modelName:   node.ollama_active_model,
+      quantHint:   node.ollama_quantization
+                ?? parseQuantFromAnyModelName(node.ollama_active_model),
+      fallbackBpw: OLLAMA_DEFAULT_BYTES_PER_WEIGHT,
+    };
+  }
+  if (node.vllm_model_name) {
+    return {
+      modelName:   node.vllm_model_name,
+      quantHint:   node.vllm_dtype
+                ?? parseQuantFromAnyModelName(node.vllm_model_name),
+      fallbackBpw: FP16_BYTES_PER_WEIGHT,
+    };
+  }
+  return {
+    modelName:   node.llamacpp_model_name ?? null,
+    quantHint:   parseQuantFromAnyModelName(node.llamacpp_model_name),
+    fallbackBpw: FP16_BYTES_PER_WEIGHT,
+  };
+}
+
 export function estimateModelSizeGb(node: SentinelMetrics): number | null {
   if (node.ollama_model_size_gb != null) return node.ollama_model_size_gb;
-
-  const modelName =
-    node.ollama_active_model
-    ?? node.vllm_model_name
-    ?? node.llamacpp_model_name
-    ?? null;
+  const { modelName, quantHint, fallbackBpw } = resolveModelSizeHints(node);
   if (!modelName) return null;
-
-  // Quant hint: prefer explicit field, fall back to name parse.
-  const quantHint =
-    node.ollama_quantization
-    ?? parseQuantFromAnyModelName(modelName);
-
-  // Un-tagged Ollama names default to Q4_K_M, not FP16 — see
-  // OLLAMA_DEFAULT_BYTES_PER_WEIGHT.
-  const fallbackBpw = node.ollama_active_model
-    ? OLLAMA_DEFAULT_BYTES_PER_WEIGHT
-    : FP16_BYTES_PER_WEIGHT;
-
   return estimateModelSizeGbFromName(modelName, quantHint, fallbackBpw);
 }
