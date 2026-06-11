@@ -40,8 +40,17 @@ fn start_cloud_push_inner(
     _obs_cache:    Option<()>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
+    use std::ops::ControlFlow;
 
-    tokio::spawn(async move {
+    // Supervised so a panic restarts the push loop, but its deliberate exits
+    // (broadcast channel closed; 410-Gone after the node is removed from the
+    // fleet) return ControlFlow::Break and are NOT restarted.
+    crate::supervisor::supervise_until("cloud-push", move || {
+        let pairing_state = pairing_state.clone();
+        let broadcast_tx  = broadcast_tx.clone();
+        #[cfg(not(target_env = "musl"))]
+        let obs_cache     = obs_cache.clone();
+        async move {
         let cloud  = std::env::var("WICKLEE_CLOUD_URL").unwrap_or_else(|_| CLOUD_URL.to_string());
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(3))
@@ -62,7 +71,7 @@ fn start_cloud_push_inner(
         loop {
             let frame = match rx.recv().await {
                 Ok(json)                    => json,
-                Err(RecvError::Closed)      => break,
+                Err(RecvError::Closed)      => return ControlFlow::Break(()),
                 Err(RecvError::Lagged(_))   => continue,
             };
 
@@ -134,7 +143,7 @@ fn start_cloud_push_inner(
                         ps.cloud_session_token = None;
                         ps.status = crate::PairingStatus::Unpaired;
                     }
-                    break; // Stop the push loop entirely
+                    return ControlFlow::Break(()); // node removed — stop permanently
                 }
                 Ok(r) if r.status().is_success() => {
                     last_pushed_state = curr_state;
@@ -142,5 +151,6 @@ fn start_cloud_push_inner(
                 _ => {} // Network error or non-2xx — retry next cycle
             }
         }
-    });
+        } // async move
+    }); // supervise_until
 }

@@ -278,6 +278,49 @@ rather than a primary bug — the real mitigation is keeping tasks from
 panicking (the supervisor above), so a 76-site poison-tolerant conversion
 isn't worth the churn.
 
+### Agent task supervisor (Pass 2 follow-up — helper + broadcast loop)
+Started the HIGH Pass-2 item: silently-dying background loops. Shipped
+`agent/src/supervisor.rs` — `supervise(name, factory)` runs a task as a
+child, logs panics/clean-returns by name, and restarts with exponential
+backoff (1s→30s, reset after a 60s healthy run). Unit-tested for both
+restart-on-panic and restart-on-clean-return. Applied it to the **metrics
+broadcast loop** first — the agent's most critical task, whose death stops
+all telemetry. It's a pure infinite loop, so wrapping was clean: the body
+is byte-identical, and the ~17 captured Arcs/config values are cloned in a
+compiler-checked factory prelude (a missed capture is a compile error, not
+a silent change). 39 agent tests green.
+
+A real subtlety surfaced and shaped the scope: `supervise` restarts on
+*clean return*, which is correct for a truly-infinite loop but WRONG for
+tasks with intentional terminal exits — `cloud_push` deliberately `break`s
+on a 410-Gone (node removed from fleet), and blindly restarting it would
+turn a permanent stop into an idle restart-spin. So this commit scopes to
+the broadcast loop; the harvesters (nested inner breaks to verify) and
+cloud_push (needs a ControlFlow/"don't restart" signal) are documented as
+the remaining work on the roadmap item. The helper itself is the reusable
+core; finishing the adopters is mechanical once the don't-restart signal
+is added.
+
+### Supervisor: don't-restart signal + cloud_push adopter
+Added `supervise_until(name, factory)` — the supervised future returns
+`ControlFlow`, so a task can signal a deliberate permanent stop
+(`Break`, not restarted) vs. an unexpected exit/panic (restarted with
+backoff). `supervise` is now a thin adapter over it. Converted
+`cloud_push` to use it: its two terminal exits — the broadcast channel
+closing and a 410-Gone (node removed from fleet) — return `Break` so a
+deliberate stop can't become an idle restart-spin. New unit test asserts
+`Break` is not restarted; 40 agent tests green.
+
+Finding that refined the remaining work: the vLLM/Ollama harvester main
+loops are NOT pure infinite loops either — each does `if
+port_rx.changed().await.is_err() { return; }`, a terminal exit when the
+discovery watch-channel's senders drop at shutdown. So they too need
+`supervise_until` with those returns mapped to `Break`, not plain
+`supervise` (which would restart-spin on shutdown). Documented precisely
+on the roadmap with the exact exit to convert, left as the next focused
+pass since classifying each loop's exits is judgment work better done
+reviewably than bundled untested.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's
