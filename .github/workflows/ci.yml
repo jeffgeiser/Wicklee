@@ -1,0 +1,83 @@
+name: CI
+
+# Tests, typecheck, and cross-binary contract checks on every push/PR.
+#
+# The June 2026 calculation-consistency audit added test suites whose whole
+# purpose is to catch drift automatically (e.g. cloud fit-scoring is pinned
+# to the agent's canonical values; quant compression ratios are pinned to
+# bytesPerWeight()/2). They only guard anything if CI runs them — both the
+# fit-score drift and the ratio-table drift happened while nothing watched.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend · tsc + vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Perplexity baseline in sync (frontend copy matches cloud/data)
+        run: npm run check:perplexity-sync
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npx vitest run
+
+  agent:
+    name: Agent · cargo test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+
+      # RustEmbed's #[folder = "frontend/dist"] requires the directory to
+      # exist at compile time. Tests don't serve assets, so an empty dir is
+      # enough — no need to build the frontend here.
+      - name: Stub embedded assets dir
+        run: mkdir -p agent/frontend/dist
+
+      - name: Tests
+        run: cargo test
+        working-directory: agent
+
+  cloud:
+    name: Cloud · cargo test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cloud
+
+      - name: Tests
+        run: cargo test
+        working-directory: cloud
