@@ -321,6 +321,21 @@ on the roadmap with the exact exit to convert, left as the next focused
 pass since classifying each loop's exits is judgment work better done
 reviewably than bundled untested.
 
+### Supervisor: all four critical loops now covered
+Finished the Pass-2 supervisor item. The three harvester main loops
+(Ollama, vLLM, llama.cpp) join the broadcast loop and cloud_push under
+supervision. Each harvester's `if port_rx.changed().await.is_err() {
+return; }` — a terminal exit when the discovery watch-channel closes at
+shutdown — now returns `ControlFlow::Break(())` via `supervise_until`, so
+a real panic restarts the harvester while a clean shutdown stops it
+without spinning. Conversions were compiler-guided (clone-per-restart
+prelude; bodies byte-identical) and landed clean on the first build —
+all captures were exactly the pre-spawn `let` bindings. Also widened the
+two timing-sensitive supervisor restart tests from 1.5s→2.5s windows
+(1s backoff + CI slack) after one flaky miss under load. 40 agent tests
+green. Only the non-critical probe sub-tasks (idle baseline measurement)
+remain unsupervised — low priority.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's

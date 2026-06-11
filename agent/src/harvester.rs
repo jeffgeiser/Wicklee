@@ -201,7 +201,13 @@ pub(crate) fn start_ollama_harvester(
     let mut port_rx_main = port_rx.clone();
     let probe_active_harvester = Arc::clone(&probe_active);
     let rc_cache = runtime_config_cache.clone();
-    tokio::spawn(async move {
+    crate::supervisor::supervise_until("ollama-harvester", move || {
+        let shared_main = shared_main.clone();
+        let proxy_main = proxy_main.clone();
+        let mut port_rx_main = port_rx_main.clone();
+        let probe_active_harvester = probe_active_harvester.clone();
+        let rc_cache = rc_cache.clone();
+        async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
@@ -212,7 +218,7 @@ pub(crate) fn start_ollama_harvester(
             loop {
                 if port_rx_main.borrow().is_some() { break; }
                 // Park until discovery sends an update (Some or None).
-                if port_rx_main.changed().await.is_err() { return; }
+                if port_rx_main.changed().await.is_err() { return std::ops::ControlFlow::Break(()); }
             }
             let discovered_port = port_rx_main.borrow().unwrap();
 
@@ -496,7 +502,8 @@ pub(crate) fn start_ollama_harvester(
                 if let Ok(mut g) = shared_main.lock() { *g = m; }
             }
         }
-    });
+        } // async move
+    }); // supervise_until
 
     // ── Probe task: scheduled 20-token benchmark every 30s ──────────────────
     // Runs on all nodes (with or without proxy). When the proxy is active and
@@ -816,12 +823,15 @@ pub(crate) fn start_vllm_harvester(
     // ── Main task: 2 s Prometheus /metrics poll ──────────────────────────────
     let shared_main  = Arc::clone(&shared);
     let mut port_rx_main = port_rx.clone();
-    tokio::spawn(async move {
+    crate::supervisor::supervise_until("vllm-harvester", move || {
+        let shared_main = shared_main.clone();
+        let mut port_rx_main = port_rx_main.clone();
+        async move {
         loop {
             // Wait until discovery reports vLLM is running.
             loop {
                 if port_rx_main.borrow().is_some() { break; }
-                if port_rx_main.changed().await.is_err() { return; }
+                if port_rx_main.changed().await.is_err() { return std::ops::ControlFlow::Break(()); }
             }
             let port = port_rx_main.borrow().unwrap();
             eprintln!("[vllm] connected on :{port}");
@@ -924,7 +934,8 @@ pub(crate) fn start_vllm_harvester(
                 }
             }
         }
-    });
+        } // async move
+    }); // supervise_until
 
     // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ─────────
     let shared_probe = Arc::clone(&shared);
@@ -1104,12 +1115,15 @@ pub(crate) fn start_llamacpp_harvester(
     // ── Main task: 2 s /health?include_slots poll ────────────────────────────
     let shared_main = Arc::clone(&shared);
     let mut port_rx_main = port_rx.clone();
-    tokio::spawn(async move {
+    crate::supervisor::supervise_until("llamacpp-harvester", move || {
+        let shared_main = shared_main.clone();
+        let mut port_rx_main = port_rx_main.clone();
+        async move {
         loop {
             // Wait until discovery reports llama.cpp/llama-box is running.
             loop {
                 if port_rx_main.borrow().is_some() { break; }
-                if port_rx_main.changed().await.is_err() { return; }
+                if port_rx_main.changed().await.is_err() { return std::ops::ControlFlow::Break(()); }
             }
             let port = port_rx_main.borrow().unwrap();
             eprintln!("[llamacpp] connected on :{port}");
@@ -1143,7 +1157,8 @@ pub(crate) fn start_llamacpp_harvester(
                 }
             }
         }
-    });
+        } // async move
+    }); // supervise_until
 
     // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ──────────
     let shared_probe = Arc::clone(&shared);

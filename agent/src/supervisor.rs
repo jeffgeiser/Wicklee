@@ -124,8 +124,8 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         });
-        // Backoff after the first failure is 1s; wait past it.
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        // Backoff after the first failure is 1s; wait well past it (CI slack).
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
         assert!(
             runs.load(Ordering::SeqCst) >= 2,
             "supervisor should have restarted the task after the panic",
@@ -161,7 +161,7 @@ mod tests {
                 // Returns immediately — supervisor must restart it.
             }
         });
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
         assert!(
             runs.load(Ordering::SeqCst) >= 2,
             "supervisor should restart a task that returns cleanly",
