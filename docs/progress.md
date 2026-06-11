@@ -153,6 +153,14 @@ cloud's Prometheus scrape proxy on wicklee.dev, not the MetricsPage —
 it's excluded from the sitemap and prerender so Google doesn't index
 scrape output. Remaining nice-to-have: a real 1200×630 og:image.
 
+Follow-up fix: the metrics reference page moved to `/metrics-reference`.
+The old `/metrics` path is nginx's exact-match proxy to the cloud's
+Prometheus scrape endpoint, so a hard refresh there returned scrape text
+instead of the page — the SPA route had silently squatted on a path the
+docs publicly advertise for Prometheus. `/metrics` survives as a
+client-side alias (canonicalizing to the new path); the reference page
+is now hard-refreshable and back in the sitemap.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's

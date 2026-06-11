@@ -80,11 +80,19 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
                  'WES, Model Fit, Context Runway, and the 18 hardware observation patterns.',
     path:        '/docs',
   },
+  '/metrics-reference': {
+    title:       'Metrics Reference — Wicklee',
+    description: 'Every metric Wicklee reports, defined: WES, thermal penalties, Model Fit, ' +
+                 'tok/s probes, memory pressure, and the formulas behind them.',
+    path:        '/metrics-reference',
+  },
+  // Alias for old bookmarks — canonicalizes to /metrics-reference (the bare
+  // /metrics path is the Prometheus scrape endpoint on wicklee.dev).
   '/metrics': {
     title:       'Metrics Reference — Wicklee',
     description: 'Every metric Wicklee reports, defined: WES, thermal penalties, Model Fit, ' +
                  'tok/s probes, memory pressure, and the formulas behind them.',
-    path:        '/metrics',
+    path:        '/metrics-reference',
   },
   '/blog': {
     title:       'Blog — Wicklee',
