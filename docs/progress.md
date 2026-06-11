@@ -161,6 +161,60 @@ docs publicly advertise for Prometheus. `/metrics` survives as a
 client-side alias (canonicalizing to the new path); the reference page
 is now hard-refreshable and back in the sitemap.
 
+### Security review pass 1 — cloud auth & tenancy (in progress)
+Started the broader code review the calculation audit kept arguing for —
+every previously-uncovered area this session has coughed up live bugs, so
+the cloud's auth/tenancy boundaries (never reviewed) were the obvious
+first target. A route inventory (43 routes) plus a read of the five auth
+primitives surfaced two criticals.
+
+**Critical 1 — fixed this commit.** Org tenancy was scoped from a
+client-supplied `X-Org-Id` header (`extract_org_id`), while the Clerk
+JWT's verified `org_id` claim was parsed and thrown away
+(`let (sub, _org_id) = ...`). No code anywhere checked org membership, so
+any logged-in user could set `X-Org-Id: org_<victim>` and read another
+org's fleet, live SSE telemetry, observations, and MCP output — Clerk org
+IDs aren't secret. Fix: `require_user_and_org` now returns the verified
+claim, `require_user_info` carries it too, all four header-trusting sites
+(stream-token, fleet, activate, mcp) use it, and `extract_org_id` is
+deleted. The frontend already sends the right value inside the token, so
+dropping header trust changes nothing for legitimate users; the stray
+`X-Org-Id` header it still sends is now simply ignored. Legacy DIY
+sessions predate orgs and resolve to a None org. Added `tenancy_tests`
+pinning `tenant_scope` to its two literal column names (the only value
+that feeds a format!() into SQL).
+
+Also in this commit: `/health` no longer leaks fleet-wide row counts /
+open-observation totals to unauthenticated callers (now a bare DB-ping
+liveness probe, which is all Railway's healthcheck needs); removed the
+dead `user_node_set`/`user_node_set_blocking` helpers the audit flagged.
+
+**Critical 2 — fixed.** Node IDs were 16-bit `WK-XXXX` (folded from the
+hardware machine-id, shown in the UI) and `POST /api/pair/claim` is
+unauthenticated and upserts on `wk_id`, rotating any node's session
+token; `/api/pair/activate` looks a node up by 6-digit code with no
+binding to who paired it. Net: unauthenticated fleet-wide DoS by
+enumerating 65,536 IDs, plus a global-PK collision risk at ~300 nodes
+platform-wide. Three-part fix: (1) node IDs now carry the FULL 64-bit
+entropy of the machine-id via FNV-1a (`WK-` + 16 hex) — deterministic so
+they still survive reinstalls, but no longer enumerable; new installs
+only, existing config.toml keeps its `WK-XXXX`. (2) `handle_claim` gained
+an ownership guard: it refuses (409) to mutate a node that already
+belongs to a user, so a known node_id can't be re-claimed to rotate its
+token or plant a hijack code — re-pairing an owned node now requires an
+authenticated remove-from-fleet first (minor UX change, documented in the
+409 message). (3) `mint_node_token` switched from the guessable
+`wk_{millis:x}_{node_id}` to a CSPRNG UUID. Disconnect is local-only, so
+re-pair-after-disconnect of a still-owned node takes the remove-then-add
+path. Tests: agent `node_id_tests` (FNV determinism + width), cloud build
+green; agent 37 / cloud 13 passing.
+
+**Pre-existing population note:** nodes already paired under `WK-XXXX`
+keep their 16-bit IDs and their (now-legacy) collision/enumeration
+exposure until they re-pair under a fresh id; the risk decays as new
+installs dominate. A forced re-pair migration wasn't done — too
+disruptive for the benefit.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's
