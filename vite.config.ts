@@ -74,6 +74,68 @@ const blogIndexPlugin = (): Plugin => ({
   configureServer() { generateBlogIndex(); },
 });
 
+// ── Sitemap generator ─────────────────────────────────────────────────────────
+// public/robots.txt has advertised https://wicklee.dev/sitemap.xml since the
+// crawler-welcome pass — but the file never existed, and the SPA fallback
+// served index.html (i.e. HTML) for it, which Search Console reports as a
+// malformed sitemap. Generated here from the static route table + the blog
+// manifest, with lastmod from each post's frontmatter date.
+
+const SITE_ORIGIN = 'https://wicklee.dev';
+
+// Keep in sync with the route table in App.tsx and STATIC_PAGE_META in
+// src/utils/pageMeta.ts.
+const STATIC_ROUTES: { path: string; priority: string }[] = [
+  { path: '/',        priority: '1.0' },
+  { path: '/docs',    priority: '0.8' },
+  { path: '/blog',    priority: '0.8' },
+  { path: '/pricing', priority: '0.7' },
+  // NOTE: /metrics is intentionally absent — on wicklee.dev nginx exact-
+  // matches it to the cloud's Prometheus scrape endpoint, so crawlers would
+  // fetch metrics text, not the MetricsPage.
+  { path: '/terms',   priority: '0.2' },
+  { path: '/privacy', priority: '0.2' },
+  { path: '/refund',  priority: '0.2' },
+];
+
+function generateSitemap() {
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(BLOG_DIR).filter(f => f.endsWith('.md'));
+  } catch { /* no blog dir — static routes only */ }
+
+  const urls: string[] = STATIC_ROUTES.map(r =>
+    `  <url><loc>${SITE_ORIGIN}${r.path}</loc><priority>${r.priority}</priority></url>`,
+  );
+
+  for (const file of files) {
+    const slug = file.replace(/\.md$/, '');
+    let lastmod = '';
+    try {
+      const raw = fs.readFileSync(path.join(BLOG_DIR, file), 'utf-8');
+      const m = raw.match(/^---[\s\S]*?\ndate:\s*(\S+)/m);
+      if (m) {
+        const d = new Date(m[1]);
+        if (!isNaN(d.getTime())) lastmod = `<lastmod>${d.toISOString().slice(0, 10)}</lastmod>`;
+      }
+    } catch { /* undated post */ }
+    urls.push(`  <url><loc>${SITE_ORIGIN}/blog/${slug}</loc>${lastmod}<priority>0.6</priority></url>`);
+  }
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    urls.join('\n') + '\n</urlset>\n';
+
+  fs.writeFileSync(path.resolve(__dirname, 'public/sitemap.xml'), xml);
+  console.log(`[sitemap] ${urls.length} URL(s) → public/sitemap.xml`);
+}
+
+const sitemapPlugin = (): Plugin => ({
+  name: 'sitemap',
+  buildStart() { generateSitemap(); },
+  configureServer() { generateSitemap(); },
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default defineConfig(() => {
@@ -100,7 +162,7 @@ export default defineConfig(() => {
       // binary where there's no CDN or HTTP/2 multiplexing benefit to splitting.
       chunkSizeWarningLimit: 1000,
     },
-    plugins: [blogIndexPlugin(), tailwindcss(), react()],
+    plugins: [blogIndexPlugin(), sitemapPlugin(), tailwindcss(), react()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

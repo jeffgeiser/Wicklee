@@ -39,6 +39,7 @@ import { usePermissions } from './hooks/usePermissions';
 import BlogListing from './components/BlogListing';
 import BlogPost from './components/BlogPost';
 import { X, Sparkles, Zap, Shield, Globe } from 'lucide-react';
+import { STATIC_PAGE_META, setPageMeta, normalizePath } from './utils/pageMeta';
 
 const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: () => void }> = ({ isOpen, onClose, onUpgrade }) => {
   if (!isOpen) return null;
@@ -187,6 +188,14 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // Per-route SEO metadata — title/description/canonical/OG swap on every
+  // navigation. Blog posts resolve theirs from frontmatter (BlogPost.tsx);
+  // routes without an entry (e.g. /blog/:slug mid-load) are left alone.
+  useEffect(() => {
+    const meta = STATIC_PAGE_META[normalizePath(currentPath)];
+    if (meta) setPageMeta(meta);
+  }, [currentPath]);
 
   // Warm the Perplexity Tax baseline cache on app startup.  Failure is
   // non-fatal — tiles fall back to the existing heuristic copy.
@@ -440,7 +449,9 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       />
     );
   }
-  const blogPostMatch = currentPath.match(/^\/blog\/([^/]+)$/);
+  // Trailing-slash tolerant — the prerendered static pages live at
+  // /blog/{slug}/index.html, so links may carry a trailing slash.
+  const blogPostMatch = currentPath.match(/^\/blog\/([^/]+?)\/?$/);
   if (blogPostMatch) {
     return (
       <BlogPost
