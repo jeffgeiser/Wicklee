@@ -925,8 +925,11 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn mint_node_token(node_id: &str) -> String {
-    format!("wk_{:x}_{node_id}", now_ms())
+fn mint_node_token(_node_id: &str) -> String {
+    // CSPRNG, not timestamp+node_id. The old `wk_{millis:x}_{node_id}` form
+    // was guessable: node_id is not secret and the mint time is narrow, so an
+    // attacker who knew a node_id could forge its telemetry token.
+    format!("wk_{}", Uuid::new_v4().simple())
 }
 
 fn extract_bearer(headers: &HeaderMap) -> Option<String> {
@@ -2048,6 +2051,23 @@ async fn handle_claim(
     if body.node_id.is_empty() || body.fleet_url.is_empty() {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "node_id and fleet_url are required" }))).into_response();
+    }
+
+    // Ownership guard: claim is unauthenticated (the agent has no cloud
+    // credentials until it pairs), so it may create a new node or refresh an
+    // as-yet-UNOWNED one, but it must never mutate a node that already belongs
+    // to a user. Without this, anyone who knows a node_id could re-claim it to
+    // rotate its session token (DoS the running agent) or plant a code to
+    // hijack ownership via /api/pair/activate. Re-pairing an owned node
+    // requires removing it from the fleet first (authenticated DELETE
+    // /api/nodes/:id).
+    let existing_owner = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT user_id FROM nodes WHERE wk_id = $1"
+    ).bind(&body.node_id).fetch_optional(&state.pool).await.unwrap_or(None);
+    if matches!(existing_owner, Some(Some(_))) {
+        return (StatusCode::CONFLICT, Json(serde_json::json!({
+            "error": "This node is already paired to an account. Remove it from that fleet before re-pairing."
+        }))).into_response();
     }
 
     let token   = mint_node_token(&body.node_id);

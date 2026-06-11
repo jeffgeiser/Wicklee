@@ -189,16 +189,31 @@ open-observation totals to unauthenticated callers (now a bare DB-ping
 liveness probe, which is all Railway's healthcheck needs); removed the
 dead `user_node_set`/`user_node_set_blocking` helpers the audit flagged.
 
-**Critical 2 — next commit.** Node IDs are 16-bit `WK-XXXX` (folded from
-the hardware machine-id, shown in the UI) and `POST /api/pair/claim` is
+**Critical 2 — fixed.** Node IDs were 16-bit `WK-XXXX` (folded from the
+hardware machine-id, shown in the UI) and `POST /api/pair/claim` is
 unauthenticated and upserts on `wk_id`, rotating any node's session
 token; `/api/pair/activate` looks a node up by 6-digit code with no
 binding to who paired it. Net: unauthenticated fleet-wide DoS by
 enumerating 65,536 IDs, plus a global-PK collision risk at ~300 nodes
-platform-wide. Fix planned as one change: 128-bit random node IDs (new
-installs only — existing configs keep their WK-XXXX), auth/lease binding
-on claim, code bound to the initiating session, and CSPRNG session
-tokens.
+platform-wide. Three-part fix: (1) node IDs now carry the FULL 64-bit
+entropy of the machine-id via FNV-1a (`WK-` + 16 hex) — deterministic so
+they still survive reinstalls, but no longer enumerable; new installs
+only, existing config.toml keeps its `WK-XXXX`. (2) `handle_claim` gained
+an ownership guard: it refuses (409) to mutate a node that already
+belongs to a user, so a known node_id can't be re-claimed to rotate its
+token or plant a hijack code — re-pairing an owned node now requires an
+authenticated remove-from-fleet first (minor UX change, documented in the
+409 message). (3) `mint_node_token` switched from the guessable
+`wk_{millis:x}_{node_id}` to a CSPRNG UUID. Disconnect is local-only, so
+re-pair-after-disconnect of a still-owned node takes the remove-then-add
+path. Tests: agent `node_id_tests` (FNV determinism + width), cloud build
+green; agent 37 / cloud 13 passing.
+
+**Pre-existing population note:** nodes already paired under `WK-XXXX`
+keep their 16-bit IDs and their (now-legacy) collision/enumeration
+exposure until they re-pair under a fresh id; the risk decays as new
+installs dominate. A forced re-pair migration wasn't done — too
+disruptive for the benefit.
 
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's

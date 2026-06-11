@@ -1991,40 +1991,47 @@ fn hardware_machine_id() -> Option<String> {
     None
 }
 
-/// Fold an arbitrary hardware ID string into a stable 16-bit suffix for WK-XXXX.
-///
-/// XOR-accumulation over byte pairs — deterministic, no external crates, no random
-/// seed (unlike `std::hash::DefaultHasher` which was randomized in Rust 1.x).
-/// Same string always produces the same 4-hex-digit output.
-fn fold_to_wk_suffix(s: &str) -> u16 {
-    let bytes = s.as_bytes();
-    let mut acc: u16 = 0x5A5A; // non-zero seed so empty strings don't collide with each other
-    for (i, &b) in bytes.iter().enumerate() {
-        if i % 2 == 0 {
-            acc ^= (b as u16) << 8;
-        } else {
-            acc ^= b as u16;
-        }
+/// 64-bit FNV-1a hash — deterministic, no external crates, no randomized seed
+/// (unlike `std::hash::DefaultHasher`). Same input always produces the same
+/// output, across processes and platforms.
+fn fnv1a_64(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
+    for &b in s.as_bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3); // FNV prime
     }
-    acc
+    hash
 }
 
-/// Generate a WK-XXXX node identity.
+/// Generate a node identity (`WK-` + 16 hex digits).
 ///
 /// Priority:
-///   1. Hardware platform ID (machine-id / IOPlatformUUID / MachineGuid) — deterministic,
-///      survives reinstalls, upgrades, and re-pairings.
-///   2. Timestamp fallback — used only when the platform ID is unavailable (containers,
-///      live ISOs, some CI environments). Matches the original behaviour.
+///   1. Hardware platform ID (machine-id / IOPlatformUUID / MachineGuid),
+///      hashed to 64 bits — deterministic, so it survives reinstalls,
+///      upgrades, and re-pairings on the same machine.
+///   2. Random 64-bit fallback when the platform ID is unavailable
+///      (containers, live ISOs, some CI). Random, not timestamp-based, so
+///      two nodes booting in the same millisecond can't collide.
 ///
-/// `load_or_create_config()` only calls this on first run (no existing config.toml),
-/// so all currently-paired nodes keep their existing WK-XXXX unchanged.
+/// SECURITY: the suffix carries the FULL entropy of the source. The previous
+/// implementation folded it to 16 bits (`WK-XXXX`, 65,536 values), which made
+/// node IDs trivially enumerable — and since `nodes.wk_id` is a GLOBAL primary
+/// key and `/api/pair/claim` is unauthenticated, an attacker could iterate the
+/// whole space to rotate every node's session token (fleet-wide DoS) or hijack
+/// ownership. 64 bits removes enumeration and the birthday-collision risk that
+/// made unrelated customers' machines collide on the shared PK at ~300 nodes.
+///
+/// `load_or_create_config()` only calls this on first run (no existing
+/// config.toml), so already-paired nodes keep their existing `WK-XXXX` id.
 fn generate_node_id() -> String {
     if let Some(hw_id) = hardware_machine_id() {
-        return format!("WK-{:04X}", fold_to_wk_suffix(&hw_id));
+        return format!("WK-{:016X}", fnv1a_64(&hw_id));
     }
-    // Fallback: timestamp-based (original behaviour)
-    format!("WK-{:04X}", now_ms() & 0xFFFF)
+    // Fallback: a fresh random 64-bit value (CSPRNG via uuid v4).
+    let r = uuid::Uuid::new_v4();
+    let bytes = r.as_bytes();
+    let suffix = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+    format!("WK-{suffix:016X}")
 }
 
 fn load_or_create_config() -> WickleeConfig {
@@ -7640,5 +7647,30 @@ mod bandwidth_tests {
         assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M3 Ultra")), Some(819.0));
         assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M2 Pro")), Some(200.0));
         assert_eq!(hardware_bandwidth_gbps(Some("AMD Radeon RX 7900 XTX"), None), None);
+    }
+}
+
+#[cfg(test)]
+mod node_id_tests {
+    use super::*;
+
+    #[test]
+    fn fnv1a_is_deterministic_and_wide() {
+        // Same input → same hash (stable node id across restarts/reinstalls).
+        let a = fnv1a_64("550e8400-e29b-41d4-a716-446655440000");
+        let b = fnv1a_64("550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(a, b);
+        // Distinct machine-ids → distinct hashes (no 16-bit folding collisions).
+        assert_ne!(fnv1a_64("machine-a"), fnv1a_64("machine-b"));
+    }
+
+    #[test]
+    fn node_id_suffix_is_64_bit_not_16_bit() {
+        // Two machine-ids that collided under the old 16-bit fold must now
+        // produce different 16-hex-digit ids.
+        let id1 = format!("WK-{:016X}", fnv1a_64("/etc/machine-id:aaaa"));
+        let id2 = format!("WK-{:016X}", fnv1a_64("/etc/machine-id:bbbb"));
+        assert_ne!(id1, id2);
+        assert_eq!(id1.len(), 19); // "WK-" + 16 hex
     }
 }
