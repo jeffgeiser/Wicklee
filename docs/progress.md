@@ -131,6 +131,28 @@ still scored won't-fit models 30–40 points (no hard gate) while the
 cloud gated to 0. Both fixed in the shared module. Running tally for the
 sprint: four bugs found by writing tests for code that had none.
 
+### SEO: the public pages stop pretending to be one page
+Every route served the same index.html with the same landing metadata,
+and robots.txt advertised a sitemap.xml that didn't exist (the SPA
+fallback served HTML for it — a malformed sitemap in Search Console).
+Two phases, no framework migration. Phase 1: shared `pageMeta.ts` swaps
+title/description/canonical/og:url per route on navigation (BlogPost
+already did half of this locally — now it's one helper, and leaving a
+post no longer strands stale og: tags); `twitter:card`, `og:type`,
+`og:site_name`, canonical added to the shell; a vite plugin generates
+sitemap.xml next to the blog-index manifest. Phase 2:
+`generate-static-pages.mjs` (postbuild) emits real HTML for the
+markdown-backed routes — each blog post, the listing, and /docs — by
+swapping metadata in the built shell and pre-injecting the rendered
+article into `#root` with BlogPosting/TechArticle JSON-LD; React
+replaces it with the live page on load. nginx untouched: `try_files
+$uri $uri/` already prefers directory indexes. Two route-table gotchas
+surfaced: the blog-post regex didn't tolerate trailing slashes (which
+directory-index URLs can carry), and `/metrics` turns out to be the
+cloud's Prometheus scrape proxy on wicklee.dev, not the MetricsPage —
+it's excluded from the sitemap and prerender so Google doesn't index
+scrape output. Remaining nice-to-have: a real 1200×630 og:image.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's

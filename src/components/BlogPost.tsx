@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import Logo from './Logo';
 import { parseFrontmatter, slugToTitle, formatDate } from '../utils/parseFrontmatter';
+import { setPageMeta } from '../utils/pageMeta';
 
 interface BlogPostProps {
   slug: string;
@@ -42,33 +43,14 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate, onSignIn, onSignU
           setDate(resolvedDate);
           setTags(resolvedTags);
 
-          // Update page title + SEO meta
-          document.title = `${resolvedTitle} — Wicklee`;
-
-          const setMeta = (sel: string, attr: string, val: string) => {
-            let el = document.head.querySelector(sel) as HTMLMetaElement | null;
-            if (!el) {
-              el = document.createElement('meta');
-              const parts = sel.match(/\[(.+?)="(.+?)"\]/);
-              if (parts) el.setAttribute(parts[1], parts[2]);
-              document.head.appendChild(el);
-            }
-            el.setAttribute(attr, val);
-          };
-
-          setMeta('meta[name="description"]', 'content', description || resolvedTitle);
-          setMeta('meta[property="og:title"]', 'content', resolvedTitle);
-          setMeta('meta[property="og:description"]', 'content', description || resolvedTitle);
-          setMeta('meta[name="twitter:title"]', 'content', resolvedTitle);
-          setMeta('meta[name="twitter:description"]', 'content', description || resolvedTitle);
-
-          let canonical = document.head.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
-          if (!canonical) {
-            canonical = document.createElement('link');
-            canonical.setAttribute('rel', 'canonical');
-            document.head.appendChild(canonical);
-          }
-          canonical.setAttribute('href', `https://wicklee.dev/blog/${slug}`);
+          // Update page title + SEO meta (shared helper — also sets
+          // canonical, og:url, og:type article, twitter:card).
+          setPageMeta({
+            title:       `${resolvedTitle} — Wicklee`,
+            description: description || resolvedTitle,
+            path:        `/blog/${slug}`,
+            ogType:      'article',
+          });
 
           const rendered = await marked(content);
           setHtml(DOMPurify.sanitize(rendered));
@@ -83,10 +65,8 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate, onSignIn, onSignU
 
     return () => {
       cancelled = true;
-      // Restore defaults on unmount
-      document.title = 'Wicklee — Local AI inference, finally observable.';
-      const canonical = document.head.querySelector('link[rel="canonical"]');
-      if (canonical) canonical.remove();
+      // No restore-on-unmount needed: the App-level route effect re-applies
+      // the destination page's metadata on every navigation.
     };
   }, [slug]);
 
