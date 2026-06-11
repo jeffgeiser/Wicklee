@@ -241,6 +241,43 @@ change, tracked separately. Cloud 13 tests green; SQL stays parameterized
 (the only format!() interpolations are the hardcoded tenant column
 literal).
 
+### Security review pass 2 — agent concurrency & resources
+Audited locks, async-blocking, leaks, task lifecycle, and config I/O across
+the eight agent source files. The survey was reassuring on the scary stuff:
+the lock-across-await, array-indexing, and divide-by-zero patterns it
+flagged all turned out guarded on inspection, and the std-Mutex sites are
+held only briefly (never across an await), so no tokio::Mutex churn was
+warranted. Two real problems stood out, both around config persistence.
+
+**Fixed this pass — config corruption + races (the one CRITICAL).**
+`save_config` used a plain `fs::write`, so a crash mid-write truncates
+config.toml and permanently loses the session_token / node identity. It now
+writes a sibling temp file, fsyncs, sets 0600, and atomically renames over
+the target. Separately, the pairing/disconnect handlers each did
+load→mutate→save with no serialization, so concurrent operations (e.g.
+"generate code" racing "disconnect") could interleave and silently drop the
+session token. All four read-modify-write sites now funnel through a new
+`update_config()` helper guarded by a process-global `CONFIG_LOCK`
+(poison-tolerant), and they drop the pairing-state lock before the config
+write so the two locks never nest. Agent 37 tests green.
+
+**Reported, not yet fixed — silent subsystem death (HIGH).** ~24
+`tokio::spawn`ed background loops (broadcast, the Ollama/vLLM harvesters,
+cloud-push) are fire-and-forget: if one panics, tokio swallows it and that
+subsystem dies while the agent keeps "running" with stale/no metrics and no
+visible error. The valuable fix is an auto-restart supervisor, which means
+refactoring each critical loop into a re-runnable closure factory —
+invasive enough to warrant its own focused change rather than riding along
+with the config fix. Recommended as the next Pass-2 commit.
+
+**Lower-severity, noted:** the proxy `per_model` HashMap only prunes on a
+successful `/api/ps` read (slow stale-entry accumulation, bounded by
+distinct model names); no graceful-shutdown cancellation (daemon is
+OS-killed); blanket `.lock().unwrap()` poisoning is a cascade amplifier
+rather than a primary bug — the real mitigation is keeping tasks from
+panicking (the supervisor above), so a 76-site poison-tolerant conversion
+isn't worth the churn.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's
