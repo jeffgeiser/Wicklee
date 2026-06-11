@@ -1046,24 +1046,35 @@ async fn resolve_clerk_user(clerk_sub: &str, pool: &sqlx::PgPool) -> Option<Stri
 /// Validate a Bearer token and return the internal user_id.
 /// Tries the legacy sessions table first, then Clerk JWT.
 async fn require_user(token: &str, pool: &sqlx::PgPool, clerk_keys: &[JwkKey]) -> Option<String> {
-    // Legacy DIY sessions.
+    require_user_and_org(token, pool, clerk_keys).await.map(|(uid, _)| uid)
+}
+
+/// Authenticate and return `(user_id, verified_org_id)`.
+///
+/// The org_id comes from the Clerk JWT's `org_id` claim — Clerk only embeds it
+/// when the user has the org active in their session, so it is membership-
+/// verified by Clerk. This MUST be the only source of org identity for
+/// tenancy: an earlier version read org_id from the client-supplied X-Org-Id
+/// header, which let any authenticated user scope queries to ANY org by
+/// guessing its (non-secret) Clerk org id — a cross-tenant read of fleet,
+/// telemetry, observations, and MCP output. Legacy DIY sessions predate orgs
+/// and always resolve to a None org.
+async fn require_user_and_org(
+    token: &str,
+    pool: &sqlx::PgPool,
+    clerk_keys: &[JwkKey],
+) -> Option<(String, Option<String>)> {
+    // Legacy DIY sessions — no org concept.
     if let Ok(id) = sqlx::query_scalar::<_, String>(
         "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1"
     ).bind(token).fetch_one(pool).await {
-        return Some(id);
+        return Some((id, None));
     }
 
-    // Clerk JWT.
-    let (sub, _org_id) = validate_clerk_jwt(token, clerk_keys)?;
-    resolve_clerk_user(&sub, pool).await
-}
-
-/// Extract org_id from X-Org-Id header (sent by frontend when user has active org).
-fn extract_org_id(headers: &HeaderMap) -> Option<String> {
-    headers.get("x-org-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_owned())
+    // Clerk JWT — trust the signed org_id claim, never a header.
+    let (sub, org_id) = validate_clerk_jwt(token, clerk_keys)?;
+    let user_id = resolve_clerk_user(&sub, pool).await?;
+    Some((user_id, org_id))
 }
 
 /// Returns (column_name, bind_value) for tenant-scoped queries.
@@ -1093,34 +1104,17 @@ async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPoo
     .unwrap_or_else(|_| "community".to_string())
 }
 
-/// Like require_user but also returns email and is_pro for tier checks.
+/// Like require_user but also returns email, is_pro, and the verified org_id.
 async fn require_user_info(
     token: &str,
     pool: &sqlx::PgPool,
     clerk_keys: &[JwkKey],
-) -> Option<(String, String, i32)> {
-    let user_id = require_user(token, pool, clerk_keys).await?;
+) -> Option<(String, String, i32, Option<String>)> {
+    let (user_id, org_id) = require_user_and_org(token, pool, clerk_keys).await?;
     let row = sqlx::query_as::<_, (String, i32)>(
         "SELECT email, is_pro FROM users WHERE id = $1"
     ).bind(&user_id).fetch_one(pool).await.ok()?;
-    Some((user_id, row.0, row.1))
-}
-
-/// Load the set of node IDs belonging to a user.
-async fn user_node_set(user_id: &str, pool: &sqlx::PgPool) -> HashSet<String> {
-    sqlx::query_scalar::<_, String>("SELECT wk_id FROM nodes WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_all(pool).await
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
-}
-
-/// Blocking version for use inside SSE stream map closure (block_in_place).
-fn user_node_set_blocking(user_id: &str, pool: &sqlx::PgPool) -> HashSet<String> {
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(user_node_set(user_id, pool))
-    })
+    Some((user_id, row.0, row.1, org_id))
 }
 
 // ── Agent API v1 helpers ──────────────────────────────────────────────────────
@@ -1852,13 +1846,12 @@ async fn handle_stream_token(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(uid) => uid,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let org_id = extract_org_id(&headers);
     let stream_token = Uuid::new_v4().to_string();
     let expires_ms = (now_ms() + 60_000) as i64;
 
@@ -2358,13 +2351,12 @@ async fn handle_fleet(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let org_id = extract_org_id(&headers);
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
@@ -3975,14 +3967,13 @@ async fn handle_activate(
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let user_info = require_user_info(&token, &state.pool, &clerk_keys).await;
 
-    let (user_id, email, is_pro_db) = match user_info {
+    let (user_id, email, is_pro_db, org_id) = match user_info {
         Some(info) => info,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
-    let org_id = extract_org_id(&headers);
     // Enforce per-tier node limits.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     let node_limit = if tier == "enterprise" { usize::MAX }
@@ -4174,32 +4165,17 @@ async fn handle_fleet_stream(
 
 /// GET /health
 async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
-    let now = now_ms() as i64;
-    let raw_stats = sqlx::query_as::<_, (Option<i64>, i64, i64)>(
-        "SELECT
-            (EXTRACT(EPOCH FROM MAX(ts)) * 1000)::bigint,
-            COUNT(*) FILTER (WHERE ts > NOW() - INTERVAL '1 hour'),
-            COUNT(*) FILTER (WHERE ts > NOW() - INTERVAL '24 hours')
-         FROM metrics_raw"
-    ).fetch_one(&state.pool).await.unwrap_or((None, 0, 0));
+    // Unauthenticated liveness probe (Railway healthcheckPath = /health).
+    // Verifies DB connectivity but deliberately exposes NO platform stats —
+    // an earlier version returned fleet-wide metrics_raw row counts and the
+    // open-observation count, leaking total fleet size and activity to anyone.
+    let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(&state.pool).await.is_ok();
 
-    let obs_open: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM fleet_observations WHERE state = 'open'"
-    ).fetch_one(&state.pool).await.unwrap_or(0);
-
-    let age_s = raw_stats.0.map(|ts| (now - ts) / 1000);
-
-    Json(serde_json::json!({
-        "status": "ok",
-        "now_ms": now,
-        "metrics_raw": {
-            "latest_ts_ms": raw_stats.0,
-            "latest_age_s": age_s,
-            "rows_1h": raw_stats.1,
-            "rows_24h": raw_stats.2,
-        },
-        "fleet_observations_open": obs_open,
-    })).into_response()
+    let status = if db_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (status, Json(serde_json::json!({
+        "status": if db_ok { "ok" } else { "degraded" },
+    }))).into_response()
 }
 
 /// GET /api/agent/version
@@ -7704,8 +7680,8 @@ async fn handle_cloud_mcp(
         None => return mcp_err(&req_id, -32000, "Missing auth token"),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return mcp_err(&req_id, -32000, "Invalid or expired session"),
     };
     let tier: String = sqlx::query_scalar::<_, String>(
@@ -7730,7 +7706,6 @@ async fn handle_cloud_mcp(
 
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
-    let org_id = extract_org_id(&headers);
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let node_ids: Vec<String> = sqlx::query_scalar(
         &format!("SELECT wk_id FROM nodes WHERE {} = $1", tcol)
@@ -8363,5 +8338,36 @@ mod fit_wrapper_tests {
         let (score, label) = cloud_fit_score(-1, 24_576, 0.0, "Normal");
         // 0-byte clamp -> 512 MB floor still "fits"; just must not panic.
         assert!(score > 0, "{label}");
+    }
+}
+
+#[cfg(test)]
+mod tenancy_tests {
+    use super::*;
+
+    #[test]
+    fn tenant_scope_prefers_org_and_emits_only_safe_columns() {
+        // org_id present → scope by the org column, bind the org value.
+        let org = Some("org_abc".to_string());
+        let (col, val) = tenant_scope("user_1", &org);
+        assert_eq!(col, "org_id");
+        assert_eq!(val, "org_abc");
+
+        // No org → personal scope.
+        let none: Option<String> = None;
+        let (col, val) = tenant_scope("user_1", &none);
+        assert_eq!(col, "user_id");
+        assert_eq!(val, "user_1");
+    }
+
+    #[test]
+    fn tenant_scope_column_is_a_fixed_literal_not_caller_data() {
+        // The column name feeds a format!() into SQL, so it must never reflect
+        // caller-supplied text. Even an injection-shaped org value only ever
+        // changes the BIND value, never the column literal.
+        let evil = Some("org_x'; DROP TABLE nodes;--".to_string());
+        let (col, val) = tenant_scope("user_1", &evil);
+        assert_eq!(col, "org_id"); // literal, regardless of value
+        assert_eq!(val, "org_x'; DROP TABLE nodes;--"); // safely bound as $1
     }
 }
