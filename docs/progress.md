@@ -98,6 +98,20 @@ would have caught the ratio drift automatically), plus `#[cfg(test)]`
 suites in both Rust binaries (33 tests: plausibility regression against
 real GGUF sizes, NVML name-matching, cloud↔agent contract tests).
 
+### Follow-through: CI + the two installer bugs
+Same sitting, immediately after the audit merged. (1) `.github/workflows/
+ci.yml` — the repo had only `release.yml`, so the 104 new tests (including
+the cloud↔agent contract tests whose whole job is catching drift) never ran
+automatically. Now: tsc + vitest, `cargo test` in agent and cloud, and the
+perplexity-sync check on every push/PR. (2) The two install.sh bugs the
+roadmap had already diagnosed: the upgrade path now finishes itself
+(offers `sudo ~/.wicklee/bin/wicklee --install-service` via /dev/tty so it
+works under `curl | bash`, verifies the promoted binary's version, and
+warns loudly when skipped that the service still runs the OLD binary), and
+the Gatekeeper `com.apple.quarantine` xattr is cleared once at the download
+path so no later promotion can carry it to `/usr/local/bin` and get
+SIGKILLed. Notarization stays on the roadmap as the proper fix.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's

@@ -140,6 +140,19 @@ mv "$TMP" "$USER_INSTALL_PATH"
 chmod 755 "$USER_INSTALL_PATH"
 trap - EXIT
 
+# Gatekeeper: clear the quarantine xattr on the downloaded binary (macOS).
+# User paths are inspected loosely, but once the binary is promoted to
+# /usr/local/bin (by `--install-service` or a manual `sudo cp`), Gatekeeper
+# enforces strictly and SIGKILLs quarantined binaries on launch
+# ("zsh: killed"). macOS file copies carry xattrs along, so clearing it
+# here — at the only place the binary enters the system — covers every
+# later promotion path. Proper long-term fix is Developer ID signing +
+# notarization in the release workflow; until then this keeps upgrades
+# from bricking the canonical path.
+if [[ "$OS_TAG" == "darwin" ]]; then
+  xattr -d com.apple.quarantine "$USER_INSTALL_PATH" 2>/dev/null || true
+fi
+
 INSTALLED_VERSION="$("${USER_INSTALL_PATH}" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 VERSION_LABEL="${INSTALLED_VERSION:-${RELEASE_TAG}}"
 
@@ -161,15 +174,48 @@ dim   "    Location: ${USER_INSTALL_PATH}"
 echo ""
 
 if [[ "$EXISTING_BINARY" == "true" ]]; then
-  # Upgrade path — existing service install. One command swaps in the new bits.
-  echo "  Finish the upgrade (the only sudo step):"
-  echo ""
-  bold "    sudo ${USER_INSTALL_PATH} --install-service"
-  echo ""
-  dim   "  Stops the current service, copies the new binary to ${CANONICAL_BIN},"
-  dim   "  and restarts. The new ${VERSION_LABEL} binary self-promotes — running the"
-  dim   "  existing ${CANONICAL_BIN} directly would just re-install the old version."
-  echo ""
+  # Upgrade path — existing system-path install. The download above only
+  # updated ~/.wicklee/bin; the service unit (and PATH resolution) still
+  # point at the old ${CANONICAL_BIN} binary, so an upgrade that stops here
+  # looks successful while localhost:7700 keeps serving the old version.
+  # When we have a terminal, offer to finish the swap right now; otherwise
+  # fall through to printed instructions with an explicit warning.
+  UPGRADE_DONE=false
+  if [[ "$EXISTING_SERVICE_ACTIVE" == "true" && -r /dev/tty && -w /dev/tty ]]; then
+    echo "  The running service still uses the old binary at ${CANONICAL_BIN}${EXISTING_VERSION:+ (${EXISTING_VERSION})}."
+    printf '  Finish the upgrade now? Runs: sudo %s --install-service [Y/n] ' "$USER_INSTALL_PATH" > /dev/tty
+    REPLY=""
+    read -r REPLY < /dev/tty || REPLY=""
+    if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy] ]]; then
+      echo ""
+      # Self-promotes to ${CANONICAL_BIN}, re-registers the service unit, and
+      # restarts — same command we'd otherwise tell the user to run by hand.
+      if sudo "$USER_INSTALL_PATH" --install-service; then
+        NEW_CANONICAL_VERSION="$("$CANONICAL_BIN" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+        echo ""
+        green "  ✓ Upgrade complete — ${CANONICAL_BIN} is now ${NEW_CANONICAL_VERSION:-$VERSION_LABEL} and the service has restarted."
+        UPGRADE_DONE=true
+      else
+        echo ""
+        red "  Upgrade step failed or was cancelled — the service is still running the old binary."
+      fi
+    fi
+  fi
+  if [[ "$UPGRADE_DONE" != "true" ]]; then
+    echo "  Finish the upgrade (the only sudo step):"
+    echo ""
+    bold "    sudo ${USER_INSTALL_PATH} --install-service"
+    echo ""
+    dim   "  Stops the current service, copies the new binary to ${CANONICAL_BIN},"
+    dim   "  and restarts. The new ${VERSION_LABEL} binary self-promotes — running the"
+    dim   "  existing ${CANONICAL_BIN} directly would just re-install the old version."
+    if [[ "$EXISTING_SERVICE_ACTIVE" == "true" ]]; then
+      echo ""
+      red "  ⚠ Until you run it, the service (and \`wicklee --version\` via PATH)"
+      red "    keeps using the OLD${EXISTING_VERSION:+ ${EXISTING_VERSION}} binary at ${CANONICAL_BIN}."
+    fi
+    echo ""
+  fi
 else
   # Fresh install — two choices.
   echo "  Next steps:"
