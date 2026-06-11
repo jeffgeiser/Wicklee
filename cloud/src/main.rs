@@ -151,6 +151,11 @@ struct MetricsPayload {
     vllm_model_name:       Option<String>,
     #[serde(default)]
     vllm_max_model_len:    Option<u64>,
+    /// Effective vLLM weight dtype/quant from the agent's process scanner
+    /// (canonical tags: AWQ / GPTQ / FP8 / BF16 / ...). Passed through to
+    /// the dashboard for weight-size estimation.
+    #[serde(default)]
+    vllm_dtype:            Option<String>,
     #[serde(default)]
     vllm_tokens_per_sec:   Option<f32>,
     #[serde(default)]

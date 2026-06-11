@@ -13,12 +13,7 @@
  */
 
 import type { SentinelMetrics } from '../types';
-import {
-  estimateModelSizeGbFromName,
-  parseQuantFromAnyModelName,
-  FP16_BYTES_PER_WEIGHT,
-  OLLAMA_DEFAULT_BYTES_PER_WEIGHT,
-} from './quantSize';
+import { estimateModelSizeGbFromName, resolveModelSizeHints } from './quantSize';
 
 /**
  * Working-set overhead applied on top of model weights when we have to
@@ -87,20 +82,10 @@ export function computeModelFitScore(node: SentinelMetrics): FitResult | null {
   let sizeFromVramProxy = false;
 
   if (modelSizeGb == null) {
-    // Step 2: param-count × bytes-per-weight via the model name.
-    const modelName =
-      node.ollama_active_model
-      ?? node.vllm_model_name
-      ?? node.llamacpp_model_name
-      ?? null;
-    const quantHint =
-      node.ollama_quantization
-      ?? parseQuantFromAnyModelName(modelName);
-    // Un-tagged Ollama pulls are Q4_K_M by default; assuming FP16 there
-    // would overestimate 3.3× and flip well-fitted nodes to "Poor".
-    const fallbackBpw = node.ollama_active_model
-      ? OLLAMA_DEFAULT_BYTES_PER_WEIGHT
-      : FP16_BYTES_PER_WEIGHT;
+    // Step 2: param-count × bytes-per-weight via the model name, with the
+    // quant hint source-matched to the runtime (vLLM nodes use the cmdline
+    // vllm_dtype; un-tagged Ollama pulls default to Q4_K_M, not FP16).
+    const { modelName, quantHint, fallbackBpw } = resolveModelSizeHints(node);
     const fromName = estimateModelSizeGbFromName(modelName, quantHint, fallbackBpw);
     if (fromName != null) modelSizeGb = fromName;
   }

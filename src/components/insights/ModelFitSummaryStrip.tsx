@@ -23,7 +23,7 @@ import { computeQuantRecommendation } from '../../utils/quantSweet';
 import { computeContextRunway, fmtCtx, fmtKvSize } from '../../utils/kvCache';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE } from '../../utils/perplexity';
 import { pushAndGetSmoothed } from '../../utils/sharedSmoothing';
-import { quantFamily, parseQuantFromAnyModelName } from '../../utils/quantSize';
+import { quantFamily, resolveModelSizeHints } from '../../utils/quantSize';
 
 // ── Score → colour helpers ──────────────────────────────────────────────────
 
@@ -140,10 +140,9 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
   if (!fit) return null;
 
   const observedTps = smoothedCombinedTps(node);
-  const quantTag = node.ollama_quantization
-    ?? parseQuantFromAnyModelName(
-         node.ollama_active_model ?? node.vllm_model_name ?? node.llamacpp_model_name,
-       );
+  // Source-matched quant resolution (Ollama field / vLLM cmdline dtype /
+  // name parse) — same chain the fit calculator uses.
+  const quantTag = resolveModelSizeHints(node).quantHint;
   const currentFamily = quantFamily(quantTag);
   const rec = currentFamily !== 'Unknown'
     ? computeQuantRecommendation(currentFamily, fit.modelSizeGb, fit.headroomGb, observedTps, node, fit.totalGb)

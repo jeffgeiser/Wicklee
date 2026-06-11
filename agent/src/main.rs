@@ -784,6 +784,16 @@ struct MetricsPayload {
     /// instead of the 8 192 conservative default.
     #[serde(skip_serializing_if = "Option::is_none")]
     vllm_max_model_len:    Option<u64>,
+    /// Effective weight dtype/quant of the running vLLM engine, captured from
+    /// the process command line (--quantization wins over --dtype) and
+    /// normalized to canonical quant tags (AWQ / GPTQ / FP8 / BF16 / ...).
+    /// None when vLLM is idle, flags are absent (--dtype auto), or the
+    /// cmdline is unreadable (cross-user without cap_sys_ptrace). The
+    /// frontend prefers this over name-based quant parsing when sizing
+    /// vLLM weights — eliminating the FP16 over-estimate for explicit
+    /// FP8 / AWQ / GPTQ deployments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vllm_dtype:            Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vllm_tokens_per_sec:   Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2945,6 +2955,7 @@ fn start_metrics_broadcaster(
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_max_model_len:    vllm.vllm_max_model_len,
+                vllm_dtype:            crate::process_discovery::vllm_effective_dtype(),
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,
@@ -6573,6 +6584,7 @@ async fn handle_metrics(
                 vllm_running:          vllm.vllm_running,
                 vllm_model_name:       vllm.vllm_model_name,
                 vllm_max_model_len:    vllm.vllm_max_model_len,
+                vllm_dtype:            crate::process_discovery::vllm_effective_dtype(),
                 vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
                 vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
                 vllm_requests_running: vllm.vllm_requests_running,
