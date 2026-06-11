@@ -25,6 +25,7 @@ use tokio::sync::{broadcast, watch};
 
 mod process_discovery;
 mod scoring;
+mod supervisor;
 #[cfg(not(target_env = "musl"))]
 mod store;
 mod inference;
@@ -2706,7 +2707,31 @@ fn start_metrics_broadcaster(
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
 
-    tokio::spawn(async move {
+    // Supervised: the metrics broadcast loop is the agent's most critical
+    // background task — if it dies, ALL telemetry stops. It's a pure infinite
+    // loop (no intentional exit), so the supervisor only restarts it on panic.
+    // State is cloned per-run in the factory prelude; the loop body is
+    // unchanged, so a restart re-runs warm-up and continues identically.
+    supervisor::supervise("metrics-broadcast", move || {
+        // Clone per-run state so the factory is callable on each restart.
+        let tx_clone = tx_clone.clone();
+        let config_node_id = config_node_id.clone();
+        let cpu_usage_atomic = cpu_usage_atomic.clone();
+        let apple_metrics = apple_metrics.clone();
+        let nvidia_metrics = nvidia_metrics.clone();
+        let ollama_metrics = ollama_metrics.clone();
+        let vllm_metrics = vllm_metrics.clone();
+        let llamacpp_metrics = llamacpp_metrics.clone();
+        let rapl_metrics = rapl_metrics.clone();
+        let linux_thermal_metrics = linux_thermal_metrics.clone();
+        let wes_metrics = wes_metrics.clone();
+        let swap_metrics = swap_metrics.clone();
+        let model_baseline = model_baseline.clone();
+        let live_events = live_events.clone();
+        let probe_active = probe_active.clone();
+        let runtime_config_cache = runtime_config_cache.clone();
+        let runtime_port_overrides = runtime_port_overrides.clone();
+        async move {
         let mut sys = System::new_all();
         let node_id = config_node_id;
         let hostname = System::host_name()
@@ -2897,7 +2922,8 @@ fn start_metrics_broadcaster(
                 let _ = tx_clone.send(json);
             }
         }
-    });
+        } // async move
+    }); // supervise
 
     tx
 }

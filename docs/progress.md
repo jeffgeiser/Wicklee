@@ -278,6 +278,29 @@ rather than a primary bug — the real mitigation is keeping tasks from
 panicking (the supervisor above), so a 76-site poison-tolerant conversion
 isn't worth the churn.
 
+### Agent task supervisor (Pass 2 follow-up — helper + broadcast loop)
+Started the HIGH Pass-2 item: silently-dying background loops. Shipped
+`agent/src/supervisor.rs` — `supervise(name, factory)` runs a task as a
+child, logs panics/clean-returns by name, and restarts with exponential
+backoff (1s→30s, reset after a 60s healthy run). Unit-tested for both
+restart-on-panic and restart-on-clean-return. Applied it to the **metrics
+broadcast loop** first — the agent's most critical task, whose death stops
+all telemetry. It's a pure infinite loop, so wrapping was clean: the body
+is byte-identical, and the ~17 captured Arcs/config values are cloned in a
+compiler-checked factory prelude (a missed capture is a compile error, not
+a silent change). 39 agent tests green.
+
+A real subtlety surfaced and shaped the scope: `supervise` restarts on
+*clean return*, which is correct for a truly-infinite loop but WRONG for
+tasks with intentional terminal exits — `cloud_push` deliberately `break`s
+on a 410-Gone (node removed from fleet), and blindly restarting it would
+turn a permanent stop into an idle restart-spin. So this commit scopes to
+the broadcast loop; the harvesters (nested inner breaks to verify) and
+cloud_push (needs a ControlFlow/"don't restart" signal) are documented as
+the remaining work on the roadmap item. The helper itself is the reusable
+core; finishing the adopters is mechanical once the don't-restart signal
+is added.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's
