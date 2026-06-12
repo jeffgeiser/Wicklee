@@ -1207,6 +1207,12 @@ async fn validate_api_key(
 
 const AUTH_RATE_LIMIT: usize = 10; // max attempts per 60s per IP
 
+/// How long a 6-digit pairing code stays redeemable after the agent claims it.
+/// The agent UI shows a 5-minute countdown; the cloud allows 10 so a code
+/// entered at the deadline still works. Codes are single-use (NULLed on
+/// activation) — this TTL covers codes that were issued but never redeemed.
+const PAIR_CODE_TTL_MS: u64 = 10 * 60_000;
+
 /// IP-based sliding-window rate limiter for auth endpoints.
 /// Returns true if the request is allowed, false if rate-limited.
 fn check_auth_rate_limit(
@@ -2064,11 +2070,21 @@ async fn handle_me(
 /// POST /api/pair/claim
 async fn handle_claim(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ClaimRequest>,
 ) -> impl IntoResponse {
     if body.code.len() != 6 || !body.code.chars().all(|c| c.is_ascii_digit()) {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
+    }
+
+    // Unauthenticated by necessity (the agent has no credentials yet), so
+    // rate-limit by IP: each call writes a nodes row + an in-memory metrics
+    // entry, and the legit agent calls this once per pairing attempt.
+    let ip = client_ip(&headers);
+    if !check_auth_rate_limit(&ip, &state.auth_rate_limits) {
+        return (StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Too many attempts. Try again in a minute." }))).into_response();
     }
     if body.node_id.is_empty() || body.fleet_url.is_empty() {
         return (StatusCode::BAD_REQUEST,
@@ -2103,6 +2119,10 @@ async fn handle_claim(
            fleet_url     = EXCLUDED.fleet_url,
            session_token = EXCLUDED.session_token,
            code          = EXCLUDED.code,
+           -- Refresh on re-claim so the activate-side code TTL measures the
+           -- LATEST code issuance, not the first-ever claim. Only unowned
+           -- nodes reach this path (owned ones are rejected above).
+           paired_at     = EXCLUDED.paired_at,
            last_seen     = EXCLUDED.last_seen"
     ).bind(&node_id).bind(&body.fleet_url).bind(&token).bind(&body.code).bind(ts)
     .execute(&state.pool).await;
@@ -3996,6 +4016,14 @@ async fn handle_activate(
             Json(serde_json::json!({ "error": "code must be exactly 6 ASCII digits" }))).into_response();
     }
 
+    // Codes are 6 digits (1M space) — without a rate limit, an authenticated
+    // attacker can sweep the space and hijack any node with a live code.
+    let ip = client_ip(&headers);
+    if !check_auth_rate_limit(&ip, &state.auth_rate_limits) {
+        return (StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Too many attempts. Try again in a minute." }))).into_response();
+    }
+
     let token = match extract_bearer(&headers) {
         Some(t) => t,
         None => return (StatusCode::UNAUTHORIZED,
@@ -4035,17 +4063,27 @@ async fn handle_activate(
         }
     }
 
+    // Atomic single-use redemption. The guards matter:
+    //   - `user_id IS NULL`: only an UNOWNED node can be activated — without
+    //     this, anyone who hits a live code re-assigns someone else's node.
+    //   - `code = NULL` on success: codes are consumed on redemption instead
+    //     of staying redeemable in the DB forever.
+    //   - `paired_at >= cutoff`: codes expire cloud-side (the agent already
+    //     shows a 5-min countdown; previously the cloud never expired them).
+    // One UPDATE..RETURNING (not SELECT-then-UPDATE) so two concurrent
+    // submissions of the same code can't both succeed.
+    let fresh_after = now_ms().saturating_sub(PAIR_CODE_TTL_MS) as i64;
     let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT wk_id, fleet_url FROM nodes WHERE code = $1"
-    ).bind(&body.code).fetch_one(&state.pool).await;
+        "UPDATE nodes SET user_id = $1, org_id = $2, code = NULL
+         WHERE code = $3 AND user_id IS NULL AND paired_at >= $4
+         RETURNING wk_id, fleet_url"
+    ).bind(&user_id).bind(&org_id).bind(&body.code).bind(fresh_after)
+    .fetch_optional(&state.pool).await.ok().flatten();
 
     match row {
-        Err(_) => (StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Code not found or already used. Make sure the agent is running and try again." }))).into_response(),
-        Ok((node_id, fleet_url)) => {
-            let _ = sqlx::query("UPDATE nodes SET user_id = $1, org_id = $2 WHERE wk_id = $3")
-                .bind(&user_id).bind(&org_id).bind(&node_id)
-                .execute(&state.pool).await;
+        None => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Code not found, expired, or already used. Make sure the agent is running and try again." }))).into_response(),
+        Some((node_id, fleet_url)) => {
             // Auto-provision org record if this is the first pairing for this org
             if let Some(ref oid) = org_id {
                 // Auto-provision org record on first pairing — inherits the
@@ -8072,20 +8110,18 @@ async fn handle_prometheus_metrics(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    // Validate API key (same as V1 endpoints).
-    let api_key = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if api_key.is_empty() {
-        return (StatusCode::UNAUTHORIZED, "X-API-Key required").into_response();
-    }
-    let key_hash = format!("{:x}", sha2::Sha256::digest(api_key.as_bytes()));
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT user_id FROM api_keys WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > $2)"
-    ).bind(&key_hash).bind(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
-    .fetch_optional(&state.pool).await.unwrap_or(None);
-
-    let user_id = match row {
-        Some((uid,)) => uid,
-        None => return (StatusCode::UNAUTHORIZED, "Invalid API key").into_response(),
+    // Validate API key through the same path as the V1 endpoints — the
+    // previous inline query referenced an `expires_at` column that doesn't
+    // exist on api_keys, so it errored on every call and this endpoint
+    // returned 401 unconditionally. validate_api_key also brings the
+    // per-key rate limit and `last_used_ms` bookkeeping for free.
+    let api_key = match extract_api_key(&headers) {
+        Some(k) if !k.is_empty() => k,
+        _ => return (StatusCode::UNAUTHORIZED, "X-API-Key required").into_response(),
+    };
+    let user_id = match validate_api_key(&api_key, &state.pool, &state.api_rate_limits).await {
+        Some((_key_id, uid, _is_pro)) => uid,
+        None => return (StatusCode::UNAUTHORIZED, "Invalid API key or rate limit exceeded").into_response(),
     };
 
     // Tier gate
