@@ -13,6 +13,37 @@ components; every finding verified against the code before acceptance)
 produced 10 HIGH findings, ~25 MEDIUMs, and a dead-code list. Fixes are
 landing in severity-ordered chunks, each tested and merged separately.
 
+### Chunk 4 — frontend HIGHs (detection, projections, pagination, selection, smoothing)
+- **Power-anomaly detector actually fires now.** Both the fleet and local
+  event derivations advanced the comparison baseline every frame, so a
+  sustained power step (100W → 200W and holding) cancelled its own
+  pending event one frame later — the detector could only fire if power
+  swung ≥30% every frame for 60s straight. Both now compare against the
+  pending window's `originalValue` baseline.
+- **Discovery tok/s projections fixed (~50% inflated).**
+  `estimateModelFileSizeMb` used hand-rolled ratios (Q4 at 0.90 GB/B)
+  contradicting the canonical real-file-validated table in quantSize.ts
+  (0.60). It now derives from `bytesPerWeight()` — restoring same-size
+  cohort matching in `projectTpsForVariant` (estimated history sizes
+  never matched real HF file sizes at 1.5× scale) and honest
+  bandwidth-tier projections.
+- **Observability history stops resetting every ~50s.** The Clerk token
+  rotates on a 50s interval; it was a dep of `fetchPage`, so every
+  rotation refetched page 1 and wiped "load more" pagination. Token
+  moved to a ref.
+- **History charts keep your node selection.** Both WES and Metrics
+  history charts read the selection from a closure frozen at mount
+  (deps = [getToken]), so any range change/refresh snapped back to the
+  first node with data. Selection now read through a ref. Also fixed:
+  the 30D/90D lock labels said "Pro" for Team-gated ranges, and the
+  metrics tooltip dropped legitimate 0-value points (`!value` → `== null`).
+- **Shared smoothing actually smooths.** `pushAndGetSmoothed` had no
+  frame dedup while two surfaces push the same node's sample in the same
+  render pass (plus StrictMode double-renders) — the 4-sample window
+  filled with copies of one frame. Now dedups by `timestamp_ms` like
+  `useRollingBuffer` always did; all five call sites pass the frame
+  timestamp. New test file locks the dedup + window semantics (80 tests).
+
 ### Chunk 3 — agent shared-state races and probe attribution
 - **Harvester lost-update race fixed.** The Ollama harvester's 5s tick
   snapshotted shared state, awaited HTTP for up to seconds, then stored

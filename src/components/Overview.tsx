@@ -366,7 +366,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   // value, then prefer that smoothed value if a fresh sample exists.
   // Falls back to the row-local pushOne for the rare case where this row
   // mounts before any shared-store consumer.
-  const smoothedTpsShared = pushAndGetSmoothed(nodeId, 'tps', rawTps);
+  const smoothedTpsShared = pushAndGetSmoothed(nodeId, 'tps', rawTps, tsMs);
   const smoothedTps       = smoothedTpsShared ?? pushOne('tps', rawTps, tsMs);
   const inferenceActive = m?.ollama_inference_active ?? null;
   // For estimation: override inferenceActive when inference_state signals an active runtime.
@@ -412,7 +412,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const hasPower    = m ? hasPowerData(m) : false;
   const rawTotalW   = m ? getNodePowerW(m) : null;
   // Same shared-store pattern for watts.
-  const sharedWatts = pushAndGetSmoothed(nodeId, 'watts', hasPower ? rawTotalW : null);
+  const sharedWatts = pushAndGetSmoothed(nodeId, 'watts', hasPower ? rawTotalW : null, tsMs);
   const totalPowerW = sharedWatts ?? pushOne('watts', hasPower ? rawTotalW : null, tsMs) ?? 0;
 
   // WES — only when actively inferencing

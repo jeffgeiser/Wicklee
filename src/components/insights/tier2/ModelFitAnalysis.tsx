@@ -309,7 +309,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   // systemIdleW deliberately NOT subtracted — that knob is for active-
   // inference cost displays, not WES.
   function wattsFor(n: SentinelMetrics): number | null {
-    return pushAndGetSmoothed(n.node_id, 'watts', getNodePowerW(n));
+    return pushAndGetSmoothed(n.node_id, 'watts', getNodePowerW(n), n.timestamp_ms ?? 0);
   }
   function pueFor(n: SentinelMetrics): number {
     return getNodeSettings?.(n.node_id)?.pue ?? 1.0;
@@ -321,7 +321,7 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
     const o = n.ollama_tokens_per_second ?? null;
     const v = n.vllm_tokens_per_sec      ?? null;
     const raw = (o != null && v != null) ? o + v : (o ?? v);
-    return pushAndGetSmoothed(n.node_id, 'tps', raw);
+    return pushAndGetSmoothed(n.node_id, 'tps', raw, n.timestamp_ms ?? 0);
   }
 
   function buildEntries(n: SentinelMetrics): ModelEntry[] {

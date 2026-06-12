@@ -324,40 +324,37 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
               }
 
               // ── 4. POWER ANOMALY ──────────────────────────────────────────
+              // Once a pending anomaly opens, compare against ITS baseline
+              // (originalValue), not the per-frame prev: prevPower advances
+              // every frame, so a sustained step (100W → 200W and holding)
+              // showed a 0% frame-over-frame delta on the very next frame and
+              // cancelled itself — the detector could effectively never fire.
+              const powerBaseline = np.power ? Number(np.power.originalValue) : prevPower;
               if (
-                prevPower !== undefined &&
-                prevPower != null &&
-                curPower  != null &&
-                prevPower >= POWER_ANOMALY_MIN_BASELINE_W &&
-                Math.abs(curPower - prevPower) / prevPower >= POWER_ANOMALY_THRESHOLD
+                powerBaseline != null &&
+                curPower      != null &&
+                powerBaseline >= POWER_ANOMALY_MIN_BASELINE_W &&
+                Math.abs(curPower - powerBaseline) / powerBaseline >= POWER_ANOMALY_THRESHOLD
               ) {
-                const direction = curPower > prevPower ? '↑' : '↓';
-                const detail    = `${prevPower.toFixed(0)}W ${direction} ${curPower.toFixed(0)}W`;
+                const direction = curPower > powerBaseline ? '↑' : '↓';
                 if (!np.power) {
                   np.power = {
                     type:          'power_anomaly',
                     pendingAt:     now,
                     hostname,
-                    originalValue: `${prevPower.toFixed(0)}`,
+                    originalValue: `${powerBaseline.toFixed(0)}`,
                     targetValue:   `${curPower.toFixed(0)}`,
-                    detail,
+                    detail:        `${powerBaseline.toFixed(0)}W ${direction} ${curPower.toFixed(0)}W`,
                   };
                 } else {
-                  // Update to latest reading.
+                  // Still deviated from the baseline — update to latest reading.
                   np.power.targetValue = `${curPower.toFixed(0)}`;
                   np.power.detail      = `${np.power.originalValue}W ${direction} ${curPower.toFixed(0)}W`;
                   np.power.hostname    = hostname;
                 }
               } else if (np.power) {
-                // Power has normalised — cancel pending anomaly.
-                if (
-                  curPower == null ||
-                  prevPower == null ||
-                  prevPower < POWER_ANOMALY_MIN_BASELINE_W ||
-                  Math.abs(curPower - prevPower) / (prevPower || 1) < POWER_ANOMALY_THRESHOLD
-                ) {
-                  delete np.power;
-                }
+                // Power returned to (near) the original baseline — cancel.
+                delete np.power;
               }
 
               if (np.power && now - np.power.pendingAt >= SETTLE_MS) {

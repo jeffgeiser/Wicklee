@@ -23,16 +23,26 @@ import { FLEET_ROW_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 
 type Key = 'watts' | 'tps' | 'gpu';
 
+interface BufState {
+  buf:    number[];
+  /** Timestamp (ms) of the last accepted sample — dedup key. */
+  lastTs: number;
+}
+
 /**
  * Per-node ring-buffer state.  Indexed by node_id at the top level,
  * then by metric key.  All callers share this single Map.
  */
-const buffers: Map<string, Record<Key, number[]>> = new Map();
+const buffers: Map<string, Record<Key, BufState>> = new Map();
 
-function ensureBuf(nodeId: string): Record<Key, number[]> {
+function ensureBuf(nodeId: string): Record<Key, BufState> {
   let b = buffers.get(nodeId);
   if (!b) {
-    b = { watts: [], tps: [], gpu: [] };
+    b = {
+      watts: { buf: [], lastTs: 0 },
+      tps:   { buf: [], lastTs: 0 },
+      gpu:   { buf: [], lastTs: 0 },
+    };
     buffers.set(nodeId, b);
   }
   return b;
@@ -43,6 +53,13 @@ function ensureBuf(nodeId: string): Record<Key, number[]> {
  * Null/non-finite values are not appended but the current mean is still
  * returned — handy for transient gaps in SSE data.
  *
+ * Pass the sample's `timestamp_ms` so the SAME frame pushed by multiple
+ * surfaces (FleetStatusRow + ModelFitSummaryStrip render in the same
+ * pass), by non-SSE re-renders, or by StrictMode double-renders is only
+ * counted once — the same dedup `useRollingBuffer.push()` does. Without
+ * it the 4-sample window filled with duplicates of one frame and the
+ * output was effectively unsmoothed.
+ *
  * Window: FLEET_ROW_ROLLING_WINDOW (4 samples). At 1 Hz SSE cadence the
  * effective averaging period is ~4 seconds.
  */
@@ -50,14 +67,17 @@ export function pushAndGetSmoothed(
   nodeId: string,
   key:    Key,
   value:  number | null | undefined,
+  tsMs:   number = 0,
 ): number | null {
   const b = ensureBuf(nodeId);
-  const buf = b[key];
-  if (value != null && isFinite(value)) {
-    buf.push(value);
-    if (buf.length > FLEET_ROW_ROLLING_WINDOW) buf.shift();
+  const s = b[key];
+  const isDuplicateFrame = tsMs > 0 && tsMs <= s.lastTs;
+  if (value != null && isFinite(value) && !isDuplicateFrame) {
+    s.buf.push(value);
+    if (s.buf.length > FLEET_ROW_ROLLING_WINDOW) s.buf.shift();
+    if (tsMs > 0) s.lastTs = tsMs;
   }
-  return buf.length > 0 ? buf.reduce((a, c) => a + c, 0) / buf.length : null;
+  return s.buf.length > 0 ? s.buf.reduce((a, c) => a + c, 0) / s.buf.length : null;
 }
 
 /**
@@ -69,7 +89,7 @@ export function pushAndGetSmoothed(
 export function getSmoothed(nodeId: string, key: Key): number | null {
   const b = buffers.get(nodeId);
   if (!b) return null;
-  const buf = b[key];
+  const { buf } = b[key];
   return buf.length > 0 ? buf.reduce((a, c) => a + c, 0) / buf.length : null;
 }
 
