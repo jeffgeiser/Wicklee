@@ -14,6 +14,9 @@
 export const SITE_ORIGIN = 'https://wicklee.dev';
 export const SITE_NAME   = 'Wicklee';
 
+/** Social/link-preview card (1200×630). Regenerate via scripts/gen-og-image.mjs. */
+export const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
+
 export const DEFAULT_TITLE       = 'Wicklee — Local AI inference, finally observable.';
 export const DEFAULT_DESCRIPTION =
   'Routing intelligence. True inference cost. Thermal state. Live, across every node. ' +
@@ -50,9 +53,11 @@ export function setPageMeta(meta: PageMeta): void {
   upsertMeta('meta[property="og:url"]',          'property', 'og:url',              url);
   upsertMeta('meta[property="og:type"]',         'property', 'og:type',             meta.ogType ?? 'website');
   upsertMeta('meta[property="og:site_name"]',    'property', 'og:site_name',        SITE_NAME);
-  upsertMeta('meta[name="twitter:card"]',        'name',     'twitter:card',        'summary');
+  upsertMeta('meta[property="og:image"]',        'property', 'og:image',            OG_IMAGE_URL);
+  upsertMeta('meta[name="twitter:card"]',        'name',     'twitter:card',        'summary_large_image');
   upsertMeta('meta[name="twitter:title"]',       'name',     'twitter:title',       meta.title);
   upsertMeta('meta[name="twitter:description"]', 'name',     'twitter:description', meta.description);
+  upsertMeta('meta[name="twitter:image"]',       'name',     'twitter:image',       OG_IMAGE_URL);
 
   let canonical = document.head.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
   if (!canonical) {
