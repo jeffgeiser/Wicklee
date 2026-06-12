@@ -336,6 +336,39 @@ two timing-sensitive supervisor restart tests from 1.5s→2.5s windows
 green. Only the non-critical probe sub-tasks (idle baseline measurement)
 remain unsupervised — low priority.
 
+### Security review pass 3 — frontend state correctness
+Third review pass: React state, effects, async lifecycle, the live data
+path. The reassuring part: the SSE stream lifecycle in FleetStreamContext
+is well-built (cancelled guard, retry-with-timer on error, EventSource
+closed on unmount, JSON.parse wrapped in try/catch), and the rolling
+smoothing store is correctly keyed and pruned per-node — no leak. Fixes
+landed:
+
+- **Error boundary (CRITICAL).** The app had none — any uncaught render
+  throw blanked the whole dashboard. Added `ErrorBoundary` wrapping both
+  render paths with a Try-again/Reload fallback. (Surfaced a pre-existing
+  gap: the project ships no React type declarations — React is implicit
+  `any` — so class-component inheritance isn't typed; the boundary
+  `declare`s the two members it uses rather than pulling in @types/react
+  app-wide. Flagged for future cleanup.)
+- **SSE org-switch reconnect (HIGH).** The connect effect used `orgId`
+  but omitted it from deps, so switching org didn't reconnect — the
+  stream kept serving the previous org's fleet until a manual refresh.
+  Added `orgId` to deps (forces a fresh org-scoped stream token). Not a
+  cross-tenant leak (the user is a member of both orgs, and the backend
+  scopes by the JWT claim since the Pass-1 fix), but a real wrong-data-
+  after-switch bug. Annotated the now-legacy X-Org-Id header.
+- **History-chart stale-overwrite races (HIGH).** MetricsHistoryChart and
+  WESHistoryChart fetched without an AbortController, so rapidly switching
+  time ranges could let a slow earlier response overwrite newer data.
+  Both now abort the in-flight request on range change/unmount and ignore
+  AbortError.
+
+Remaining Pass-3 items noted but not yet done: a fixed 5s SSE retry (not
+exponential backoff — minor), a couple of array-index React keys
+(Overview cost table, AddNodeModal digit inputs — display-only), and the
+broader "React is untyped" gap. tsc clean, 75 tests green, build OK.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's

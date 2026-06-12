@@ -221,7 +221,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
 
   const { allNodeMetrics } = useFleetStream();
 
-  const fetchHistory = useCallback(async (r: TimeRange) => {
+  const fetchHistory = useCallback(async (r: TimeRange, signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
@@ -229,6 +229,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
       const url   = `${CLOUD_URL}/api/fleet/metrics-history?range=${r}`;
       const res   = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal,
       });
       if (!res.ok) { setError(`Server returned ${res.status}`); return; }
       const data           = await res.json();
@@ -240,14 +241,23 @@ const MetricsHistoryChart: React.FC<Props> = ({
         if (newId) setSelectedId(newId);
       }
       setLastFetch(Date.now());
-    } catch {
+    } catch (e) {
+      // A superseded fetch (range switched) aborts — ignore so a stale
+      // earlier response can't overwrite newer data or flash an error.
+      if ((e as { name?: string } | null)?.name === 'AbortError') return;
       setError('Network error — check connection');
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [getToken]);
 
-  useEffect(() => { fetchHistory(range); }, [range]);
+  // Abort the in-flight request when the range changes or on unmount, so a
+  // slow earlier fetch can't land after a newer one (stale-overwrite race).
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchHistory(range, ctrl.signal);
+    return () => ctrl.abort();
+  }, [range, fetchHistory]);
 
   const cfg        = METRIC_CONFIG[metric];
   const rangeCfg   = RANGE_CONFIG[range];

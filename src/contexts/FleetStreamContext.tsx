@@ -115,6 +115,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
         const jwt = await getToken();
         if (!jwt || cancelled) { retryTimer = setTimeout(connect, RETRY_MS); return; }
         const hdrs: Record<string, string> = { Authorization: `Bearer ${jwt}` };
+        // Legacy hint; the backend authoritatively scopes by the JWT's org
+        // claim (not this header) — kept only so the effect deps include orgId,
+        // forcing a reconnect with a fresh org-scoped token on org switch.
         if (orgId) hdrs['X-Org-Id'] = orgId;
         const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, { headers: hdrs });
         if (!res.ok || cancelled) { retryTimer = setTimeout(connect, RETRY_MS); return; }
@@ -439,7 +442,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
       esRef.current = null;
       clearTimeout(retryTimer);
     };
-  }, [isSignedIn, getToken]);
+  }, [isSignedIn, getToken, orgId]);
 
   // ── Seed fleet events from DuckDB history on initial connect ──────────────
   const seededRef = useRef(false);

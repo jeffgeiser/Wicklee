@@ -2535,7 +2535,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
                 </thead>
                 <tbody>
                   {costByModel.map((m, i) => (
-                    <tr key={i} className="border-b border-gray-50 dark:border-gray-700/50">
+                    <tr key={m.model ?? `idle-${i}`} className="border-b border-gray-50 dark:border-gray-700/50">
                       <td className="py-2 text-gray-300 font-mono text-[11px]">{m.model ?? '(idle)'}</td>
                       <td className="py-2 text-right text-gray-400">{m.hours_active?.toFixed(1) ?? '—'}</td>
                       <td className="py-2 text-right text-gray-400">{m.avg_watts?.toFixed(1) ?? '—'}</td>

@@ -97,7 +97,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   const [lastFetch,    setLastFetch]    = useState(0);
   // exportReport state removed — CSV export replaces modal
 
-  const fetchHistory = useCallback(async (r: TimeRange) => {
+  const fetchHistory = useCallback(async (r: TimeRange, signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
@@ -105,6 +105,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       const url   = `${CLOUD_URL}/api/fleet/wes-history?range=${r}`;
       const res   = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal,
       });
       if (!res.ok) {
         setError(`Server returned ${res.status}`);
@@ -122,16 +123,22 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       }
       setLastFetch(Date.now());
     } catch (e) {
+      // Superseded fetch (range switched) aborts — ignore so a stale earlier
+      // response can't overwrite newer data.
+      if ((e as { name?: string } | null)?.name === 'AbortError') return;
       setError('Failed to load history');
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [getToken]);
 
-  // Fetch on range change
+  // Fetch on range change; abort the in-flight request on change/unmount so a
+  // slow earlier fetch can't land after a newer one (stale-overwrite race).
   useEffect(() => {
     if (RANGE_CONFIG[range].historyMin > historyDays) return; // gate
-    fetchHistory(range);
+    const ctrl = new AbortController();
+    fetchHistory(range, ctrl.signal);
+    return () => ctrl.abort();
   }, [range, fetchHistory, historyDays]);
 
   // ── Derived chart data ────────────────────────────────────────────────────
