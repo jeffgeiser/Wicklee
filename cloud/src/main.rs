@@ -1108,6 +1108,36 @@ async fn node_in_tenant(
     ).bind(node_id).bind(tval).fetch_one(pool).await.unwrap_or(0) > 0
 }
 
+/// The tenant_id a NODE's telemetry/observations/events are stored under:
+/// org_id when org-paired, else the owning user's id. This is THE rule for
+/// every tenant_id read or write in ingest/background paths (it's what
+/// handle_telemetry stamps onto metrics rows). JWT-side reads use
+/// tenant_scope(), which yields the same value for any node that
+/// node_in_tenant() admits. None = node unknown or not yet paired.
+async fn node_tenant_id(node_id: &str, pool: &sqlx::PgPool) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(org_id, user_id) FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
+    ).bind(node_id).fetch_one(pool).await.ok()
+}
+
+/// Tier governing a NODE's entitlements — the org's subscription when
+/// org-paired, else the owning user's. Background-path counterpart of
+/// resolve_tier() (which resolves from JWT identity). Previously these
+/// paths looked up `users.subscription_tier` keyed by tenant_id, which is
+/// an org id for org-paired nodes — resolving to 'community' and silently
+/// disabling alerts/webhooks for every org fleet.
+async fn resolve_node_tier(node_id: &str, pool: &sqlx::PgPool) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(
+             (SELECT o.subscription_tier FROM organizations o WHERE o.org_id = n.org_id),
+             u.subscription_tier,
+             'community')
+         FROM nodes n LEFT JOIN users u ON u.id = n.user_id
+         WHERE n.wk_id = $1"
+    ).bind(node_id).fetch_one(pool).await
+    .unwrap_or_else(|_| "community".to_string())
+}
+
 /// Resolve subscription tier — checks organizations table for org users,
 /// falls back to users table for solo users.
 async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPool) -> String {
@@ -2355,9 +2385,12 @@ async fn handle_telemetry(
             .execute(&pool).await;
         }
 
-        // Resolve tenant_id (org_id for shared fleets, user_id for solo).
-        if let Ok(tenant_id) = sqlx::query_scalar::<_, String>(
-            "SELECT COALESCE(org_id, user_id) FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
+        // Resolve tenant_id (org_id for shared fleets, user_id for solo) and
+        // the owning user. They key different stores: telemetry rows, events,
+        // and webhook subscriptions are per-TENANT; alert rules are created
+        // per-USER, so the owner's rules are what fire for this node.
+        if let Ok((tenant_id, owner_id)) = sqlx::query_as::<_, (String, String)>(
+            "SELECT COALESCE(org_id, user_id), user_id FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
         ).bind(&nid).fetch_one(&pool).await {
             let row = MetricsRow { tenant_id: tenant_id.clone(), ..duck_row };
             if let Err(e) = metrics_tx.try_send(row) {
@@ -2375,15 +2408,14 @@ async fn handle_telemetry(
                 });
             }
 
-            // Evaluate alert rules if user is Pro+ tier.
-            let tier: String = sqlx::query_scalar::<_, String>(
-                "SELECT subscription_tier FROM users WHERE id = $1"
-            ).bind(&tenant_id).fetch_one(&pool).await
-            .unwrap_or_else(|_| "community".to_string());
+            // Evaluate alert rules if the node's tenant is Pro+ tier. Resolved
+            // from the node (org tier for org fleets) — tenant_id is an org id
+            // for org-paired nodes and must not be used as a users.id key.
+            let tier = resolve_node_tier(&nid, &pool).await;
 
             if is_pro_or_above(&tier) {
                 if let Some(ref metrics_snapshot) = metrics_snap {
-                    evaluate_alerts(&tenant_id, &nid, metrics_snapshot, &pool).await;
+                    evaluate_alerts(&owner_id, &nid, metrics_snapshot, &pool).await;
                     // Threshold Webhooks evaluator — runs on every telemetry
                     // push so subscribers get sub-second push notifications
                     // for state transitions and threshold crossings.
@@ -2633,9 +2665,8 @@ async fn handle_fleet_observations(
     };
 
     // Tier-based pattern filtering: community users only see community-tier observations.
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     let allowed = allowed_patterns_for_tier(&tier);
 
     let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50).min(200);
@@ -2735,9 +2766,8 @@ async fn handle_submit_observation(
     };
 
     // Pro+ only — persistent insight cards
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if tier == "community" {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "Persistent insights require Pro tier or above", "upgrade": true }))).into_response();
@@ -2858,11 +2888,14 @@ async fn handle_fleet_model_comparison(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    // metrics rows are keyed by tenant (org id for org fleets) — binding the
+    // bare user_id returned permanently-empty responses for org users.
+    let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
 
     let hours: i32 = params.get("hours")
         .and_then(|v| v.parse().ok())
@@ -2887,7 +2920,7 @@ async fn handle_fleet_model_comparison(
          GROUP BY ollama_active_model
          ORDER BY wes DESC NULLS LAST"
     )
-    .bind(&user_id).bind(&interval)
+    .bind(&tenant_id).bind(&interval)
     .fetch_all(&state.pool).await.unwrap_or_default();
 
     // TTFT lives in metrics_raw only; pull a side query for the rolling window
@@ -2901,7 +2934,7 @@ async fn handle_fleet_model_comparison(
            AND ttft_ms IS NOT NULL
          GROUP BY ollama_active_model"
     )
-    .bind(&user_id)
+    .bind(&tenant_id)
     .fetch_all(&state.pool).await.unwrap_or_default();
     let ttft_map: HashMap<String, Option<f32>> = ttft_rows.into_iter().collect();
 
@@ -2945,11 +2978,14 @@ async fn handle_fleet_model_switches(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    // metrics rows are keyed by tenant (org id for org fleets) — binding the
+    // bare user_id returned permanently-empty responses for org users.
+    let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
 
     let hours: i32 = params.get("hours")
         .and_then(|v| v.parse().ok())
@@ -2991,7 +3027,7 @@ async fn handle_fleet_model_switches(
          ORDER BY ts DESC
          LIMIT 200"
     )
-    .bind(&user_id).bind(&interval)
+    .bind(&tenant_id).bind(&interval)
     .fetch_all(&state.pool).await;
 
     let rows = match rows_result {
@@ -3036,11 +3072,14 @@ async fn handle_fleet_cost_by_model(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    // metrics rows are keyed by tenant (org id for org fleets) — binding the
+    // bare user_id returned permanently-empty responses for org users.
+    let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
 
     let hours: i32 = params.get("hours")
         .and_then(|v| v.parse().ok())
@@ -3064,7 +3103,7 @@ async fn handle_fleet_cost_by_model(
          GROUP BY ollama_active_model
          ORDER BY hours_active DESC"
     )
-    .bind(&user_id).bind(&interval)
+    .bind(&tenant_id).bind(&interval)
     .fetch_all(&state.pool).await.unwrap_or_default();
 
     let mut total_cost_usd: f64 = 0.0;
@@ -3111,9 +3150,8 @@ async fn handle_fleet_export(
     };
 
     // Export is Team+ only
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_team_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "CSV/JSON export requires Team tier or above", "upgrade": true }))).into_response();
@@ -3215,9 +3253,8 @@ async fn handle_wes_history(
     };
 
     // Tier enforcement
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
     let allowed = match tier.as_str() {
         "team" | "enterprise" => true,
@@ -3360,9 +3397,8 @@ async fn handle_thermal_budget(
     };
 
     // Pro+ tier gate (uses 7-day Postgres history Pro tier buys).
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return (StatusCode::FORBIDDEN,
             Json(serde_json::json!({
@@ -3378,11 +3414,12 @@ async fn handle_thermal_budget(
             Json(serde_json::json!({ "error": "Node not found" }))).into_response();
     }
 
-    // Tenant scope (matches how observations are inserted — solo user OR
-    // Clerk org id when org-shared).
-    let tenant_id: String = sqlx::query_scalar(
-        "SELECT COALESCE(org_id, user_id) FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| user_id.clone());
+    // Tenant scope from the NODE row — the same rule telemetry writes with.
+    // (The previous query selected org_id from `users`, a column that table
+    // doesn't have; it errored on every call and fell back to user_id,
+    // returning empty windows for org-paired nodes.)
+    let tenant_id: String = node_tenant_id(&node_id, &state.pool).await
+        .unwrap_or_else(|| user_id.clone());
 
     // Pull last 7 days of 5-min rollups in chronological order.
     let rows: Vec<(i64, Option<f32>, Option<f32>, Option<String>)> = sqlx::query_as(
@@ -3576,9 +3613,8 @@ async fn handle_webhook_create(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return (StatusCode::FORBIDDEN,
             Json(serde_json::json!({
@@ -3813,9 +3849,8 @@ async fn handle_metrics_history(
     };
 
     // Tier enforcement
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
     let allowed = match tier.as_str() {
         "team" | "enterprise" => true,
@@ -6170,31 +6205,35 @@ async fn node_offline_alert_task(state: AppState) {
         interval.tick().await;
         let now = now_ms();
 
-        let nodes: Vec<(String, String, i64)> = sqlx::query_as(
-            "SELECT user_id, wk_id, last_seen FROM nodes WHERE user_id IS NOT NULL"
+        // user_id keys the owner's alert rules; tenant keys events and
+        // observations (org_id for org-shared fleets — writing these under
+        // user_id made every cloud-generated observation invisible to
+        // org-scoped reads).
+        let nodes: Vec<(String, String, i64, String)> = sqlx::query_as(
+            "SELECT user_id, wk_id, last_seen, COALESCE(org_id, user_id)
+             FROM nodes WHERE user_id IS NOT NULL"
         ).fetch_all(&state.pool).await.unwrap_or_default();
 
-        let mut went_offline: Vec<(String, String, u64)> = Vec::new();
-        let mut came_online:  Vec<(String, String)> = Vec::new();
+        let mut went_offline: Vec<(String, String, String, u64)> = Vec::new();
+        let mut came_online:  Vec<(String, String, String)> = Vec::new();
 
-        for (user_id, node_id, last_seen) in &nodes {
+        for (user_id, node_id, last_seen, tenant) in &nodes {
             let elapsed = now.saturating_sub(*last_seen as u64);
             if elapsed >= offline_threshold_ms {
                 if !known_offline.contains(node_id) {
-                    went_offline.push((user_id.clone(), node_id.clone(), elapsed));
+                    went_offline.push((user_id.clone(), node_id.clone(), tenant.clone(), elapsed));
                     known_offline.insert(node_id.clone());
                 }
             } else if known_offline.remove(node_id) {
-                came_online.push((user_id.clone(), node_id.clone()));
+                came_online.push((user_id.clone(), node_id.clone(), tenant.clone()));
             }
         }
 
         // Fire alerts for nodes that just went offline.
-        for (user_id, node_id, elapsed) in &went_offline {
+        for (user_id, node_id, tenant, elapsed) in &went_offline {
             println!("[alerts] node_offline: {node_id} went offline (elapsed {elapsed}ms, user_id={user_id})");
-            let tier: String = sqlx::query_scalar::<_, String>(
-                "SELECT subscription_tier FROM users WHERE id = $1"
-            ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+            // Org-aware: org-paired nodes are entitled by the ORG subscription.
+            let tier = resolve_node_tier(node_id, &state.pool).await;
             if !is_pro_or_above(&tier) {
                 println!("[alerts] node_offline: skipped — tier={tier} (requires Pro+)");
                 continue;
@@ -6238,12 +6277,12 @@ async fn node_offline_alert_task(state: AppState) {
             let cutoff = (now as i64) - 3_600_000;
             let already_exists: bool = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(SELECT 1 FROM node_events WHERE tenant_id = $1 AND node_id = $2 AND event_type = 'node_offline' AND ts > to_timestamp($3::float8 / 1000.0))"
-            ).bind(user_id).bind(node_id).bind(cutoff as f64).fetch_one(&state.pool).await.unwrap_or(false);
+            ).bind(tenant).bind(node_id).bind(cutoff as f64).fetch_one(&state.pool).await.unwrap_or(false);
 
             if !already_exists {
                 let minutes = elapsed / 60_000;
                 let _ = state.events_tx.try_send(EventRow {
-                    ts_ms: now as i64, node_id: node_id.clone(), tenant_id: user_id.clone(),
+                    ts_ms: now as i64, node_id: node_id.clone(), tenant_id: tenant.clone(),
                     level: "error".into(), event_type: Some("node_offline".into()),
                     message: format!("Node offline \u{2014} no telemetry received for {minutes}m"),
                 });
@@ -6255,7 +6294,7 @@ async fn node_offline_alert_task(state: AppState) {
                     "INSERT INTO fleet_observations (id, tenant_id, node_id, alert_type, severity, state, title, detail, context_json, fired_at_ms)
                      VALUES ($1, $2, $3, 'node_offline', 'critical', 'open', 'Node Offline', $4, $5, $6)
                      ON CONFLICT DO NOTHING"
-                ).bind(&obs_id).bind(user_id).bind(node_id)
+                ).bind(&obs_id).bind(tenant).bind(node_id)
                 .bind(format!("Node has not reported telemetry in {minutes} minutes."))
                 .bind(serde_json::json!({"elapsed_minutes": minutes}))
                 .bind(now as i64)
@@ -6264,19 +6303,22 @@ async fn node_offline_alert_task(state: AppState) {
         }
 
         // Resolve alerts for nodes that came back online.
-        for (user_id, node_id) in &came_online {
-            let tier: String = sqlx::query_scalar::<_, String>(
-                "SELECT subscription_tier FROM users WHERE id = $1"
-            ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+        for (_user_id, node_id, tenant) in &came_online {
+            let tier = resolve_node_tier(node_id, &state.pool).await;
             if !is_pro_or_above(&tier) { continue; }
 
-            // Deliver resolved notification to the same channels that fired the offline alert.
+            // Deliver resolved notification to the same channels that fired
+            // the offline alert. Scoped to node_offline rules — without the
+            // event_type filter this selected (and below, resolved) EVERY
+            // open alert for the node, e.g. an active thermal_critical, which
+            // then re-fired and re-notified.
             let open_rules: Vec<(String, String, String)> = sqlx::query_as(
                 "SELECT ae.rule_id, nc.channel_type, nc.config_json::text
                  FROM alert_events ae
                  JOIN alert_rules ar ON ar.id = ae.rule_id
                  JOIN notification_channels nc ON nc.id = ar.channel_id
-                 WHERE ae.node_id = $1 AND ae.resolved_at IS NULL"
+                 WHERE ae.node_id = $1 AND ae.resolved_at IS NULL
+                   AND ar.event_type = 'node_offline'"
             ).bind(node_id).fetch_all(&state.pool).await.unwrap_or_default();
             for (_rule_id, channel_type, config_json) in open_rules {
                 let ct = channel_type.clone();
@@ -6287,11 +6329,14 @@ async fn node_offline_alert_task(state: AppState) {
                 });
             }
 
-            let _ = sqlx::query("UPDATE alert_events SET resolved_at = $1 WHERE node_id = $2 AND resolved_at IS NULL")
-                .bind(now as i64).bind(node_id).execute(&state.pool).await;
+            let _ = sqlx::query(
+                "UPDATE alert_events SET resolved_at = $1
+                 WHERE node_id = $2 AND resolved_at IS NULL
+                   AND rule_id IN (SELECT id FROM alert_rules WHERE event_type = 'node_offline')"
+            ).bind(now as i64).bind(node_id).execute(&state.pool).await;
 
             let _ = state.events_tx.try_send(EventRow {
-                ts_ms: now as i64, node_id: node_id.clone(), tenant_id: user_id.clone(),
+                ts_ms: now as i64, node_id: node_id.clone(), tenant_id: tenant.clone(),
                 level: "info".into(), event_type: Some("node_online".into()),
                 message: "Node back online \u{2014} telemetry resumed".into(),
             });
@@ -6299,7 +6344,7 @@ async fn node_offline_alert_task(state: AppState) {
             let _ = sqlx::query(
                 "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1
                  WHERE tenant_id = $2 AND node_id = $3 AND alert_type = 'node_offline' AND state = 'open'"
-            ).bind(now as i64).bind(user_id).bind(node_id).execute(&state.pool).await;
+            ).bind(now as i64).bind(tenant).bind(node_id).execute(&state.pool).await;
 
             println!("[alerts] node_online \u{2014} resolved alerts for {node_id}");
         }
@@ -6367,17 +6412,22 @@ async fn wes_long_term_drift_evaluator_task(state: AppState) {
         interval.tick().await;
         let now = now_ms();
 
-        // All Pro+ nodes that have telemetry in the last 24h.
+        // All Pro+ nodes with telemetry in the last 24h, with the tenant the
+        // node's data is stored under (org id for org fleets). Tier comes
+        // from the org subscription when org-paired, else the owner's.
         let nodes: Vec<(String, String)> = sqlx::query_as(
-            "SELECT n.wk_id, n.user_id
+            "SELECT n.wk_id, COALESCE(n.org_id, n.user_id)
              FROM nodes n
-             JOIN users u ON n.user_id = u.id
-             WHERE u.subscription_tier IN ('pro', 'team', 'business', 'enterprise')
+             LEFT JOIN users u         ON u.id = n.user_id
+             LEFT JOIN organizations o ON o.org_id = n.org_id
+             WHERE COALESCE(o.subscription_tier, u.subscription_tier)
+                   IN ('pro', 'team', 'business', 'enterprise')
+               AND n.user_id IS NOT NULL
                AND n.last_seen >= $1"
         ).bind((now.saturating_sub(86_400_000) as i64))
          .fetch_all(&state.pool).await.unwrap_or_default();
 
-        for (node_id, user_id) in &nodes {
+        for (node_id, tenant_id) in &nodes {
             // Baseline: 6-day window ending 24h ago.
             let baseline: Option<(Option<f64>, i64)> = sqlx::query_as(
                 "SELECT AVG(wes_penalized_avg)::DOUBLE PRECISION, COUNT(*)::BIGINT
@@ -6408,13 +6458,6 @@ async fn wes_long_term_drift_evaluator_task(state: AppState) {
             let drop_pct = (b_avg - r_avg) / b_avg * 100.0;
             if drop_pct < 15.0 { continue; }
 
-            // Tenant scope — pull tenant_id consistent with how observations
-            // are inserted elsewhere (matches the user's id for solo, or org
-            // id for Clerk-org-shared fleets).
-            let tenant_id: String = sqlx::query_scalar(
-                "SELECT COALESCE(org_id, user_id) FROM users WHERE id = $1"
-            ).bind(user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| user_id.clone());
-
             // 24h cooldown: skip if an open `wes_long_term_drift` already
             // exists for this node, OR if any was fired+resolved within 24h.
             let recent_open: Option<i64> = sqlx::query_scalar(
@@ -6422,7 +6465,7 @@ async fn wes_long_term_drift_evaluator_task(state: AppState) {
                  WHERE tenant_id = $1 AND node_id = $2 AND alert_type = 'wes_long_term_drift'
                    AND fired_at_ms >= $3
                  ORDER BY fired_at_ms DESC LIMIT 1"
-            ).bind(&tenant_id).bind(node_id).bind((now.saturating_sub(86_400_000)) as i64)
+            ).bind(tenant_id).bind(node_id).bind((now.saturating_sub(86_400_000)) as i64)
               .fetch_optional(&state.pool).await.ok().flatten();
             if recent_open.is_some() { continue; }
 
@@ -6455,7 +6498,7 @@ async fn wes_long_term_drift_evaluator_task(state: AppState) {
                  VALUES ($1, $2, $3, 'wes_long_term_drift', 'warning', 'open', $4, $5, $6::jsonb, $7, 'cloud')
                  ON CONFLICT (id) DO NOTHING"
             )
-            .bind(&id).bind(&tenant_id).bind(node_id)
+            .bind(&id).bind(tenant_id).bind(node_id)
             .bind(&title).bind(&detail).bind(context.to_string())
             .bind(now as i64)
             .execute(&state.pool).await;
@@ -6825,12 +6868,16 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 .chain(to_update.iter().map(|(nid, _, _, _)| nid.clone()))
                 .collect();
 
-            let mut tenant_map: HashMap<String, String> = HashMap::new();
+            // node_id → (tenant_id, owner user_id). Observations/events are
+            // stored per-TENANT (org id for org fleets — writing them under
+            // user_id hid them from org-scoped reads); alert rules + tier
+            // delivery are keyed by the owning USER.
+            let mut tenant_map: HashMap<String, (String, String)> = HashMap::new();
             for nid in &affected_nodes {
-                if let Ok(uid) = sqlx::query_scalar::<_, String>(
-                    "SELECT user_id FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
+                if let Ok(row) = sqlx::query_as::<_, (String, String)>(
+                    "SELECT COALESCE(org_id, user_id), user_id FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
                 ).bind(nid).fetch_one(&state.pool).await {
-                    tenant_map.insert(nid.clone(), uid);
+                    tenant_map.insert(nid.clone(), row);
                 }
             }
 
@@ -6841,7 +6888,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
             let wes_cliff_cooldown_ms: i64 = 14_400_000; // 4 hours
 
             for obs in &to_fire {
-                let tenant_id = match tenant_map.get(&obs.node_id) { Some(t) => t.clone(), None => continue };
+                let (tenant_id, owner_id) = match tenant_map.get(&obs.node_id) { Some(t) => t.clone(), None => continue };
 
                 // Check cooldown: was this (node, alert_type) recently resolved/acknowledged?
                 let cooldown = if obs.alert_type == "wes_cliff" { wes_cliff_cooldown_ms } else { default_cooldown_ms };
@@ -6883,11 +6930,12 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                 let node_id3 = obs.node_id.clone();
                 let alert_type3 = obs.alert_type.clone();
                 let detail3 = obs.detail.clone();
-                let tenant_id2 = tenant_id.clone();
+                let owner_id2 = owner_id.clone();
                 tokio::spawn(async move {
-                    let tier: String = sqlx::query_scalar::<_, String>(
-                        "SELECT subscription_tier FROM users WHERE id = $1"
-                    ).bind(&tenant_id2).fetch_one(&pool2).await.unwrap_or_else(|_| "community".to_string());
+                    // Org-aware tier; rules are matched by the OWNER (rules
+                    // are created per-user — tenant_id is an org id for org
+                    // fleets and matches no rules).
+                    let tier = resolve_node_tier(&node_id3, &pool2).await;
                     if !is_team_or_above(&tier) { return; }
 
                     let rules: Vec<(String, String)> = sqlx::query_as(
@@ -6895,7 +6943,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                          FROM alert_rules ar JOIN notification_channels nc ON nc.id = ar.channel_id
                          WHERE ar.user_id = $1 AND ar.event_type = $2 AND ar.enabled = 1
                            AND (ar.node_id IS NULL OR ar.node_id = $3)"
-                    ).bind(&tenant_id2).bind(&alert_type3).bind(&node_id3)
+                    ).bind(&owner_id2).bind(&alert_type3).bind(&node_id3)
                     .fetch_all(&pool2).await.unwrap_or_default();
 
                     for (ch_type, config_json) in rules {
@@ -6916,7 +6964,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
                         "UPDATE fleet_observations SET state = 'resolved', resolved_at_ms = $1 WHERE id = $2 AND state = 'open'"
                     ).bind(now as i64).bind(&obs_id).execute(&state.pool).await;
 
-                    if let Some(tenant_id) = tenant_map.get(node_id) {
+                    if let Some((tenant_id, _owner)) = tenant_map.get(node_id) {
                         let _ = state.events_tx.try_send(EventRow {
                             ts_ms: now as i64, node_id: node_id.clone(), tenant_id: tenant_id.clone(),
                             level: "info".into(), event_type: Some(format!("{alert_type}_resolved")),
@@ -7000,9 +7048,8 @@ async fn handle_update_node(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "Node naming requires Pro tier or above" }))).into_response();
@@ -7070,15 +7117,14 @@ async fn handle_create_channel(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "Alerting requires Pro tier or above" }))).into_response();
@@ -7185,15 +7231,14 @@ async fn handle_create_rule(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "Alerting requires Pro tier or above" }))).into_response();
@@ -7534,12 +7579,12 @@ async fn handle_get_otel_config(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing auth token"}))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
     };
-    let tier: String = sqlx::query_scalar("SELECT subscription_tier FROM users WHERE id = $1")
-        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if tier != "team" && tier != "enterprise" {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Team tier required"}))).into_response();
     }
@@ -7564,12 +7609,12 @@ async fn handle_put_otel_config(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing auth token"}))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
     };
-    let tier: String = sqlx::query_scalar("SELECT subscription_tier FROM users WHERE id = $1")
-        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if tier != "team" && tier != "enterprise" {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Team tier required"}))).into_response();
     }
@@ -7760,9 +7805,8 @@ async fn handle_cloud_mcp(
         Some(v) => v,
         None => return mcp_err(&req_id, -32000, "Invalid or expired session"),
     };
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
+    // Org-aware: org members are entitled by the org subscription.
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_team_or_above(&tier) {
         return mcp_err(&req_id, -32000, "Cloud MCP requires Team tier or above");
     }
@@ -7884,8 +7928,11 @@ async fn handle_cloud_mcp(
                     let avg = if wv.is_empty() { None } else { Some((wv.iter().sum::<f32>() / wv.len() as f32 * 10.0).round() / 10.0) };
                     let tv: Vec<f32> = node_ids.iter().filter_map(|n| { let e = map.get(n)?; if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; } let m = e.metrics.as_ref()?; if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second } }).collect();
                     let ftps = if tv.is_empty() { None } else { Some((tv.iter().sum::<f32>() * 10.0).round() / 10.0) };
+                    // tval, not user_id — observations are keyed by tenant
+                    // (org id for org sessions; node listing above already
+                    // scopes by tval).
                     let obs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fleet_observations WHERE tenant_id = $1 AND state = 'open'")
-                        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or(0);
+                        .bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
                     mcp_tool(&req_id, serde_json::json!({ "fleet": { "online": online, "total": node_ids.len(), "avg_wes": avg, "fleet_tok_s": ftps }, "active_observations": obs }))
                 }
                 "get_fleet_observations" => {
@@ -7897,7 +7944,7 @@ async fn handle_cloud_mcp(
                         "SELECT id, node_id, alert_type, severity, state, title, detail, context_json::text, fired_at_ms, resolved_at_ms FROM fleet_observations WHERE tenant_id = $1 AND alert_type = ANY($2) AND state = 'open' ORDER BY fired_at_ms DESC LIMIT 50"
                     };
                     let rows: Vec<(String, String, String, String, String, String, String, Option<String>, i64, Option<i64>)> =
-                        sqlx::query_as(sql).bind(&user_id).bind(&allowed).fetch_all(&state.pool).await.unwrap_or_default();
+                        sqlx::query_as(sql).bind(tval).bind(&allowed).fetch_all(&state.pool).await.unwrap_or_default();
                     let obs: Vec<serde_json::Value> = rows.into_iter().map(|(id, nid, at, sev, st, t, d, ctx, f, r)| {
                         serde_json::json!({ "id": id, "node_id": nid, "alert_type": at, "severity": sev, "state": st, "title": t, "detail": d, "context": ctx, "fired_at_ms": f, "resolved_at_ms": r })
                     }).collect();

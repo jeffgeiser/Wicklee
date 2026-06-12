@@ -13,6 +13,44 @@ components; every finding verified against the code before acceptance)
 produced 10 HIGH findings, ~25 MEDIUMs, and a dead-code list. Fixes are
 landing in severity-ordered chunks, each tested and merged separately.
 
+### Chunk 2 — org-tenancy sweep (cloud)
+The review found that org-paired fleets were systematically second-class:
+the same tenant/tier resolution was hand-rolled in 40+ handlers and had
+drifted. Fixed in one sweep with two new helpers — `node_tenant_id()`
+(the tenant a node's data is stored under: org id when org-paired, else
+owner) and `resolve_node_tier()` (org subscription governs org nodes) —
+plus `resolve_tier()` adoption across the JWT-side gates:
+- **Alerts/webhooks now evaluate for org nodes.** The telemetry hot path
+  looked up tier with tenant_id (an org id) as a `users.id` key →
+  "community" → `evaluate_alerts`/`evaluate_webhooks` never ran for any
+  org-paired node. Alerts also matched rules by tenant_id, but rules are
+  created per-user — now the node OWNER's rules fire; webhooks stay
+  tenant-keyed (matching how subscriptions are stored).
+- **Two queries that could never succeed** — `SELECT COALESCE(org_id,
+  user_id) FROM users` (the users table has neither column) in Thermal
+  Budget and the WES-drift evaluator errored on every call and fell back
+  to user_id, hiding org data. Both now resolve from the nodes row.
+- **Cloud-generated observations/events visible to org fleets.** The
+  fleet evaluator, node-offline task, and WES-drift task wrote
+  `tenant_id = nodes.user_id`; org sessions read by org_id, so every
+  cloud observation was invisible to org users. All write the node's
+  tenant now.
+- **Back-online recovery no longer nukes unrelated alerts** — the
+  came-online path selected and bulk-resolved EVERY open alert event for
+  the node (an active thermal_critical got "back online"-notified,
+  resolved, then re-fired). Both queries now filter to
+  `event_type = 'node_offline'`.
+- **Org members get their org's tier** at ~13 gates that queried
+  `users.subscription_tier` directly (observations, export, wes/metrics
+  history, thermal budget, webhook create, update node, MCP, OTel
+  config, channel/rule create) — all on `resolve_tier`/`resolve_node_tier`
+  now. The three fleet model endpoints (comparison/switches/cost) also
+  scoped metrics by bare user_id → permanently empty for org users; now
+  tenant-scoped. MCP `get_fleet_insights`/`get_fleet_observations` bound
+  user_id where the org tenant was required.
+- Not changed: API-key endpoints still resolve user tier — keys carry no
+  org claim (the "org-wide API keys" roadmap item, needs a product call).
+
 ### Chunk 1 — cloud pairing/auth security trio
 - **Pairing-code hijack closed.** `/api/pair/activate` redeemed codes
   with a SELECT-then-UPDATE that never cleared the code, never checked
