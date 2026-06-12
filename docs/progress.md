@@ -13,6 +13,38 @@ components; every finding verified against the code before acceptance)
 produced 10 HIGH findings, ~25 MEDIUMs, and a dead-code list. Fixes are
 landing in severity-ordered chunks, each tested and merged separately.
 
+### Chunk 3 — agent shared-state races and probe attribution
+- **Harvester lost-update race fixed.** The Ollama harvester's 5s tick
+  snapshotted shared state, awaited HTTP for up to seconds, then stored
+  the whole struct back — silently reverting anything the probe task
+  wrote in between. Losing `probe_caused_next_reset` made the probe's
+  own `expires_at` reset look like a user request (false 15s LIVE on
+  idle nodes, pushed to the cloud immediately); losing `last_probe_end`
+  stuck the "probing" display. The writeback now re-reads probe-owned
+  fields at write time under the lock, and expires-change attribution
+  runs against the LIVE flag inside that same critical section.
+- **Proxy "inference active" un-stuck.** `inference_active` was set on
+  every request and never cleared — permanently `true` after the first
+  proxied request. Replaced with an `in_flight` counter, decremented on
+  every relay exit path (done packet, stream end, upstream error,
+  timeout, client disconnect) via a Drop guard.
+- **Probe failures no longer wipe the tok/s baseline.** One transient
+  probe timeout wrote all-None over the cached baseline (flatlining the
+  display and force-triggering the next probe regardless of GPU load).
+  Now only successful values overwrite — same rule the vLLM probe
+  already followed.
+- **vLLM/llama.cpp probes no longer blip LIVE.** Their 30s baseline
+  probes are real completion requests that Tier 1 of
+  `compute_inference_state` counted as user inference (every idle node
+  blipped LIVE each probe). The probes now set the shared probe-active
+  flag (Drop-guarded) and Tier 1 discounts exactly one in-flight request
+  while a probe runs — concurrent user traffic (≥2) still reads LIVE.
+  Three new state-machine tests lock the behavior in.
+- **Model-candidates fit scoring off-by-5 fixed.** `score_fit` was
+  passed `Some(0.0)` as "neutral" historical WES, which matches the
+  poor-WES arm (5 pts) instead of the neutral no-data arm (10 pts) — a
+  flat −5 on every candidate. Now passes `None`.
+
 ### Chunk 2 — org-tenancy sweep (cloud)
 The review found that org-paired fleets were systematically second-class:
 the same tenant/tier resolution was hand-rolled in 40+ handlers and had

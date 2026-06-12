@@ -440,21 +440,19 @@ pub(crate) fn start_ollama_harvester(
                 m.ollama_embedding_dim = cached_embedding_dim;
 
                 // Detect inference activity via expires_at resets (use first model — same as before).
+                // Only DETECT here; attribution (probe vs user) happens in the
+                // final writeback below, against the LIVE probe flag — the
+                // probe task may set probe_caused_next_reset while this tick
+                // is parked on the HTTP awaits above, and attributing against
+                // the pre-await snapshot mis-classified the probe's own reset
+                // as a user request (false 15s LIVE on idle nodes).
+                let mut expires_changed = false;
                 if let Some(first) = ps_models.first() {
                     if let Some(exp_str) = first["expires_at"].as_str() {
                         let exp_owned = exp_str.to_string();
                         if prev_expires.as_deref() != Some(&exp_owned) {
                             last_infer_ts = Some(std::time::Instant::now());
-                            let result = attribute_expires_change(
-                                probe_active_harvester.load(std::sync::atomic::Ordering::Acquire),
-                                m.probe_caused_next_reset,
-                            );
-                            if result.consume_probe_flag {
-                                m.probe_caused_next_reset = false;
-                            }
-                            if result.is_user_request {
-                                m.last_user_request_ts = Some(std::time::Instant::now());
-                            }
+                            expires_changed = true;
                         }
                         prev_expires = Some(exp_owned);
                     }
@@ -464,8 +462,9 @@ pub(crate) fn start_ollama_harvester(
                 m.active_models = if live_models.len() > 1 { Some(live_models) } else { None };
 
                 // Inference-active signal + proxy aggregate stats.
+                let mut harvester_set_tps = false;
                 if let Some(ref ps) = proxy_main {
-                    let proxy_active = ps.inference_active.load(std::sync::atomic::Ordering::Relaxed);
+                    let proxy_active = ps.in_flight.load(std::sync::atomic::Ordering::Relaxed) > 0;
                     let since_done   = ps.last_done_ts.lock().unwrap()
                         .map_or(false, |t| t.elapsed().as_secs() < 15);
                     m.ollama_inference_active = Some(proxy_active || since_done);
@@ -475,6 +474,7 @@ pub(crate) fn start_ollama_harvester(
                     if let Some((ref name, _)) = most_recent_done {
                         if let Some(&(tps, _, _, _, _)) = proxy_model_stats.get(name) {
                             m.ollama_tokens_per_second = Some(tps);
+                            harvester_set_tps = true;
                         }
                     }
 
@@ -499,7 +499,43 @@ pub(crate) fn start_ollama_harvester(
                         Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 15));
                 }
 
-                if let Ok(mut g) = shared_main.lock() { *g = m; }
+                // Writeback. m was built from a snapshot taken BEFORE several
+                // seconds of HTTP awaits; the probe task may have written its
+                // fields since. Re-read probe-owned fields at write time so the
+                // whole-struct store can't silently revert them (the lost-update
+                // race here erased probe_caused_next_reset — turning the probe's
+                // own expires_at reset into a false 15s user-LIVE state — and
+                // erased last_probe_end, sticking the "probing" display).
+                if let Ok(mut g) = shared_main.lock() {
+                    // Probe-task-owned: always take the live values.
+                    m.last_probe_start        = g.last_probe_start;
+                    m.last_probe_end          = g.last_probe_end;
+                    m.ollama_prompt_eval_tps  = g.ollama_prompt_eval_tps;
+                    m.ollama_ttft_ms          = g.ollama_ttft_ms;
+                    m.ollama_load_duration_ms = g.ollama_load_duration_ms;
+                    // tok/s is shared: the probe owns it unless this tick got a
+                    // fresher proxy-derived value from a real request.
+                    if !harvester_set_tps {
+                        m.ollama_tokens_per_second = g.ollama_tokens_per_second;
+                    }
+
+                    // Attribute the expires_at change against the LIVE flag.
+                    m.probe_caused_next_reset = g.probe_caused_next_reset;
+                    if expires_changed {
+                        let result = attribute_expires_change(
+                            probe_active_harvester.load(std::sync::atomic::Ordering::Acquire),
+                            g.probe_caused_next_reset,
+                        );
+                        if result.consume_probe_flag {
+                            m.probe_caused_next_reset = false;
+                        }
+                        if result.is_user_request {
+                            m.last_user_request_ts = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    *g = m;
+                }
             }
         }
         } // async move
@@ -624,10 +660,16 @@ pub(crate) fn start_ollama_harvester(
                 }
                 let probe_result = probe_ollama_tps(&probe_client, port, &model).await;
                 if let Ok(mut g) = shared_probe.lock() {
-                    g.ollama_tokens_per_second   = probe_result.tps;
-                    g.ollama_prompt_eval_tps     = probe_result.prompt_eval_tps;
-                    g.ollama_ttft_ms             = probe_result.ttft_ms;
-                    g.ollama_load_duration_ms    = probe_result.load_duration_ms;
+                    // Retain the last successful baseline on probe failure —
+                    // probe_ollama_tps returns all-None on timeout/error, and
+                    // writing it unconditionally wiped the tok/s baseline (flat-
+                    // lining the display AND force-triggering the next probe
+                    // via the !has_baseline path regardless of GPU load). Same
+                    // only-on-Some rule the vLLM probe already follows.
+                    if let Some(tps)  = probe_result.tps              { g.ollama_tokens_per_second = Some(tps); }
+                    if let Some(pe)   = probe_result.prompt_eval_tps  { g.ollama_prompt_eval_tps   = Some(pe); }
+                    if let Some(tt)   = probe_result.ttft_ms          { g.ollama_ttft_ms           = Some(tt); }
+                    if let Some(ld)   = probe_result.load_duration_ms { g.ollama_load_duration_ms  = Some(ld); }
                     g.last_probe_end = Some(std::time::Instant::now());
                     // Tell the harvester: the next expires_at change you see is mine.
                     // The harvester will consume this flag and skip attribution for
@@ -817,6 +859,11 @@ pub(crate) fn start_vllm_harvester(
     port_rx: process_discovery::PortRx,
     apple:       Arc<Mutex<AppleSiliconMetrics>>,
     nvidia:      Arc<Mutex<NvidiaMetrics>>,
+    // Shared probe-in-flight flag (same Arc the Ollama probe sets). The vLLM
+    // probe is a real /v1/completions request that the 2s Prometheus poll
+    // sees as num_requests_running=1 — without flagging it, Tier 1 of
+    // compute_inference_state classified every idle-node probe as LIVE.
+    probe_active: Arc<std::sync::atomic::AtomicBool>,
 ) -> Arc<Mutex<VllmMetrics>> {
     let shared = Arc::new(Mutex::new(VllmMetrics::default()));
 
@@ -939,6 +986,7 @@ pub(crate) fn start_vllm_harvester(
 
     // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ─────────
     let shared_probe = Arc::clone(&shared);
+    let probe_active_probe = Arc::clone(&probe_active);
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
@@ -986,6 +1034,13 @@ pub(crate) fn start_vllm_harvester(
             }
 
             eprintln!("[vllm] probing idle tok/s on :{port} model={model}");
+            // Flag the probe so Tier 1 (num_requests_running) doesn't classify
+            // our own completion request as user inference. Drop guard clears
+            // it on every exit path (success, error, panic, cancellation).
+            probe_active_probe.store(true, std::sync::atomic::Ordering::SeqCst);
+            scopeguard::defer! {
+                probe_active_probe.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
             if let Some(tps) = probe_vllm_tps(&client, port, &model).await {
                 eprintln!("[vllm] idle probe → {tps:.1} tok/s");
                 if let Ok(mut g) = shared_probe.lock() {
@@ -1109,6 +1164,9 @@ pub(crate) fn start_llamacpp_harvester(
     port_rx: process_discovery::PortRx,
     apple:   Arc<Mutex<AppleSiliconMetrics>>,
     nvidia:  Arc<Mutex<NvidiaMetrics>>,
+    // Shared probe-in-flight flag — see start_vllm_harvester. Tier 1 reads
+    // slots_processing, which counts our own probe request.
+    probe_active: Arc<std::sync::atomic::AtomicBool>,
 ) -> Arc<Mutex<LlamacppMetrics>> {
     let shared = Arc::new(Mutex::new(LlamacppMetrics::default()));
 
@@ -1162,6 +1220,7 @@ pub(crate) fn start_llamacpp_harvester(
 
     // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ──────────
     let shared_probe = Arc::clone(&shared);
+    let probe_active_probe = Arc::clone(&probe_active);
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
@@ -1206,6 +1265,12 @@ pub(crate) fn start_llamacpp_harvester(
             }
 
             eprintln!("[llamacpp] probing idle tok/s on :{port} model={model}");
+            // Flag the probe so Tier 1 (slots_processing) doesn't classify our
+            // own completion request as user inference.
+            probe_active_probe.store(true, std::sync::atomic::Ordering::SeqCst);
+            scopeguard::defer! {
+                probe_active_probe.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
             if let Some(tps) = probe_llamacpp_tps(&client, port, &model).await {
                 eprintln!("[llamacpp] idle probe → {tps:.1} tok/s");
                 if let Ok(mut g) = shared_probe.lock() {
