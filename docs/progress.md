@@ -6,6 +6,35 @@
 
 ---
 
+## Mid June 2026 — Full-codebase quality review + fix campaign
+
+A four-surface review (cloud, agent, frontend data layer, frontend
+components; every finding verified against the code before acceptance)
+produced 10 HIGH findings, ~25 MEDIUMs, and a dead-code list. Fixes are
+landing in severity-ordered chunks, each tested and merged separately.
+
+### Chunk 1 — cloud pairing/auth security trio
+- **Pairing-code hijack closed.** `/api/pair/activate` redeemed codes
+  with a SELECT-then-UPDATE that never cleared the code, never checked
+  ownership, and had no rate limit — any authenticated user who hit a
+  live 6-digit code (1M space) silently took over someone else's node.
+  Now a single atomic `UPDATE … WHERE code = $3 AND user_id IS NULL AND
+  paired_at >= cutoff RETURNING`, codes are consumed on redemption
+  (`code = NULL`), expire cloud-side after 10 min (the agent UI already
+  showed a 5-min countdown; the cloud never expired them), and the
+  endpoint is IP rate-limited. `handle_claim` refreshes `paired_at` on
+  re-claim so the TTL measures the latest code issuance.
+- **`/api/pair/claim` rate-limited.** Unauthenticated by necessity, but
+  each call wrote a `nodes` row + a permanent in-memory metrics entry
+  with no limit — a trivial DB/memory DoS. Now IP rate-limited via the
+  same sliding window as login/signup.
+- **Prometheus `/metrics` endpoint un-broken.** Its auth query
+  referenced `api_keys.expires_at`, a column that doesn't exist — the
+  query errored on every call, `unwrap_or(None)` swallowed it, and the
+  Team-tier scrape feature returned 401 unconditionally since it
+  shipped. Now routed through `validate_api_key` (same as the V1
+  endpoints), which also adds per-key rate limiting and Bearer support.
+
 ## Early June 2026 — Cross-stack calculation consistency audit
 
 Reviewed every metric formula across the three tiers — frontend
