@@ -9,6 +9,8 @@
  * a model is actively running.
  */
 
+import { bytesPerWeight, OLLAMA_DEFAULT_BYTES_PER_WEIGHT } from './quantSize';
+
 export const QUANT_QUALITY: Record<string, string> = {
   'F16':    'Full precision. Original model quality. Largest file.',
   'F32':    'Full 32-bit precision. Reference quality. Usually overkill.',
@@ -92,9 +94,16 @@ export function quantFamily(quant: string): 'q4' | 'q5' | 'q8' | 'low' | null {
  *
  * Returns size in MB. Returns null if no parameter count is detectable.
  *
- * Heuristic: file_size_mb ≈ params_billions × 1024 × quant_ratio
- * where quant_ratio is family-dependent. Without an explicit quant in
- * the name (most ollama models don't carry it), assumes Q4_K_M (0.45).
+ * Heuristic: file_size_mb ≈ params_billions × 1024 × bytes_per_weight,
+ * with bytes-per-weight from the canonical table in quantSize.ts (validated
+ * there against real GGUF files: Llama 3.1 8B Q4_K_M = 4.92 GB ≈ 0.61 GB/B).
+ * Without an explicit quant in the name (most Ollama models don't carry
+ * one), assumes Q4_K_M — Ollama's default quant.
+ *
+ * Earlier versions used hand-rolled ratios ~50% above the canonical table
+ * (Q4 at 0.90 GB/B vs the real 0.60), which broke same-size cohort matching
+ * in projectTpsForVariant (estimated history sizes never matched real HF
+ * file sizes) and inflated bandwidth-tier tok/s projections ~1.5×.
  */
 export function estimateModelFileSizeMb(modelName: string): number | null {
   if (!modelName) return null;
@@ -106,15 +115,8 @@ export function estimateModelFileSizeMb(modelName: string): number | null {
 
   // Detect explicit quant in the model name (rare on Ollama; common on HF).
   const qm = modelName.toUpperCase().match(/Q\d(?:_K_[MS]|_[01])?|F16|F32|BF16/);
-  let ratio = 0.45; // Q4_K_M default
-  if (qm) {
-    const fam = quantFamily(qm[0]);
-    if (fam === 'q8') ratio = 0.80;
-    else if (fam === 'q5') ratio = 0.55;
-    else if (fam === 'low') ratio = 0.30;
-  }
-  // FP16 baseline ≈ 2 bytes/param → params(B) × 2 GB. Then × ratio for quant.
-  return params * 2 * 1024 * ratio;
+  const bpw = (qm && bytesPerWeight(qm[0])) ?? OLLAMA_DEFAULT_BYTES_PER_WEIGHT;
+  return params * 1024 * bpw;
 }
 
 /**

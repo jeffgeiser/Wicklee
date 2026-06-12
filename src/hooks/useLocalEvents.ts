@@ -227,32 +227,32 @@ export function useLocalEvents(
       }
 
       // ── 4. POWER ANOMALY ─────────────────────────────────────────────────
+      // Compare against the pending window's ORIGINAL baseline once one is
+      // open — prevPower advances every frame, so a sustained step cancelled
+      // itself on the next frame (see FleetStreamContext for the full note).
       const prevP = prevPower.current ?? null;
+      const powerBaseline = np.power ? Number(np.power.originalValue) : prevP;
       if (
-        prevP !== undefined &&
-        prevP != null &&
+        powerBaseline != null &&
         curPower != null &&
-        prevP >= POWER_ANOMALY_MIN_BASELINE_W &&
-        Math.abs(curPower - prevP) / prevP >= POWER_ANOMALY_THRESHOLD
+        powerBaseline >= POWER_ANOMALY_MIN_BASELINE_W &&
+        Math.abs(curPower - powerBaseline) / powerBaseline >= POWER_ANOMALY_THRESHOLD
       ) {
-        const direction = curPower > prevP ? '↑' : '↓';
-        const detail    = `${prevP.toFixed(0)}W ${direction} ${curPower.toFixed(0)}W`;
+        const direction = curPower > powerBaseline ? '↑' : '↓';
         if (!np.power) {
           np.power = {
             type:          'power_anomaly',
             pendingAt:     now,
-            originalValue: `${prevP.toFixed(0)}`,
+            originalValue: `${powerBaseline.toFixed(0)}`,
             targetValue:   `${curPower.toFixed(0)}`,
-            detail,
+            detail:        `${powerBaseline.toFixed(0)}W ${direction} ${curPower.toFixed(0)}W`,
           };
         } else {
           np.power.targetValue = `${curPower.toFixed(0)}`;
           np.power.detail      = `${np.power.originalValue}W ${direction} ${curPower.toFixed(0)}W`;
         }
-      } else if (np.power && (
-        curPower == null || prevP == null || prevP < POWER_ANOMALY_MIN_BASELINE_W ||
-        Math.abs((curPower - (prevP ?? 0)) / (prevP || 1)) < POWER_ANOMALY_THRESHOLD
-      )) {
+      } else if (np.power) {
+        // Returned to (near) the original baseline — cancel.
         delete np.power;
       }
 

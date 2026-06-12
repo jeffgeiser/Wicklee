@@ -48,8 +48,15 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
   const [hasMore, setHasMore] = useState(true);
 
   // Track whether the last fetch failed — prevents infinite retry loops when
-  // the token refresh interval (50s) recreates fetchPage and re-triggers useEffect.
+  // a dependency change recreates fetchPage and re-triggers useEffect.
   const lastFetchFailed = useRef(false);
+
+  // The Clerk token rotates on a 50s interval in the caller. Keep it in a
+  // ref so rotation does NOT recreate fetchPage — when it was a dep, every
+  // rotation re-ran the initial-load effect, refetching page 1 and wiping
+  // any pages the user had accumulated with "load more".
+  const tokenRef = useRef(opts.token);
+  tokenRef.current = opts.token;
 
   const fetchPage = useCallback(async (before?: number) => {
     setLoading(true);
@@ -65,8 +72,8 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       const baseUrl = isFleet ? CLOUD_URL : 'http://localhost:7700';
       const path    = isFleet ? '/api/fleet/events/history' : '/api/events/history';
       const headers: Record<string, string> = {};
-      if (isFleet && opts.token) {
-        headers['Authorization'] = `Bearer ${opts.token}`;
+      if (isFleet && tokenRef.current) {
+        headers['Authorization'] = `Bearer ${tokenRef.current}`;
       }
 
       const res = await fetch(`${baseUrl}${path}?${params}`, { headers });
@@ -91,11 +98,11 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
     } finally {
       setLoading(false);
     }
-  }, [limit, opts.eventType, opts.nodeId, opts.token, isFleet]);
+  }, [limit, opts.eventType, opts.nodeId, isFleet]);
 
   // Initial load (skipped while waiting for auth).
-  // Don't auto-retry when the last fetch failed — the token refresh interval
-  // recreates fetchPage every 50s, which would otherwise loop 502s forever.
+  // Don't auto-retry when the last fetch failed — a filter change recreates
+  // fetchPage, which would otherwise loop 502s forever.
   // The user can still manually retry via the refresh button.
   useEffect(() => {
     if (opts.skip) return;

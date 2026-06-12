@@ -133,7 +133,7 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
     const o = n.ollama_tokens_per_second ?? null;
     const v = n.vllm_tokens_per_sec      ?? null;
     const raw = (o != null && v != null) ? o + v : (o ?? v);
-    return pushAndGetSmoothed(n.node_id, 'tps', raw);
+    return pushAndGetSmoothed(n.node_id, 'tps', raw, n.timestamp_ms ?? 0);
   }
 
   const fit = computeModelFitScore(node);

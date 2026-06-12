@@ -12,7 +12,7 @@
  *   Team      — + 30D / 90D
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -156,7 +156,7 @@ const RANGE_CONFIG: Record<TimeRange, {
 const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d'];
 
 function tierUpgradeLabel(minTier: SubscriptionTier): string {
-  return minTier === 'pro' ? 'Pro' : minTier === 'team' ? 'Pro' : '';
+  return minTier === 'pro' ? 'Pro' : minTier === 'team' ? 'Team' : '';
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -182,7 +182,8 @@ const MetricTooltip: React.FC<{
   const cfg = METRIC_CONFIG[metric];
   const main = payload.find(p => p.name === 'value');
   const p95  = payload.find(p => p.name === 'p95');
-  if (!main?.value) return null;
+  // == null, not falsy: 0 tok/s / 0 W are legitimate points to show.
+  if (main?.value == null) return null;
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-xs shadow-xl">
       <p className="text-gray-500 mb-1">{label}</p>
@@ -219,6 +220,14 @@ const MetricsHistoryChart: React.FC<Props> = ({
   const [error,      setError]      = useState<string | null>(null);
   const [lastFetch,  setLastFetch]  = useState(0);
 
+  // fetchHistory reads the selection through a ref: with deps = [getToken],
+  // a closed-over selectedId stays frozen at its mount value (null), so every
+  // range change / refresh concluded "no selection" and snapped the chart
+  // back to the first node with data, stomping the user's (and the parent's
+  // synced) selection.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+
   const { allNodeMetrics } = useFleetStream();
 
   const fetchHistory = useCallback(async (r: TimeRange, signal?: AbortSignal) => {
@@ -235,7 +244,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
       const data           = await res.json();
       const fetched: MetricsNode[] = data.nodes ?? [];
       setNodes(fetched);
-      const currentId = externalSelectedId ?? internalSelectedId;
+      const currentId = selectedIdRef.current;
       if (!currentId || !fetched.some(n => n.node_id === currentId)) {
         const newId = fetched.find(n => n.points.length > 0)?.node_id ?? fetched[0]?.node_id ?? null;
         if (newId) setSelectedId(newId);

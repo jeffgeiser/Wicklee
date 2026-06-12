@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
@@ -58,7 +58,7 @@ function buildChartPoints(points: WESPoint[], fmtTs: (ms: number) => string): Ch
 
 function tierUpgradeLabel(minTier: SubscriptionTier): string {
   return minTier === 'pro'  ? 'Pro' :
-         minTier === 'team' ? 'Pro' : '';
+         minTier === 'team' ? 'Team' : '';
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -97,6 +97,13 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   const [lastFetch,    setLastFetch]    = useState(0);
   // exportReport state removed — CSV export replaces modal
 
+  // Read the selection through a ref inside fetchHistory: with deps =
+  // [getToken], a closed-over selectedId stays frozen at its mount value
+  // (null), so every range change / refresh reset the selection to the
+  // first node with data (see MetricsHistoryChart for the same fix).
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+
   const fetchHistory = useCallback(async (r: TimeRange, signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
@@ -116,7 +123,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       setNodes(fetched);
       // Auto-select first node with data if nothing selected yet
       const withData = fetched.find(n => n.points.length > 0);
-      const currentId = externalSelectedId ?? internalSelectedId;
+      const currentId = selectedIdRef.current;
       if (!currentId || !fetched.some(n => n.node_id === currentId)) {
         const newId = withData?.node_id ?? fetched[0]?.node_id ?? null;
         if (newId) setSelectedId(newId);
