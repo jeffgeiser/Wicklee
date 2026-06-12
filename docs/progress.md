@@ -385,6 +385,21 @@ the blog/docs pages. `injectContent` gained an optional `wrapStyle` so
 the landing uses a wider container than the article wrapper. 75 tests
 green, build OK.
 
+### og:image shipped — link previews get a real card
+Designed and wired the 1200×630 social-preview card: dark brand palette
+(gray-900, blue glows), wicklee wordmark + orb, the hero line, the
+"WES — the MPG for local AI · Ollama · vLLM · llama.cpp" tagline, and
+the install one-liner. Rendered from an SVG via sharp by
+`scripts/gen-og-image.mjs` (on-demand only — the PNG is committed at
+`public/og-image.png`, so builds and deploys never need sharp; bundle an
+Inter .ttf there if a pixel-exact brand face is ever wanted). Wired as
+`og:image` + `twitter:image` (with width/height/alt) in `index.html` and
+`pageMeta.ts`, and `twitter:card` upgraded from `summary` to
+`summary_large_image`; the prerender propagates the tags to every
+static page automatically since they live in the shell. Slack/X/
+LinkedIn/Discord unfurls of any wicklee.dev URL now show the card
+instead of a bare text snippet.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's
