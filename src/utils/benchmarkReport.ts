@@ -93,40 +93,6 @@ export function buildReportFromLive(node: SentinelMetrics): BenchmarkReport {
   };
 }
 
-// ── Factory: history point ────────────────────────────────────────────────────
-
-export function buildReportFromHistory(opts: {
-  nodeId:       string;
-  hostname:     string;
-  rawWes:       number | null;
-  penalizedWes: number | null;
-  thermalState: string;
-  tsMs:         number;
-  range:        string;
-}): BenchmarkReport {
-  const tcPct = thermalCostPct(opts.rawWes, opts.penalizedWes);
-  return {
-    generatedAt:    new Date().toISOString(),
-    wickleeVersion: WICKLEE_VERSION_FALLBACK,
-    nodeId:         opts.nodeId,
-    hostname:       opts.hostname,
-    hardware:       null,
-    os:             null,
-    runtime:        'unknown',
-    model:          null,
-    quantization:   null,
-    tokensPerSec:   null,
-    watts:          null,
-    rawWes:         opts.rawWes,
-    penalizedWes:   opts.penalizedWes,
-    thermalCostPct: tcPct,
-    thermalState:   opts.thermalState,
-    thermalSource:  null,
-    wesVersion:     2,
-    historyRange:   opts.range,
-    historyTsMs:    opts.tsMs,
-  };
-}
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 

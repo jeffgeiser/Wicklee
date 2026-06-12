@@ -3451,9 +3451,8 @@ async fn handle_thermal_budget(
     // pushed the node into thermal trouble.
     #[derive(Default)]
     struct Block {
-        start_idx: usize,
-        end_idx:   usize,
-        len:       usize,
+        end_idx: usize,
+        len:     usize,
     }
 
     let mut sustained_normal_max_tps: f32 = 0.0;
@@ -3466,7 +3465,7 @@ async fn handle_thermal_budget(
         let is_normal = thermal.as_deref().unwrap_or("Normal") == "Normal";
         if is_normal {
             if !in_normal {
-                cur = Block { start_idx: i, end_idx: i, len: 1 };
+                cur = Block { end_idx: i, len: 1 };
                 in_normal = true;
             } else {
                 cur.end_idx = i;
@@ -6424,7 +6423,7 @@ async fn wes_long_term_drift_evaluator_task(state: AppState) {
                    IN ('pro', 'team', 'business', 'enterprise')
                AND n.user_id IS NOT NULL
                AND n.last_seen >= $1"
-        ).bind((now.saturating_sub(86_400_000) as i64))
+        ).bind(now.saturating_sub(86_400_000) as i64 )
          .fetch_all(&state.pool).await.unwrap_or_default();
 
         for (node_id, tenant_id) in &nodes {

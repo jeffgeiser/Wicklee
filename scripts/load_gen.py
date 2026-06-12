@@ -4,8 +4,8 @@ Wicklee load generator — drives concurrent Ollama inference on fleet nodes
 and prints live tok/s per node so you can watch the dashboard react.
 
 Usage:
-    # Quick test — both nodes, default model on each, 60 s
-    python scripts/load_gen.py --nodes localhost:11434 geiserbmc:11434
+    # Quick test — both nodes, 60 s
+    python scripts/load_gen.py --nodes localhost:11434 geiserbmc:11434 --model llama3.2:3b
 
     # Override model and run longer with more parallel streams
     python scripts/load_gen.py \
@@ -15,11 +15,11 @@ Usage:
         --duration 300
 
     # Single node, heavier prompt
-    python scripts/load_gen.py --nodes geiserbmc:11434 --prompt long
+    python scripts/load_gen.py --nodes geiserbmc:11434 --model llama3.2:3b --prompt long
 
 Flags:
     --nodes       HOST:PORT[,...]  Comma-sep or space-sep list of Ollama endpoints
-    --model       Model name (default: use whatever is loaded on the node)
+    --model       Model name (required)
     --streams     Parallel streams per node (default: 1)
     --duration    Seconds to run (default: 120; 0 = run until Ctrl-C)
     --prompt      short | medium | long | reasoning  (default: medium)
@@ -65,11 +65,6 @@ BOLD    = "\033[1m"
 DIM     = "\033[2m"
 RED     = "\033[31m"
 GREEN   = "\033[32m"
-
-
-def strip_colour(s: str) -> str:
-    import re
-    return re.sub(r"\033\[[0-9;]*m", "", s)
 
 
 # ── Per-node stats ────────────────────────────────────────────────────────────
@@ -272,7 +267,7 @@ def main():
         metavar="HOST:PORT",
         help="Ollama endpoint(s), e.g. localhost:11434 192.168.1.10:11434",
     )
-    parser.add_argument("--model",    default=None,     help="Model name (default: node's loaded model)")
+    parser.add_argument("--model",    required=True,    help="Model name (required — Ollama's /api/generate rejects requests without one)")
     parser.add_argument("--streams",  type=int, default=1, help="Parallel streams per node (default: 1)")
     parser.add_argument("--duration", type=int, default=120, help="Seconds to run; 0 = forever (default: 120)")
     parser.add_argument("--prompt",   choices=list(PROMPTS), default="medium", help="Prompt size preset")

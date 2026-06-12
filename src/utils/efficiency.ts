@@ -31,19 +31,6 @@ export const WES_TOOLTIP =
   'Use the 24h baseline in Triage for regression detection. Higher is better.';
 
 /**
- * Compute WES from pre-adjusted watts (raw power × PUE already applied by caller).
- * Use this form when the caller pre-multiplies power by PUE before calling.
- * Equivalent to computeWES(toks, rawWatts, thermalState, pue).
- */
-export function calculateWES(
-  toks: number | null | undefined,
-  adjustedWatts: number | null | undefined,
-  thermalState: string | null | undefined,
-): number | null {
-  return computeWES(toks, adjustedWatts, thermalState, 1.0);
-}
-
-/**
  * Canonical default electricity rate, used wherever the user hasn't
  * configured a per-node or fleet rate. Roughly the current US average
  * residential rate. MUST stay in sync with the cloud's

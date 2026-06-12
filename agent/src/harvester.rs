@@ -198,7 +198,7 @@ pub(crate) fn start_ollama_harvester(
     // ── Main task: watch for port, poll /api/ps every 5s ────────────────────
     let shared_main = Arc::clone(&shared);
     let proxy_main  = proxy_arc.clone();
-    let mut port_rx_main = port_rx.clone();
+    let port_rx_main = port_rx.clone();
     let probe_active_harvester = Arc::clone(&probe_active);
     let rc_cache = runtime_config_cache.clone();
     crate::supervisor::supervise_until("ollama-harvester", move || {
@@ -869,7 +869,7 @@ pub(crate) fn start_vllm_harvester(
 
     // ── Main task: 2 s Prometheus /metrics poll ──────────────────────────────
     let shared_main  = Arc::clone(&shared);
-    let mut port_rx_main = port_rx.clone();
+    let port_rx_main = port_rx.clone();
     crate::supervisor::supervise_until("vllm-harvester", move || {
         let shared_main = shared_main.clone();
         let mut port_rx_main = port_rx_main.clone();
@@ -1172,7 +1172,7 @@ pub(crate) fn start_llamacpp_harvester(
 
     // ── Main task: 2 s /health?include_slots poll ────────────────────────────
     let shared_main = Arc::clone(&shared);
-    let mut port_rx_main = port_rx.clone();
+    let port_rx_main = port_rx.clone();
     crate::supervisor::supervise_until("llamacpp-harvester", move || {
         let shared_main = shared_main.clone();
         let mut port_rx_main = port_rx_main.clone();

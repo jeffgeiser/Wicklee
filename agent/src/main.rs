@@ -137,14 +137,6 @@ pub(crate) struct CatalogVariant {
     pub(crate) file_size_bytes: u64,
 }
 
-/// A model entry from the HuggingFace GGUF catalog.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub(crate) struct CatalogModel {
-    pub(crate) model_id: String,
-    pub(crate) downloads: u64,
-    pub(crate) variants: Vec<CatalogVariant>,
-}
-
 /// Hardware profile for fit scoring — either live or simulated.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct HardwareProfile {
@@ -6309,14 +6301,31 @@ async fn run_mcp_stdio() {
     }
 }
 
-async fn handle_tags() -> Json<TagsResponse> {
-    Json(TagsResponse {
-        models: vec![
-            ModelInfo { name: "phi3:mini".into(),    size: 2_200_000_000 },
-            ModelInfo { name: "mistral".into(),       size: 4_100_000_000 },
-            ModelInfo { name: "qwen2.5:1.5b".into(), size: 1_600_000_000 },
-        ],
-    })
+/// GET /api/tags — Ollama model tags, proxied from the local Ollama
+/// instance (matching the public docs). Empty list when Ollama isn't
+/// running. Replaces a leftover demo stub that served three hardcoded
+/// fake models as if they were real.
+async fn handle_tags(port_rx: tokio::sync::watch::Receiver<Option<u16>>) -> Json<TagsResponse> {
+    let port = match *port_rx.borrow() {
+        Some(p) => p,
+        None => return Json(TagsResponse { models: vec![] }),
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .unwrap_or_default();
+    let models = async {
+        let resp = client.get(format!("http://127.0.0.1:{port}/api/tags")).send().await.ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        let models = json["models"].as_array()?.iter().filter_map(|m| {
+            Some(ModelInfo {
+                name: m["name"].as_str()?.to_string(),
+                size: m["size"].as_u64().unwrap_or(0),
+            })
+        }).collect::<Vec<_>>();
+        Some(models)
+    }.await.unwrap_or_default();
+    Json(TagsResponse { models })
 }
 
 /// Health snapshot — operator-facing diagnostic for "are the API routes I
@@ -7157,6 +7166,8 @@ async fn main() {
     // GET /api/runtime-config and used to set the MetricsPayload availability
     // flag.
     let runtime_config_cache = runtime_config::new_cache();
+    // Keep a receiver for /api/tags before the harvester takes ownership.
+    let tags_port_rx = ollama_port_rx.clone();
     let (ollama_metrics, probe_active) = harvester::start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
@@ -7357,6 +7368,11 @@ async fn main() {
                             tick.tick().await;
                             let sc = s2.clone();
                             let _ = tokio::task::spawn_blocking(move || {
+                                // Housekeeping documented on the function itself:
+                                // expired dismissal rows otherwise accumulate forever.
+                                if let Err(e) = sc.prune_expired_dismissals(now_ms() as i64) {
+                                    eprintln!("[store] dismissal prune error: {e}");
+                                }
                                 if let Err(e) = sc.run_aggregation(now_ms() as i64) {
                                     eprintln!("[store] aggregation error: {e}");
                                 }
@@ -7550,7 +7566,7 @@ async fn main() {
     let app = {
         let r = Router::new()
             .route("/api/health",         get(handle_health))         // diagnostic — always live
-            .route("/api/tags",           get(handle_tags))
+            .route("/api/tags",           get(move || handle_tags(tags_port_rx.clone())))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/ws",                 get(handle_ws))             // WebSocket primary (10 Hz)
