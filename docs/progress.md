@@ -13,6 +13,34 @@ components; every finding verified against the code before acceptance)
 produced 10 HIGH findings, ~25 MEDIUMs, and a dead-code list. Fixes are
 landing in severity-ordered chunks, each tested and merged separately.
 
+### Chunk 5 — dead-code sweep (all three surfaces + scripts)
+- **Agent**: `/api/tags` no longer serves three hardcoded fake models —
+  it now proxies the real local Ollama list, matching what the public
+  docs always claimed. `prune_expired_dismissals` (documented as periodic,
+  never called — dismissal rows accumulated forever) now runs in the
+  hourly aggregation loop. Dead `CatalogModel` struct deleted, three
+  needless `mut`s fixed, and the `no_nvml` release cfg registered via
+  `[lints.rust]` so every normal build stops emitting two warnings.
+  cargo: zero warnings.
+- **Cloud**: dead `Block.start_idx` field and stray parens removed.
+  cargo: zero warnings.
+- **Frontend**: deleted `SustainabilityView.tsx` (unreferenced; rendered
+  `Math.random()` carbon data had it ever been wired) and
+  `SubscriptionGuard.tsx` (unreferenced). Overview lost two dead
+  network-polling subsystems — the 60s `/api/fleet/duty` poll + tick
+  counter feeding a `dutyPct` no JSX rendered, and a 60s
+  `useFleetObservations` poll whose result had zero readers — plus
+  unused imports. Dead exports removed: `calculateWES`,
+  `buildReportFromHistory`, the duplicate `FleetObservation` in
+  types.ts, `src/blog/registry.ts`. (One review claim was wrong:
+  `ROLLING_WINDOW` was a live default param — pointed it at
+  `NODE_ROLLING_WINDOW` instead of deleting.)
+- **Scripts**: `load_gen.py` — dead `strip_colour()` removed and
+  `--model` made required (modern Ollama rejects `/api/generate` without
+  one, so the documented default mode failed every request);
+  `qa_agent.sh` — unused `chip` var removed, `bc` added to the
+  documented requirements.
+
 ### Chunk 4 — frontend HIGHs (detection, projections, pagination, selection, smoothing)
 - **Power-anomaly detector actually fires now.** Both the fleet and local
   event derivations advanced the comparison baseline every frame, so a

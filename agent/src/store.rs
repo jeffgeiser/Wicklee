@@ -1213,8 +1213,7 @@ impl Store {
     }
 
     /// Prune expired dismissal rows older than 7 days beyond their expiry.
-    /// Call periodically (e.g., alongside the hourly aggregation).
-    #[allow(dead_code)]
+    /// Called from the hourly aggregation loop in main.rs.
     pub fn prune_expired_dismissals(&self, now_ms: i64) -> Result<(), duckdb::Error> {
         let cutoff = now_ms - 7 * 24 * 60 * 60 * 1000; // 7 days past expiry
         self.0.lock().unwrap().execute(

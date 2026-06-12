@@ -27,9 +27,6 @@ export const FLEET_ROLLING_WINDOW = 12;
  */
 export const FLEET_ROW_ROLLING_WINDOW = 4;
 
-/** @deprecated use NODE_ROLLING_WINDOW or FLEET_ROLLING_WINDOW */
-const ROLLING_WINDOW = NODE_ROLLING_WINDOW;
-
 /**
  * Generic rolling-average buffer.
  *
@@ -76,7 +73,7 @@ export function useRollingBuffer(window: number = NODE_ROLLING_WINDOW) {
  * pushOne(key, value, tsMs) — same semantics as useRollingBuffer.push
  * resetAll()               — clear all three buffers (call on node offline).
  */
-export function useNodeRollingMetrics(window: number = ROLLING_WINDOW) {
+export function useNodeRollingMetrics(window: number = NODE_ROLLING_WINDOW) {
   const windowRef = useRef(window);
   const stateRef = useRef<{
     tps:   { buf: number[]; lastTs: number };

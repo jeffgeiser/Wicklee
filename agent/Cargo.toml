@@ -3,6 +3,12 @@ name = "wicklee-agent"
 version = "0.9.0"
 edition = "2024"
 
+# `no_nvml` is a custom cfg set by the release workflow's musl/static build
+# (RUSTFLAGS='--cfg no_nvml') to strip the NVML wrapper. Register it so the
+# check-cfg lint doesn't warn on every normal build.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_nvml)'] }
+
 [dependencies]
 axum          = { version = "0.7", features = ["ws"] }
 tokio         = { version = "1",   features = ["full"] }

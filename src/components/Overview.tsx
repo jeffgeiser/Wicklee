@@ -9,15 +9,13 @@ import { pushAndGetSmoothed, pruneBuffers } from '../utils/sharedSmoothing';
 import { CLOUD_URL } from '../utils/cloudUrl';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
-import { useFleetObservations } from '../hooks/useFleetObservations';
-import type { FleetObservation } from '../hooks/useFleetObservations';
 import ModelFitSummaryStrip from './insights/ModelFitSummaryStrip';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { useLocalEvents } from '../hooks/useLocalEvents';
 import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
-import EventFeed, { eventMeta, fmtAgo as fmtEventAgo } from './EventFeed';
+import EventFeed from './EventFeed';
 import MetricTooltip from './MetricTooltip';
 import RuntimeConfigModal from './RuntimeConfigModal';
 
@@ -86,7 +84,7 @@ interface OverviewProps {
   onUpgrade?: () => void;
   getNodeSettings?: (nodeId: string) => { pue: number; kwhRate: number; currency: string };
   fleetKwhRate?: number;
-  /** Auth token getter for cloud API calls (fleet duty endpoint). */
+  /** Auth token getter for cloud API calls. */
   getToken?: () => Promise<string | null>;
   /** Cross-nav to Observability tab with optional node pre-filter. */
   onNavigateToObservability?: (params?: ObservabilityNavParams) => void;
@@ -1330,13 +1328,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     connectionState,
   } = useFleetStream();
 
-  // ── Server-side fleet observations (de-spammed Live Activity) ─────────────
-  const { observations: serverObservations } = useFleetObservations({
-    getToken,
-    state: 'open',
-    skip: isLocalMode,
-  });
-
   // Local-only state (used when isLocalHost for WS/SSE to the local agent)
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   // v0.9.0: Runtime Config modal — null when closed, otherwise the model name to inspect.
@@ -1402,35 +1393,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Per-node cost rolling average — keyed by nodeId, managed via Map ref so
   // hook count doesn't grow with fleet size (hooks must be called unconditionally).
   const nodeCostBufsRef = useRef<Map<string, { buf: number[]; lastTs: number }>>(new Map());
-
-  // Inference duty cycle — client-side rolling tracker (localhost fallback).
-  // On cloud, server-side duty from /api/fleet/duty takes priority.
-  const dutyRef = useRef<{ live: number; total: number }>({ live: 0, total: 0 });
-  const [serverDutyPct, setServerDutyPct] = useState<number | null>(null);
-  const [serverDutyRange, setServerDutyRange] = useState<string>('');
-
-  // Fetch server-side duty cycle on cloud (on mount + every 60s)
-  useEffect(() => {
-    if (isLocalHost || !getToken) return;
-    let cancelled = false;
-    const fetchDuty = async () => {
-      try {
-        const token = await getToken();
-        const res = await fetch(`${CLOUD_URL}/api/fleet/duty?range=24h`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        if (!cancelled && data.duty_pct != null) {
-          setServerDutyPct(data.duty_pct);
-          setServerDutyRange('24h');
-        }
-      } catch { /* silently skip */ }
-    };
-    fetchDuty();
-    const iv = setInterval(fetchDuty, 60_000);
-    return () => { cancelled = true; clearInterval(iv); };
-  }, [getToken]);
 
   // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
@@ -1619,22 +1581,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Must be called before any early returns (Rules of Hooks).
   const counts = useFleetCounts(nodes);
 
-  // Inference duty cycle effect — must be before early returns (Rules of Hooks).
-  // Uses allNodeMetrics directly since effectiveMetrics isn't computed until after early returns.
-  const dutyMetrics = Object.values(allNodeMetrics);
-  useEffect(() => {
-    if (dutyMetrics.length === 0) return;
-    const anyLive = dutyMetrics.some(m => m.inference_state === 'live');
-    dutyRef.current.total += 1;
-    if (anyLive) dutyRef.current.live += 1;
-    // Cap at ~3600 ticks (~1 hour at 1Hz SSE) to keep it a rolling-ish window
-    if (dutyRef.current.total > 3600) {
-      dutyRef.current.live  = Math.round(dutyRef.current.live  * 0.5);
-      dutyRef.current.total = Math.round(dutyRef.current.total * 0.5);
-    }
-    // Note: client-side counter is an in-memory session-only fallback for localhost.
-    // On cloud, server-side /api/fleet/duty (Postgres) is the SSOT.
-  }, [dutyMetrics]);
 
   // Prune the shared smoothing-store buffers when the fleet roster shrinks.
   // Reads from `allNodeMetrics` (declared just above) so this hook lives
@@ -1807,13 +1753,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const displayMemPressure = (isLocalMode && sentinel?.memory_pressure_percent != null)
     ? Math.round(sentinel.memory_pressure_percent)
     : fleetMemPressure;
-
-  // ── Inference Duty Cycle ──
-  // Cloud: prefer server-side 24h duty from /api/fleet/duty (persisted in Postgres).
-  // Localhost: fall back to client-side tick counter.
-  const clientDutyPct = dutyRef.current.total > 0
-    ? Math.round((dutyRef.current.live / dutyRef.current.total) * 100) : null;
-  const dutyPct = (!isLocalHost && serverDutyPct != null) ? Math.round(serverDutyPct) : clientDutyPct;
 
   // Tile 4 — FLEET NODES: online / total
   // fleetTotalCount — all registered nodes (single source via useFleetCounts)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # qa_agent.sh — smoke-tests the Wicklee agent API at localhost:7700
 # Usage: bash scripts/qa_agent.sh
-# Requires: curl, jq
+# Requires: curl, jq, bc
 
 set -uo pipefail
 
@@ -57,7 +57,6 @@ else
 fi
 
 # ── Apple Silicon specific ────────────────────────────────────────────────────
-chip=$(jqv '.gpu_name // .chip_name // "n/a"')
 if echo "$METRICS" | jq -e '.gpu_name or .soc_power_w' > /dev/null 2>&1; then
   section "Apple Silicon"
   soc=$(jqv '.apple_soc_power_w')
