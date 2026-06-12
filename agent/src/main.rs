@@ -5428,7 +5428,10 @@ async fn handle_model_candidates(
                 quant_level: quant.clone(),
                 file_size_bytes: *file_size,
             };
-            let fit = score_fit(model_id, &cv, &hw, wes.penalty_avg.map(|_| 0f32)); // neutral WES without live inference data
+            // None = neutral "no historical WES" (scores 10). `Some(0.0)` is NOT
+            // neutral — fit_components matches it as a poor-WES signal (scores 5),
+            // which silently docked 5 points from every candidate.
+            let fit = score_fit(model_id, &cv, &hw, None);
             // Construct the Ollama HF pull command: `ollama pull hf.co/<model_id>:<quant>`
             let pull_cmd = format!("ollama pull hf.co/{model_id}:{quant}");
             scored_variants.push(serde_json::json!({
@@ -7020,7 +7023,7 @@ async fn main() {
                                         .timeout(Duration::from_secs(300))
                                         .build()
                                         .unwrap_or_default(),
-                    inference_active: std::sync::atomic::AtomicBool::new(false),
+                    in_flight:        std::sync::atomic::AtomicU32::new(0),
                     last_done_ts:     Mutex::new(None),
                     node_id:          config.node_id.clone(),
                     #[cfg(not(target_env = "musl"))]
@@ -7163,8 +7166,8 @@ async fn main() {
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
-    let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
-    let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics));
+    let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active));
+    let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active));
 
     // v0.9.0: Runtime Config Surface — dedicated 5-min pollers for vLLM and
     // llama.cpp. Both run alongside the existing metrics harvesters and write

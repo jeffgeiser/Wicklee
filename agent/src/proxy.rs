@@ -21,8 +21,13 @@ pub(crate) struct ProxyState {
     pub(crate) ollama_port:    u16,
     pub(crate) bypass_if_down: bool,
     pub(crate) client:         reqwest::Client,
-    /// Set to true the instant a request arrives; cleared via 35s window after last done packet.
-    pub(crate) inference_active: std::sync::atomic::AtomicBool,
+    /// Number of inference requests currently streaming through the proxy.
+    /// >0 = inference active right now. Incremented when a request arrives,
+    /// decremented when its relay task ends (done packet, stream end, error,
+    /// timeout, or client disconnect — Drop guard covers them all). Replaces
+    /// a set-but-never-cleared AtomicBool that stuck "inference active" on
+    /// permanently after the first proxied request.
+    pub(crate) in_flight: std::sync::atomic::AtomicU32,
     /// Timestamp of last completed request (done packet received).
     pub(crate) last_done_ts:   Mutex<Option<std::time::Instant>>,
     /// Node ID for trace attribution.
@@ -69,7 +74,7 @@ pub(crate) async fn proxy_ollama_streaming(
     } else {
         String::new()
     };
-    state.inference_active.store(true, std::sync::atomic::Ordering::Relaxed);
+    state.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     // Trace timing: capture request start and generate a unique trace ID.
     let req_ts_ms = std::time::SystemTime::now()
@@ -90,6 +95,8 @@ pub(crate) async fn proxy_ollama_streaming(
     let upstream_resp = match upstream {
         Ok(r) => r,
         Err(e) => {
+            // Request never started streaming — release the in-flight slot.
+            state.in_flight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             let hint = format!(
                 "Wicklee proxy: cannot reach Ollama on :{} — {}\n\
                  Check that Ollama is running with OLLAMA_HOST=127.0.0.1:{}",
@@ -122,6 +129,11 @@ pub(crate) async fn proxy_ollama_streaming(
     tokio::spawn(async move {
         let trace_id = trace_id_clone;
         let model = trace_model;
+        // Release the in-flight slot when the relay ends, on EVERY exit path
+        // (done, stream end, upstream error, chunk timeout, client gone, panic).
+        scopeguard::defer! {
+            proxy_state.in_flight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let mut byte_stream = upstream_resp.bytes_stream();
         loop {
             match tokio::time::timeout(CHUNK_TIMEOUT, byte_stream.next()).await {

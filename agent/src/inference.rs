@@ -110,10 +110,16 @@ impl std::fmt::Display for InferenceState {
 ///   Idle      Silicon at rest
 pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     // ── Tier 1: Exact runtime counts (zero heuristic) ────────────────────────
-    if s.vllm_requests.map_or(false, |r| r > 0) {
+    // The agent's own 30s baseline probe is a real completion request, so it
+    // shows up in these counts (num_requests_running / slots_processing).
+    // While a probe is in flight, discount exactly one request — otherwise
+    // every idle-node probe blipped LIVE and was pushed to the cloud via the
+    // state-transition bypass. Concurrent user traffic still counts (≥2).
+    let probe_inflight = u32::from(s.probe_active);
+    if s.vllm_requests.map_or(false, |r| r > probe_inflight) {
         return InferenceState::Live;
     }
-    if s.llamacpp_requests.map_or(false, |r| r > 0) {
+    if s.llamacpp_requests.map_or(false, |r| r > probe_inflight) {
         return InferenceState::Live;
     }
 
@@ -207,6 +213,46 @@ mod tests {
             apple_gpu_pct:     Some(99.0),
             ai_runtime_loaded: true,
             ai_model_loaded:   true,
+            probe_active:      true,
+            ..idle_signals()
+        };
+        assert_ne!(compute_inference_state(&s), InferenceState::Live);
+    }
+
+    // ── Tier 1 probe discount: the probe's own request must not read LIVE ───
+    // The 30s baseline probe is a real completion request, so it appears in
+    // num_requests_running / slots_processing while in flight.
+    #[test]
+    fn vllm_probe_own_request_not_live() {
+        let s = HardwareSignals {
+            ai_runtime_loaded: true,
+            ai_model_loaded:   true,
+            vllm_requests:     Some(1),
+            probe_active:      true,
+            ..idle_signals()
+        };
+        assert_ne!(compute_inference_state(&s), InferenceState::Live);
+    }
+
+    // Concurrent user traffic during a probe still counts (≥ 2 requests).
+    #[test]
+    fn vllm_user_request_during_probe_still_live() {
+        let s = HardwareSignals {
+            ai_runtime_loaded: true,
+            ai_model_loaded:   true,
+            vllm_requests:     Some(2),
+            probe_active:      true,
+            ..idle_signals()
+        };
+        assert_eq!(compute_inference_state(&s), InferenceState::Live);
+    }
+
+    #[test]
+    fn llamacpp_probe_own_request_not_live() {
+        let s = HardwareSignals {
+            ai_runtime_loaded: true,
+            ai_model_loaded:   true,
+            llamacpp_requests: Some(1),
             probe_active:      true,
             ..idle_signals()
         };
