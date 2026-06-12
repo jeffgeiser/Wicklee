@@ -369,6 +369,22 @@ exponential backoff — minor), a couple of array-index React keys
 (Overview cost table, AddNodeModal digit inputs — display-only), and the
 broader "React is untyped" gap. tsc clean, 75 tests green, build OK.
 
+### Landing page now prerenders real content (SEO/unfurl/AI-visibility gap)
+The earlier SEO pass prerendered blog/docs and added correct meta + OG +
+JSON-LD to the homepage — but left the landing page's `#root` empty, so
+the most-shared page (HN/Reddit drops, AI-assistant lookups, link
+unfurlers) served zero human-readable content without JS. Extended the
+build-time prerender (`generate-static-pages.mjs`) to inject the landing
+page's real hero, subhead, install command, the three feature cards,
+"Sovereign by design" / "Built for agents & LLMs" section copy, and nav
+links into `#root` — ~2.7 KB of crawlable content. Copy is mirrored
+verbatim from `LandingPage.tsx` (kept in sync by hand; marketing surface
+changes rarely; no claims absent from the live page). React's
+`createRoot().render()` replaces it with the live app on load, same as
+the blog/docs pages. `injectContent` gained an optional `wrapStyle` so
+the landing uses a wider container than the article wrapper. 75 tests
+green, build OK.
+
 ### Deliberately left alone
 Cloud-stored WES staying PUE-less (the cloud can't know a user's
 facility multiplier — it's a display-time adjustment), the cloud's

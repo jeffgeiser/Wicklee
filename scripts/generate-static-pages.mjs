@@ -16,7 +16,9 @@
  *   dist/docs/index.html          — public/docs.md
  *   dist/metrics/index.html       — public/metrics.md
  *
- * and injects SoftwareApplication JSON-LD into the landing dist/index.html.
+ * and injects the landing page's real hero/feature content + SoftwareApplication
+ * JSON-LD into dist/index.html, so the homepage isn't an empty #root to
+ * crawlers, AI assistants, and link unfurlers.
  *
  * Each page is the built SPA shell with swapped metadata and the article HTML
  * pre-injected into #root — so crawlers get content, while a real browser
@@ -90,8 +92,8 @@ function applyMeta(shell, { title, description, path, ogType }) {
   return html;
 }
 
-/** Inject JSON-LD + article content into the shell's #root. */
-function injectContent(html, { jsonLd, bodyHtml }) {
+/** Inject JSON-LD + content into the shell's #root. */
+function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
   if (jsonLd) {
     // JSON-LD is data, not executable script — CSP script-src doesn't apply,
     // and crawlers read it from the raw HTML.
@@ -102,11 +104,68 @@ function injectContent(html, { jsonLd, bodyHtml }) {
     if (!html.includes(rootTag)) throw new Error('#root div not found in built index.html');
     // Content lives inside #root: visible to crawlers and during the
     // pre-hydration paint; React's createRoot().render() replaces it with
-    // the live page (same markdown source) once the bundle loads.
+    // the live page once the bundle loads.
+    const style = wrapStyle ?? 'max-width:48rem;margin:0 auto;padding:3rem 1.5rem';
     html = html.replace(rootTag,
-      `${rootTag}<div class="blog-content" style="max-width:48rem;margin:0 auto;padding:3rem 1.5rem">${bodyHtml}</div>`);
+      `${rootTag}<div class="blog-content" style="${style}">${bodyHtml}</div>`);
   }
   return html;
+}
+
+/**
+ * Static HTML for the landing page (`/`).
+ *
+ * The homepage is the page dropped into HN/Reddit threads and read by AI
+ * assistants / link unfurlers / non-JS crawlers — so it must carry real,
+ * human-readable content in the raw HTML, not an empty #root that only fills
+ * in after the JS bundle runs. React hydrates over this on load.
+ *
+ * Copy is mirrored verbatim from src/components/LandingPage.tsx (hero,
+ * feature cards, section headers) — keep the two in sync; this is a marketing
+ * surface that changes rarely. No claims here that aren't on the live page.
+ */
+function landingBodyHtml() {
+  const features = [
+    ['See every node', 'Live GPU temp, VRAM usage, and inference throughput across your entire fleet — auto-detected, zero configuration.'],
+    ['Thermal Intelligence', 'Monitor thermal thresholds and health signals across your entire fleet. Prevent hardware degradation with real-time alerts and WES-aware health telemetry.'],
+    ['Understand your costs', 'WES — the MPG for AI — scores each node on tok/s per watt, thermally adjusted. Wattage-per-Token is the metric cloud providers don’t surface. Now you have it for your local fleet.'],
+  ];
+  const featureHtml = features.map(([t, d]) =>
+    `<li style="margin-bottom:1rem"><strong style="color:#f9fafb">${esc(t)}</strong> — ${esc(d)}</li>`
+  ).join('\n');
+
+  return `
+<main>
+  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Self-hosted AI inference, fully observable.</h1>
+  <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1.5rem">
+    WES (thermally-honest MPG for AI), 18 observation patterns, instant model fit checks, and
+    programmable APIs for Ollama, vLLM, and llama.cpp. Install in 60 seconds — no sudo, no account,
+    nothing to configure.
+  </p>
+  <p style="margin:0 0 2rem">
+    <code style="background:#1f2937;border:1px solid #374151;border-radius:0.375rem;padding:0.5rem 0.75rem;color:#f9fafb;font-family:ui-monospace,monospace;font-size:0.875rem">curl -fsSL https://wicklee.dev/install.sh | bash</code>
+  </p>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">What Wicklee does</h2>
+  <ul style="list-style:none;padding:0;color:#9ca3af;line-height:1.6">
+${featureHtml}
+  </ul>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Sovereign by design</h2>
+  <p style="color:#9ca3af;line-height:1.6">
+    Telemetry never leaves your hardware. Self-hostable, air-gap friendly, and built to complement
+    your existing Prometheus / Grafana / Datadog stack rather than replace it.
+  </p>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Built for agents &amp; LLMs</h2>
+  <p style="color:#9ca3af;line-height:1.6">
+    Best-node selection API, reactive automation webhooks, performance CI/CD, and an MCP server so
+    AI agents can query your fleet's status, efficiency, and model fit directly.
+  </p>
+  <p style="margin-top:2.5rem">
+    <a href="/docs" style="color:#60a5fa">Documentation</a> ·
+    <a href="/pricing" style="color:#60a5fa">Pricing</a> ·
+    <a href="/blog" style="color:#60a5fa">Blog</a> ·
+    <a href="/metrics-reference" style="color:#60a5fa">Metrics reference</a>
+  </p>
+</main>`.trim();
 }
 
 async function emit(routePath, html) {
@@ -132,8 +191,12 @@ const shell = await readFile(join(DIST, 'index.html'), 'utf8');
     url: ORIGIN,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   };
-  await writeFile(join(DIST, 'index.html'), injectContent(shell, { jsonLd }));
-  console.log('[static-pages] / → JSON-LD injected into dist/index.html');
+  await writeFile(join(DIST, 'index.html'), injectContent(shell, {
+    jsonLd,
+    bodyHtml: landingBodyHtml(),
+    wrapStyle: 'max-width:60rem;margin:0 auto;padding:3rem 1.5rem',
+  }));
+  console.log('[static-pages] / → JSON-LD + landing content injected into dist/index.html');
 }
 
 // 2. Blog posts.
@@ -218,4 +281,4 @@ for (const page of [
   await emit(page.path, html);
 }
 
-console.log(`[static-pages] done — ${posts.length} post(s) + listing + docs + landing JSON-LD.`);
+console.log(`[static-pages] done — ${posts.length} post(s) + listing + docs + landing content.`);
