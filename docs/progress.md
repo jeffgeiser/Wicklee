@@ -13,6 +13,34 @@ components; every finding verified against the code before acceptance)
 produced 10 HIGH findings, ~25 MEDIUMs, and a dead-code list. Fixes are
 landing in severity-ordered chunks, each tested and merged separately.
 
+### Chunk 6 — cloud calculation fixes (the four user-visible-numbers MEDIUMs)
+- **`wes_for_payload` honors Apple SoC power.** It fell back NVIDIA → CPU,
+  skipping `apple_soc_power_w` — live WES (and the wes_drop / thermal
+  alerts and MCP tools built on it) used CPU-cluster watts on Apple
+  Silicon and disagreed with the persisted `wes_penalized` history. Now
+  NVIDIA → Apple SoC → CPU, matching the persistence path.
+- **Rollup no longer loses the cutoff-straddling bucket.** Aggregation
+  used a raw `NOW()-24h` cutoff with `ON CONFLICT DO NOTHING`: the
+  straddling 5-min bucket was inserted from partial data, and its late
+  rows were later deleted un-aggregated. Both the INSERT and DELETE
+  cutoffs are now floored to a 5-min boundary, so only complete buckets
+  roll up.
+- **7d/30d/90d charts lose their permanent 24-hour hole.** The 5-min
+  branch of wes-history and metrics-history read only `metrics_5min`,
+  which the rollup populates only past 24h. Both now UNION the raw tail
+  for the trailing day (boundary-bucket weighting skew accepted vs a
+  missing day).
+- **WES long-term drift can actually fire now** — same family: its
+  "recent 24h" window read `metrics_5min`, which never contains the last
+  24h, so the recent sample count was always ~0 (< the 30 threshold) and
+  the observation never fired since it shipped. Recent now reads
+  `metrics_raw` bucketed to 5-min units so the thresholds keep their
+  meaning.
+- **Quant quality factor no longer applied twice.** Both best-variant
+  selection loops recomputed qf on `best_score`, which already carried
+  it — qf² on the incumbent biased model recommendations toward
+  lower-quality quants. The comparison is now direct.
+
 ### Chunk 5 — dead-code sweep (all three surfaces + scripts)
 - **Agent**: `/api/tags` no longer serves three hardcoded fake models —
   it now proxies the real local Ollama list, matching what the public

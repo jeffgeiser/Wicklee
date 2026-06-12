@@ -1193,7 +1193,12 @@ fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
         m.ollama_tokens_per_second?
     };
     if tok_s <= 0.0 { return None; }
-    let watts = m.nvidia_power_draw_w.or(m.cpu_power_w)?;
+    // Same power-resolution order as the persistence path
+    // (metrics_row_from_payload): NVIDIA → Apple SoC → CPU. Skipping
+    // apple_soc_power_w fell back to the CPU-cluster reading on Apple
+    // Silicon, inflating live WES (and the wes_drop/thermal alerts built on
+    // it) versus the wes_penalized stored for history charts.
+    let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w)?;
     if watts <= 0.0 { return None; }
     let penalty = thermal_penalty_for(m.thermal_state.as_deref());
     let raw = tok_s / (watts * penalty);
@@ -3325,17 +3330,36 @@ async fn handle_wes_history(
                     serde_json::json!({ "ts_ms": ts, "raw_wes": rw, "penalized_wes": pw, "thermal_state": thermal })
                 }).collect()
         } else {
+            // metrics_5min only holds buckets older than 24h (run_rollup's
+            // cutoff), so reading it alone left a permanent 24-hour hole at
+            // the right edge of every 7d/30d/90d chart. UNION the raw tail
+            // for the trailing day. Only the boundary bucket can mix
+            // pre-averaged 5-min rows with raw rows (slight weighting skew
+            // there — accepted vs. a missing day).
             let sql = format!(
                 "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
-                        AVG(wes_raw_avg)       AS raw_wes,
-                        AVG(wes_penalized_avg) AS penalized_wes,
-                        MAX(CASE thermal_state_worst
-                            WHEN 'Critical' THEN 3
-                            WHEN 'Serious'  THEN 2
-                            WHEN 'Fair'     THEN 1
-                            ELSE 0 END)         AS thermal_rank
-                 FROM metrics_5min
-                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                        AVG(raw)  AS raw_wes,
+                        AVG(pen)  AS penalized_wes,
+                        MAX(tr)   AS thermal_rank
+                 FROM (
+                     SELECT ts, wes_raw_avg AS raw, wes_penalized_avg AS pen,
+                            CASE thermal_state_worst
+                                WHEN 'Critical' THEN 3
+                                WHEN 'Serious'  THEN 2
+                                WHEN 'Fair'     THEN 1
+                                ELSE 0 END AS tr
+                     FROM metrics_5min
+                     WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                     UNION ALL
+                     SELECT ts, wes_raw, wes_penalized,
+                            CASE thermal_state
+                                WHEN 'Critical' THEN 3
+                                WHEN 'Serious'  THEN 2
+                                WHEN 'Fair'     THEN 1
+                                ELSE 0 END
+                     FROM metrics_raw
+                     WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '24 hours'
+                 ) u
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
@@ -3921,21 +3945,38 @@ async fn handle_metrics_history(
                     serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e, "wes_score": wes })
                 }).collect()
         } else {
+            // metrics_5min only holds buckets older than 24h (run_rollup's
+            // cutoff) — UNION the raw tail so 7d/30d/90d charts don't have a
+            // permanent 24-hour hole at the right edge. See handle_wes_history
+            // for the boundary-bucket weighting caveat.
             let sql = format!(
                 "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
-                        AVG(tok_s_avg)            AS tok_s,
-                        AVG(tok_s_p95)            AS tok_s_p95,
-                        AVG(watts_avg)            AS watts,
-                        AVG(gpu_pct_avg)          AS gpu_pct,
-                        AVG(mem_pressure_pct_avg) AS mem_pct,
-                        AVG(inference_duty_pct)   AS duty_pct,
-                        NULL::float8              AS cpu_pct,
-                        AVG(swap_write_avg)       AS swap_write,
-                        NULL::float8              AS ttft_ms,
-                        NULL::float8              AS e2e_latency_ms,
-                        AVG(wes_penalized_avg)    AS wes_score
-                 FROM metrics_5min
-                 WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                        AVG(tok_s)      AS tok_s,
+                        AVG(tok_s_p95)  AS tok_s_p95,
+                        AVG(watts)      AS watts,
+                        AVG(gpu_pct)    AS gpu_pct,
+                        AVG(mem_pct)    AS mem_pct,
+                        AVG(duty_pct)   AS duty_pct,
+                        NULL::float8    AS cpu_pct,
+                        AVG(swap_write) AS swap_write,
+                        NULL::float8    AS ttft_ms,
+                        NULL::float8    AS e2e_latency_ms,
+                        AVG(wes)        AS wes_score
+                 FROM (
+                     SELECT ts, tok_s_avg AS tok_s, tok_s_p95, watts_avg AS watts,
+                            gpu_pct_avg AS gpu_pct, mem_pressure_pct_avg AS mem_pct,
+                            inference_duty_pct AS duty_pct, swap_write_avg AS swap_write,
+                            wes_penalized_avg AS wes
+                     FROM metrics_5min
+                     WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '{lookback}'
+                     UNION ALL
+                     SELECT ts, tok_s, NULL::float8, watts,
+                            gpu_pct, mem_pressure_pct,
+                            (CASE WHEN inference_state = 'live' THEN 100.0 ELSE 0.0 END)::float8,
+                            swap_write, wes_penalized
+                     FROM metrics_raw
+                     WHERE tenant_id = $1 AND node_id = $2 AND ts >= NOW() - INTERVAL '24 hours'
+                 ) u
                  GROUP BY bucket_ms ORDER BY bucket_ms",
                 bucket_secs = bucket_secs, lookback = lookback_interval
             );
@@ -4579,7 +4620,13 @@ async fn run_rollup(pool: &sqlx::PgPool) {
             -- Last non-null model name observed in the 5-minute window.
             (array_agg(ollama_active_model ORDER BY ts DESC) FILTER (WHERE ollama_active_model IS NOT NULL))[1]
         FROM metrics_raw
-        WHERE ts < NOW() - INTERVAL '24 hours'
+        -- Cutoff floored to a 5-min bucket boundary so only COMPLETE buckets
+        -- are aggregated. With a raw NOW()-24h cutoff, the straddling bucket
+        -- was inserted from partial data; an hour later its remaining rows
+        -- aged past the cutoff, the re-insert hit ON CONFLICT DO NOTHING,
+        -- and the DELETE below removed them un-aggregated — one
+        -- systematically undercounted bucket per node per run.
+        WHERE ts < to_timestamp(floor(EXTRACT(EPOCH FROM NOW() - INTERVAL '24 hours') / 300) * 300)
         GROUP BY bucket, node_id, tenant_id
         ON CONFLICT DO NOTHING"
     ).execute(pool).await;
@@ -4593,7 +4640,7 @@ async fn run_rollup(pool: &sqlx::PgPool) {
     // but explicit deletion ensures data is rolled up first.
     let _ = sqlx::query(
         "DELETE FROM metrics_raw
-         WHERE ts < NOW() - INTERVAL '24 hours'
+         WHERE ts < to_timestamp(floor(EXTRACT(EPOCH FROM NOW() - INTERVAL '24 hours') / 300) * 300)
            AND EXISTS (
                SELECT 1 FROM metrics_5min m
                WHERE m.tenant_id = metrics_raw.tenant_id
@@ -5115,9 +5162,12 @@ async fn handle_fleet_model_candidates(
                 let qf = quant_quality_factor(model_id, quant);
                 let score = (raw_score as f32 * qf).round() as u8;
                 let label = if qf == 0.0 { "Won't Fit".to_string() } else { label };
-                let effective     = score as u32;
-                let best_effective = (best_score as f32 * quant_quality_factor(model_id, &best_quant)).round() as u32;
-                if effective > best_effective {
+                // `score` and `best_score` BOTH already carry the quality
+                // factor — compare directly. Recomputing qf on best_score
+                // applied it twice to the incumbent, biasing selection
+                // toward lower-quality quants whenever the incumbent's
+                // qf < 1.
+                if score > best_score {
                     best_score = score;
                     best_label = label;
                     best_quant = quant.clone();
@@ -5264,9 +5314,12 @@ async fn handle_v1_models_discover(
                 let qf = quant_quality_factor(&model_id, quant);
                 let score = (raw_score as f32 * qf).round() as u8;
                 let label = if qf == 0.0 { "Won't Fit".to_string() } else { label };
-                let effective     = score as u32;
-                let best_effective = (best_score as f32 * quant_quality_factor(&model_id, &best_quant)).round() as u32;
-                if effective > best_effective {
+                // `score` and `best_score` BOTH already carry the quality
+                // factor — compare directly. Recomputing qf on best_score
+                // applied it twice to the incumbent, biasing selection
+                // toward lower-quality quants whenever the incumbent's
+                // qf < 1.
+                if score > best_score {
                     best_score = score;
                     best_quant = quant.clone();
                     best_label = label;
@@ -6438,14 +6491,23 @@ async fn wes_long_term_drift_evaluator_task(state: AppState) {
                    AND wes_penalized_avg > 0"
             ).bind(node_id).fetch_one(&state.pool).await.ok();
 
-            // Recent: last 24 hours.
+            // Recent: last 24 hours — from metrics_RAW, bucketed to 5-min
+            // units so the r_n threshold below keeps its meaning. The rollup
+            // only populates metrics_5min for data OLDER than 24h, so the
+            // previous metrics_5min read here always counted ~0 recent
+            // samples and the drift observation could never fire.
             let recent: Option<(Option<f64>, i64)> = sqlx::query_as(
-                "SELECT AVG(wes_penalized_avg)::DOUBLE PRECISION, COUNT(*)::BIGINT
-                 FROM metrics_5min
-                 WHERE node_id = $1
-                   AND ts >= NOW() - INTERVAL '24 hours'
-                   AND wes_penalized_avg IS NOT NULL
-                   AND wes_penalized_avg > 0"
+                "SELECT AVG(bucket_avg)::DOUBLE PRECISION, COUNT(*)::BIGINT
+                 FROM (
+                     SELECT floor(EXTRACT(EPOCH FROM ts) / 300) AS bucket,
+                            AVG(wes_penalized) AS bucket_avg
+                     FROM metrics_raw
+                     WHERE node_id = $1
+                       AND ts >= NOW() - INTERVAL '24 hours'
+                       AND wes_penalized IS NOT NULL
+                       AND wes_penalized > 0
+                     GROUP BY bucket
+                 ) b"
             ).bind(node_id).fetch_one(&state.pool).await.ok();
 
             let (Some((Some(b_avg), b_n)), Some((Some(r_avg), r_n))) = (baseline, recent) else { continue };
