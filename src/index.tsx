@@ -2,6 +2,7 @@ import './index.css';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Build-time flag injected by Vite when `vite build --mode agent` is used.
 // The value is baked into the bundle at compile time via .env.agent, not read
@@ -25,7 +26,9 @@ const root = ReactDOM.createRoot(rootElement);
     // Agent / local binary: no Clerk. Auth is cloud-only.
     root.render(
       <React.StrictMode>
-        <App />
+        <ErrorBoundary surface="agent">
+          <App />
+        </ErrorBoundary>
       </React.StrictMode>
     );
   } else {
@@ -37,7 +40,9 @@ const root = ReactDOM.createRoot(rootElement);
     root.render(
       <React.StrictMode>
         <ClerkProvider publishableKey={clerkPubKey}>
-          <App />
+          <ErrorBoundary surface="cloud">
+            <App />
+          </ErrorBoundary>
         </ClerkProvider>
       </React.StrictMode>
     );
