@@ -591,7 +591,8 @@ struct MetricsPayload {
     /// Comma-separated runtime names with [runtime_ports] config overrides (e.g. "vllm" or "ollama,vllm").
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_port_overrides: Option<String>,
-    /// True during the agent's 30s background probe AND for 40 s afterward.
+    /// True while the agent's background probe is running AND for 5 s afterward
+    /// (see `OllamaMetrics::is_probing_display`).
     /// Frontend uses this to show IDLE-SPD instead of LIVE during probe activity —
     /// the probe fires a real Ollama request which would otherwise look like a user session.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2739,7 +2740,10 @@ fn start_metrics_broadcaster(
         let mut interval = tokio::time::interval(Duration::from_millis(1_000));
         loop {
             interval.tick().await;
-            sys.refresh_all();
+            // This loop only reads CPU usage and memory from `sys`; refresh just
+            // those rather than `refresh_all()`, which would also re-enumerate
+            // every process/disk/network each second for no benefit.
+            sys.refresh_cpu();
             sys.refresh_memory();
             // Update shared CPU usage for WES sampler idle-thermal override.
             cpu_usage_atomic.store(
@@ -3228,17 +3232,23 @@ async fn handle_export(
     };
 
     let node_id = System::host_name().unwrap_or_else(|| "node".to_string());
-    // Simple date string from system time — no chrono needed.
+    // Correct civil date (UTC) from system time — no chrono needed.
+    // Howard Hinnant's days-from-epoch → y/m/d algorithm; exact across leap years.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let days = secs / 86400;
-    // Rough year/month/day — good enough for filenames.
-    let y = 1970 + days / 365;
-    let d = days % 365;
-    let m = d / 30 + 1;
-    let day = d % 30 + 1;
+    let days = (secs / 86400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;                                   // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y_civil = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);             // [0, 365]
+    let mp = (5 * doy + 2) / 153;                                  // [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;               // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;          // [1, 12]
+    let y = if m <= 2 { y_civil + 1 } else { y_civil };
     let date = format!("{y}-{m:02}-{day:02}");
     let filename = format!("wicklee-audit-{node_id}-{date}");
 
@@ -3379,7 +3389,7 @@ async fn handle_dismissed_list(
     }
 }
 
-// ── Local Observations (Patterns A, B, J, L) ─────────────────────────────────
+// ── Local Observations (16 hardware patterns) ────────────────────────────────
 //
 // Server-side evaluation of 16 hardware-focused patterns against the 10-min
 // DuckDB buffer. Returned by GET /api/observations for the localhost frontend
@@ -4497,8 +4507,12 @@ fn evaluate_local_observations(
             let ttft_seq: Vec<f64> = ttft_vals.iter().map(|(_, v)| *v).collect();
             let mean_ttft = obs_mean(&ttft_seq);
 
-            // OLS slope using sample index as X-axis; convert to ms/min
-            // Each sample ~ 1s, so slope_per_sample * 60 = slope_per_min
+            // OLS slope of TTFT vs. sample index (X = position in the filtered
+            // series, not wall-clock — TTFT samples only exist on inference
+            // events, so spacing is irregular). The * 6.0 below converts the
+            // per-sample slope to an approximate per-minute rate assuming the
+            // typical ~10 s spacing between inference events; treat the ms/min
+            // figure as a trend indicator, not an exact rate.
             let n = ttft_seq.len() as f64;
             let x_mean = (n - 1.0) / 2.0;
             let slope_raw: f64 = {
@@ -4510,7 +4524,6 @@ fn evaluate_local_observations(
                     .sum();
                 if den.abs() < 1e-9 { 0.0 } else { num / den }
             };
-            // Samples are sparse (only on inference), estimate spacing at ~10s avg
             let slope_per_min = slope_raw * 6.0;
 
             // Recent tail: last 30% of ttft samples vs full mean
@@ -5211,7 +5224,12 @@ fn pct_encode_query(s: &str) -> String {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
             b' ' => out.push('+'),
-            _ => { out.push('%'); out.push_str(&format!("{b:02X}")); }
+            _ => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0x0F) as usize] as char);
+            }
         }
     }
     out
@@ -5351,7 +5369,7 @@ async fn refresh_model_catalog(store: store::Store) {
 /// GET /api/model-candidates — discover GGUF models that fit this hardware.
 /// Query params: ?search=llama&limit=20
 /// When search is provided, fetches live from HuggingFace (bypasses cache).
-/// When no search, returns cached trending top-30 (refreshed every 24h).
+/// When no search, returns the cached trending catalog (default limit 20).
 #[cfg(not(target_env = "musl"))]
 async fn handle_model_candidates(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -5579,7 +5597,6 @@ fn build_mcp_node_snapshot(
     hostname: &str,
     proxy_listen: Option<u16>,
     proxy_target: Option<u16>,
-    _runtime_overrides: Option<String>,
     model_baseline: Option<(f32, f32, u32)>,
 ) -> serde_json::Value {
     let hw = read_hardware_signals(apple, nvidia, ollama, vllm, llamacpp,
@@ -5682,7 +5699,7 @@ async fn handle_mcp(
             rapl, &lt, swap, &probe_active, sys.global_cpu_info().cpu_usage(),
             total, used, total.saturating_sub(used), sys.cpus().len(),
             &node_id.0, &hostname,
-            proxy_ports.listen, proxy_ports.target, proxy_ports.runtime_overrides.clone(),
+            proxy_ports.listen, proxy_ports.target,
             None, // model_baseline — not wired through Extension, acceptable for MCP
         )
     };
@@ -6414,7 +6431,9 @@ async fn handle_metrics(
 
         loop {
             interval.tick().await;
-            sys.refresh_all();
+            // Only CPU usage and memory are read below; avoid the per-second
+            // process/disk/network enumeration that `refresh_all()` performs.
+            sys.refresh_cpu();
             sys.refresh_memory();
 
             let timestamp_ms = std::time::SystemTime::now()

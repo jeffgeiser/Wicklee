@@ -352,16 +352,18 @@ fn listening_inode_to_port(path: &str) -> HashMap<u64, u16> {
 /// of the process owner — only reading `/proc/{pid}/fd/` requires same-user or
 /// `cap_sys_ptrace`. This means even when cmdline is empty (other-user process),
 /// the socket scan succeeds as long as the agent can read the fd directory.
+/// `listen_maps` holds one `inode → listening_port` map per kernel TCP table,
+/// in priority order (tcp6 first — dual-stack servers bind on ":::" which
+/// appears there even for IPv4-mapped connections; tcp second for IPv4-only
+/// servers). The caller builds these once per scan so this stays O(inodes) per
+/// PID instead of re-reading and re-parsing the full TCP tables on every call.
 #[cfg(target_os = "linux")]
-pub fn socket_port_for_pid(pid: u32) -> Option<u16> {
+fn socket_port_for_pid(pid: u32, listen_maps: &[HashMap<u64, u16>]) -> Option<u16> {
     let inodes = socket_inodes_for_pid(pid);
     if inodes.is_empty() {
         return None;
     }
-    // Prefer tcp6 — dual-stack servers bind on ":::" which appears there even
-    // for IPv4-mapped connections. Fall through to tcp for IPv4-only servers.
-    for table in &["/proc/net/tcp6", "/proc/net/tcp"] {
-        let listen_map = listening_inode_to_port(table);
+    for listen_map in listen_maps {
         for inode in &inodes {
             if let Some(&port) = listen_map.get(inode) {
                 return Some(port);
@@ -373,7 +375,7 @@ pub fn socket_port_for_pid(pid: u32) -> Option<u16> {
 
 /// Stub for non-Linux targets — Tier 3 is a no-op; always returns `None`.
 #[cfg(not(target_os = "linux"))]
-pub fn socket_port_for_pid(_pid: u32) -> Option<u16> {
+fn socket_port_for_pid(_pid: u32, _listen_maps: &[HashMap<u64, u16>]) -> Option<u16> {
     None
 }
 
@@ -481,29 +483,49 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
     // runtime's default port; the main server binds on the configured port.
     // Strategy: prefer the first PID whose listening socket port differs from the
     // runtime's default_port — that is the user-configured main server.
-    candidates
-        .into_iter()
-        .map(|(name, c)| {
-            if c.explicit {
-                return (name, c.port);
+    //
+    // The kernel TCP tables are parsed ONCE here and shared across every PID,
+    // instead of re-reading them per PID (previously O(pids × table_size), which
+    // is costly with many vLLM worker subprocesses on a busy host).
+    let listen_maps: Vec<HashMap<u64, u16>> = {
+        #[cfg(target_os = "linux")]
+        {
+            if candidates.values().any(|c| !c.explicit) {
+                vec![
+                    listening_inode_to_port("/proc/net/tcp6"),
+                    listening_inode_to_port("/proc/net/tcp"),
+                ]
+            } else {
+                Vec::new()
             }
-            let spec = RUNTIME_SPECS.iter().find(|s| s.name == name).unwrap();
-            let mut result = c.port; // start with default as fallback
-            for pid in &c.pids {
-                if let Some(sp) = socket_port_for_pid(*pid) {
-                    if sp != spec.default_port {
-                        // Non-default → this is the main server, not a worker.
-                        // (Logged only by the discovery loop on change, not per-scan.)
-                        result = sp;
-                        break;
-                    }
-                    // Confirms the runtime is running; keep scanning for non-default.
+        }
+        #[cfg(not(target_os = "linux"))]
+        { Vec::new() }
+    };
+
+    let mut resolved: HashMap<&'static str, u16> = HashMap::with_capacity(candidates.len());
+    for (name, c) in candidates {
+        if c.explicit {
+            resolved.insert(name, c.port);
+            continue;
+        }
+        let spec = RUNTIME_SPECS.iter().find(|s| s.name == name).unwrap();
+        let mut result = c.port; // start with default as fallback
+        for pid in &c.pids {
+            if let Some(sp) = socket_port_for_pid(*pid, &listen_maps) {
+                if sp != spec.default_port {
+                    // Non-default → this is the main server, not a worker.
+                    // (Logged only by the discovery loop on change, not per-scan.)
                     result = sp;
+                    break;
                 }
+                // Confirms the runtime is running; keep scanning for non-default.
+                result = sp;
             }
-            (name, result)
-        })
-        .collect()
+        }
+        resolved.insert(name, result);
+    }
+    resolved
 }
 
 // ── Discovery loop ────────────────────────────────────────────────────────────
@@ -527,10 +549,7 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
         loop {
             ticker.tick().await;
 
-            let active: HashMap<&str, u16> = scan_runtimes()
-                .into_iter()
-                .map(|(n, p)| (n, p))
-                .collect();
+            let active: HashMap<&str, u16> = scan_runtimes().into_iter().collect();
 
             for (name, tx) in &txs {
                 let new_val = active.get(name).copied();

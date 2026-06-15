@@ -75,9 +75,10 @@ fn start_cloud_push_inner(
                 Err(RecvError::Lagged(_))   => continue,
             };
 
-            // Extract inference_state for the bypass decision (one cheap JSON parse).
-            let curr_state: Option<String> = serde_json::from_str::<serde_json::Value>(&frame)
-                .ok()
+            // Parse the frame once and reuse it for both the state-change bypass
+            // decision and the node_id/observations patch below.
+            let parsed: Option<serde_json::Value> = serde_json::from_str(&frame).ok();
+            let curr_state: Option<String> = parsed.as_ref()
                 .and_then(|v| v["inference_state"].as_str().map(|s| s.to_string()));
             let state_changed = curr_state.as_deref() != last_pushed_state.as_deref();
 
@@ -97,7 +98,7 @@ fn start_cloud_push_inner(
             // so it matches the nodes table key. The `hostname` field is already
             // set correctly by the broadcast loop (System::host_name()) — do NOT
             // overwrite it.
-            let patched = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&frame) {
+            let patched = if let Some(mut val) = parsed {
                 val["node_id"] = serde_json::json!(wk_id);
                 // Embed current observations from the shared cache (non-musl only).
                 // Empty array is omitted by the cloud's serde(default) — no overhead.

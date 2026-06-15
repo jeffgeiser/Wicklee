@@ -98,7 +98,7 @@ pub(crate) fn bytes_per_param_for_quant(quant: &str) -> Option<f32> {
     if q.starts_with("Q5") { return Some(0.6875); }                          // ~5.5 bits
     if q.starts_with("Q6") { return Some(0.8125); }                          // ~6.5 bits
     if q.starts_with("Q8") { return Some(1.125); }                           // ~9 bits
-    if q == "F16" || q == "BF16" || q.starts_with("MXFP16") { return Some(2.0); }
+    if q == "F16" || q == "BF16" { return Some(2.0); }
     if q == "F32" { return Some(4.0); }
     None
 }

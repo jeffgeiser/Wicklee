@@ -12,10 +12,11 @@
 //!
 //! # Threading model
 //! DuckDB's `Connection` is `Send` but not `Sync`; the `Mutex<Connection>`
-//! wrapper makes the store `Sync`.  Write calls from the async broadcast
-//! subscriber hold the lock for < 1 ms and are fire-and-forget at 1 Hz.
-//! The hourly aggregation is dispatched via `tokio::task::spawn_blocking`
-//! so it never blocks the async executor even if it takes a few seconds.
+//! wrapper makes the store `Sync`. Writes from the async broadcast subscriber
+//! are quick (single-row inserts at 1 Hz), but the same mutex also serialises
+//! the read-side queries (`/api/history`, SLA, profile, audit export) and the
+//! hourly aggregation — so any blocking DB call MUST run inside
+//! `tokio::task::spawn_blocking` to keep the async executor free.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -676,8 +677,14 @@ impl Store {
         "))?;
 
         // ── Tier 1 → Tier 2 ──────────────────────────────────────────────────
-        // PERCENTILE_CONT is a DuckDB ordered-set aggregate — gives true p95
-        // without materialising all raw samples.
+        // Each per-minute row carries `sample_count` (raw 1 Hz samples folded
+        // into it). Minutes with gaps/restarts have fewer samples, so we weight
+        // every average by sample_count — an unweighted AVG(avg) would treat a
+        // 3-sample minute the same as a full 60-sample minute and skew the hour.
+        // NULLIF guards divide-by-zero when a column was NULL across the window.
+        // Note: tps_p95 is the p95 of the per-minute *averages*, not of raw
+        // samples (raw rows are pruned at 24 h, so true sample-level p95 isn't
+        // available at the 1-hr tier).
         conn.execute_batch(&format!("
             INSERT INTO metrics_1hr
               (ts_ms, node_id, model,
@@ -688,13 +695,18 @@ impl Store {
               (ts_ms / 3600000) * 3600000                                AS ts_ms,
               node_id,
               MAX(model)                                                  AS model,
-              AVG(tps_avg)                                                AS tps_avg,
+              SUM(tps_avg * sample_count)
+                / NULLIF(SUM(CASE WHEN tps_avg IS NOT NULL THEN sample_count ELSE 0 END), 0)         AS tps_avg,
               MAX(tps_max)                                                AS tps_max,
-              PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tps_avg)      AS tps_p95,
-              AVG(cpu_usage_avg)                                          AS cpu_usage_avg,
-              AVG(gpu_util_avg)                                           AS gpu_util_avg,
-              AVG(gpu_power_avg)                                          AS gpu_power_avg,
-              CAST(AVG(vram_used_avg) AS BIGINT)                         AS vram_used_avg,
+              PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tps_avg)       AS tps_p95,
+              SUM(cpu_usage_avg * sample_count)
+                / NULLIF(SUM(CASE WHEN cpu_usage_avg IS NOT NULL THEN sample_count ELSE 0 END), 0)   AS cpu_usage_avg,
+              SUM(gpu_util_avg * sample_count)
+                / NULLIF(SUM(CASE WHEN gpu_util_avg IS NOT NULL THEN sample_count ELSE 0 END), 0)    AS gpu_util_avg,
+              SUM(gpu_power_avg * sample_count)
+                / NULLIF(SUM(CASE WHEN gpu_power_avg IS NOT NULL THEN sample_count ELSE 0 END), 0)   AS gpu_power_avg,
+              CAST(SUM(vram_used_avg * sample_count)
+                / NULLIF(SUM(CASE WHEN vram_used_avg IS NOT NULL THEN sample_count ELSE 0 END), 0) AS BIGINT) AS vram_used_avg,
               SUM(sample_count)                                           AS sample_count
             FROM metrics_1min
             WHERE ts_ms >= {min_lookback} AND ts_ms < {cur_hr_ms}
@@ -1389,14 +1401,17 @@ impl Store {
               GROUP BY model ORDER BY avg_watts DESC".to_string(),
              1.0 / 3600.0)
         } else {
-            // 1-min aggregated data — each sample = 1 minute = 1/60 hour
+            // 1-min aggregated data — `sample_count` carries the number of raw
+            // 1 Hz samples folded into each minute, so each counted sample is
+            // still 1 second = 1/3600 hour (NOT 1/60: that would treat every
+            // raw second as a full minute and inflate cost ~60×).
             ("SELECT model, SUM(sample_count) AS samples,
                      AVG(gpu_power_avg) AS avg_watts,
                      AVG(tps_avg) AS avg_tps
               FROM metrics_1min
               WHERE node_id = ? AND ts_ms >= ?
               GROUP BY model ORDER BY avg_watts DESC".to_string(),
-             1.0 / 60.0)
+             1.0 / 3600.0)
         };
 
         let mut stmt = conn.prepare(&sql)?;
