@@ -54,11 +54,10 @@ pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
         let after_num: String = after_substr.chars()
             .take_while(|c| c.is_ascii_digit() || *c == '.').collect();
         let suffix_ok = after_substr[after_num.len()..].starts_with('b');
-        if !before.is_empty() && !after_num.is_empty() && suffix_ok {
-            if let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
+        if !before.is_empty() && !after_num.is_empty() && suffix_ok
+            && let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
                 return Some(e * p);
             }
-        }
     }
     // Fallback: plain "NB" or "N.MB", word-boundaried so "1b" in "1binary"
     // doesn't match.
@@ -70,11 +69,9 @@ pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
             while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') { i += 1; }
             if i < bytes.len() && bytes[i] == b'b' {
                 let is_boundary = i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_alphanumeric();
-                if is_boundary {
-                    if let Ok(p) = lower[start..i].parse::<f32>() {
-                        if p > 0.0 && p < 10000.0 { return Some(p); }
-                    }
-                }
+                if is_boundary
+                    && let Ok(p) = lower[start..i].parse::<f32>()
+                        && p > 0.0 && p < 10000.0 { return Some(p); }
             }
         }
         i += 1;

@@ -23,10 +23,10 @@ pub(crate) struct ProxyState {
     pub(crate) client:         reqwest::Client,
     /// Number of inference requests currently streaming through the proxy.
     /// >0 = inference active right now. Incremented when a request arrives,
-    /// decremented when its relay task ends (done packet, stream end, error,
-    /// timeout, or client disconnect — Drop guard covers them all). Replaces
-    /// a set-but-never-cleared AtomicBool that stuck "inference active" on
-    /// permanently after the first proxied request.
+    /// > decremented when its relay task ends (done packet, stream end, error,
+    /// > timeout, or client disconnect — Drop guard covers them all). Replaces
+    /// > a set-but-never-cleared AtomicBool that stuck "inference active" on
+    /// > permanently after the first proxied request.
     pub(crate) in_flight: std::sync::atomic::AtomicU32,
     /// Timestamp of last completed request (done packet received).
     pub(crate) last_done_ts:   Mutex<Option<std::time::Instant>>,
@@ -144,8 +144,8 @@ pub(crate) async fn proxy_ollama_streaming(
                             // The done packet is the last line; it's small and rarely split across chunks.
                             if let Ok(text) = std::str::from_utf8(&bytes) {
                                 for line in text.lines() {
-                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                                        if v["done"].as_bool() == Some(true) {
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                                        && v["done"].as_bool() == Some(true) {
                                             let total_dur    = v["total_duration"].as_u64().unwrap_or(0);
                                             let prompt_dur   = v["prompt_eval_duration"].as_u64().unwrap_or(0);
                                             let eval_dur     = v["eval_duration"].as_u64().unwrap_or(0);
@@ -195,7 +195,6 @@ pub(crate) async fn proxy_ollama_streaming(
                                                 });
                                             }
                                         }
-                                    }
                                 }
                             }
                             if tx.send(Ok(bytes)).await.is_err() {
@@ -203,7 +202,7 @@ pub(crate) async fn proxy_ollama_streaming(
                             }
                         }
                         Err(e) => {
-                            let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await;
+                            let _ = tx.send(Err(std::io::Error::other(e))).await;
                             break;
                         }
                     }
@@ -276,7 +275,7 @@ pub(crate) async fn proxy_passthrough(
                         Ok(Some(c)) => {
                             match c {
                                 Ok(b)  => { if tx.send(Ok(b)).await.is_err() { break; } }
-                                Err(e) => { let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await; break; }
+                                Err(e) => { let _ = tx.send(Err(std::io::Error::other(e))).await; break; }
                             }
                         }
                         Ok(None) => break,
