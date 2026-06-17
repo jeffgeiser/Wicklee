@@ -591,7 +591,8 @@ struct MetricsPayload {
     /// Comma-separated runtime names with [runtime_ports] config overrides (e.g. "vllm" or "ollama,vllm").
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_port_overrides: Option<String>,
-    /// True during the agent's 30s background probe AND for 40 s afterward.
+    /// True while the agent's background probe is running AND for 5 s afterward
+    /// (see `OllamaMetrics::is_probing_display`).
     /// Frontend uses this to show IDLE-SPD instead of LIVE during probe activity —
     /// the probe fires a real Ollama request which would otherwise look like a user session.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1183,10 +1184,13 @@ fn read_linux_chip_name() -> Option<String> { None }
 //
 // Reads the kernel powercap interface — no sudo, no extra libraries.
 // Samples the energy counter twice with a 500 ms gap; power = ΔµJ / Δµs (= Watts).
-// Handles three path variants in priority order:
-//   1. intel-rapl subdirectory layout  (most Intel, also AMD on modern kernels)
-//   2. intel-rapl flat layout          (older kernels)
-//   3. amd-core layout                 (fallback for some AMD configs)
+//
+// Enumerates and SUMS every top-level RAPL package domain (e.g. intel-rapl:0,
+// intel-rapl:1 on a dual-socket box) so multi-socket total package power is
+// reported, not just socket 0. Subdomains (intel-rapl:0:0) and the duplicate
+// MMIO interface (intel-rapl-mmio:*) are excluded to avoid double-counting.
+// Falls back to the legacy single-path layout (amd-core / older kernels) when
+// no standard package domain is found.
 
 #[cfg(target_os = "linux")]
 pub(crate) const RAPL_PATHS: &[(&str, &str)] = &[
@@ -1200,6 +1204,35 @@ pub(crate) fn read_rapl_uj(path: &str) -> Option<u64> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
+/// Enumerate the `energy_uj` paths of every top-level RAPL package domain.
+///
+/// Top-level zones are named `intel-rapl:N` / `amd-core:N` (exactly one colon
+/// group). Subdomains `intel-rapl:N:M` (core/uncore/dram — would double-count
+/// against the package) and the `intel-rapl-mmio:*` mirror interface are
+/// excluded. On a dual-socket box this returns both `intel-rapl:0` and
+/// `intel-rapl:1`, whose powers the caller sums.
+#[cfg(target_os = "linux")]
+pub(crate) fn discover_rapl_domains() -> Vec<String> {
+    let mut domains = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/sys/class/powercap") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // `starts_with("intel-rapl:")` excludes "intel-rapl-mmio:*"; the
+            // single-colon count excludes the "intel-rapl:N:M" subdomains.
+            let is_package = (name.starts_with("intel-rapl:") || name.starts_with("amd-core:"))
+                && name.matches(':').count() == 1;
+            if is_package {
+                let path = format!("/sys/class/powercap/{name}/energy_uj");
+                if read_rapl_uj(&path).is_some() {
+                    domains.push(path);
+                }
+            }
+        }
+    }
+    domains.sort(); // deterministic order across ticks
+    domains
+}
+
 /// Returns a shared `Option<f32>` updated every ~500 ms with the package CPU power
 /// in Watts (Linux RAPL powercap).  Stays `None` on non-Linux or when no RAPL sysfs
 /// node is found (older kernels, certain VMs, or AMD pre-Zen platforms).
@@ -1210,22 +1243,43 @@ fn start_rapl_harvester() -> Arc<Mutex<Option<f32>>> {
     {
         let shared_clone = Arc::clone(&shared);
         tokio::spawn(async move {
-            // Find the first RAPL path that is readable.
-            let found = RAPL_PATHS.iter().find(|(path, _)| read_rapl_uj(path).is_some());
-            let Some((path, _label)) = found else { return; };
-            let path = *path;
+            // Prefer enumerating every package domain (multi-socket → summed).
+            let mut domains = discover_rapl_domains();
+            if domains.is_empty() {
+                // Legacy fallback for older/non-standard layouts (amd-core, the
+                // subdirectory variant) that the enumeration above doesn't match.
+                if let Some((path, _)) = RAPL_PATHS.iter().find(|(p, _)| read_rapl_uj(p).is_some()) {
+                    domains.push((*path).to_string());
+                }
+            }
+            if domains.is_empty() { return; }
+
+            // Sum the energy counters across all package domains. Returns None
+            // only when every domain read fails (transient sysfs error).
+            let read_total = |ds: &[String]| -> Option<u64> {
+                let mut sum = 0_u64;
+                let mut any = false;
+                for d in ds {
+                    if let Some(v) = read_rapl_uj(d) {
+                        sum = sum.wrapping_add(v);
+                        any = true;
+                    }
+                }
+                any.then_some(sum)
+            };
 
             loop {
-                let Some(e1) = read_rapl_uj(path) else {
+                let Some(e1) = read_total(&domains) else {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 };
                 let t1 = std::time::Instant::now();
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                let Some(e2) = read_rapl_uj(path) else { continue; };
+                let Some(e2) = read_total(&domains) else { continue; };
 
                 let elapsed_us = t1.elapsed().as_micros() as f64;
-                // Skip sample on counter rollover — extremely rare but guard it anyway.
+                // Skip sample on counter rollover (any domain wrapping makes the
+                // summed delta non-monotonic) — extremely rare in a 500 ms window.
                 if e2 > e1 && elapsed_us > 0.0 {
                     let power_w = (e2 - e1) as f64 / elapsed_us; // µJ / µs = W
                     if let Ok(mut guard) = shared_clone.lock() {
@@ -1467,13 +1521,20 @@ fn amd_clock_ratio_result(ratio: f64, tdie_c: Option<f64>) -> LinuxThermalResult
         ("Critical", 2.50)   // severe throttle — higher than the 4-state cap of 2.0
     };
 
-    // Temperature tie-breaker: Tdie > 85 °C → at least Serious.
+    // Reconcile the clock-ratio verdict against the temperature reading.
+    // Depressed clocks alone do NOT imply thermal throttling — demand-based DVFS
+    // idles the clocks on a cold, unloaded CPU. Real throttling only happens near
+    // Tjmax (~90-100 °C), so the die must actually be hot to count as throttling.
     let (state, penalty) = match tdie_c {
+        // Hot die + reduced clocks → confirmed thermal stress, at least Serious.
         Some(t) if t > 85.0 && penalty < 1.75 => ("Serious", 1.75_f32),
-        // No temperature sensor: low clock ratio is likely demand-based frequency
-        // scaling (idle CPU), not thermal throttling. Cap at "Fair" since we can't
-        // confirm actual thermal stress without a temp reading.
+        // Cool die (< 75 °C): low clocks are idle DVFS, not throttling → Normal,
+        // regardless of how far the clock ratio has dropped.
+        Some(t) if t < 75.0 => ("Normal", 1.00_f32),
+        // No temperature sensor: can't confirm thermal stress, so a low clock
+        // ratio is more likely idle DVFS — cap at "Fair".
         None if penalty > 1.25 => ("Fair", 1.25_f32),
+        // 75–85 °C with a temp reading: keep the clock-ratio verdict (gray zone).
         _ => (state, penalty),
     };
 
@@ -1507,12 +1568,17 @@ fn read_coretemp_max_c(hwmon: &std::path::Path) -> Option<f64> {
 
 #[cfg(target_os = "linux")]
 fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult> {
+    // Resolve the hwmon nodes once — each lookup scans /sys/class/hwmon, and the
+    // branches below would otherwise re-scan it up to four times per tick.
+    let k10temp_hwmon = find_hwmon("k10temp");
+    let coretemp_hwmon = find_hwmon("coretemp");
+
     // ── AMD path: k10temp + clock ratio ──────────────────────────────────────
-    if let Some(hwmon) = find_hwmon("k10temp") {
+    if let Some(hwmon) = &k10temp_hwmon {
         if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
             if max_khz > 0 {
                 let ratio  = cur_khz as f64 / max_khz as f64;
-                let tdie_c = read_k10temp_tdie_c(&hwmon);
+                let tdie_c = read_k10temp_tdie_c(hwmon);
                 return Some(amd_clock_ratio_result(ratio, tdie_c));
             }
         }
@@ -1522,8 +1588,8 @@ fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult
     // ── Intel path: coretemp hwmon + clock ratio ─────────────────────────────
     // coretemp provides direct per-core temperature readings on Intel CPUs.
     // Combined with clock ratio for thermal state determination.
-    if let Some(hwmon) = find_hwmon("coretemp") {
-        let temp_c = read_coretemp_max_c(&hwmon);
+    if let Some(hwmon) = &coretemp_hwmon {
+        let temp_c = read_coretemp_max_c(hwmon);
         // Try clock ratio first (same approach as AMD)
         if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
             if max_khz > 0 {
@@ -1553,7 +1619,7 @@ fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult
 
     // ── Generic Intel/other: clock ratio without dedicated hwmon ─────────────
     // If no k10temp or coretemp hwmon, but cpufreq is available, use clock ratio.
-    if find_hwmon("k10temp").is_none() && find_hwmon("coretemp").is_none() {
+    if k10temp_hwmon.is_none() && coretemp_hwmon.is_none() {
         if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
             if max_khz > 0 {
                 let ratio = cur_khz as f64 / max_khz as f64;
@@ -1751,6 +1817,14 @@ async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
     Some(result)
 }
 
+/// Whether to emit the per-sample powermetrics diagnostics (label dump + power
+/// breakdown). Off by default — set WICKLEE_DEBUG_POWER=1 to enable. Without
+/// this gate these printed on every ~5 s sample forever, growing the log file.
+fn power_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("WICKLEE_DEBUG_POWER").is_ok())
+}
+
 fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
     let mut m = AppleSiliconMetrics::default();
     for line in output.lines() {
@@ -1805,11 +1879,13 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
     // us catch label changes (e.g. "Combined Power" → "SoC Power" in Sequoia)
     // without guessing.  Log prefix [pm_raw] — filter with:
     //   sudo tail -f /var/log/wicklee.log | grep '\[pm_raw\]'
-    for line in output.lines() {
-        let t = line.trim();
-        let lower = t.to_ascii_lowercase();
-        if lower.contains("power") || lower.contains("residency") {
-            eprintln!("[pm_raw] {t}");
+    if power_debug_enabled() {
+        for line in output.lines() {
+            let t = line.trim();
+            let lower = t.to_ascii_lowercase();
+            if lower.contains("power") || lower.contains("residency") {
+                eprintln!("[pm_raw] {t}");
+            }
         }
     }
 
@@ -1827,11 +1903,13 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
 
     // Diagnostic: log the power component breakdown so operators can verify
     // GPU + ANE rails are being captured during active inference.
-    eprintln!("[power] soc={:.2}W  (cpu={:.2} + gpu={:.2} + ane={:.2})",
-        m.soc_power_w.unwrap_or(0.0),
-        m.cpu_power_w.unwrap_or(0.0),
-        m.gpu_power_w.unwrap_or(0.0),
-        m.ane_power_w.unwrap_or(0.0));
+    if power_debug_enabled() {
+        eprintln!("[power] soc={:.2}W  (cpu={:.2} + gpu={:.2} + ane={:.2})",
+            m.soc_power_w.unwrap_or(0.0),
+            m.cpu_power_w.unwrap_or(0.0),
+            m.gpu_power_w.unwrap_or(0.0),
+            m.ane_power_w.unwrap_or(0.0));
+    }
 
     m
 }
@@ -2445,6 +2523,29 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
         #[cfg(not(target_os = "macos"))]
         let wired_limit_mb: Option<u64> = None;
 
+        // powermetrics samples over a 5 s window (try_powermetrics_nosudo uses
+        // `-i 5000`), so awaiting it inline would gate this whole loop to ~5 s and
+        // staling the cheap thermal/GPU/memory reads. Run it on its own task and
+        // have the 2 s loop below merge whatever the latest sample is.
+        let pm_cache: Arc<Mutex<Option<AppleSiliconMetrics>>> = Arc::new(Mutex::new(None));
+        {
+            let pm_cache = Arc::clone(&pm_cache);
+            tokio::spawn(async move {
+                loop {
+                    match try_powermetrics_nosudo().await {
+                        // Success already blocked ~5 s, so this self-paces at ~5 s.
+                        Some(pm) => { if let Ok(mut g) = pm_cache.lock() { *g = Some(pm); } }
+                        // Unavailable (non-root / Intel Mac): returns fast — clear
+                        // the cache and back off so we don't busy-spin.
+                        None => {
+                            if let Ok(mut g) = pm_cache.lock() { *g = None; }
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        }
+                    }
+                }
+            });
+        }
+
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
             interval.tick().await;
@@ -2465,11 +2566,13 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
             // 3. Memory pressure via vm_stat (no sudo required)
             m.memory_pressure_percent = read_memory_pressure_vmstat().await;
 
-            // 4. Power + thermal via powermetrics (no sudo required when running as root)
+            // 4. Power + thermal via powermetrics — read the latest sample from the
+            //    background task (refreshed ~every 5 s) instead of blocking here.
             //    Copy all power fields: cpu, gpu, ane, and the combined SoC total.
             //    apple_soc_power_w (= soc_power_w) is the true ~13-20 W system draw
             //    during inference; cpu_power_w alone (~1.7-7 W) under-reports by 2-3×.
-            if let Some(pm) = try_powermetrics_nosudo().await {
+            let latest_pm = pm_cache.lock().ok().and_then(|g| g.clone());
+            if let Some(pm) = latest_pm {
                 m.cpu_power_w  = pm.cpu_power_w;
                 m.ecpu_power_w = pm.ecpu_power_w;
                 m.pcpu_power_w = pm.pcpu_power_w;
@@ -2739,7 +2842,10 @@ fn start_metrics_broadcaster(
         let mut interval = tokio::time::interval(Duration::from_millis(1_000));
         loop {
             interval.tick().await;
-            sys.refresh_all();
+            // This loop only reads CPU usage and memory from `sys`; refresh just
+            // those rather than `refresh_all()`, which would also re-enumerate
+            // every process/disk/network each second for no benefit.
+            sys.refresh_cpu();
             sys.refresh_memory();
             // Update shared CPU usage for WES sampler idle-thermal override.
             cpu_usage_atomic.store(
@@ -3228,17 +3334,23 @@ async fn handle_export(
     };
 
     let node_id = System::host_name().unwrap_or_else(|| "node".to_string());
-    // Simple date string from system time — no chrono needed.
+    // Correct civil date (UTC) from system time — no chrono needed.
+    // Howard Hinnant's days-from-epoch → y/m/d algorithm; exact across leap years.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let days = secs / 86400;
-    // Rough year/month/day — good enough for filenames.
-    let y = 1970 + days / 365;
-    let d = days % 365;
-    let m = d / 30 + 1;
-    let day = d % 30 + 1;
+    let days = (secs / 86400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;                                   // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y_civil = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);             // [0, 365]
+    let mp = (5 * doy + 2) / 153;                                  // [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;               // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;          // [1, 12]
+    let y = if m <= 2 { y_civil + 1 } else { y_civil };
     let date = format!("{y}-{m:02}-{day:02}");
     let filename = format!("wicklee-audit-{node_id}-{date}");
 
@@ -3379,7 +3491,7 @@ async fn handle_dismissed_list(
     }
 }
 
-// ── Local Observations (Patterns A, B, J, L) ─────────────────────────────────
+// ── Local Observations (16 hardware patterns) ────────────────────────────────
 //
 // Server-side evaluation of 16 hardware-focused patterns against the 10-min
 // DuckDB buffer. Returned by GET /api/observations for the localhost frontend
@@ -4497,8 +4609,12 @@ fn evaluate_local_observations(
             let ttft_seq: Vec<f64> = ttft_vals.iter().map(|(_, v)| *v).collect();
             let mean_ttft = obs_mean(&ttft_seq);
 
-            // OLS slope using sample index as X-axis; convert to ms/min
-            // Each sample ~ 1s, so slope_per_sample * 60 = slope_per_min
+            // OLS slope of TTFT vs. sample index (X = position in the filtered
+            // series, not wall-clock — TTFT samples only exist on inference
+            // events, so spacing is irregular). The * 6.0 below converts the
+            // per-sample slope to an approximate per-minute rate assuming the
+            // typical ~10 s spacing between inference events; treat the ms/min
+            // figure as a trend indicator, not an exact rate.
             let n = ttft_seq.len() as f64;
             let x_mean = (n - 1.0) / 2.0;
             let slope_raw: f64 = {
@@ -4510,7 +4626,6 @@ fn evaluate_local_observations(
                     .sum();
                 if den.abs() < 1e-9 { 0.0 } else { num / den }
             };
-            // Samples are sparse (only on inference), estimate spacing at ~10s avg
             let slope_per_min = slope_raw * 6.0;
 
             // Recent tail: last 30% of ttft samples vs full mean
@@ -5211,7 +5326,12 @@ fn pct_encode_query(s: &str) -> String {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
             b' ' => out.push('+'),
-            _ => { out.push('%'); out.push_str(&format!("{b:02X}")); }
+            _ => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0x0F) as usize] as char);
+            }
         }
     }
     out
@@ -5351,7 +5471,7 @@ async fn refresh_model_catalog(store: store::Store) {
 /// GET /api/model-candidates — discover GGUF models that fit this hardware.
 /// Query params: ?search=llama&limit=20
 /// When search is provided, fetches live from HuggingFace (bypasses cache).
-/// When no search, returns cached trending top-30 (refreshed every 24h).
+/// When no search, returns the cached trending catalog (default limit 20).
 #[cfg(not(target_env = "musl"))]
 async fn handle_model_candidates(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -5579,7 +5699,6 @@ fn build_mcp_node_snapshot(
     hostname: &str,
     proxy_listen: Option<u16>,
     proxy_target: Option<u16>,
-    _runtime_overrides: Option<String>,
     model_baseline: Option<(f32, f32, u32)>,
 ) -> serde_json::Value {
     let hw = read_hardware_signals(apple, nvidia, ollama, vllm, llamacpp,
@@ -5682,7 +5801,7 @@ async fn handle_mcp(
             rapl, &lt, swap, &probe_active, sys.global_cpu_info().cpu_usage(),
             total, used, total.saturating_sub(used), sys.cpus().len(),
             &node_id.0, &hostname,
-            proxy_ports.listen, proxy_ports.target, proxy_ports.runtime_overrides.clone(),
+            proxy_ports.listen, proxy_ports.target,
             None, // model_baseline — not wired through Extension, acceptable for MCP
         )
     };
@@ -6414,7 +6533,9 @@ async fn handle_metrics(
 
         loop {
             interval.tick().await;
-            sys.refresh_all();
+            // Only CPU usage and memory are read below; avoid the per-second
+            // process/disk/network enumeration that `refresh_all()` performs.
+            sys.refresh_cpu();
             sys.refresh_memory();
 
             let timestamp_ms = std::time::SystemTime::now()
@@ -7762,5 +7883,50 @@ mod node_id_tests {
         let id2 = format!("WK-{:016X}", fnv1a_64("/etc/machine-id:bbbb"));
         assert_ne!(id1, id2);
         assert_eq!(id1.len(), 19); // "WK-" + 16 hex
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod thermal_tests {
+    use super::*;
+
+    #[test]
+    fn cool_die_with_low_clocks_is_not_throttling() {
+        // The bug: an idle CPU drops its clocks via demand-based DVFS, which the
+        // raw clock-ratio mapping reads as Critical. With a cool temp reading it
+        // must be Normal — a cold chip cannot be thermally throttled.
+        let r = amd_clock_ratio_result(0.30, Some(40.0));
+        assert_eq!(r.state, "Normal");
+        assert_eq!(r.direct_penalty, Some(1.00));
+    }
+
+    #[test]
+    fn hot_die_with_reduced_clocks_escalates_to_at_least_serious() {
+        // 90 °C with a mild clock drop (would be "Fair" on ratio alone) is real
+        // thermal pressure → at least Serious.
+        let r = amd_clock_ratio_result(0.85, Some(90.0));
+        assert_eq!(r.state, "Serious");
+        assert!(r.direct_penalty.unwrap() >= 1.75);
+    }
+
+    #[test]
+    fn severe_throttle_when_hot_stays_critical() {
+        let r = amd_clock_ratio_result(0.40, Some(95.0));
+        assert_eq!(r.state, "Critical");
+    }
+
+    #[test]
+    fn no_temp_sensor_caps_low_clocks_at_fair() {
+        // Without a temperature we can't confirm throttling, so a deep clock drop
+        // is capped at Fair rather than reported as Critical.
+        let r = amd_clock_ratio_result(0.30, None);
+        assert_eq!(r.state, "Fair");
+        assert_eq!(r.direct_penalty, Some(1.25));
+    }
+
+    #[test]
+    fn full_clocks_when_cool_are_normal() {
+        let r = amd_clock_ratio_result(0.98, Some(55.0));
+        assert_eq!(r.state, "Normal");
     }
 }

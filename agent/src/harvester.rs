@@ -106,7 +106,7 @@ async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> O
     ) {
         // TTFT = prompt_eval_duration in milliseconds
         if pe_dur_ns > 0 {
-            result.ttft_ms = Some(pe_dur_ns as f64 / 1_000_000.0 as f64).map(|v| v as f32);
+            result.ttft_ms = Some((pe_dur_ns as f64 / 1_000_000.0) as f32);
             // Prefill tok/s
             if pe_count > 0 {
                 let pe_tps = pe_count as f64 / (pe_dur_ns as f64 / 1_000_000_000.0);
@@ -117,7 +117,7 @@ async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> O
 
     // Model load duration (Phase 2: new — 0 when warm, >0 on cold start)
     if let Some(load_ns) = json["load_duration"].as_u64() {
-        result.load_duration_ms = Some(load_ns as f64 / 1_000_000.0 as f64).map(|v| v as f32);
+        result.load_duration_ms = Some((load_ns as f64 / 1_000_000.0) as f32);
     }
 
     result

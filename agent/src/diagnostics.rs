@@ -97,8 +97,7 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                 .and_then(|v| v.as_f64())
                 .filter(|&w| w > 0.0)
         }.await;
-        if daemon_has_power.is_some() {
-            let watts = daemon_has_power.unwrap();
+        if let Some(watts) = daemon_has_power {
             platform_rows.push(row("Power", &format!("{watts:.1}W  (powermetrics via daemon)")));
         } else {
             // Daemon not running or not reporting power — try direct
