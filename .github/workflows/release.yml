@@ -50,7 +50,10 @@ jobs:
   # ── Windows x64 ───────────────────────────────────────────────────────────────
   build-windows:
     name: Build · Windows (x64)
-    runs-on: windows-latest
+    # Pinned: windows-latest moved to VS 18 / MSVC 14.51, which fails to compile
+    # the bundled DuckDB 1.1 C++ (libduckdb-sys, cc-rs exit 2). windows-2022
+    # (VS 2022 / MSVC 14.4x) is the toolchain that built v0.9.0 successfully.
+    runs-on: windows-2022
     timeout-minutes: 35      # max observed ~21 min; Windows is the long pole
     steps:
       - uses: actions/checkout@v4

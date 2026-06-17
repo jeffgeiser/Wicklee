@@ -1,6 +1,6 @@
 [package]
 name = "wicklee-agent"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 
 # `no_nvml` is a custom cfg set by the release workflow's musl/static build
