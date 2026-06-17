@@ -4,6 +4,13 @@
 //! Tier 1 (metrics_1min):  1-minute aggregates, 30-day  retention
 //! Tier 2 (metrics_1hr):   1-hour  aggregates,  90-day  retention
 //!
+//! Aggregated tiers (1min/1hr) are keyed by (ts_ms, node_id) — i.e. node-level,
+//! not per-model — because `model` is nullable during idle and so cannot be part
+//! of the primary key. Each aggregated bucket is labelled with its dominant model
+//! (most raw samples). Per-model breakdowns are exact only from the raw tier
+//! (≤24 h); model-attributed history beyond that is approximate for buckets that
+//! straddle a model switch.
+//!
 //! All timestamps are stored as INTEGER (Unix milliseconds) so serialisation
 //! to JSON never requires format negotiation.
 //!
@@ -652,7 +659,12 @@ impl Store {
             SELECT
               (ts_ms / 60000) * 60000                           AS ts_ms,
               node_id,
-              MAX(model)                                        AS model,
+              -- Aggregated tiers are node-level (PK is ts_ms+node_id, and `model`
+              -- is nullable during idle so it can't join the key). Label each
+              -- bucket with its DOMINANT model (most raw samples) instead of an
+              -- arbitrary MAX(); a minute spanning a model switch is still blended
+              -- in tps/util but at least carries the model that ran longest.
+              mode(model)                                       AS model,
               AVG(tps)                                          AS tps_avg,
               MAX(tps)                                          AS tps_max,
               MIN(CASE WHEN tps > 0 THEN tps ELSE NULL END)     AS tps_min,
@@ -694,7 +706,7 @@ impl Store {
             SELECT
               (ts_ms / 3600000) * 3600000                                AS ts_ms,
               node_id,
-              MAX(model)                                                  AS model,
+              mode(model)                                                 AS model,
               SUM(tps_avg * sample_count)
                 / NULLIF(SUM(CASE WHEN tps_avg IS NOT NULL THEN sample_count ELSE 0 END), 0)         AS tps_avg,
               MAX(tps_max)                                                AS tps_max,
