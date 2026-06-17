@@ -115,17 +115,15 @@ impl RuntimeSpec {
         let eq_prefix = format!("{}=", self.port_arg);
         for (i, arg) in cmd.iter().enumerate() {
             // --port 8001
-            if arg == self.port_arg {
-                if let Some(val) = cmd.get(i + 1).and_then(|v| v.parse::<u16>().ok()) {
+            if arg == self.port_arg
+                && let Some(val) = cmd.get(i + 1).and_then(|v| v.parse::<u16>().ok()) {
                     return val;
                 }
-            }
             // --port=8001
-            if let Some(suffix) = arg.strip_prefix(&eq_prefix) {
-                if let Ok(val) = suffix.parse::<u16>() {
+            if let Some(suffix) = arg.strip_prefix(&eq_prefix)
+                && let Ok(val) = suffix.parse::<u16>() {
                     return val;
                 }
-            }
         }
         self.default_port
     }
@@ -221,14 +219,11 @@ pub fn vllm_effective_dtype() -> Option<String> {
 fn extract_string_flag(cmd: &[String], flag: &str) -> Option<String> {
     let eq_prefix = format!("{flag}=");
     for (i, arg) in cmd.iter().enumerate() {
-        if arg == flag {
-            if let Some(v) = cmd.get(i + 1) {
-                if !v.starts_with('-') { return Some(v.clone()); }
-            }
-        }
-        if let Some(suffix) = arg.strip_prefix(&eq_prefix) {
-            if !suffix.is_empty() { return Some(suffix.to_string()); }
-        }
+        if arg == flag
+            && let Some(v) = cmd.get(i + 1)
+                && !v.starts_with('-') { return Some(v.clone()); }
+        if let Some(suffix) = arg.strip_prefix(&eq_prefix)
+            && !suffix.is_empty() { return Some(suffix.to_string()); }
     }
     None
 }
@@ -291,11 +286,10 @@ fn socket_inodes_for_pid(pid: u32) -> std::collections::HashSet<u64> {
         if let Ok(target) = std::fs::read_link(entry.path()) {
             let s = target.to_string_lossy();
             // socket fds resolve to "socket:[inode]"
-            if let Some(inner) = s.strip_prefix("socket:[").and_then(|s| s.strip_suffix(']')) {
-                if let Ok(inode) = inner.parse::<u64>() {
+            if let Some(inner) = s.strip_prefix("socket:[").and_then(|s| s.strip_suffix(']'))
+                && let Ok(inode) = inner.parse::<u64>() {
                     inodes.insert(inode);
                 }
-            }
         }
     }
     inodes
@@ -434,7 +428,7 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
         let pid = process.pid().as_u32();
 
         for spec in RUNTIME_SPECS {
-            if candidates.get(spec.name).map_or(false, |c| c.explicit) {
+            if candidates.get(spec.name).is_some_and(|c| c.explicit) {
                 continue; // already locked in with an explicit port
             }
             if !spec.matches(&name, &cmd) { continue; }
@@ -559,7 +553,7 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
                     match new_val {
                         Some(p) => {
                             let spec = RUNTIME_SPECS.iter().find(|s| s.name == *name);
-                            let is_default = spec.map_or(false, |s| p == s.default_port);
+                            let is_default = spec.is_some_and(|s| p == s.default_port);
                             if is_default && first_scan {
                                 eprintln!("[discovery] {name} → :{p} (default port — if {name} uses a non-default port, set [runtime_ports] {name} = <port> in config.toml)");
                             } else {

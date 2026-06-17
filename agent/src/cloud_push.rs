@@ -103,9 +103,9 @@ fn start_cloud_push_inner(
                 // Embed current observations from the shared cache (non-musl only).
                 // Empty array is omitted by the cloud's serde(default) — no overhead.
                 #[cfg(not(target_env = "musl"))]
-                if let Some(ref cache) = obs_cache {
-                    if let Ok(obs) = cache.lock() {
-                        if !obs.is_empty() {
+                if let Some(ref cache) = obs_cache
+                    && let Ok(obs) = cache.lock()
+                        && !obs.is_empty() {
                             // Enrich with computed routing_hint before serializing
                             let enriched: Vec<serde_json::Value> = obs.iter().map(|o| {
                                 let mut v = serde_json::to_value(o).unwrap_or_default();
@@ -117,8 +117,6 @@ fn start_cloud_push_inner(
                             }).collect();
                             val["observations"] = serde_json::to_value(&enriched).unwrap_or_default();
                         }
-                    }
-                }
                 val.to_string()
             } else {
                 frame

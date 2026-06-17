@@ -30,7 +30,7 @@ async fn discover_first_ollama_model(client: &reqwest::Client, port: u16) -> Opt
     }
     let json: serde_json::Value = resp.json().await.ok()?;
     let models = json["models"].as_array();
-    if models.map_or(true, |m| m.is_empty()) {
+    if models.is_none_or(|m| m.is_empty()) {
         eprintln!("[ollama] /api/tags on :{port} — no models installed");
         return None;
     }
@@ -92,12 +92,11 @@ async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> O
     if let (Some(count), Some(dur_ns)) = (
         json["eval_count"].as_u64(),
         json["eval_duration"].as_u64(),
-    ) {
-        if count > 0 && dur_ns > 0 {
+    )
+        && count > 0 && dur_ns > 0 {
             let tps = count as f64 / (dur_ns as f64 / 1_000_000_000.0);
             if tps > 0.0 { result.tps = Some(tps as f32); }
         }
-    }
 
     // Prefill speed + TTFT (Phase 2: new)
     if let (Some(pe_count), Some(pe_dur_ns)) = (
@@ -151,14 +150,12 @@ async fn probe_vllm_tps(client: &reqwest::Client, port: u16, model: &str) -> Opt
     let elapsed = t0.elapsed().as_secs_f64();
     if elapsed <= 0.0 { return None; }
     let text = resp.text().await.ok()?;
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(n) = json["usage"]["completion_tokens"].as_u64() {
-            if n > 0 {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(n) = json["usage"]["completion_tokens"].as_u64()
+            && n > 0 {
                 let tps = n as f64 / elapsed;
                 if tps > 0.0 { return Some(tps as f32); }
             }
-        }
-    }
     None
 }
 
@@ -333,13 +330,11 @@ pub(crate) fn start_ollama_harvester(
 
                 // Poll /api/ps for ALL loaded models and inference state.
                 let mut ps_models: Vec<serde_json::Value> = Vec::new();
-                if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(arr) = json["models"].as_array() {
+                if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await
+                    && let Ok(json) = resp.json::<serde_json::Value>().await
+                        && let Some(arr) = json["models"].as_array() {
                             ps_models = arr.clone();
                         }
-                    }
-                }
 
                 // Read per-model proxy stats (if proxy active).
                 let proxy_model_stats: std::collections::HashMap<String, (f32, u64, u64, u64, std::time::Instant)> =
@@ -375,11 +370,10 @@ pub(crate) fn start_ollama_harvester(
                     });
 
                     // Track most-recently-active model for singular field backwards compat
-                    if let Some(&(_, _, _, _, done_ts)) = proxy_model_stats.get(&name) {
-                        if most_recent_done.as_ref().map_or(true, |(_, t)| done_ts > *t) {
+                    if let Some(&(_, _, _, _, done_ts)) = proxy_model_stats.get(&name)
+                        && most_recent_done.as_ref().is_none_or(|(_, t)| done_ts > *t) {
                             most_recent_done = Some((name.clone(), done_ts));
                         }
-                    }
                 }
 
                 // Singular fields: use most-recently-active model (or first if no proxy stats).
@@ -400,8 +394,7 @@ pub(crate) fn start_ollama_harvester(
                         if let Ok(show_resp) = client.post(format!("{base}/api/show"))
                             .json(&serde_json::json!({ "name": model_name }))
                             .send().await
-                        {
-                            if let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
+                            && let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
                                 let mi = &show_json["model_info"];
                                 cached_context_length = mi["general.context_length"].as_u64()
                                     .or_else(|| mi["llama.context_length"].as_u64());
@@ -426,7 +419,6 @@ pub(crate) fn start_ollama_harvester(
                                     eprintln!("[runtime-config] ollama: cached config for {model_name}");
                                 }
                             }
-                        }
                     } else {
                         cached_context_length = None;
                         cached_parameter_count = None;
@@ -447,8 +439,8 @@ pub(crate) fn start_ollama_harvester(
                 // the pre-await snapshot mis-classified the probe's own reset
                 // as a user request (false 15s LIVE on idle nodes).
                 let mut expires_changed = false;
-                if let Some(first) = ps_models.first() {
-                    if let Some(exp_str) = first["expires_at"].as_str() {
+                if let Some(first) = ps_models.first()
+                    && let Some(exp_str) = first["expires_at"].as_str() {
                         let exp_owned = exp_str.to_string();
                         if prev_expires.as_deref() != Some(&exp_owned) {
                             last_infer_ts = Some(std::time::Instant::now());
@@ -456,7 +448,6 @@ pub(crate) fn start_ollama_harvester(
                         }
                         prev_expires = Some(exp_owned);
                     }
-                }
 
                 // Set active_models only when >1 model (no payload bloat for single model).
                 m.active_models = if live_models.len() > 1 { Some(live_models) } else { None };
@@ -466,17 +457,16 @@ pub(crate) fn start_ollama_harvester(
                 if let Some(ref ps) = proxy_main {
                     let proxy_active = ps.in_flight.load(std::sync::atomic::Ordering::Relaxed) > 0;
                     let since_done   = ps.last_done_ts.lock().unwrap()
-                        .map_or(false, |t| t.elapsed().as_secs() < 15);
+                        .is_some_and(|t| t.elapsed().as_secs() < 15);
                     m.ollama_inference_active = Some(proxy_active || since_done);
                     m.ollama_proxy_active = true;
 
                     // Most-recently-active model's tok/s for singular field
-                    if let Some((ref name, _)) = most_recent_done {
-                        if let Some(&(tps, _, _, _, _)) = proxy_model_stats.get(name) {
+                    if let Some((ref name, _)) = most_recent_done
+                        && let Some(&(tps, _, _, _, _)) = proxy_model_stats.get(name) {
                             m.ollama_tokens_per_second = Some(tps);
                             harvester_set_tps = true;
                         }
-                    }
 
                     // Aggregate across all models for singular proxy averages
                     let total_reqs: u64 = proxy_model_stats.values().map(|&(_, _, _, cnt, _)| cnt).sum();
@@ -496,7 +486,7 @@ pub(crate) fn start_ollama_harvester(
                 } else {
                     // No proxy — fall back to /api/ps timer for inference detection.
                     m.ollama_inference_active =
-                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 15));
+                        Some(last_infer_ts.is_some_and(|t| t.elapsed().as_secs() < 15));
                 }
 
                 // Writeback. m was built from a snapshot taken BEFORE several
@@ -625,7 +615,7 @@ pub(crate) fn start_ollama_harvester(
                         "[ollama] no baseline yet — forcing initial probe despite GPU at {:.0}%",
                         gpu_util.unwrap_or(0.0),
                     );
-                } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+                } else if gpu_util.is_some_and(|u| u >= GPU_LOAD_THRESHOLD_PCT) {
                     eprintln!(
                         "[ollama] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                         gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT,
@@ -637,7 +627,7 @@ pub(crate) fn start_ollama_harvester(
                 // exact tok/s from done packets; probing would interfere.
                 if let Some(ref ps) = proxy_for_probe {
                     let recent_req = ps.last_done_ts.lock().unwrap()
-                        .map_or(false, |t| t.elapsed().as_secs() < 60);
+                        .is_some_and(|t| t.elapsed().as_secs() < 60);
                     if recent_req {
                         continue; // proxy has fresh production data — no probe needed
                     }
@@ -782,14 +772,13 @@ async fn harvest_vllm(port: u16) -> VllmHarvestResult {
         let value_f32: Option<f32> = raw_value.map(|v| v as f32);
 
         // Extract model_name="..." from the label string (first occurrence wins).
-        if r.model_name.is_none() {
-            if let Some(start) = line.find("model_name=\"") {
+        if r.model_name.is_none()
+            && let Some(start) = line.find("model_name=\"") {
                 let rest = &line[start + 12..];
                 if let Some(end) = rest.find('"') {
                     r.model_name = Some(rest[..end].to_string());
                 }
             }
-        }
 
         let parse_u32 = |v: Option<f32>| -> Option<u32> {
             v.and_then(|v| if v >= 0.0 && v < u32::MAX as f32 { Some(v as u32) } else { None })
@@ -912,12 +901,11 @@ pub(crate) fn start_vllm_harvester(
 
                 // Fetch /v1/models metadata once when the loaded model changes.
                 // Off the hot path on subsequent ticks for the same model.
-                if let Some(ref name) = h.model_name {
-                    if cached_model_name.as_deref() != Some(name.as_str()) {
+                if let Some(ref name) = h.model_name
+                    && cached_model_name.as_deref() != Some(name.as_str()) {
                         cached_max_ctx    = fetch_vllm_max_model_len(port).await;
                         cached_model_name = Some(name.clone());
                     }
-                }
 
                 if let Ok(mut g) = shared_main.lock() {
                     if !h.running {
@@ -1006,7 +994,7 @@ pub(crate) fn start_vllm_harvester(
             let (port, model) = {
                 let g = match shared_probe.lock() { Ok(g) => g, Err(_) => continue };
                 if !g.vllm_running { continue; }
-                if g.vllm_requests_running.map_or(false, |r| r > 0) { continue; }
+                if g.vllm_requests_running.is_some_and(|r| r > 0) { continue; }
                 let port  = match *port_rx.borrow() { Some(p) => p, None => continue };
                 let model = match g.vllm_model_name.clone() { Some(m) => m, None => continue };
                 (port, model)
@@ -1025,7 +1013,7 @@ pub(crate) fn start_vllm_harvester(
                     "[vllm] no baseline yet — forcing initial probe despite GPU at {:.0}%",
                     gpu_util.unwrap_or(0.0),
                 );
-            } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+            } else if gpu_util.is_some_and(|u| u >= GPU_LOAD_THRESHOLD_PCT) {
                 eprintln!(
                     "[vllm] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                     gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
@@ -1142,14 +1130,12 @@ async fn probe_llamacpp_tps(client: &reqwest::Client, port: u16, model: &str) ->
     let elapsed = t0.elapsed().as_secs_f64();
     if elapsed <= 0.0 { return None; }
     let text = resp.text().await.ok()?;
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(n) = json["usage"]["completion_tokens"].as_u64() {
-            if n > 0 {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(n) = json["usage"]["completion_tokens"].as_u64()
+            && n > 0 {
                 let tps = n as f64 / elapsed;
                 if tps > 0.0 { return Some(tps as f32); }
             }
-        }
-    }
     None
 }
 
@@ -1238,7 +1224,7 @@ pub(crate) fn start_llamacpp_harvester(
             let (port, model) = {
                 let g = match shared_probe.lock() { Ok(g) => g, Err(_) => continue };
                 if !g.llamacpp_running { continue; }
-                if g.llamacpp_slots_processing.map_or(false, |s| s > 0) { continue; }
+                if g.llamacpp_slots_processing.is_some_and(|s| s > 0) { continue; }
                 let port  = match *port_rx.borrow() { Some(p) => p, None => continue };
                 let model = match g.llamacpp_model_name.clone() { Some(m) => m, None => continue };
                 (port, model)
@@ -1256,7 +1242,7 @@ pub(crate) fn start_llamacpp_harvester(
                     "[llamacpp] no baseline yet — forcing initial probe despite GPU at {:.0}%",
                     gpu_util.unwrap_or(0.0),
                 );
-            } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+            } else if gpu_util.is_some_and(|u| u >= GPU_LOAD_THRESHOLD_PCT) {
                 eprintln!(
                     "[llamacpp] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                     gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT

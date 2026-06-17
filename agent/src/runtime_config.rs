@@ -146,9 +146,8 @@ pub(crate) async fn fetch_vllm_config(
         .get(format!("{base_url}/v1/server_info"))
         .timeout(Duration::from_secs(2))
         .send().await
-    {
-        if resp.status().is_success() {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
+        && resp.status().is_success()
+            && let Ok(json) = resp.json::<serde_json::Value>().await {
                 let model = json["model_name"].as_str()
                     .or_else(|| json["served_model_name"].as_str())
                     .unwrap_or("unknown")
@@ -170,8 +169,6 @@ pub(crate) async fn fetch_vllm_config(
                     raw: Some(json),
                 });
             }
-        }
-    }
 
     // Attempt #2: ps aux fallback — finds the vllm process and parses args
     let args = parse_process_args("vllm").await
@@ -215,9 +212,8 @@ pub(crate) async fn fetch_llamacpp_config(
         .get(format!("{base_url}/props"))
         .timeout(Duration::from_secs(2))
         .send().await
-    {
-        if resp.status().is_success() {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
+        && resp.status().is_success()
+            && let Ok(json) = resp.json::<serde_json::Value>().await {
                 let model = json["default_generation_settings"]["model"].as_str()
                     .or_else(|| json["model"].as_str())
                     .unwrap_or("unknown")
@@ -242,8 +238,6 @@ pub(crate) async fn fetch_llamacpp_config(
                     raw: Some(json),
                 });
             }
-        }
-    }
 
     // Attempt #2: ps aux fallback. Try llama-server first (the common
     // serving binary), then raw llama.cpp (less common, batch use).
