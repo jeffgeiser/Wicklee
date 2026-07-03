@@ -47,6 +47,9 @@ Team dashboard sharing via Clerk Organizations. Org members see the same fleet �
 ### PagerDuty Alerts
 Events API v2 integration for Team+ tier. Trigger and resolve events with dedup key for incident lifecycle. Routing key configured in Settings → Alerts.
 
+### Audit Logging (Business+)
+Immutable, append-only audit trail for sensitive fleet operations, Postgres-backed (`audit_log` table, no UPDATE/DELETE paths anywhere in the codebase). `GET /api/audit-log` (Clerk JWT auth, tenant-scoped, cursor-paginated via `before`, filterable by `action`) is gated to Business+ for reads; events are recorded for every tier via a fire-and-forget `audit()` helper that never delays or fails the request and resolves the actor email server-side. `org_id` comes from the verified JWT claim, never a client header. Nine instrumented actions: `node.paired` / `node.removed` / `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created` / `api_key.deleted`, `stream_tokens.revoked`. Surfaced as the Audit Log section in Settings (Business+; action filter, load-more pagination, upgrade-nudge for lower tiers).
+
 ### Per-Tier Node Limits
 Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Business: 100 nodes (unlimited seats), Enterprise: unlimited. Enforced at pairing, fleet list, and SSE stream.
 
@@ -201,8 +204,6 @@ Helm chart and operator for automated Wicklee agent deployment across GPU node p
 ### Install Telemetry
 Anonymous install event tracking (OS, arch, version) via fire-and-forget ping from `install.sh` to cloud endpoint. Powers activation funnel metrics without collecting PII.
 
-### Audit Logging (Business+)
-Immutable audit trail for sensitive fleet operations: node add/remove, alert config changes, API key lifecycle, team member management. Postgres-backed with `GET /api/audit-log` endpoint and Settings UI.
 
 ### WES Leaderboard (Public)
 Anonymous hardware benchmark submissions with public ranking. "MPG for AI" — compare tok/W across hardware configurations. Public read API + submission endpoint.

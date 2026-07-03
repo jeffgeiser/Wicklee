@@ -6,6 +6,67 @@
 
 ---
 
+## Early July 2026 — Audit Logging (Business+) shipped + a session-recovery story
+
+### The recovery
+A prior session built a batch of tier features (audit logging, Team
+intelligence, webhook event subscriptions, deployment profiles) on a
+**stale local `main`**, committed them, and on push discovered local
+`main` was ~150 commits behind the real `origin/main` (v0.10.0) — where
+most of that work had already shipped independently, and where a security
+fix had removed the org-tenancy pattern the code depended on. It chose
+"preserve + sync + port" and was mid-port of audit logging (adapting it
+to the new JWT-tenancy baseline) when it ran out of budget. The container
+was later reclaimed; the in-flight work survived only as one uncommitted
+`cloud/src/main.rs` in a local Mac working tree. We recovered that diff,
+pushed it to a branch, and finished the feature here. **Lesson (recorded
+as convention):** push WIP to a remote branch before the container idles
+— ephemeral working trees are not backups; the two never-pushed commits
+were unrecoverable.
+
+### What shipped — Audit Logging (Business+)
+The last **Planned** Business-tier item is now Shipped. Immutable,
+append-only trail of sensitive fleet operations.
+- **Backend** (`cloud/src/main.rs`): `audit_log` table (BIGSERIAL,
+  `ts`/`user_id`/`org_id`/`actor_email`/`action`/`target`/`details` JSONB;
+  user+ts and org+ts indexes; no UPDATE/DELETE path exists anywhere).
+  Fire-and-forget `audit()` helper — spawns off the request path, resolves
+  the actor email server-side, never delays or fails the caller. `org_id`
+  is taken from the verified `require_user_and_org` JWT claim, never a
+  client header. `GET /api/audit-log` reads are Business+-gated
+  (`is_business_or_above`), `tenant_scope`d, cursor-paginated (`before`),
+  and `action`-filterable, returning `{ entries, next_before }`.
+- **Instrumentation — 9 actions.** The recovered port wired five
+  (`api_key.created`/`deleted`, `node.removed`, `node.paired`,
+  `stream_tokens.revoked`); this pass added the four the roadmap spec
+  named but the port hadn't reached: `alert_rule.created`,
+  `alert_channel.created`, `webhook.created`, `node.updated` — each at the
+  handler's success path, referencing move-bound fields before they're
+  consumed by the response.
+- **Frontend**: new `settings/AuditLogSection.tsx` — Business+ gated via
+  `usePermissions`-style tier check, action-filter dropdown, load-more
+  cursor pagination, domain-coloured action chips, and an upgrade-nudge
+  locked state for lower tiers. Wired into `SettingsView` after the OTel
+  section. (Note: the pre-existing `AuditLogRecord` type in `types.ts` is
+  unrelated — it's the localhost TracesView CSV export — so the section
+  defines its own cloud-audit `AuditEntry` type.)
+- **Docs**: ROADMAP moved Audit Logging → Shipped; `public/llms-full.txt`
+  gained the `GET /api/audit-log` endpoint spec.
+- **Verification**: cloud `cargo check`/`cargo test` (13) green, frontend
+  `tsc` clean, vitest (80) green.
+
+### Known follow-ups (not in this change)
+- **`public/llms-full.txt` still carries stale pricing** ($9 Pro / $19
+  Team / "from $200" Enterprise, no Business tier) — a drift the prior
+  session had fixed on its lost branch. `public/llms.txt` is correct
+  ($29/$49/$499). Worth a focused doc-pricing sweep.
+- **Deployment Profiles** (agent-side `sovereign_dev` /
+  `dedicated_server` / `production_fleet`) — also built on the lost
+  branch, still absent on `origin/main`, still Planned.
+- The audit `before` cursor uses strict `ts <` so two entries sharing an
+  exact millisecond could straddle a page boundary — acceptable at
+  current volume; revisit with a `(ts, id)` composite cursor if needed.
+
 ## Mid June 2026 — Full-codebase quality review + fix campaign
 
 A four-surface review (cloud, agent, frontend data layer, frontend

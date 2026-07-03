@@ -3807,6 +3807,9 @@ async fn handle_webhook_create(
     .bind(body.threshold).bind(cooldown_s)
     .execute(&state.pool).await;
 
+    audit(&state.pool, &user_id, &org_id, "webhook.created", &id,
+        serde_json::json!({ "event_type": &body.event_type, "url": &body.url }));
+
     Json(serde_json::json!({
         "id":         id,
         "url":        body.url,
@@ -7267,6 +7270,8 @@ async fn handle_update_node(
 
     match row {
         Some((wk_id, hostname, display_name, tags)) => {
+            audit(&state.pool, &user_id, &org_id, "node.updated", &node_id,
+                serde_json::json!({ "display_name": &display_name, "tags": &tags }));
             Json(serde_json::json!({
                 "node_id": wk_id,
                 "hostname": hostname,
@@ -7324,10 +7329,14 @@ async fn handle_create_channel(
     .execute(&state.pool).await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, Json(AlertChannel {
-            id, channel_type: body.channel_type, name: body.name,
-            config_json: body.config_json, verified: false, created_at: ts,
-        })).into_response(),
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "alert_channel.created", &id,
+                serde_json::json!({ "channel_type": &body.channel_type, "name": &body.name }));
+            (StatusCode::CREATED, Json(AlertChannel {
+                id, channel_type: body.channel_type, name: body.name,
+                config_json: body.config_json, verified: false, created_at: ts,
+            })).into_response()
+        }
         Err(e) => { eprintln!("[alerts] channel insert failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
@@ -7446,11 +7455,15 @@ async fn handle_create_rule(
     .execute(&state.pool).await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, Json(AlertRule {
-            id, node_id: body.node_id, event_type: body.event_type,
-            threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
-            enabled: true, created_at: ts,
-        })).into_response(),
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "alert_rule.created", &id,
+                serde_json::json!({ "event_type": &body.event_type, "node_id": &body.node_id, "urgency": &urgency }));
+            (StatusCode::CREATED, Json(AlertRule {
+                id, node_id: body.node_id, event_type: body.event_type,
+                threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
+                enabled: true, created_at: ts,
+            })).into_response()
+        }
         Err(e) => { eprintln!("[alerts] rule insert failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },

@@ -378,6 +378,18 @@ List all API keys. Hash is never exposed.
 ### DELETE /api/v1/keys/{key_id}
 Revoke an API key. Takes effect immediately.
 
+### GET /api/audit-log
+Immutable, append-only audit trail of sensitive fleet operations. Clerk JWT auth; **Business tier and above** to read (events are recorded for every tier). Org members see the whole org-scoped trail. Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Recorded actions: `node.paired`, `node.removed`, `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created`, `api_key.deleted`, `stream_tokens.revoked`.
+```json
+{
+  "entries": [
+    { "id": 42, "ts": 1774624251478, "user_id": "user_abc", "org_id": "org_xyz",
+      "actor_email": "ops@acme.com", "action": "node.removed", "target": "WK-99E9", "details": {} }
+  ],
+  "next_before": 1774624251478
+}
+```
+
 ---
 
 ## MetricsPayload Schema

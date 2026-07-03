@@ -4,6 +4,7 @@ import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, T
 import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import WebhooksSection from './settings/WebhooksSection';
+import AuditLogSection from './settings/AuditLogSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
@@ -683,6 +684,15 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       {/* ── ④¾ OPENTELEMETRY EXPORT ───────────────────────────────────── */}
       {isCloudMode && (subscriptionTier === 'team' || subscriptionTier === 'enterprise') && (
         <OtelExportSection getToken={getToken} />
+      )}
+
+      {/* ── ④⅞ AUDIT LOG (Business+) ──────────────────────────────────── */}
+      {isCloudMode && (
+        <AuditLogSection
+          subscriptionTier={subscriptionTier}
+          getToken={getToken}
+          onNavigateToPricing={onNavigateToPricing}
+        />
       )}
 
       {/* ── ⑤ ACCOUNT & DATA ─────────────────────────────────────────────── */}
