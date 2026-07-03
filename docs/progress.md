@@ -6,6 +6,50 @@
 
 ---
 
+## ⇢ Session handoff — current state (2026-07-03)
+
+**Working branch:** `claude/recent-progress-summary-jgw3rd` (ahead of `origin/main`
+@ v0.10.0). All work below is pushed there; **no PR opened yet** and nothing is
+merged to `main`. A fresh session should `git fetch` and check out this branch —
+do NOT restart from `main` or you'll lose the shipped work.
+
+**Shipped on this branch (all verified — cloud `cargo test` 13, agent
+deployment-profile tests 4/4, `tsc` clean, vitest 80):**
+1. **Audit Logging (Business+)** — cloud backend (`audit_log` table, `audit()`
+   helper, `GET /api/audit-log`, 9 instrumented actions) + `settings/AuditLogSection.tsx`.
+2. **Deployment Profiles** — agent `evaluate_local_observations` tuning
+   (3 levers), `GET/PUT /api/deployment-profile`, config persistence,
+   `settings/DeploymentProfileSection.tsx`.
+3. **`llms-full.txt` pricing fix** — stale table → correct 5-tier.
+
+**Recovery context:** #1 and #2 were originally built in a prior session on a
+stale local `main`, lost when its container was reclaimed, and rebuilt/recovered
+here on the v0.10.0 baseline (see the two July entries below). `origin/claude/recovered-audit-logging`
+is a now-redundant backup branch, safe to delete.
+
+**Still open (were lost with the same container, NOT yet rebuilt):** the "Team
+intelligence" and "webhook event subscriptions v2" the prior session mentioned
+turned out to already be shipped on `origin/main` (Threshold Webhooks, SLA,
+Thermal Budget) — do **not** rebuild them. Remaining genuinely-open items live in
+`ROADMAP.md` → Planned (largest clusters: the June full-codebase-review MEDIUMs —
+cloud perf/hardening, remaining agent items, frontend; and the Pass-2/3 security
+follow-ups).
+
+**Process lessons (bit us this session):**
+- Push WIP to a *remote* branch before a container idles — ephemeral working
+  trees are not backups.
+- When running `cargo` in the background, let the tool's own backgrounding handle
+  it; a trailing `&` inside a backgrounded call double-forks and returns a bogus
+  "exit 0" while the build runs orphaned (this masked a real E0063).
+- The agent bin embeds `agent/frontend/dist` via rust-embed, so `cargo check`/
+  `test` on the agent requires `npm run build:agent` first, or `StaticAssets::get`
+  fails to resolve.
+- Pricing/tier facts live across ~9 surfaces (llms.txt, llms-full.txt, docs.md,
+  DocsPage.tsx, PricingPage, README, Legal/ToS, Settings upgrade copy, types.ts) —
+  they must all move together on any pricing change.
+
+---
+
 ## Early July 2026 — Deployment Profiles (agent)
 
 The second feature lost with the reclaimed container, rebuilt fresh on the

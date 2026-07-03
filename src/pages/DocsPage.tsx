@@ -1464,6 +1464,21 @@ WES Version:     2
             <NoteBox>
               Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window. Point-in-time patterns (<code className="text-gray-300">vram_overcommit</code>) always fire at High confidence since a single observation provides complete evidence.
             </NoteBox>
+
+            <div className="bg-gray-900 border border-emerald-500/20 rounded-xl p-4 space-y-2 mt-2">
+              <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Deployment Profiles</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                One intent selector in <strong className="text-white">Settings → Deployment Profile</strong> (localhost) coherently shifts how sensitively every pattern fires — no per-pattern knobs. Three levers move together: the evidence-window density, the sustained-fraction gate, and a confidence floor. Applied within ~10s and persisted to <code className="text-gray-300">config.toml</code>. Node-local — it governs which observations this node raises, not fleet-wide alert rules.
+              </p>
+              <ul className="text-xs text-gray-400 leading-relaxed list-disc pl-4 space-y-1">
+                <li><strong className="text-white">Sovereign Dev</strong> — laptop running inference alongside other work: high bar + confidence floor so mixed-use noise stays quiet.</li>
+                <li><strong className="text-white">Dedicated Server</strong> <span className="text-[9px] text-gray-500">(default)</span> — single-purpose node: the baseline the patterns were tuned for.</li>
+                <li><strong className="text-white">Production Fleet</strong> — serving real users: aggressive early warning, degradations surface sooner.</li>
+              </ul>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                API (localhost, no auth): <code className="text-gray-300 font-mono text-[10px]">GET/PUT /api/deployment-profile</code>.
+              </p>
+            </div>
           </Section>
 
           {/* ── Alerts & Notifications ── */}
@@ -1708,6 +1723,10 @@ WES Version:     2
                   <tr>
                     <Td mono>GET /api/observations</Td>
                     <Td>17 observation patterns (10-min DuckDB buffer). Each observation includes <code className="text-gray-400 font-mono text-[10px]">routing_hint</code> (steer_away / reduce_batch / monitor). Response envelope includes node-level <code className="text-gray-400 font-mono text-[10px]">routing_hint</code> + <code className="text-gray-400 font-mono text-[10px]">routing_hint_source</code> (worst active pattern)</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET/PUT /api/deployment-profile</Td>
+                    <Td>Deployment Profiles — one intent selector (sovereign_dev / dedicated_server / production_fleet) that coherently shifts observation-pattern sensitivity. Persisted to config.toml; applied within one 10s eval cycle. Node-local.</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/profile?minutes=60</Td>

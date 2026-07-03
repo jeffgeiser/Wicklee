@@ -423,6 +423,22 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 ---
 
+## Deployment Profiles
+
+A single intent selector that coherently shifts how sensitively a node's local observation patterns fire — instead of exposing a knob per pattern. Set it in Settings → Deployment Profile on the localhost dashboard; the agent applies it within ~10 seconds and persists it to `config.toml` (`deployment_profile`). Node-local: it governs which observations *this node* raises, not fleet-wide alert rules.
+
+| Profile | Intent | Evidence window | Sustained gate | Confidence floor |
+|---------|--------|-----------------|----------------|------------------|
+| **Sovereign Dev** | Laptop/workstation running inference alongside other work — high bar so mixed-use noise stays quiet | ×1.15 (more) | 0.85 | 0.50 |
+| **Dedicated Server** *(default)* | Single-purpose inference node — the baseline patterns were tuned for | ×1.00 | 0.70 | none |
+| **Production Fleet** | Serving real users where latency matters — aggressive early warning | ×0.65 (less) | 0.55 | none |
+
+The three levers move together: `density_scale` multiplies the evidence-window density every pattern derives from, `evidence_ratio` is the sustained-fraction gate a ratio-gated pattern must clear, and `min_confidence` drops low-confidence observations before they surface. `dedicated_server` reproduces the original pre-profile behavior exactly.
+
+**API (localhost, no auth):** `GET /api/deployment-profile` returns the active profile plus the selectable set with each one's tuning; `PUT /api/deployment-profile` with `{ "profile": "sovereign_dev" | "dedicated_server" | "production_fleet" }` switches it.
+
+---
+
 ## Alerts & Notifications
 
 When observations or fleet alerts fire, Wicklee delivers notifications to external channels.
