@@ -2135,7 +2135,7 @@ fn load_or_create_config() -> WickleeConfig {
     }
 
     // ── First-run: generate a new identity ───────────────────────────────────
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None };
     save_config(&cfg);
     cfg
 }
