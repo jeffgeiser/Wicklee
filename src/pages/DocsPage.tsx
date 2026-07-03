@@ -115,6 +115,7 @@ const NAV = [
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
   { id: 'teams',       label: 'Teams & Orgs' },
+  { id: 'audit-log',   label: 'Audit Log' },
   { id: 'mcp',         label: 'MCP Server' },
   { id: 'proxy',       label: 'Inline Proxy' },
   { id: 'otel',        label: 'OTel & Prometheus' },
@@ -1989,6 +1990,38 @@ curl https://wicklee.dev/api/v1/fleet \\
 
             <NoteBox>
               <strong className="text-white">Solo users:</strong> Organizations are optional. Community and Pro users who don't need shared access can continue using Wicklee as a single-user dashboard — nothing changes.
+            </NoteBox>
+          </Section>
+
+          {/* ── Audit Log ── */}
+          <Section
+            id="audit-log"
+            icon={<Shield className="w-5 h-5" />}
+            accent="border-amber-500/20"
+            title="Audit Logging"
+          >
+            <p>
+              An immutable, append-only record of sensitive fleet operations — for SOC 2 / ISO change-management evidence and answering <em>"who changed what, when."</em> Backed by a Postgres <code className="text-gray-300">audit_log</code> table with no UPDATE or DELETE path anywhere in the codebase. Events are recorded for <strong className="text-white">every</strong> tier; reading the trail is gated to <strong className="text-white">Business+</strong>. Organization members share one org-wide trail, scoped from the verified session claim — never a client-supplied header.
+            </p>
+
+            <p className="text-xs text-gray-400 leading-relaxed mt-3">
+              Recording is fire-and-forget: it runs off the request path and never delays or fails the operation being audited. The actor's email is resolved server-side, so callers only pass IDs.
+            </p>
+
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Recorded actions (9)</p>
+            <p className="text-xs text-gray-400 leading-relaxed mt-1">
+              <code className="text-gray-300">node.paired</code>, <code className="text-gray-300">node.removed</code>, <code className="text-gray-300">node.updated</code>, <code className="text-gray-300">alert_rule.created</code>, <code className="text-gray-300">alert_channel.created</code>, <code className="text-gray-300">webhook.created</code>, <code className="text-gray-300">api_key.created</code>, <code className="text-gray-300">api_key.deleted</code>, <code className="text-gray-300">stream_tokens.revoked</code>.
+            </p>
+
+            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-4">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Endpoint <span className="ml-1.5 text-[9px] text-emerald-400 normal-case tracking-normal">Business+</span></p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <code className="text-gray-300 font-mono text-[10px]">GET /api/audit-log</code> (Clerk JWT). Query params: <code className="text-gray-300 font-mono text-[10px]">limit</code> (default 50, max 200), <code className="text-gray-300 font-mono text-[10px]">before</code> (ts_ms cursor), <code className="text-gray-300 font-mono text-[10px]">action</code> (exact-match filter). Returns <code className="text-gray-300 font-mono text-[10px]">{'{ entries, next_before }'}</code> — each entry carries <code className="text-gray-300 font-mono text-[10px]">ts</code>, <code className="text-gray-300 font-mono text-[10px]">actor_email</code>, <code className="text-gray-300 font-mono text-[10px]">action</code>, <code className="text-gray-300 font-mono text-[10px]">target</code>, and a JSON <code className="text-gray-300 font-mono text-[10px]">details</code> object.
+              </p>
+            </div>
+
+            <NoteBox>
+              Surfaced as the <strong className="text-white">Audit Log</strong> section in Settings — action filter, load-more pagination, and an upgrade nudge on lower tiers. Because events are recorded on every tier, upgrading to Business reveals the trail retroactively.
             </NoteBox>
           </Section>
 

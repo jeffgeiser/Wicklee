@@ -672,6 +672,20 @@ Wicklee uses Clerk Organizations for shared fleet access. When you create an org
 
 ---
 
+## Audit Logging (Business+)
+
+An immutable, append-only record of sensitive fleet operations — for SOC 2 / ISO change-management evidence and answering "who changed what, when." Backed by a Postgres `audit_log` table with **no UPDATE or DELETE path anywhere in the codebase**. Events are recorded for **every** tier; reading the trail is gated to **Business+**. Org members share one org-wide trail (tenant-scoped from the verified JWT — never a client header).
+
+Recording is fire-and-forget: it runs off the request path and never delays or fails the operation being audited. The actor's email is resolved server-side, so callers only pass IDs.
+
+**Recorded actions (9):** `node.paired`, `node.removed`, `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created`, `api_key.deleted`, `stream_tokens.revoked`.
+
+**Endpoint:** `GET /api/audit-log` (Clerk JWT, Business+). Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Returns `{ entries: [...], next_before }` where each entry carries `ts`, `actor_email`, `action`, `target`, and a JSON `details` object.
+
+Surfaced as the **Audit Log** section in Settings — action filter, load-more pagination, and an upgrade nudge on lower tiers.
+
+---
+
 ## MCP Server
 
 The agent exposes a local MCP (Model Context Protocol) server for AI agents. Available on all tiers, localhost only, no auth.

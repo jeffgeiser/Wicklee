@@ -96,6 +96,7 @@ Base URL: `https://wicklee.dev/api/v1`
 - `POST /api/v1/keys` — Create API key
 - `GET /api/v1/keys` — List API keys
 - `DELETE /api/v1/keys/{id}` — Revoke API key
+- `GET /api/audit-log` — Immutable audit trail (Business+, Clerk JWT): sensitive-op events (node.paired/removed/updated, alert_rule.created, alert_channel.created, webhook.created, api_key.created/deleted, stream_tokens.revoked). Params: limit/before/action. Org-scoped, append-only.
 - `GET /metrics` — Prometheus scrape endpoint (Team+, X-API-Key auth)
 
 ## Multi-Model Monitoring
