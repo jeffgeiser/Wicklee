@@ -35,6 +35,12 @@ Thermal Budget) — do **not** rebuild them. Remaining genuinely-open items live
 cloud perf/hardening, remaining agent items, frontend; and the Pass-2/3 security
 follow-ups).
 
+**ACTIVE ITERATION FOCUS:** the ★ Business & Enterprise Readiness Program at the
+top of `ROADMAP.md` → Planned (from the July 2026 Teams/Enterprise strategic
+review). Work Phase 1 in order: RBAC → SSO honesty fix → audit export/SIEM →
+org-wide API keys. Each item carries implementation pointers + acceptance
+criteria. RBAC is in progress on this branch.
+
 **Process lessons (bit us this session):**
 - Push WIP to a *remote* branch before a container idles — ephemeral working
   trees are not backups.

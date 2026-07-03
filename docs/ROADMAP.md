@@ -153,6 +153,42 @@ The SPA served every route from one index.html shell with identical landing-page
 
 ## Planned
 
+### ★ Business & Enterprise Readiness Program (July 2026 strategic review)
+The July 2026 Teams/Enterprise review found the Team tier strong and differentiated, but the Business/Enterprise story thin where enterprise buyers screen. This program is the ship-order plan. Each item carries implementation pointers + acceptance criteria so any session can pick one up cold. Work items sequentially within a phase; phases 1→5 are priority order.
+
+**Phase 1 — Close the trust gap (blocks deals today)**
+
+1. **RBAC: Admin / Member / Viewer (IN PROGRESS).** Today every org member can delete nodes, reconfigure alerts, and mint keys — no role is ever checked. Clerk session JWTs already carry `org_role` (`"org:admin"` / `"org:member"`, custom roles like `"org:viewer"` on paid Clerk plans); the cloud's `ClerkClaims` struct (cloud/src/main.rs ~981) deserializes only `sub` + `org_id` and throws the role away. Plan: (a) add `org_role: Option<String>` to `ClerkClaims` and return it through `validate_clerk_jwt`; (b) new `OrgRole` enum (Admin/Member/Viewer; solo users with no org = Admin over their own resources) + `require_user_org_role()` helper — keep `require_user_and_org` as a thin wrapper so the ~40 existing call sites don't churn; (c) enforce at the mutating Clerk-JWT handlers: Viewer → 403 on ALL mutations (delete/update node, channel/rule create+delete, webhook create/delete/test, ack/resolve, OTel PUT, revoke stream tokens, pair/activate); Admin-only → delete node + revoke stream tokens. Member = everything else. (d) unit tests for role parsing + policy table. Frontend v1: graceful 403 rendering (sections already show error text); role-aware UI hiding is a follow-up (Clerk's `useOrganization` exposes the member role client-side). Acceptance: a member with `org:viewer` cannot mutate anything; a member cannot delete a node; solo users unaffected; cloud tests green.
+2. **SSO/SAML (Business+) — ship it or stop advertising it.** Currently a claim on PricingPage/llms.txt with ZERO implementation. Clerk supports per-org SAML/OIDC (Enhanced Auth add-on) — the code-side work is small (org SSO enablement indicator + docs + an Enterprise setup guide); the real work is Clerk dashboard config, which needs the owner's Clerk account. Product decision recorded: either enable via Clerk and document the setup flow, or soften the pricing copy to "SSO/SAML (via Clerk, on request)" until enabled. A session without Clerk dashboard access should do the docs + copy honesty fix and leave enablement to the owner.
+3. **Audit log export + SIEM streaming (Business+).** The Settings panel is not how enterprises consume audit logs. Add: `GET /api/audit-log/export?format=csv|json` (same tenant/tier gates as `/api/audit-log`, streams full history — reuse the CSV escaping fix pattern from the June review) and an optional HTTPS drain (POST batches of audit events to a customer URL, HMAC-signed like threshold webhooks; store drain config per tenant). State a retention policy per tier (Business 365d, Enterprise unlimited). Acceptance: export downloads the full filtered trail; drain delivers new events within ~1 min; both audit-logged themselves (`audit_export.run`).
+4. **Org-wide API keys.** Already specced under Security Review item 3 below — becomes Phase 1 work. Add `org_id` to `api_keys` (NULL = personal), `validate_api_key` + node scoping honor it via `tenant_scope`; only org Admins (RBAC above) may mint/revoke org keys. Unblocks CI/automation not tied to an employee.
+
+**Phase 2 — Reliability maturity (become the pager for AI infra)**
+
+5. **SLOs with error budgets** (extends the existing "Fleet SLA Aggregation" entry below). Per-tag/env SLO definitions (e.g. p95 TTFT < 500ms, 99% monthly), continuous evaluation from `inference_traces`/rollups, error-budget burn alerts through the existing channel/rule machinery, and a monthly SLO report (email + endpoint). The sentence "our internal inference API met SLO 99.2% of the month" is the renewal-insurance deliverable.
+6. **Environments & tag-based scoping.** `nodes.tags` exists as a free-text column nothing consumes. Make tags first-class: filter fleet dashboard/SSE by tag, tag-scoped alert rules + webhook subscriptions (add `tag` alongside `node_id` scope), tag dimension on cost/WES rollup endpoints. Convention: reserve `env:prod` / `env:staging` prefixes for the environment picker.
+7. **Alert escalation, silences, maintenance windows.** Silences first (suppress rule/node/tag for a duration — one table + a check in `evaluate_alerts`/`evaluate_webhooks`; without this the first planned driver upgrade pages everyone). Then maintenance windows (scheduled silences), then multi-step escalation policies (notify channel A, unacked after N min → channel B).
+8. **Fleet config management.** Deployment profiles are node-local (config.toml + localhost API). Add cloud-side desired-profile per node/tag; agent picks it up via the existing telemetry-response path (or a config-poll), applies through the same `update_config` machinery, reports actual profile in MetricsPayload so the fleet view shows intent vs. actual. Also the natural home for future agent remote-upgrade rings.
+
+**Phase 3 — Cost governance (the CFO wedge; only Wicklee has watts AND tokens)**
+
+9. **Showback/chargeback reports.** Per-team(tag)/per-model/per-node cost from measured watts × electricity rate, joined with token counts from proxy traces → $/1M tokens by team, trended. Endpoint + dashboard section + monthly export (CSV). Datadog/Langfuse see tokens; DCGM sees watts; nobody joins them — this is the moat feature.
+10. **Idle-waste & right-sizing report.** Fleet rollup of phantom-load cost + quant-advisor savings: "fleet burned $X idle last 30d; these N changes recover $Y" with per-node actions (unload idle model, quant swap, consolidate). Weekly email digest (Resend is already wired for alerts). This makes Wicklee unremovable — removing it makes waste invisible again.
+11. **Capacity planner with procurement scenarios** (sharpens the existing "Fleet Capacity Planner" entry below): "reach 200 tok/s sustained: 2×4090 vs 1×H100" priced from the fleet's own measured WES, not vendor benchmarks.
+
+**Phase 4 — Enterprise deployment surface**
+
+12. **Self-hosted control plane (Enterprise).** The cloud is one Rust binary + Postgres. Package as Docker Compose/Helm with license key; document Clerk-or-DIY-auth choice (legacy DIY session path still exists in `require_user_and_org`). Completes the "sovereign" brand honestly — the answer for buyers who won't ship telemetry to wicklee.dev.
+13. **Kubernetes operator + Helm** (existing entry below — becomes Phase 4).
+14. **Grafana datasource plugin + prebuilt dashboards; Terraform provider.** Meet platform teams inside tools they already defend budget for. Prometheus scrape + OTel export already exist — the plugin/dashboards are packaging, not new telemetry.
+
+**Phase 5 — AI-native moats**
+
+15. **Model governance.** Allowed-model registry per org; alert (or webhook) when an unapproved model appears on a tagged-prod node. The `model.changed` edge detection already exists in the webhook-subscription evaluator — this adds a policy table + a check in the same path. Compliance wedge for regulated industries.
+16. **Governed agentic operations.** MCP tools that ACT (drain node, unload idle model, swap quant) behind RBAC approval, every action audit-logged. Builds directly on Phase 1 RBAC + audit; first governed write surface for AI-agent-driven infra ops.
+
+**Packaging target once Phases 1–3 land:** Business = SSO + RBAC + audit export + org keys + SLO reports + cost governance (justifies $499). Enterprise = + self-hosted control plane + SCIM + custom SLA.
+
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
 
@@ -207,9 +243,6 @@ Anonymous install event tracking (OS, arch, version) via fire-and-forget ping fr
 
 ### WES Leaderboard (Public)
 Anonymous hardware benchmark submissions with public ranking. "MPG for AI" — compare tok/W across hardware configurations. Public read API + submission endpoint.
-
-### SSO/SAML (Business+)
-SAML 2.0 single sign-on via Clerk Organizations. Configured per-org in Clerk dashboard. Business and Enterprise tiers.
 
 ---
 
