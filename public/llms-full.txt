@@ -162,6 +162,30 @@ The MetricsPayload carries a single boolean — `runtime_config_available` —
 so the frontend knows whether to render the "Config" affordance without
 having to hit the endpoint speculatively for every node.
 
+### GET/PUT /api/deployment-profile
+Deployment Profiles. A single intent selector that coherently shifts the
+sensitivity of every local observation pattern — replacing per-pattern
+threshold knobs. GET returns the active profile plus the selectable set and
+the tuning each applies; PUT `{ "profile": "sovereign_dev" | "dedicated_server"
+| "production_fleet" }` switches it (validated; 400 otherwise), persists to
+`config.toml`, and takes effect within one 10s evaluation cycle. Three coherent
+levers: `density_scale` (evidence-window density every pattern derives from
+`min_density_5m`/`min_density_10m`), `evidence_ratio` (sustained-fraction gate,
+baseline 0.70), `min_confidence` (final emission filter). dedicated_server is
+the default and preserves the original baseline exactly. Node-local, no auth
+(localhost endpoint) — governs which observations this node raises, not
+fleet-wide alert rules.
+```json
+{
+  "profile": "dedicated_server",
+  "available": [
+    { "id": "sovereign_dev",    "density_scale": 1.15, "evidence_ratio": 0.85, "min_confidence": 0.5 },
+    { "id": "dedicated_server", "density_scale": 1.0,  "evidence_ratio": 0.7,  "min_confidence": 0.0 },
+    { "id": "production_fleet", "density_scale": 0.65, "evidence_ratio": 0.55, "min_confidence": 0.0 }
+  ]
+}
+```
+
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
 ```json

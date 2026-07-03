@@ -59,6 +59,9 @@ Community (Free) → Pro ($29/mo) → Team ($49/seat/mo) → Business ($499/mo) 
 ### Server-Side Pattern Evaluation (Phase 7)
 Migrated all 18 observation patterns from client-side TypeScript to server-side Rust. Agent evaluates 17 patterns against 10-min DuckDB buffer every 10s, pushes to cloud via telemetry. Cloud evaluates `fleet_load_imbalance`. Deleted `patternEngine.ts` (2,254 lines) and `useMetricHistory.ts` (284 lines).
 
+### Deployment Profiles
+Single intent selector — `sovereign_dev`, `dedicated_server` (default), `production_fleet` — that coherently shifts the sensitivity of every local observation pattern instead of exposing per-pattern threshold knobs. Implemented as three tuning levers threaded into `evaluate_local_observations`: `density_scale` (multiplies the evidence-window density every pattern derives from `min_density_5m`/`min_density_10m`), `evidence_ratio` (the sustained-fraction gate, baseline 0.70), and `min_confidence` (a final emission filter). sovereign_dev raises all three (high bar + confidence floor for a mixed-use laptop); production_fleet lowers them (aggressive early warning); dedicated_server preserves the original baseline exactly (scale 1.0, gate 0.70, no floor). Persisted in `config.toml` as `deployment_profile`, switchable at runtime via `GET`/`PUT /api/deployment-profile` (the 10s evaluator re-reads it each tick), and selected in the localhost Settings UI. Node-local: governs which observations a node raises, not fleet-wide alert rules.
+
 ---
 
 ### Inference Intelligence (4 features)
@@ -194,9 +197,6 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 
 ### Cross-Node Model Migration
 "Llama 3.1 70B on WK-A1B2 has WES 8.2, VRAM at 89%. WK-C3D4 has WES 12.1, VRAM at 52%. Recommend migrating for 47% efficiency gain." Fleet-wide model placement optimization based on measured performance.
-
-### Deployment Profiles
-Single config selector (`sovereign_dev`, `dedicated_server`, `production_fleet`) that adjusts all observation thresholds, evidence windows, and alert sensitivity coherently. sovereign_dev: high thresholds, long windows — laptop running inference alongside other workloads. dedicated_server: standard thresholds — single-purpose inference node. production_fleet: aggressive early warning — serving real users where latency matters. Eliminates per-pattern threshold knobs in favor of a single intent declaration. Maps cleanly to routing_hint severity: steer_away on a dev profile means genuinely broken, on production it means slightly degraded.
 
 ### Kubernetes Operator
 Helm chart and operator for automated Wicklee agent deployment across GPU node pools.

@@ -6,6 +6,60 @@
 
 ---
 
+## Early July 2026 — Deployment Profiles (agent)
+
+The second feature lost with the reclaimed container, rebuilt fresh on the
+v0.10.0 baseline. A single intent selector that coherently shifts how
+sensitively a node's local observation patterns fire — the roadmap's
+"eliminate per-pattern threshold knobs in favor of one declaration."
+
+### The design choice
+`evaluate_local_observations` is a ~1,200-line function with thresholds as
+inline literals across ~20 patterns. Rewriting every literal per-profile
+would be huge and risky. Instead, three coherent levers thread through the
+function at the chokepoints all patterns already share:
+- **`density_scale`** multiplies the two base densities (`min_density_5m`
+  = 210, `min_density_10m` = 420) that every pattern derives its
+  evidence-window requirement from — one change, all patterns shift.
+- **`evidence_ratio`** replaces the hardcoded `0.70` sustained-fraction
+  gate at the three ratio-gated patterns (thermal_drain, phantom_load,
+  swap_io_pressure).
+- **`min_confidence`** is a final `obs.retain()` filter dropping
+  low-confidence observations before return.
+
+| Profile | density_scale | evidence_ratio | min_confidence |
+|---|---|---|---|
+| sovereign_dev | 1.15 | 0.85 | 0.50 |
+| dedicated_server (default) | 1.00 | 0.70 | 0.00 |
+| production_fleet | 0.65 | 0.55 | 0.00 |
+
+**dedicated_server is byte-for-behavior identical to the pre-profile
+baseline** (scale 1.0, gate 0.70, no floor) — a locked unit test asserts
+this so the default can never silently drift. sovereign_dev raises the bar
+(mixed-use laptop shouldn't cry wolf); production_fleet lowers it (serving
+users → warn early). A test also asserts the three profiles are strictly
+ordered on all three levers and that scaled dev densities stay within their
+windows (≤300 / ≤600 samples @1Hz).
+
+### Plumbing
+- `deployment_profile: Option<String>` added to `WickleeConfig` (persists
+  to config.toml; None → dedicated_server).
+- Shared `Arc<Mutex<DeploymentProfile>>` initialized from config, re-read by
+  the 10s evaluator each tick (a runtime switch lands within one cycle),
+  exposed to handlers via an axum `Extension` layer.
+- `GET /api/deployment-profile` (current + selectable set with each
+  profile's tuning) and `PUT /api/deployment-profile` (validates, updates
+  shared state, persists via `update_config`). Localhost/agent, no auth.
+- Frontend `settings/DeploymentProfileSection.tsx` — three selectable
+  intent cards (same-origin fetch to the agent on :7700), rendered in
+  Settings only in localhost/agent mode (`!isCloudMode`).
+- Docs: ROADMAP → Shipped; llms-full.txt gained the endpoint spec.
+
+Verified: agent `cargo check` clean, deployment_profile unit tests green,
+frontend `tsc` clean, vitest (80) green. Only Deployment Profiles remains
+node-local — a future enhancement could push the active profile in
+telemetry so the fleet view shows each node's intent.
+
 ## Early July 2026 — Audit Logging (Business+) shipped + a session-recovery story
 
 ### The recovery
