@@ -804,6 +804,10 @@ pub(crate) struct WickleeConfig {
     /// Set to "0.0.0.0" to accept LAN connections (proxy mode, remote dashboard).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) bind_address: Option<String>,
+    /// Deployment profile governing observation sensitivity:
+    /// "sovereign_dev" | "dedicated_server" (default) | "production_fleet".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) deployment_profile: Option<String>,
 }
 
 #[derive(Clone)]
@@ -3126,6 +3130,55 @@ async fn handle_pair_claim(
     Json(pairing_response(&state))
 }
 
+/// GET /api/deployment-profile — current profile + the selectable set with
+/// the coherent tuning each applies. Localhost/agent-only (no auth).
+async fn handle_get_deployment_profile(
+    axum::extract::Extension(profile): axum::extract::Extension<Arc<Mutex<DeploymentProfile>>>,
+) -> Json<serde_json::Value> {
+    let current = profile.lock().map(|p| *p).unwrap_or(DeploymentProfile::DedicatedServer);
+    let describe = |p: DeploymentProfile| {
+        let t = p.tuning();
+        serde_json::json!({
+            "id": p.as_str(),
+            "density_scale": t.density_scale,
+            "evidence_ratio": t.evidence_ratio,
+            "min_confidence": t.min_confidence,
+        })
+    };
+    Json(serde_json::json!({
+        "profile": current.as_str(),
+        "available": [
+            describe(DeploymentProfile::SovereignDev),
+            describe(DeploymentProfile::DedicatedServer),
+            describe(DeploymentProfile::ProductionFleet),
+        ],
+    }))
+}
+
+#[derive(Deserialize)]
+struct SetProfileBody { profile: String }
+
+/// PUT /api/deployment-profile — switch the active profile. Validates against
+/// the known set, updates the shared state (the 10 s evaluator picks it up on
+/// its next tick), and persists to config.toml so it survives restart.
+async fn handle_put_deployment_profile(
+    axum::extract::Extension(profile): axum::extract::Extension<Arc<Mutex<DeploymentProfile>>>,
+    Json(body): Json<SetProfileBody>,
+) -> impl axum::response::IntoResponse {
+    let valid = matches!(body.profile.as_str(),
+        "sovereign_dev" | "dedicated_server" | "production_fleet");
+    if !valid {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "profile must be sovereign_dev, dedicated_server, or production_fleet",
+        }))).into_response();
+    }
+    let next = DeploymentProfile::from_config(Some(&body.profile));
+    if let Ok(mut p) = profile.lock() { *p = next; }
+    let persisted = next.as_str().to_string();
+    update_config(|cfg| { cfg.deployment_profile = Some(persisted); });
+    Json(serde_json::json!({ "profile": next.as_str() })).into_response()
+}
+
 async fn handle_pair_disconnect(
     axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
 ) -> Json<PairingStatusResponse> {
@@ -3593,24 +3646,88 @@ fn obs_confidence(ratio: f64) -> &'static str {
 /// Pure evaluation function — no side effects, no stored state.
 /// Takes a 10-minute window of DuckDB samples + live PCIe state and returns
 /// any observations that meet their gating criteria.
+/// Deployment profile — a single intent declaration that coherently shifts
+/// the sensitivity of every local observation pattern, replacing per-pattern
+/// threshold knobs. Persisted in config.toml as `deployment_profile` and
+/// switchable at runtime via PUT /api/deployment-profile.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DeploymentProfile {
+    /// Laptop / workstation running inference alongside other workloads.
+    /// High evidence bar + confidence floor so mixed-use noise doesn't fire.
+    SovereignDev,
+    /// Single-purpose inference node — standard thresholds (the baseline the
+    /// patterns were originally tuned for).
+    DedicatedServer,
+    /// Serving real users where latency matters — aggressive early warning:
+    /// less sustained evidence required, so degradations surface sooner.
+    ProductionFleet,
+}
+
+/// Coherent tuning knobs derived from a profile and applied at the chokepoints
+/// shared by all patterns. `Copy` so it can be moved into the eval closure.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProfileTuning {
+    /// Multiplies the evidence-window density requirement every pattern derives
+    /// from `min_density_5m` / `min_density_10m`. >1 demands more sustained
+    /// data (conservative); <1 fires with less (aggressive).
+    pub density_scale: f64,
+    /// The sustained-fraction gate — the share of the window that must show the
+    /// condition before a ratio-gated pattern fires (baseline 0.70).
+    pub evidence_ratio: f64,
+    /// Observations below this confidence_ratio are dropped before return.
+    pub min_confidence: f64,
+}
+
+impl DeploymentProfile {
+    pub(crate) fn from_config(s: Option<&str>) -> Self {
+        match s {
+            Some("sovereign_dev")    => DeploymentProfile::SovereignDev,
+            Some("production_fleet") => DeploymentProfile::ProductionFleet,
+            // None or "dedicated_server" or anything unrecognized → the safe default.
+            _ => DeploymentProfile::DedicatedServer,
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            DeploymentProfile::SovereignDev    => "sovereign_dev",
+            DeploymentProfile::DedicatedServer => "dedicated_server",
+            DeploymentProfile::ProductionFleet => "production_fleet",
+        }
+    }
+
+    pub(crate) fn tuning(&self) -> ProfileTuning {
+        match self {
+            DeploymentProfile::SovereignDev =>
+                ProfileTuning { density_scale: 1.15, evidence_ratio: 0.85, min_confidence: 0.50 },
+            DeploymentProfile::DedicatedServer =>
+                ProfileTuning { density_scale: 1.00, evidence_ratio: 0.70, min_confidence: 0.00 },
+            DeploymentProfile::ProductionFleet =>
+                ProfileTuning { density_scale: 0.65, evidence_ratio: 0.55, min_confidence: 0.00 },
+        }
+    }
+}
+
 fn evaluate_local_observations(
     samples:  &[store::ObsSample],
     pcie:     &PcieSnapshot,
     node_id:  &str,
     hostname: &str,
+    tuning:   ProfileTuning,
 ) -> Vec<LocalObservation> {
     let mut obs = Vec::new();
     let now_ms = now_ms() as i64;
 
-    // 5-minute window — used by patterns A/B/H/J/K
-    let min_density_5m = 210_usize;   // 70% of 300s at 1 Hz
+    // 5-minute window — used by patterns A/B/H/J/K. Density requirement is
+    // scaled by the deployment profile so all patterns shift coherently.
+    let min_density_5m = (210.0 * tuning.density_scale) as usize;   // baseline: 70% of 300s at 1 Hz
     let cutoff_5m = now_ms - 300_000_i64;
     let window: Vec<&store::ObsSample> = samples.iter()
         .filter(|s| s.ts_ms >= cutoff_5m)
         .collect();
 
     // 10-minute window — used by patterns C/F
-    let min_density_10m = 420_usize;  // 70% of 600s at 1 Hz
+    let min_density_10m = (420.0 * tuning.density_scale) as usize;  // baseline: 70% of 600s at 1 Hz
     let cutoff_10m = now_ms - 600_000_i64;
     let long_window: Vec<&store::ObsSample> = samples.iter()
         .filter(|s| s.ts_ms >= cutoff_10m)
@@ -3631,7 +3748,7 @@ fn evaluate_local_observations(
 
         let thermal_ratio = thermal_samples.len() as f64 / window.len() as f64;
 
-        if thermal_ratio >= 0.70 {
+        if thermal_ratio >= tuning.evidence_ratio {
             // Compute tok/s means for throttled vs Normal baselines
             let throttled_tps: Vec<f64> = thermal_samples.iter()
                 .filter_map(|s| s.tps)
@@ -3716,7 +3833,7 @@ fn evaluate_local_observations(
 
         let phantom_ratio = phantom_samples.len() as f64 / window.len() as f64;
 
-        if phantom_ratio >= 0.70 {
+        if phantom_ratio >= tuning.evidence_ratio {
             let avg_watts: f64 = phantom_samples.iter()
                 .filter_map(|s| s.gpu_power_w.or(s.cpu_power_w))
                 .sum::<f64>() / phantom_samples.len().max(1) as f64;
@@ -3769,7 +3886,7 @@ fn evaluate_local_observations(
 
         let swap_ratio = swap_samples.len() as f64 / window.len() as f64;
 
-        if swap_ratio >= 0.70 {
+        if swap_ratio >= tuning.evidence_ratio {
             let avg_swap: f64 = swap_samples.iter()
                 .filter_map(|s| s.swap_write_mb_s)
                 .sum::<f64>() / swap_samples.len().max(1) as f64;
@@ -4818,6 +4935,13 @@ fn evaluate_local_observations(
                 });
             }
         }
+    }
+
+    // Profile-driven emission filter: on stricter profiles (sovereign_dev),
+    // drop observations that haven't cleared the confidence floor — the last
+    // coherent sensitivity lever, applied uniformly across every pattern above.
+    if tuning.min_confidence > 0.0 {
+        obs.retain(|o| o.confidence_ratio >= tuning.min_confidence);
     }
 
     obs
@@ -7423,6 +7547,12 @@ async fn main() {
     #[cfg(target_env = "musl")]
     let observation_cache: Arc<Mutex<Vec<()>>> = Arc::new(Mutex::new(Vec::new()));
 
+    // Deployment profile — governs observation sensitivity. Loaded from config,
+    // switchable at runtime via PUT /api/deployment-profile; the 10 s evaluator
+    // reads it each tick so a change takes effect within one cycle.
+    let deployment_profile: Arc<Mutex<DeploymentProfile>> =
+        Arc::new(Mutex::new(DeploymentProfile::from_config(config.deployment_profile.as_deref())));
+
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
     #[cfg(not(target_env = "musl"))]
     cloud_push::start_cloud_push(
@@ -7576,6 +7706,7 @@ async fn main() {
                     let apple_clone  = Arc::clone(&apple_metrics);
                     let node_id_clone = config.node_id.clone();
                     let obs_cache = Arc::clone(&observation_cache);
+                    let profile_for_obs = Arc::clone(&deployment_profile);
                     // Cache the Linux CPU model once — never changes at runtime.
                     // Used by `bandwidth_ceiling_reached` to look up memory bandwidth.
                     let linux_chip_name_obs = read_linux_chip_name();
@@ -7587,6 +7718,11 @@ async fn main() {
                             interval.tick().await;
                             let st  = store_clone.clone();
                             let nid = node_id_clone.clone();
+                            // Re-read each tick so a runtime profile change takes
+                            // effect within one 10 s cycle.
+                            let tuning = profile_for_obs.lock()
+                                .map(|p| p.tuning())
+                                .unwrap_or_else(|_| DeploymentProfile::DedicatedServer.tuning());
                             let nv  = nvidia_clone.lock().map(|g| g.clone()).unwrap_or_default();
                             let ol  = ollama_clone.lock().map(|g| g.clone()).unwrap_or_default();
                             let ap  = apple_clone.lock().map(|g| g.clone()).unwrap_or_default();
@@ -7599,7 +7735,7 @@ async fn main() {
                             let result = tokio::task::spawn_blocking(move || {
                                 match st.query_observation_window(&nid, 600_000) {
                                     Ok(samples) => {
-                                        let mut obs = evaluate_local_observations(&samples, &pcie, &nid, &hostname);
+                                        let mut obs = evaluate_local_observations(&samples, &pcie, &nid, &hostname, tuning);
                                         // Pattern O — VRAM Overcommit (point-in-time, no history needed)
                                         if let Some(o) = evaluate_vram_overcommit(&ol, &nv, &ap, &nid, &hostname) {
                                             obs.push(o);
@@ -7700,7 +7836,8 @@ async fn main() {
             .route("/.well-known/mcp.json",     get(handle_mcp_manifest))
             // v0.9.0: Runtime Config Surface — backed by in-memory cache,
             // available regardless of store health.
-            .route("/api/runtime-config",       get(handle_runtime_config));
+            .route("/api/runtime-config",       get(handle_runtime_config))
+            .route("/api/deployment-profile",   get(handle_get_deployment_profile).put(handle_put_deployment_profile));
 
         // Wire store-backed routes only when DuckDB opened successfully.
         // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET),
@@ -7730,6 +7867,7 @@ async fn main() {
         r.fallback(static_handler)
          .layer(axum::extract::Extension(store_healthy))
          .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
+         .layer(axum::extract::Extension(Arc::clone(&deployment_profile)))
          .layer(axum::extract::Extension(apple_metrics))
          .layer(axum::extract::Extension(nvidia_metrics))
          .layer(axum::extract::Extension(ollama_metrics))
@@ -7858,6 +7996,55 @@ mod bandwidth_tests {
         assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M3 Ultra")), Some(819.0));
         assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M2 Pro")), Some(200.0));
         assert_eq!(hardware_bandwidth_gbps(Some("AMD Radeon RX 7900 XTX"), None), None);
+    }
+}
+
+#[cfg(test)]
+mod deployment_profile_tests {
+    use super::*;
+
+    #[test]
+    fn from_config_defaults_to_dedicated_server() {
+        // None, empty, and unrecognized all fall back to the safe standard.
+        assert_eq!(DeploymentProfile::from_config(None), DeploymentProfile::DedicatedServer);
+        assert_eq!(DeploymentProfile::from_config(Some("bogus")), DeploymentProfile::DedicatedServer);
+        assert_eq!(DeploymentProfile::from_config(Some("dedicated_server")), DeploymentProfile::DedicatedServer);
+        assert_eq!(DeploymentProfile::from_config(Some("sovereign_dev")), DeploymentProfile::SovereignDev);
+        assert_eq!(DeploymentProfile::from_config(Some("production_fleet")), DeploymentProfile::ProductionFleet);
+    }
+
+    #[test]
+    fn as_str_round_trips_through_from_config() {
+        for p in [DeploymentProfile::SovereignDev, DeploymentProfile::DedicatedServer, DeploymentProfile::ProductionFleet] {
+            assert_eq!(DeploymentProfile::from_config(Some(p.as_str())), p);
+        }
+    }
+
+    #[test]
+    fn dedicated_server_preserves_the_original_baseline() {
+        // The standard profile must not change the pre-profile behavior:
+        // 0.70 gate, unscaled density, no confidence floor.
+        let t = DeploymentProfile::DedicatedServer.tuning();
+        assert_eq!(t.density_scale, 1.0);
+        assert_eq!(t.evidence_ratio, 0.70);
+        assert_eq!(t.min_confidence, 0.0);
+        // Baseline densities are unchanged from the original constants.
+        assert_eq!((210.0 * t.density_scale) as usize, 210);
+        assert_eq!((420.0 * t.density_scale) as usize, 420);
+    }
+
+    #[test]
+    fn sensitivity_is_ordered_dev_conservative_production_aggressive() {
+        let dev  = DeploymentProfile::SovereignDev.tuning();
+        let std  = DeploymentProfile::DedicatedServer.tuning();
+        let prod = DeploymentProfile::ProductionFleet.tuning();
+        // Dev demands more evidence and more confidence than standard; production less.
+        assert!(dev.evidence_ratio > std.evidence_ratio && std.evidence_ratio > prod.evidence_ratio);
+        assert!(dev.density_scale  > std.density_scale  && std.density_scale  > prod.density_scale);
+        assert!(dev.min_confidence > std.min_confidence);
+        // Scaled dev densities stay within their windows (5min=300, 10min=600 samples @1Hz).
+        assert!((210.0 * dev.density_scale) as usize <= 300);
+        assert!((420.0 * dev.density_scale) as usize <= 600);
     }
 }
 

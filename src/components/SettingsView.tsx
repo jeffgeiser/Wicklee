@@ -5,6 +5,7 @@ import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import WebhooksSection from './settings/WebhooksSection';
 import AuditLogSection from './settings/AuditLogSection';
+import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
@@ -633,6 +634,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           />
         </div>
       </Section>
+
+      {/* ── ③¾ DEPLOYMENT PROFILE (localhost/agent-only) ─────────────────── */}
+      {!isCloudMode && <DeploymentProfileSection />}
 
       {/* ── ④ ALERTS & NOTIFICATIONS ─────────────────────────────────────── */}
       <AlertsSection
