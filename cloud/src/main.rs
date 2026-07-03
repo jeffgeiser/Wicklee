@@ -781,6 +781,26 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("organizations migration failed");
 
+    // ── Audit log (Business+ tier) ──────────────────────────────────────────
+    // Append-only: no UPDATE/DELETE paths exist anywhere in the codebase.
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id          BIGSERIAL PRIMARY KEY,
+            ts          BIGINT NOT NULL,
+            user_id     TEXT NOT NULL,
+            org_id      TEXT,
+            actor_email TEXT NOT NULL DEFAULT '',
+            action      TEXT NOT NULL,
+            target      TEXT NOT NULL DEFAULT '',
+            details     JSONB
+        )
+    ").execute(pool).await.expect("audit_log migration failed");
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, ts DESC)")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_org ON audit_log(org_id, ts DESC)")
+        .execute(pool).await.ok();
+
     // Install telemetry — anonymous counter, no PII.
     sqlx::query("
         CREATE TABLE IF NOT EXISTS installs (
@@ -1156,6 +1176,93 @@ async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPoo
     .unwrap_or_else(|_| "community".to_string())
 }
 
+/// Record an audit event. Fire-and-forget — never delays or fails the request.
+/// Events are recorded for every tier; reading them is gated to Business+.
+/// org_id must come from the verified JWT claim (require_user_and_org), never
+/// a client header. The actor email is resolved here so callers only pass ids.
+fn audit(
+    pool: &sqlx::PgPool,
+    user_id: &str,
+    org_id: &Option<String>,
+    action: &'static str,
+    target: &str,
+    details: serde_json::Value,
+) {
+    let pool = pool.clone();
+    let user_id = user_id.to_owned();
+    let org_id = org_id.clone();
+    let target = target.to_owned();
+    tokio::spawn(async move {
+        let email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(&user_id).fetch_one(&pool).await.unwrap_or_default();
+        if let Err(e) = sqlx::query(
+            "INSERT INTO audit_log (ts, user_id, org_id, actor_email, action, target, details)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)"
+        ).bind(now_ms() as i64).bind(&user_id).bind(&org_id).bind(&email)
+        .bind(action).bind(&target).bind(details.to_string())
+        .execute(&pool).await {
+            eprintln!("[audit] write failed for {action}: {e}");
+        }
+    });
+}
+
+/// GET /api/audit-log — immutable audit trail, Business+ tier.
+/// Query params: limit (default 50, max 200), before (ts_ms cursor),
+/// action (exact-match filter). Org members see the whole org trail.
+async fn handle_audit_log(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+
+    let limit: i64 = params.get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50).clamp(1, 200);
+    let before: i64 = params.get("before")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(i64::MAX);
+    let action = params.get("action").cloned();
+
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let mut sql = format!(
+        "SELECT id, ts, user_id, org_id, actor_email, action, target, COALESCE(details::text, '{{}}')
+         FROM audit_log WHERE {tcol} = $1 AND ts < $2");
+    if action.is_some() { sql.push_str(" AND action = $4"); }
+    sql.push_str(" ORDER BY ts DESC LIMIT $3");
+
+    let mut q = sqlx::query_as::<_, (i64, i64, String, Option<String>, String, String, String, String)>(&sql)
+        .bind(tval).bind(before).bind(limit);
+    if let Some(ref a) = action { q = q.bind(a); }
+    let rows = q.fetch_all(&state.pool).await.unwrap_or_default();
+
+    let entries: Vec<serde_json::Value> = rows.into_iter()
+        .map(|(id, ts, uid, oid, email, action, target, details)| serde_json::json!({
+            "id": id, "ts": ts, "user_id": uid, "org_id": oid,
+            "actor_email": email, "action": action, "target": target,
+            "details": serde_json::from_str::<serde_json::Value>(&details)
+                .unwrap_or(serde_json::json!({})),
+        })).collect();
+
+    let next_before = entries.last().and_then(|e| e["ts"].as_i64());
+    Json(serde_json::json!({ "entries": entries, "next_before": next_before })).into_response()
+}
+
 /// Like require_user but also returns email, is_pro, and the verified org_id.
 async fn require_user_info(
     token: &str,
@@ -1382,9 +1489,14 @@ async fn handle_v1_create_key(
     .execute(&state.pool).await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, Json(V1CreateKeyResponse {
-            key_id, key: raw_key, name, created_at: ts,
-        })).into_response(),
+        Ok(_) => {
+            // API keys are per-user by design (see roadmap: org-wide keys deferred).
+            audit(&state.pool, &user_id, &None, "api_key.created", &key_id,
+                serde_json::json!({ "name": &name }));
+            (StatusCode::CREATED, Json(V1CreateKeyResponse {
+                key_id, key: raw_key, name, created_at: ts,
+            })).into_response()
+        }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     }
@@ -1460,6 +1572,7 @@ async fn handle_delete_node(
 
             // Evict from in-memory cache.
             state.metrics.write().unwrap().remove(&node_id);
+            audit(&state.pool, &user_id, &org_id, "node.removed", &node_id, serde_json::json!({}));
             StatusCode::NO_CONTENT.into_response()
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
@@ -1493,7 +1606,11 @@ async fn handle_v1_delete_key(
     match result {
         Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
-        Ok(_)  => StatusCode::NO_CONTENT.into_response(),
+        Ok(_)  => {
+            audit(&state.pool, &user_id, &None, "api_key.deleted", &key_id,
+                serde_json::json!({}));
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     }
@@ -1948,6 +2065,7 @@ async fn handle_revoke_stream_tokens(
     let _ = sqlx::query("DELETE FROM stream_tokens WHERE user_id = $1")
         .bind(&user_id).execute(&state.pool).await;
 
+    audit(&state.pool, &user_id, &None, "stream_tokens.revoked", "", serde_json::json!({}));
     StatusCode::NO_CONTENT
 }
 
@@ -4170,6 +4288,8 @@ async fn handle_activate(
                 ).bind(oid).bind(&user_id).bind(now_ms() as i64)
                 .execute(&state.pool).await;
             }
+            audit(&state.pool, &user_id, &org_id, "node.paired", &node_id,
+                serde_json::json!({ "fleet_url": &fleet_url }));
             (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response()
         }
     }
@@ -8452,6 +8572,7 @@ async fn main() {
         .route("/api/billing/config",    get(handle_billing_config))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
         .route("/api/otel/config",       get(handle_get_otel_config).put(handle_put_otel_config))
+        .route("/api/audit-log",         get(handle_audit_log))
         .with_state(state.clone())
         .layer(middleware::from_fn(cors_dashboard));
 
