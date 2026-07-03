@@ -623,6 +623,10 @@ Evaluated by the cloud backend every 60 seconds.
 | Business | $499/mo | 100 (unlimited seats) | 365 days | + SSO/SAML, audit logging |
 | Enterprise | Contact sales | Unlimited | Unlimited | + sovereign deployment, custom SLA |
 
+### Organization RBAC
+
+Shared fleets (Clerk Organizations) enforce role-based access from the signed session token's org role claim — never a client header. **Admin** (`org:admin`): everything, including node removal. **Member** (`org:member`, custom roles): day-to-day operations — pair/rename/tag nodes, alert rules & channels, webhooks, acknowledge/resolve observations, OTel config. **Viewer** (custom `org:viewer` Clerk role): read-only; every mutating endpoint returns 403 with `role_required`. Unknown roles map to Member, never Admin. Solo users (no org) have full control of their own resources.
+
 ---
 
 ## Runtimes

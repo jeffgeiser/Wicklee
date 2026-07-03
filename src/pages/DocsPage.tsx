@@ -1991,6 +1991,13 @@ curl https://wicklee.dev/api/v1/fleet \\
             <NoteBox>
               <strong className="text-white">Solo users:</strong> Organizations are optional. Community and Pro users who don't need shared access can continue using Wicklee as a single-user dashboard — nothing changes.
             </NoteBox>
+
+            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-2">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Roles (RBAC)</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Fleet permissions follow your Clerk organization role, verified from the signed session token on every request. <strong className="text-white">Admin</strong> (<code className="text-gray-300">org:admin</code>) can do everything, including removing nodes. <strong className="text-white">Member</strong> (<code className="text-gray-300">org:member</code> and custom roles) handles day-to-day operations — pairing and renaming nodes, alert rules and channels, webhooks, acknowledging observations. <strong className="text-white">Viewer</strong> (a custom <code className="text-gray-300">org:viewer</code> role you create in Clerk) is read-only — every mutation returns 403. Unknown roles map to Member, never Admin; solo users keep full control of their own resources.
+              </p>
+            </div>
           </Section>
 
           {/* ── Audit Log ── */}

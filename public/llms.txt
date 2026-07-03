@@ -151,3 +151,5 @@ wes_cliff, agent_version_mismatch
 - Team: $49/seat/mo, 25 nodes (+$2/node over 25), 90-day history, shared dashboards, PagerDuty, Cloud MCP, OTel+Prometheus
 - Business: $499/mo, unlimited seats, 100 nodes, 365-day history, everything in Team + SSO/SAML + audit logging
 - Enterprise: Contact sales, unlimited nodes, sovereign deployment, custom SLA
+
+Shared fleets use Clerk Organizations with RBAC enforced from the signed session token: Admin (org:admin) = everything incl. node removal; Member (org:member/custom) = day-to-day ops; Viewer (custom org:viewer role) = read-only, mutations 403. Solo users have full control of their own resources.

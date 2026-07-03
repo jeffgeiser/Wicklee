@@ -670,6 +670,18 @@ Wicklee uses Clerk Organizations for shared fleet access. When you create an org
 
 **Solo users:** Organizations are optional. Community and Pro users can use Wicklee as a single-user dashboard with no changes.
 
+### Roles (RBAC)
+
+Fleet permissions follow your Clerk organization role, verified from the signed session token on every request:
+
+| Role | Can |
+|------|-----|
+| **Admin** (`org:admin`) | Everything, including removing nodes from the fleet |
+| **Member** (`org:member`, custom roles) | Day-to-day operations — pair nodes, rename/tag nodes, alert rules & channels, webhooks, acknowledge/resolve observations, OTel config |
+| **Viewer** (`org:viewer`, custom Clerk role) | Read-only — dashboards, history, observations, exports; every mutation returns 403 |
+
+Node removal is Admin-only. Unknown custom roles map to Member (never Admin). Solo users without an organization have full control of their own resources. To use Viewer, create a custom `viewer` role in your Clerk organization settings and assign it to members.
+
 ---
 
 ## Audit Logging (Business+)

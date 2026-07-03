@@ -56,6 +56,49 @@ criteria. RBAC is in progress on this branch.
 
 ---
 
+## Early July 2026 — RBAC v1 (Business & Enterprise Readiness, Phase 1 item 1)
+
+First feature of the ★ Business & Enterprise Readiness Program (see ROADMAP).
+The July strategic review found every org member could delete nodes, rewire
+alerts, and reconfigure OTel — no role was ever checked; the Clerk JWT's role
+claim was parsed and thrown away, exactly like the org_id claim was before the
+June tenancy fix.
+
+### Design
+- `validate_clerk_jwt` now returns `(sub, org_id, org_role)`, handling both
+  Clerk token shapes: v1 top-level `org_id`/`org_role` ("org:admin") and v2
+  nested `o: { id, rol }` (bare "admin"). The nested `o.id` also backstops
+  org_id resolution for v2 tokens.
+- `OrgRole { Admin, Member, Viewer }` with deliberate mapping rules: solo
+  users (no org in session) = Admin over their own resources (tenancy scoping
+  already confines them); "admin" → Admin; custom "viewer" role → Viewer;
+  **anything unknown → Member, never Admin** (a bespoke Clerk ops role must
+  not be locked out of day-to-day work, and must never be escalated).
+- `require_user_org_role()` is the new core; `require_user_and_org` and
+  `require_user_info` became thin wrappers, so the ~28 read-only call sites
+  needed zero changes. Only mutating handlers switched to the role-aware
+  helper (mechanical transform, applied by script, compiled first try).
+
+### Policy (enforced at 15 handlers)
+- **Viewer → 403 on every mutation:** update node, alert channel/rule
+  create+delete+test, webhook create/delete/test, acknowledge/resolve/submit
+  observations, OTel config PUT, pair/activate. 403 body carries
+  `role_required` so the frontend can render a real message (sections already
+  display `err.error`).
+- **Admin-only:** node removal (`handle_delete_node`).
+- **Deliberately ungated:** stream-token revoke (self-scoped — users revoke
+  their own tokens); personal API keys (per-user by design, see the org-keys
+  item — an org viewer's personal key reaches only their personal nodes).
+
+### Tests + docs
+4 new `rbac_tests` (role parsing incl. prefix variants and the
+unknown-role→Member rule, policy table); 17 cloud tests green. Docs updated
+across docs.md (Roles table in Teams & Orgs), DocsPage.tsx, llms.txt,
+llms-full.txt. Follow-ups on the roadmap item: role-aware UI hiding,
+`access.denied` audit events, Admin-gated org key minting.
+
+---
+
 ## Early July 2026 — Deployment Profiles (agent)
 
 The second feature lost with the reclaimed container, rebuilt fresh on the

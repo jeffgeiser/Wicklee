@@ -975,13 +975,27 @@ fn fetch_jwks(url: &str) -> Vec<JwkKey> {
     }
 }
 
-/// Verify a Clerk JWT and return the `sub` claim (Clerk user ID) and optional `org_id`.
-fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<String>)> {
+/// Verify a Clerk JWT and return the `sub` claim (Clerk user ID), optional
+/// `org_id`, and optional org role string (e.g. "org:admin"). Handles both
+/// Clerk token shapes: v1 top-level `org_id`/`org_role`, and v2 nested
+/// `o: { id, rol }` (rol carries no "org:" prefix).
+fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<String>, Option<String>)> {
+    #[derive(Deserialize)]
+    struct ClerkOrgClaim {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        rol: Option<String>,
+    }
     #[derive(Deserialize)]
     struct ClerkClaims {
         sub: String,
         #[serde(default)]
         org_id: Option<String>,
+        #[serde(default)]
+        org_role: Option<String>,
+        #[serde(default)]
+        o: Option<ClerkOrgClaim>,
     }
 
     if keys.is_empty() {
@@ -1017,8 +1031,12 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<St
             Err(e) => { eprintln!("[auth] DecodingKey build failed for kid={}: {e}", jwk.kid); }
             Ok(key) => match decode::<ClerkClaims>(token, &key, &val) {
                 Ok(data) => {
-                    eprintln!("[auth] JWT valid (org_id={:?})", data.claims.org_id);
-                    return Some((data.claims.sub, data.claims.org_id));
+                    let c = data.claims;
+                    let (o_id, o_rol) = c.o.map(|o| (o.id, o.rol)).unwrap_or((None, None));
+                    let org_id   = c.org_id.or(o_id);
+                    let org_role = c.org_role.or(o_rol);
+                    eprintln!("[auth] JWT valid (org_id={org_id:?} role={org_role:?})");
+                    return Some((c.sub, org_id, org_role));
                 }
                 Err(e) => { eprintln!("[auth] JWT decode failed for kid={}: {e}", jwk.kid); }
             }
@@ -1087,17 +1105,66 @@ async fn require_user_and_org(
     pool: &sqlx::PgPool,
     clerk_keys: &[JwkKey],
 ) -> Option<(String, Option<String>)> {
-    // Legacy DIY sessions — no org concept.
+    require_user_org_role(token, pool, clerk_keys).await
+        .map(|(uid, org, _role)| (uid, org))
+}
+
+/// RBAC role within the active organization, derived from the verified Clerk
+/// JWT's org role claim — never from the client. Solo users (no org in the
+/// session) are Admin over their own resources; tenancy scoping already
+/// confines them to those. Clerk built-in roles: "org:admin" / "org:member";
+/// a custom "org:viewer" role (configurable in Clerk) maps to read-only.
+/// Unknown custom roles default to Member so a bespoke ops role isn't
+/// accidentally locked out of day-to-day work — Admin is never inferred.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OrgRole { Admin, Member, Viewer }
+
+impl OrgRole {
+    fn from_claim(role: Option<&str>, has_org: bool) -> Self {
+        if !has_org { return OrgRole::Admin; }
+        match role.map(|r| r.strip_prefix("org:").unwrap_or(r)) {
+            Some("admin")  => OrgRole::Admin,
+            Some("viewer") => OrgRole::Viewer,
+            // "member", "basic_member", custom roles, or a missing claim on
+            // an org session → Member (least-privilege for Admin, but not
+            // read-only — Clerk always sends the role for org sessions).
+            _ => OrgRole::Member,
+        }
+    }
+
+    /// Viewers cannot mutate anything.
+    fn can_mutate(&self) -> bool { !matches!(self, OrgRole::Viewer) }
+    fn is_admin(&self)   -> bool { matches!(self, OrgRole::Admin) }
+}
+
+/// 403 body for role-policy denials — names the required role so the
+/// frontend can render a useful message instead of a generic failure.
+fn role_forbidden(required: &str) -> axum::response::Response {
+    (StatusCode::FORBIDDEN, Json(serde_json::json!({
+        "error": format!("Your organization role does not permit this action ({required} required)"),
+        "role_required": required,
+    }))).into_response()
+}
+
+/// Like `require_user_and_org` but also returns the caller's [`OrgRole`].
+/// Mutating handlers use this; read-only handlers keep the 2-tuple wrapper.
+async fn require_user_org_role(
+    token: &str,
+    pool: &sqlx::PgPool,
+    clerk_keys: &[JwkKey],
+) -> Option<(String, Option<String>, OrgRole)> {
+    // Legacy DIY sessions — no org concept, full control of own resources.
     if let Ok(id) = sqlx::query_scalar::<_, String>(
         "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1"
     ).bind(token).fetch_one(pool).await {
-        return Some((id, None));
+        return Some((id, None, OrgRole::Admin));
     }
 
-    // Clerk JWT — trust the signed org_id claim, never a header.
-    let (sub, org_id) = validate_clerk_jwt(token, clerk_keys)?;
+    // Clerk JWT — trust the signed org_id + role claims, never a header.
+    let (sub, org_id, org_role) = validate_clerk_jwt(token, clerk_keys)?;
     let user_id = resolve_clerk_user(&sub, pool).await?;
-    Some((user_id, org_id))
+    let role = OrgRole::from_claim(org_role.as_deref(), org_id.is_some());
+    Some((user_id, org_id, role))
 }
 
 /// Returns (column_name, bind_value) for tenant-scoped queries.
@@ -1263,17 +1330,18 @@ async fn handle_audit_log(
     Json(serde_json::json!({ "entries": entries, "next_before": next_before })).into_response()
 }
 
-/// Like require_user but also returns email, is_pro, and the verified org_id.
+/// Like require_user but also returns email, is_pro, the verified org_id,
+/// and the caller's [`OrgRole`].
 async fn require_user_info(
     token: &str,
     pool: &sqlx::PgPool,
     clerk_keys: &[JwkKey],
-) -> Option<(String, String, i32, Option<String>)> {
-    let (user_id, org_id) = require_user_and_org(token, pool, clerk_keys).await?;
+) -> Option<(String, String, i32, Option<String>, OrgRole)> {
+    let (user_id, org_id, role) = require_user_org_role(token, pool, clerk_keys).await?;
     let row = sqlx::query_as::<_, (String, i32)>(
         "SELECT email, is_pro FROM users WHERE id = $1"
     ).bind(&user_id).fetch_one(pool).await.ok()?;
-    Some((user_id, row.0, row.1, org_id))
+    Some((user_id, row.0, row.1, org_id, role))
 }
 
 // ── Agent API v1 helpers ──────────────────────────────────────────────────────
@@ -1545,11 +1613,12 @@ async fn handle_delete_node(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.is_admin() { return role_forbidden("admin"); }
 
     // Org members can remove any node in the shared fleet; solo users only
     // their own. tenant_id on the metrics tables is the same scope column.
@@ -2846,11 +2915,12 @@ async fn handle_acknowledge_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let now = now_ms() as i64;
     let result = sqlx::query(
@@ -2882,11 +2952,12 @@ async fn handle_submit_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Pro+ only — persistent insight cards
     // Org-aware: org members are entitled by the org subscription.
@@ -2960,11 +3031,12 @@ async fn handle_resolve_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let now = now_ms() as i64;
     let result = sqlx::query(
@@ -3749,11 +3821,12 @@ async fn handle_webhook_create(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
@@ -3874,11 +3947,12 @@ async fn handle_webhook_delete(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let res = sqlx::query(
         "DELETE FROM webhook_subscriptions WHERE id = $1 AND user_id = $2"
@@ -3908,11 +3982,12 @@ async fn handle_webhook_test(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let row: Option<(String, String, String)> = sqlx::query_as(
         "SELECT url, secret, event_type FROM webhook_subscriptions
@@ -4229,11 +4304,13 @@ async fn handle_activate(
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let user_info = require_user_info(&token, &state.pool, &clerk_keys).await;
 
-    let (user_id, email, is_pro_db, org_id) = match user_info {
+    let (user_id, email, is_pro_db, org_id, role) = match user_info {
         Some(info) => info,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    // RBAC: pairing a node into the fleet is a mutation — viewers cannot.
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
     // Enforce per-tier node limits.
@@ -7226,11 +7303,12 @@ async fn handle_update_node(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
@@ -7303,11 +7381,12 @@ async fn handle_create_channel(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
@@ -7384,11 +7463,12 @@ async fn handle_delete_channel(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let result = sqlx::query("DELETE FROM notification_channels WHERE id = $1 AND user_id = $2")
         .bind(&channel_id).bind(&user_id).execute(&state.pool).await;
@@ -7421,11 +7501,12 @@ async fn handle_create_rule(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
@@ -7512,11 +7593,12 @@ async fn handle_delete_rule(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let result = sqlx::query("DELETE FROM alert_rules WHERE id = $1 AND user_id = $2")
         .bind(&rule_id).bind(&user_id).execute(&state.pool).await;
@@ -7541,11 +7623,12 @@ async fn handle_test_channel(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session or channel not found" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT channel_type, config_json::text FROM notification_channels WHERE id = $1 AND user_id = $2"
@@ -7803,10 +7886,11 @@ async fn handle_put_otel_config(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing auth token"}))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if tier != "team" && tier != "enterprise" {
@@ -8654,6 +8738,50 @@ mod fit_wrapper_tests {
         let (score, label) = cloud_fit_score(-1, 24_576, 0.0, "Normal");
         // 0-byte clamp -> 512 MB floor still "fits"; just must not panic.
         assert!(score > 0, "{label}");
+    }
+}
+
+#[cfg(test)]
+mod rbac_tests {
+    use super::*;
+
+    #[test]
+    fn solo_users_are_admin_over_their_own_resources() {
+        // No org in the session → full control; tenancy scoping confines them.
+        assert_eq!(OrgRole::from_claim(None, false), OrgRole::Admin);
+        // Even a stray role claim without an org doesn't demote a solo user.
+        assert_eq!(OrgRole::from_claim(Some("org:viewer"), false), OrgRole::Admin);
+    }
+
+    #[test]
+    fn clerk_role_claims_map_with_and_without_prefix() {
+        // v1 tokens carry "org:admin"; v2 nested claims carry bare "admin".
+        assert_eq!(OrgRole::from_claim(Some("org:admin"), true), OrgRole::Admin);
+        assert_eq!(OrgRole::from_claim(Some("admin"), true), OrgRole::Admin);
+        assert_eq!(OrgRole::from_claim(Some("org:member"), true), OrgRole::Member);
+        assert_eq!(OrgRole::from_claim(Some("member"), true), OrgRole::Member);
+        assert_eq!(OrgRole::from_claim(Some("org:viewer"), true), OrgRole::Viewer);
+        assert_eq!(OrgRole::from_claim(Some("viewer"), true), OrgRole::Viewer);
+    }
+
+    #[test]
+    fn unknown_org_roles_default_to_member_never_admin() {
+        // A custom Clerk role must not be locked out of day-to-day work,
+        // and must never be silently escalated to Admin.
+        assert_eq!(OrgRole::from_claim(Some("org:ops_oncall"), true), OrgRole::Member);
+        assert_eq!(OrgRole::from_claim(Some("basic_member"), true), OrgRole::Member);
+        // Missing claim on an org session → Member (least privilege short of read-only).
+        assert_eq!(OrgRole::from_claim(None, true), OrgRole::Member);
+    }
+
+    #[test]
+    fn policy_table_viewer_reads_member_mutates_admin_deletes() {
+        assert!(!OrgRole::Viewer.can_mutate());
+        assert!(!OrgRole::Viewer.is_admin());
+        assert!(OrgRole::Member.can_mutate());
+        assert!(!OrgRole::Member.is_admin());
+        assert!(OrgRole::Admin.can_mutate());
+        assert!(OrgRole::Admin.is_admin());
     }
 }
 
