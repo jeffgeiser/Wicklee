@@ -591,12 +591,13 @@ Evaluated by the cloud backend every 60 seconds.
 
 ## Pricing
 
-| Tier | Price | Nodes | History | Patterns |
-|------|-------|-------|---------|----------|
-| Community | Free | 3 | 24h | 9 |
-| Pro | $9/mo | 10 | 7 days | 18 |
-| Team | $19/seat/mo | 25 | 90 days | 18 + shared dashboards |
-| Enterprise | From $200/mo | Custom | Custom | + proxy + sovereign deploy |
+| Tier | Price | Nodes | History | Patterns & features |
+|------|-------|-------|---------|---------------------|
+| Community | Free | 3 | 24h | 9 patterns |
+| Pro | $29/mo | 10 | 7 days | 20 patterns + custom alerts (Slack/email), threshold webhooks |
+| Team | $49/seat/mo | 25 (+$2/node over 25) | 90 days | + shared dashboards, PagerDuty, Cloud MCP, OTel/Prometheus export |
+| Business | $499/mo | 100 (unlimited seats) | 365 days | + SSO/SAML, audit logging |
+| Enterprise | Contact sales | Unlimited | Unlimited | + sovereign deployment, custom SLA |
 
 ---
 
