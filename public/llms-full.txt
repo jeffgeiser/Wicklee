@@ -85,7 +85,7 @@ DELETE /api/v1/webhooks/:id
 POST /api/v1/webhooks/:id/test → fire synthetic payload
 ```
 
-Create body: `{ "url": "...", "event_type": "wes_below", "node_id": "WK-X" /*opt*/, "threshold": 1.0, "cooldown_s": 60 }`
+Create body: `{ "url": "...", "event_type": "wes_below", "node_id": "WK-X" /*opt*/, "tag": "env:prod" /*opt*/, "threshold": 1.0, "cooldown_s": 60 }` — `tag` scopes the subscription to nodes bearing that tag (comma-separated `nodes.tags`, matched case/space-insensitively; composes with node_id). Alert rules accept the same optional `tag`.
 
 Webhook payload (state-changed): `{ "event_type": "thermal_state_changed", "node_id": "...", "ts_ms": ..., "previous_state": "Normal", "current_state": "Fair", "context": { "tok_s": 18.5, "watts": 22.3, "thermal_state": "Fair", "active_model": "..." } }`
 

@@ -34,6 +34,10 @@ export interface ModelLiveMetrics {
 export interface SentinelMetrics {
   node_id: string;
   hostname?: string;
+  /** Comma-separated node tags (cloud-side, from nodes.tags — patched into
+   *  the metrics object by FleetStreamContext; never sent by the agent).
+   *  Convention: `env:` prefix reserved for environments (env:prod). */
+  tags?: string | null;
   /** GPU model name — NVIDIA: nvmlDeviceGetName; Apple: system_profiler chip description */
   gpu_name?: string;
   /** CPU/chip name for non-GPU nodes — Linux: /proc/cpuinfo model name */
@@ -488,6 +492,8 @@ export interface FleetNode {
   restricted?: boolean;
   /** Custom display name set by Pro+ users. Takes priority over hostname. */
   display_name?: string | null;
+  /** Comma-separated node tags (Pro+, set in Settings → Node Configuration). */
+  tags?: string | null;
 }
 
 /** Values exposed by FleetStreamContext to consumers via useFleetStream(). */

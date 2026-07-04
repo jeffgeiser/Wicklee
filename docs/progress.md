@@ -56,6 +56,47 @@ criteria. RBAC is in progress on this branch.
 
 ---
 
+## Early July 2026 — Environments & tags v1 (Readiness Program, Phase 2 item 6)
+
+Phase 2 opened with tags rather than SLOs — deliberately out of roadmap
+order, because SLO definitions and alert silences are both *per-tag/env*;
+tags are the substrate the rest of Phase 2 scopes against.
+
+### Starting point
+`nodes.tags` existed as a free-text column written by `PATCH /api/nodes/:id`
+and read by nothing — not the SSE stream, not alerts, not webhooks. There
+wasn't even a UI to set it.
+
+### What shipped
+- **Editable**: new Tags column in Settings → Node Configuration
+  (`NodeOverrideRow` gained a tags input synced on blur via
+  `saveTagsToCloud`, mirroring the display-name flow). Convention: comma-
+  separated; `env:` prefix reserved for environments (`env:prod`).
+- **On the wire**: the SSE stream's display-name cache became a `node_meta`
+  cache carrying `(display_name, tags)`; FleetStreamContext patches tags
+  into `metrics.tags` so every consumer can tag-filter with zero extra
+  fetches (`SentinelMetrics.tags` / `FleetNode.tags` types added).
+- **Scoping**: `alert_rules.tag` + `webhook_subscriptions.tag` (nullable,
+  additive migrations). Both evaluator queries gained the same predicate —
+  case- and space-insensitive membership match against the comma-separated
+  `nodes.tags` (`',' || replace(lower(tags),' ','') || ','` LIKE). Scope
+  tags are validated by `valid_scope_tag` (letters/digits/`: - _ .`, ≤64 —
+  comma-free so they can't collide with storage, %-free so they can't game
+  the LIKE). Tag inputs added to the alert-rule form (SettingsView) and the
+  webhook form (WebhooksSection); both list views show the tag.
+- Rule/webhook create audits carry the tag; composes with node_id scope
+  (both must match when both set).
+
+### Deferred (recorded on the roadmap item, not silent)
+Overview tag-filter chips, `?tag=` on V1 fleet/rollup endpoints, and the
+tag dimension on cost/WES rollups — they unlock when SLOs (item 5) consume
+tags next.
+
+Verified: cloud `cargo test` 22 green (2 new scope_tag tests), `tsc` clean,
+vitest 80.
+
+---
+
 ## Early July 2026 — Org-wide API keys (Readiness Program, Phase 1 item 4)
 
 Closes the June security review's "org-wide API keys" deferral and completes

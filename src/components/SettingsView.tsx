@@ -115,6 +115,7 @@ function useAlerts(getToken: (() => Promise<string | null>) | undefined, isCloud
   const createRule = useCallback(async (payload: {
     node_id: string | null; event_type: string;
     threshold_value: number | null; urgency: string; channel_id: string;
+    tag?: string | null;
   }) => {
     await authFetch('/api/alerts/rules', { method: 'POST', body: JSON.stringify(payload) });
     await refresh();
@@ -254,6 +255,22 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         method: 'PATCH',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: name.trim() || null }),
+      });
+    } catch { /* best-effort sync */ }
+  }, [isProOrAbove, isCloudMode, getToken]);
+
+  // Save tags to cloud backend (Pro+ only). Comma-separated; `env:` prefix
+  // is the environment convention. Tags scope alert rules, webhooks, and
+  // fleet filtering.
+  const saveTagsToCloud = React.useCallback(async (nodeId: string, tags: string) => {
+    if (!isProOrAbove || !isCloudMode || !getToken) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      await fetch(`${CLOUD_URL}/api/nodes/${nodeId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: tags.trim() || null }),
       });
     } catch { /* best-effort sync */ }
   }, [isProOrAbove, isCloudMode, getToken]);
@@ -525,6 +542,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <th className="text-left px-4 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Node ID</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Display Name</th>
+                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[160px]" title="Comma-separated. env: prefix = environment (env:prod). Tags scope alert rules and webhooks.">Tags</th>
                     <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
                       <div>kWh Rate</div>
                       <ClearColumnButton
@@ -592,6 +610,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         fleetSettings={settings.fleet}
                         onOverride={(patch) => setNodeOverride(node.id, patch)}
                         onSaveDisplayName={saveDisplayNameToCloud}
+                        onSaveTags={saveTagsToCloud}
                       />
                     );
                   })}
@@ -868,6 +887,7 @@ const AlertsSection: React.FC<{
   const [ruleEventType, setRuleEventType] = useState(EVENT_TYPES[0].value);
   const [ruleChannelId, setRuleChannelId] = useState('');
   const [ruleNodeId,    setRuleNodeId]    = useState('');    // '' = fleet-wide
+  const [ruleTag,       setRuleTag]       = useState('');    // '' = no tag scope
   const [ruleUrgency,   setRuleUrgency]   = useState('immediate');
   const [ruleThreshold, setRuleThreshold] = useState('');
   const [ruleSaving,    setRuleSaving]    = useState(false);
@@ -909,9 +929,11 @@ const AlertsSection: React.FC<{
           ? parseFloat(ruleThreshold) : null,
         urgency:         ruleUrgency,
         channel_id:      ruleChannelId,
+        tag:             ruleTag.trim() || null,
       });
       setShowRuleForm(false);
       setRuleThreshold('');
+      setRuleTag('');
     } catch (e) {
       setRuleError((e as Error).message);
     } finally {
@@ -1204,6 +1226,19 @@ const AlertsSection: React.FC<{
                   </div>
                 </div>
 
+                {/* Tag scope */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Tag scope (optional)</label>
+                  <input
+                    type="text"
+                    value={ruleTag}
+                    onChange={e => setRuleTag(e.target.value)}
+                    placeholder="env:prod"
+                    title="Rule fires only for nodes bearing this tag (set tags in Settings → Node Configuration). Composes with node scope."
+                    className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full`}
+                  />
+                </div>
+
                 {/* Urgency */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Urgency</label>
@@ -1344,17 +1379,21 @@ const NodeOverrideRow: React.FC<{
   fleetSettings: FleetSettings;
   onOverride: (patch: Partial<NodeOverride>) => void;
   onSaveDisplayName?: (nodeId: string, name: string) => void;
-}> = ({ node, eff, ov, fleetSettings, onOverride, onSaveDisplayName }) => {
+  onSaveTags?: (nodeId: string, tags: string) => void;
+}> = ({ node, eff, ov, fleetSettings, onOverride, onSaveDisplayName, onSaveTags }) => {
   const [kwhDraft,  setKwhDraft]  = useState(ov.kwhRate?.toString() ?? '');
   const [pueDraft,  setPueDraft]  = useState(ov.pue?.toString()  ?? '');
   const [idleDraft, setIdleDraft] = useState(ov.systemIdleW?.toString() ?? '');
+  // Tags come from the cloud (via the stream's node payload), not local
+  // overrides — draft locally, sync on blur.
+  const [tagsDraft, setTagsDraft] = useState(node.metrics?.tags ?? '');
 
   React.useEffect(() => { setKwhDraft(ov.kwhRate?.toString() ?? ''); }, [ov.kwhRate]);
   React.useEffect(() => { setPueDraft(ov.pue?.toString()  ?? ''); }, [ov.pue]);
   React.useEffect(() => { setIdleDraft(ov.systemIdleW?.toString() ?? ''); }, [ov.systemIdleW]);
 
-  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | null>(null);
-  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc' | 'idle') => {
+  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags' | null>(null);
+  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags') => {
     setSavedCell(cell);
     setTimeout(() => setSavedCell(c => c === cell ? null : c), 1500);
   };
@@ -1422,6 +1461,24 @@ const NodeOverrideRow: React.FC<{
             className={`${cellBase} truncate ${valCls(!!ov.locationLabel)}`}
           />
           {savedCell === 'loc' && <SavedMark />}
+        </div>
+      </td>
+
+      {/* Tags */}
+      <td className="px-3 py-3 max-w-[160px]">
+        <div className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={tagsDraft}
+            onChange={e => setTagsDraft(e.target.value)}
+            onBlur={e => { onSaveTags?.(node.id, e.target.value); flashSaved('tags'); }}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder="env:prod, gpu"
+            title="Comma-separated tags. env: prefix = environment. Tags scope alert rules and webhooks."
+            maxLength={256}
+            className={`${cellBase} truncate ${valCls(!!tagsDraft)}`}
+          />
+          {savedCell === 'tags' && <SavedMark />}
         </div>
       </td>
 

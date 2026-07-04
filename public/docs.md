@@ -439,6 +439,20 @@ The three levers move together: `density_scale` multiplies the evidence-window d
 
 ---
 
+## Environments & Tags (Pro+)
+
+Group nodes with free-form, comma-separated tags — set them in **Settings → Node Configuration** (Tags column) or `PATCH /api/nodes/:id` with `{ "tags": "env:prod, gpu, rack-2" }`. The `env:` prefix is the reserved convention for environments (`env:prod`, `env:staging`).
+
+**What consumes tags:**
+
+- **Alert rules** — an optional *Tag scope* on a rule makes it fire only for nodes bearing that tag (composes with node scope; matching is case- and space-insensitive).
+- **Threshold webhooks** — same optional `tag` on a subscription.
+- **The fleet stream** — every node's SSE frame carries its tags, so dashboards and API consumers can group and filter without extra fetches.
+
+Tag values used for scoping are restricted to letters, digits, and `: - _ .` (max 64 chars) so a tag can't collide with the comma-separated storage or the matcher.
+
+---
+
 ## Alerts & Notifications
 
 When observations or fleet alerts fire, Wicklee delivers notifications to external channels.

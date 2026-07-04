@@ -554,6 +554,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules(user_id)")
         .execute(pool).await.ok();
+    // Tag scoping: a rule with a tag fires only for nodes bearing that tag
+    // (comma-separated nodes.tags, matched case- and space-insensitively).
+    sqlx::query("ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS tag TEXT")
+        .execute(pool).await.ok();
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_rules_channel ON alert_rules(channel_id)")
         .execute(pool).await.ok();
 
@@ -747,6 +751,9 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     ").execute(pool).await.expect("webhook_subscriptions migration failed");
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_webhook_subs_tenant ON webhook_subscriptions(tenant_id, enabled)")
+        .execute(pool).await.ok();
+    // Tag scoping — same semantics as alert_rules.tag.
+    sqlx::query("ALTER TABLE webhook_subscriptions ADD COLUMN IF NOT EXISTS tag TEXT")
         .execute(pool).await.ok();
 
     // Per-(subscription, node) state used to detect transitions and crossings.
@@ -1169,6 +1176,14 @@ fn role_forbidden(required: &str) -> axum::response::Response {
         "error": format!("Your organization role does not permit this action ({required} required)"),
         "role_required": required,
     }))).into_response()
+}
+
+/// Validate a scoping tag for alert rules / webhook subscriptions.
+/// Comma-free (node tags are stored comma-separated) and restricted to a
+/// safe charset so the SQL LIKE match can't be gamed with % wildcards.
+fn valid_scope_tag(tag: &str) -> bool {
+    !tag.is_empty() && tag.len() <= 64
+        && tag.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_' | '.'))
 }
 
 /// Like `require_user_and_org` but also returns the caller's [`OrgRole`].
@@ -4196,6 +4211,9 @@ struct CreateWebhookBody {
     event_type: String,
     /// Optional — when None, fires for any node owned by the user.
     node_id:    Option<String>,
+    /// Optional tag scope — fires only for nodes bearing this tag.
+    #[serde(default)]
+    tag:        Option<String>,
     /// Required for `wes_below` / `wes_above`; ignored for state-changed types.
     threshold:  Option<f32>,
     /// Min seconds between fires for the same (subscription, node) pair.
@@ -4257,6 +4275,13 @@ async fn handle_webhook_create(
         }
     }
 
+    if let Some(ref t) = body.tag {
+        if !valid_scope_tag(t) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+        }
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     // 32-byte HMAC secret, hex-encoded → 64 chars. Returned ONCE on creation.
     let secret_bytes: [u8; 32] = std::array::from_fn(|_| rand::random());
@@ -4265,13 +4290,13 @@ async fn handle_webhook_create(
 
     let _ = sqlx::query(
         "INSERT INTO webhook_subscriptions
-         (id, user_id, tenant_id, url, secret, event_type, node_id, threshold, cooldown_s, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)"
+         (id, user_id, tenant_id, url, secret, event_type, node_id, threshold, cooldown_s, enabled, tag)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10)"
     )
     .bind(&id).bind(&user_id).bind(&tenant_id)
     .bind(&body.url).bind(&secret)
     .bind(&body.event_type).bind(&body.node_id)
-    .bind(body.threshold).bind(cooldown_s)
+    .bind(body.threshold).bind(cooldown_s).bind(&body.tag)
     .execute(&state.pool).await;
 
     audit(&state.pool, &user_id, &org_id, "webhook.created", &id,
@@ -4282,6 +4307,7 @@ async fn handle_webhook_create(
         "url":        body.url,
         "event_type": body.event_type,
         "node_id":    body.node_id,
+        "tag":        body.tag,
         "threshold":  body.threshold,
         "cooldown_s": cooldown_s,
         "secret":     secret,  // shown ONCE — receiver uses for HMAC verification
@@ -4306,19 +4332,20 @@ async fn handle_webhook_list(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let rows: Vec<(String, String, String, Option<String>, Option<f32>, i32, bool, Option<i64>)> = sqlx::query_as(
-        "SELECT id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms
+    let rows: Vec<(String, String, String, Option<String>, Option<f32>, i32, bool, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms, tag
          FROM webhook_subscriptions
          WHERE user_id = $1
          ORDER BY created_at DESC"
     ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let subs: Vec<serde_json::Value> = rows.into_iter().map(|(id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms)| {
+    let subs: Vec<serde_json::Value> = rows.into_iter().map(|(id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms, tag)| {
         serde_json::json!({
             "id":            id,
             "url":           url,
             "event_type":    event_type,
             "node_id":       node_id,
+            "tag":           tag,
             "threshold":     threshold,
             "cooldown_s":    cooldown_s,
             "enabled":       enabled,
@@ -4828,13 +4855,15 @@ async fn handle_fleet_stream(
     let mut ordered_nodes  = initial_ordered;
     let mut tier           = initial_tier;
     let tval4 = tval_owned.clone();
-    // display_name cache: node_id → custom name (Pro+ feature)
-    let mut display_names: HashMap<String, String> = tokio::task::block_in_place(|| {
+    // Node metadata cache: node_id → (display_name, tags). Both ride the
+    // stream frame so the dashboard can label and tag-filter without extra
+    // fetches; refreshed every 30 ticks alongside the node set.
+    let mut node_meta: HashMap<String, (Option<String>, Option<String>)> = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            sqlx::query_as::<_, (String, String)>(
-                &format!("SELECT wk_id, display_name FROM nodes WHERE {} = $1 AND display_name IS NOT NULL", tc)
+            sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                &format!("SELECT wk_id, display_name, tags FROM nodes WHERE {} = $1 AND (display_name IS NOT NULL OR tags IS NOT NULL)", tc)
             ).bind(&tval4).fetch_all(&pool).await.unwrap_or_default()
-                .into_iter().collect()
+                .into_iter().map(|(id, dn, tg)| (id, (dn, tg))).collect()
         })
     });
     let mut tick: u32 = 0;
@@ -4864,12 +4893,12 @@ async fn handle_fleet_stream(
                     resolve_tier(&uid_ref, &oid_ref, &pool).await
                 })
             });
-            display_names = tokio::task::block_in_place(|| {
+            node_meta = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
-                    sqlx::query_as::<_, (String, String)>(
-                        &format!("SELECT wk_id, display_name FROM nodes WHERE {} = $1 AND display_name IS NOT NULL", tc)
+                    sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                        &format!("SELECT wk_id, display_name, tags FROM nodes WHERE {} = $1 AND (display_name IS NOT NULL OR tags IS NOT NULL)", tc)
                     ).bind(&tv).fetch_all(&pool).await.unwrap_or_default()
-                        .into_iter().collect()
+                        .into_iter().map(|(id, dn, tg)| (id, (dn, tg))).collect()
                 })
             });
         }
@@ -4893,8 +4922,13 @@ async fn handle_fleet_stream(
                     "metrics":      entry.metrics,
                     "restricted":   restricted_ids.contains(node_id.as_str()),
                 });
-                if let Some(name) = display_names.get(node_id.as_str()) {
-                    obj["display_name"] = serde_json::Value::String(name.clone());
+                if let Some((dn, tg)) = node_meta.get(node_id.as_str()) {
+                    if let Some(name) = dn {
+                        obj["display_name"] = serde_json::Value::String(name.clone());
+                    }
+                    if let Some(tags) = tg {
+                        obj["tags"] = serde_json::Value::String(tags.clone());
+                    }
                 }
                 obj
             })
@@ -6124,6 +6158,7 @@ struct AlertRule {
     channel_id:      String,
     enabled:         bool,
     created_at:      i64,
+    tag:             Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -6140,6 +6175,10 @@ struct CreateRuleRequest {
     threshold_value: Option<f64>,
     urgency:         Option<String>,
     channel_id:      String,
+    /// Optional tag scope — the rule fires only for nodes bearing this tag.
+    /// Composes with node_id (both must match when both are set).
+    #[serde(default)]
+    tag:             Option<String>,
 }
 
 // ── Alerting — notification delivery ─────────────────────────────────────────
@@ -6390,9 +6429,13 @@ async fn evaluate_webhooks(
     let subs: Vec<(String, String, String, String, Option<String>, Option<f32>, i32, Option<i64>)> =
         sqlx::query_as(
             "SELECT id, url, secret, event_type, node_id, threshold, cooldown_s, last_fired_ms
-             FROM webhook_subscriptions
+             FROM webhook_subscriptions ws
              WHERE tenant_id = $1 AND enabled = true
-               AND (node_id IS NULL OR node_id = $2)"
+               AND (node_id IS NULL OR node_id = $2)
+               AND (ws.tag IS NULL OR EXISTS(
+                     SELECT 1 FROM nodes n WHERE n.wk_id = $2
+                       AND (',' || replace(lower(COALESCE(n.tags,'')), ' ', '') || ',')
+                           LIKE ('%,' || replace(lower(ws.tag), ' ', '') || ',%')))"
         ).bind(tenant_id).bind(node_id).fetch_all(pool).await.unwrap_or_default();
 
     if subs.is_empty() { return; }
@@ -6597,7 +6640,11 @@ async fn evaluate_alerts(
          JOIN   notification_channels nc ON nc.id = ar.channel_id
          WHERE  ar.user_id  = $1
            AND  ar.enabled  = 1
-           AND  (ar.node_id IS NULL OR ar.node_id = $2)"
+           AND  (ar.node_id IS NULL OR ar.node_id = $2)
+           AND  (ar.tag IS NULL OR EXISTS(
+                  SELECT 1 FROM nodes n WHERE n.wk_id = $2
+                    AND (',' || replace(lower(COALESCE(n.tags,'')), ' ', '') || ',')
+                        LIKE ('%,' || replace(lower(ar.tag), ' ', '') || ',%')))"
     ).bind(user_id).bind(node_id)
     .fetch_all(pool).await.unwrap_or_default();
 
@@ -7916,25 +7963,32 @@ async fn handle_create_rule(
             Json(serde_json::json!({ "error": "Alerting requires Team tier or channel not found" }))).into_response();
     }
 
+    if let Some(ref t) = body.tag {
+        if !valid_scope_tag(t) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+        }
+    }
+
     let id      = Uuid::new_v4().to_string();
     let urgency = body.urgency.as_deref().unwrap_or("immediate").to_string();
     let ts      = now_ms() as i64;
 
     let result = sqlx::query(
-        "INSERT INTO alert_rules (id, user_id, node_id, event_type, threshold_value, urgency, channel_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+        "INSERT INTO alert_rules (id, user_id, node_id, event_type, threshold_value, urgency, channel_id, created_at, tag)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
     ).bind(&id).bind(&user_id).bind(&body.node_id).bind(&body.event_type)
-    .bind(body.threshold_value).bind(&urgency).bind(&body.channel_id).bind(ts)
+    .bind(body.threshold_value).bind(&urgency).bind(&body.channel_id).bind(ts).bind(&body.tag)
     .execute(&state.pool).await;
 
     match result {
         Ok(_) => {
             audit(&state.pool, &user_id, &org_id, "alert_rule.created", &id,
-                serde_json::json!({ "event_type": &body.event_type, "node_id": &body.node_id, "urgency": &urgency }));
+                serde_json::json!({ "event_type": &body.event_type, "node_id": &body.node_id, "urgency": &urgency, "tag": &body.tag }));
             (StatusCode::CREATED, Json(AlertRule {
                 id, node_id: body.node_id, event_type: body.event_type,
                 threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
-                enabled: true, created_at: ts,
+                enabled: true, created_at: ts, tag: body.tag,
             })).into_response()
         }
         Err(e) => { eprintln!("[alerts] rule insert failed: {e}");
@@ -7960,14 +8014,14 @@ async fn handle_list_rules(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let rows: Vec<(String, Option<String>, String, Option<f64>, String, String, i32, i64)> = sqlx::query_as(
-        "SELECT id, node_id, event_type, threshold_value, urgency, channel_id, enabled, created_at
+    let rows: Vec<(String, Option<String>, String, Option<f64>, String, String, i32, i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, node_id, event_type, threshold_value, urgency, channel_id, enabled, created_at, tag
          FROM alert_rules WHERE user_id = $1 ORDER BY created_at DESC"
     ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let rules: Vec<AlertRule> = rows.into_iter().map(|(id, nid, et, tv, u, cid, en, ca)| {
+    let rules: Vec<AlertRule> = rows.into_iter().map(|(id, nid, et, tv, u, cid, en, ca, tag)| {
         AlertRule { id, node_id: nid, event_type: et, threshold_value: tv, urgency: u,
-            channel_id: cid, enabled: en != 0, created_at: ca }
+            channel_id: cid, enabled: en != 0, created_at: ca, tag }
     }).collect();
 
     Json(serde_json::json!({ "rules": rules })).into_response()
@@ -9134,6 +9188,29 @@ mod fit_wrapper_tests {
         let (score, label) = cloud_fit_score(-1, 24_576, 0.0, "Normal");
         // 0-byte clamp -> 512 MB floor still "fits"; just must not panic.
         assert!(score > 0, "{label}");
+    }
+}
+
+#[cfg(test)]
+mod scope_tag_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_conventional_tags() {
+        assert!(valid_scope_tag("env:prod"));
+        assert!(valid_scope_tag("gpu"));
+        assert!(valid_scope_tag("rack-2.us-east_1"));
+    }
+
+    #[test]
+    fn rejects_commas_wildcards_and_empties() {
+        // Commas would collide with the comma-separated nodes.tags storage;
+        // % could game the SQL LIKE match; empty/oversized are nonsense.
+        assert!(!valid_scope_tag(""));
+        assert!(!valid_scope_tag("a,b"));
+        assert!(!valid_scope_tag("100%"));
+        assert!(!valid_scope_tag("has space"));
+        assert!(!valid_scope_tag(&"x".repeat(65)));
     }
 }
 
