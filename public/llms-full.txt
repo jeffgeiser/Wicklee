@@ -91,6 +91,14 @@ Webhook payload (state-changed): `{ "event_type": "thermal_state_changed", "node
 
 Webhook payload (threshold-crossing): same shape but with `previous_value` / `current_value` / `threshold` numeric fields instead of state strings.
 
+### Alert Silences & Maintenance Windows (Pro+, JWT auth)
+Suppress alert rules AND threshold webhooks while active — enforced inside both evaluator queries, so silenced conditions never fire. A silence targets any combination of `node_id`, `tag`, and `event_type` (NULL = all; event vocabulary is the union of rule + webhook types). `starts_at` in the future = scheduled maintenance window. Duration 1 min–30 days. Tenant-scoped (org members share silences); creation/deletion audit-logged.
+```
+POST /api/alerts/silences        → { node_id?, tag?, event_type?, reason?, starts_at?, duration_min }
+GET /api/alerts/silences         → { silences: [{ id, node_id, tag, event_type, reason, starts_at, ends_at, active }] }
+DELETE /api/alerts/silences/:id  → end early / cancel scheduled window
+```
+
 ### GET /api/v1/thermal-budget?node_id=X
 Thermal Budget Calculator (Pro+, cloud, requires JWT). Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, and computes whether pushing a node harder backfires. Returns `sustainable_tps` (max during ≥30-min Normal blocks), `push_threshold_tps` (median tps in 10 min before transition), `time_to_fair_min` (avg duration before transition), `fair_penalized_tps` (push ÷ 1.25), confidence level (insufficient/low/medium/high), and a plain-English advice string comparing 1-hour token output of "stay sustainable" vs "push then drop to penalized."
 ```json

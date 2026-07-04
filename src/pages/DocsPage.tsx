@@ -1497,6 +1497,10 @@ WES Version:     2
               <strong className="text-white">Scoping:</strong> a rule can target the whole fleet, a single node, and/or a <strong className="text-white">tag</strong> — e.g. <code className="text-gray-300 font-mono text-[10px]">env:prod</code> to alert only on production nodes. Tags are comma-separated per node (Settings → Node Configuration, Pro+), matched case- and space-insensitively; the <code className="text-gray-300 font-mono text-[10px]">env:</code> prefix is the environment convention. Threshold webhooks accept the same optional tag scope.
             </p>
 
+            <p className="text-xs text-gray-400 leading-relaxed mt-2">
+              <strong className="text-white">Silences &amp; maintenance windows (Pro+):</strong> suppress alert rules and threshold webhooks for a duration — by node, tag, and/or event type — so a planned driver upgrade doesn't page everyone. A future start time makes it a scheduled maintenance window. Managed in Settings → Alerts → Silences (<code className="text-gray-300 font-mono text-[10px]">POST/GET/DELETE /api/alerts/silences</code>); org members share silences, and every create/delete is audit-logged.
+            </p>
+
             <p className="text-xs font-bold text-red-400 uppercase tracking-wider mt-4">Notification Channels by Tier</p>
             <div className="overflow-x-auto mt-2">
               <table className="w-full">

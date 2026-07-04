@@ -56,6 +56,50 @@ criteria. RBAC is in progress on this branch.
 
 ---
 
+## Early July 2026 — Alert silences & maintenance windows (Readiness Program, Phase 2 item 7)
+
+The "planned GPU driver upgrade paged everyone" fix, built directly on the
+tags substrate from item 6.
+
+### Design
+- **One table covers both concepts**: `alert_silences` (tenant-scoped — org
+  members share) with `starts_at`/`ends_at`. A silence starting now is a
+  silence; a future `starts_at` is a scheduled maintenance window. Same
+  storage, same matching, same UI list.
+- **Suppression lives in the evaluator queries**, not post-hoc: both
+  `evaluate_alerts` and `evaluate_webhooks` gained a `NOT EXISTS` predicate
+  on the telemetry hot path, so silenced conditions simply never fire —
+  no notification to dedupe, no cooldown interaction. The alerts evaluator
+  resolves the node's tenant via `COALESCE(nodes.org_id, nodes.user_id)`
+  (rules are per-user but silences are shared); the webhook evaluator is
+  already tenant-keyed.
+- **Match dimensions compose**: node_id, tag (same case/space-insensitive
+  membership match as scoping, same `valid_scope_tag` validation), and
+  event_type (NULL = all; vocabulary = `SILENCEABLE_EVENTS`, the union of
+  the alert-rule and threshold-webhook event types — one silence mutes both
+  systems).
+- CRUD: `POST/GET/DELETE /api/alerts/silences` — Pro+ tier, Member+ (RBAC),
+  duration clamped 1min–30d, `starts_at` ≤90d out with a 60s clock-skew
+  grace, reason ≤200 chars. List returns active + upcoming with an `active`
+  flag (expired rows age out of the list, stay in the table). Creation and
+  deletion are audit-logged (`alert_silence.created/deleted`).
+
+### UI
+Settings → Alerts gained a Silences block: create form (duration presets
+30m–7d, node scope, tag scope, event type, optional future start via
+datetime-local, reason) and a list with Silencing/Scheduled badges,
+scope · window summary, and end-early/cancel.
+
+### Known gap (recorded on the roadmap item)
+The fleet-alert evaluator (zombied_engine etc.) and the node-offline
+notification path don't yet honor silences — custom alert rules and
+threshold webhooks do. Escalation policies (the item's third phase) need an
+ack model, so they slot after SLOs; the fleet-path silencing folds in then.
+
+Verified: cloud `cargo test` 22 green, `tsc` clean, vitest 80.
+
+---
+
 ## Early July 2026 — Environments & tags v1 (Readiness Program, Phase 2 item 6)
 
 Phase 2 opened with tags rather than SLOs — deliberately out of roadmap

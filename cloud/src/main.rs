@@ -558,6 +558,27 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     // (comma-separated nodes.tags, matched case- and space-insensitively).
     sqlx::query("ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS tag TEXT")
         .execute(pool).await.ok();
+
+    // Alert silences & maintenance windows. A silence suppresses matching
+    // alert-rule notifications AND threshold-webhook fires while now is in
+    // [starts_at, ends_at). starts_at in the future = a scheduled
+    // maintenance window. Tenant-scoped: org members share silences.
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS alert_silences (
+            id         TEXT PRIMARY KEY,
+            tenant_id  TEXT NOT NULL,
+            user_id    TEXT NOT NULL,
+            node_id    TEXT,
+            tag        TEXT,
+            event_type TEXT,
+            reason     TEXT NOT NULL DEFAULT '',
+            starts_at  BIGINT NOT NULL,
+            ends_at    BIGINT NOT NULL,
+            created_at BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("alert_silences migration failed");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_silences_tenant ON alert_silences(tenant_id, ends_at)")
+        .execute(pool).await.ok();
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_rules_channel ON alert_rules(channel_id)")
         .execute(pool).await.ok();
 
@@ -6435,8 +6456,18 @@ async fn evaluate_webhooks(
                AND (ws.tag IS NULL OR EXISTS(
                      SELECT 1 FROM nodes n WHERE n.wk_id = $2
                        AND (',' || replace(lower(COALESCE(n.tags,'')), ' ', '') || ',')
-                           LIKE ('%,' || replace(lower(ws.tag), ' ', '') || ',%')))"
-        ).bind(tenant_id).bind(node_id).fetch_all(pool).await.unwrap_or_default();
+                           LIKE ('%,' || replace(lower(ws.tag), ' ', '') || ',%')))
+               AND NOT EXISTS(
+                     SELECT 1 FROM alert_silences s
+                     WHERE s.tenant_id = $1
+                       AND $3 >= s.starts_at AND $3 < s.ends_at
+                       AND (s.node_id IS NULL OR s.node_id = $2)
+                       AND (s.event_type IS NULL OR s.event_type = ws.event_type)
+                       AND (s.tag IS NULL OR EXISTS(
+                             SELECT 1 FROM nodes n3 WHERE n3.wk_id = $2
+                               AND (',' || replace(lower(COALESCE(n3.tags,'')), ' ', '') || ',')
+                                   LIKE ('%,' || replace(lower(s.tag), ' ', '') || ',%'))))"
+        ).bind(tenant_id).bind(node_id).bind(now_ms() as i64).fetch_all(pool).await.unwrap_or_default();
 
     if subs.is_empty() { return; }
 
@@ -6644,8 +6675,18 @@ async fn evaluate_alerts(
            AND  (ar.tag IS NULL OR EXISTS(
                   SELECT 1 FROM nodes n WHERE n.wk_id = $2
                     AND (',' || replace(lower(COALESCE(n.tags,'')), ' ', '') || ',')
-                        LIKE ('%,' || replace(lower(ar.tag), ' ', '') || ',%')))"
-    ).bind(user_id).bind(node_id)
+                        LIKE ('%,' || replace(lower(ar.tag), ' ', '') || ',%')))
+           AND  NOT EXISTS(
+                  SELECT 1 FROM alert_silences s
+                  WHERE s.tenant_id = (SELECT COALESCE(n2.org_id, n2.user_id) FROM nodes n2 WHERE n2.wk_id = $2)
+                    AND $3 >= s.starts_at AND $3 < s.ends_at
+                    AND (s.node_id IS NULL OR s.node_id = $2)
+                    AND (s.event_type IS NULL OR s.event_type = ar.event_type)
+                    AND (s.tag IS NULL OR EXISTS(
+                          SELECT 1 FROM nodes n3 WHERE n3.wk_id = $2
+                            AND (',' || replace(lower(COALESCE(n3.tags,'')), ' ', '') || ',')
+                                LIKE ('%,' || replace(lower(s.tag), ' ', '') || ',%'))))"
+    ).bind(user_id).bind(node_id).bind(now_ms() as i64)
     .fetch_all(pool).await.unwrap_or_default();
 
     let now = now_ms();
@@ -8057,6 +8098,184 @@ async fn handle_delete_rule(
     }
 }
 
+// ── Alert silences & maintenance windows ─────────────────────────────────────
+
+/// Event types a silence may target — the union of the alert-rule and
+/// threshold-webhook vocabularies (a silence suppresses both systems).
+const SILENCEABLE_EVENTS: &[&str] = &[
+    "thermal_serious", "thermal_critical", "memory_pressure_high", "wes_drop", "node_offline",
+    "ttft_regression", "throughput_low",
+    "thermal_state_changed", "inference_state_changed", "wes_below", "wes_above",
+];
+
+/// Longest allowed silence: 30 days. Anything longer is "delete the rule."
+const MAX_SILENCE_MIN: i64 = 30 * 24 * 60;
+
+#[derive(Deserialize)]
+struct CreateSilenceBody {
+    /// NULL = all nodes.
+    node_id:      Option<String>,
+    /// NULL = no tag filter; otherwise nodes bearing this tag.
+    tag:          Option<String>,
+    /// NULL = all event types; otherwise one of SILENCEABLE_EVENTS.
+    event_type:   Option<String>,
+    #[serde(default)]
+    reason:       Option<String>,
+    /// Unix ms. Omitted = starts now. Future = scheduled maintenance window.
+    starts_at:    Option<i64>,
+    duration_min: i64,
+}
+
+/// POST /api/alerts/silences (Pro+, Member+) — create a silence or a
+/// scheduled maintenance window.
+async fn handle_create_silence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateSilenceBody>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.can_mutate() { return role_forbidden("member"); }
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_pro_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Alert silences require Pro tier or above" }))).into_response();
+    }
+
+    if body.duration_min < 1 || body.duration_min > MAX_SILENCE_MIN {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "duration_min must be 1..43200 (30 days)" }))).into_response();
+    }
+    if let Some(ref t) = body.tag {
+        if !valid_scope_tag(t) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+        }
+    }
+    if let Some(ref et) = body.event_type {
+        if !SILENCEABLE_EVENTS.contains(&et.as_str()) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("event_type must be one of: {}", SILENCEABLE_EVENTS.join(", ")) }))).into_response();
+        }
+    }
+    let now = now_ms() as i64;
+    let starts_at = body.starts_at.unwrap_or(now).max(now - 60_000); // small clock-skew grace
+    if starts_at > now + 90 * 24 * 3_600_000 {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "starts_at must be within 90 days" }))).into_response();
+    }
+    let ends_at = starts_at + body.duration_min * 60_000;
+    let reason: String = body.reason.unwrap_or_default().chars().take(200).collect();
+
+    let id = Uuid::new_v4().to_string();
+    let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
+    let result = sqlx::query(
+        "INSERT INTO alert_silences (id, tenant_id, user_id, node_id, tag, event_type, reason, starts_at, ends_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+    ).bind(&id).bind(&tenant_id).bind(&user_id)
+    .bind(&body.node_id).bind(&body.tag).bind(&body.event_type).bind(&reason)
+    .bind(starts_at).bind(ends_at).bind(now)
+    .execute(&state.pool).await;
+
+    match result {
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "alert_silence.created", &id,
+                serde_json::json!({ "node_id": &body.node_id, "tag": &body.tag,
+                    "event_type": &body.event_type, "reason": &reason,
+                    "starts_at": starts_at, "ends_at": ends_at }));
+            (StatusCode::CREATED, Json(serde_json::json!({
+                "id": id, "node_id": body.node_id, "tag": body.tag,
+                "event_type": body.event_type, "reason": reason,
+                "starts_at": starts_at, "ends_at": ends_at,
+            }))).into_response()
+        }
+        Err(e) => { eprintln!("[silences] insert failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() }
+    }
+}
+
+/// GET /api/alerts/silences — active + upcoming silences for the tenant
+/// (expired ones age out of the list; the table keeps them for the record).
+async fn handle_list_silences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let now = now_ms() as i64;
+    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, node_id, tag, event_type, reason, starts_at, ends_at, created_at
+         FROM alert_silences WHERE tenant_id = $1 AND ends_at > $2
+         ORDER BY starts_at ASC"
+    ).bind(tval).bind(now).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let silences: Vec<serde_json::Value> = rows.into_iter()
+        .map(|(id, node_id, tag, event_type, reason, starts_at, ends_at, created_at)| serde_json::json!({
+            "id": id, "node_id": node_id, "tag": tag, "event_type": event_type,
+            "reason": reason, "starts_at": starts_at, "ends_at": ends_at,
+            "created_at": created_at, "active": starts_at <= now,
+        })).collect();
+
+    Json(serde_json::json!({ "silences": silences })).into_response()
+}
+
+/// DELETE /api/alerts/silences/:id — end a silence early (Member+).
+async fn handle_delete_silence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(silence_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.can_mutate() { return role_forbidden("member"); }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let result = sqlx::query("DELETE FROM alert_silences WHERE id = $1 AND tenant_id = $2")
+        .bind(&silence_id).bind(tval).execute(&state.pool).await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => {
+            audit(&state.pool, &user_id, &org_id, "alert_silence.deleted", &silence_id,
+                serde_json::json!({}));
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Silence not found" }))).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response(),
+    }
+}
+
 /// POST /api/alerts/channels/:id/test
 async fn handle_test_channel(
     State(state): State<AppState>,
@@ -9113,6 +9332,8 @@ async fn main() {
         .route("/api/alerts/rules",             post(handle_create_rule))
         .route("/api/alerts/rules",             get(handle_list_rules))
         .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
+        .route("/api/alerts/silences",          post(handle_create_silence).get(handle_list_silences))
+        .route("/api/alerts/silences/:id",      delete(handle_delete_silence))
         .route("/api/nodes/:node_id",    patch(handle_update_node))
         .route("/api/billing/config",    get(handle_billing_config))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))

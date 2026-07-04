@@ -469,6 +469,18 @@ PagerDuty uses dedup keys (`wicklee-{node_id}-{event_type}`) for incident lifecy
 
 Community tier: observations appear on the dashboard but no outbound notifications.
 
+### Silences & Maintenance Windows (Pro+)
+
+Suppress alert rules **and** threshold webhooks for a duration — so a planned driver upgrade doesn't page everyone. A silence targets any combination of node, tag, and event type (blank = all); a future start time makes it a scheduled maintenance window. Org members share silences (tenant-scoped). Managed in Settings → Alerts → Silences, or:
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| `POST` | `/api/alerts/silences` | `{ node_id?, tag?, event_type?, reason?, starts_at?, duration_min }` — duration 1 min–30 days; omitted `starts_at` = now |
+| `GET` | `/api/alerts/silences` | Active + upcoming (expired age out); each entry carries `active` |
+| `DELETE` | `/api/alerts/silences/:id` | End a silence early / cancel a scheduled window |
+
+Silence creation and deletion are audit-logged. Suppression is enforced inside both evaluator queries on the telemetry hot path — a silenced rule simply never fires, so there's no notification to dedupe afterward.
+
 ---
 
 ## Deep Intelligence
