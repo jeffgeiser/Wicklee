@@ -1479,6 +1479,9 @@ WES Version:     2
               <p className="text-xs text-gray-400 leading-relaxed">
                 API (localhost, no auth): <code className="text-gray-300 font-mono text-[10px]">GET/PUT /api/deployment-profile</code>.
               </p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <strong className="text-white">Fleet config management:</strong> set profiles centrally — the Profile column in Settings → Node Configuration (<code className="text-gray-300 font-mono text-[10px]">PATCH /api/nodes/:id</code>, Pro+) or bulk by tag with <code className="text-gray-300 font-mono text-[10px]">POST /api/fleet/config</code> (Team+, e.g. all <code className="text-gray-300 font-mono text-[10px]">env:prod</code> nodes → <code className="text-gray-300 font-mono text-[10px]">production_fleet</code>). The desired profile rides every telemetry response; agents apply it within ~2s and report their actual profile in every frame, so the dashboard shows truth, not intent. Bulk applies are audited.
+              </p>
             </div>
           </Section>
 

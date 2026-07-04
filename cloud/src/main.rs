@@ -50,6 +50,10 @@ struct MetricsPayload {
     node_id:                        String,
     #[serde(default)]
     hostname:                       Option<String>,
+    /// Actual deployment profile the agent is running (fleet config mgmt —
+    /// injected by cloud_push; compare against nodes.desired_profile).
+    #[serde(default)]
+    deployment_profile:             Option<String>,
     #[serde(default)]
     gpu_name:                       Option<String>,
     #[serde(default)]
@@ -476,6 +480,11 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         .execute(pool).await.ok();
     // Migration for existing databases
     sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS display_name TEXT")
+        .execute(pool).await.ok();
+    // Fleet config management: cloud-side desired deployment profile.
+    // NULL = agent keeps its local choice; set = delivered to the agent in
+    // every telemetry response and applied within one push cycle (~2s).
+    sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS desired_profile TEXT")
         .execute(pool).await.ok();
     sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS tags TEXT")
         .execute(pool).await.ok();
@@ -2977,7 +2986,7 @@ async fn handle_telemetry(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<MetricsPayload>,
-) -> StatusCode {
+) -> axum::response::Response {
     let node_id       = payload.node_id.clone();
     let node_hostname = payload.hostname.clone();
     let ts            = now_ms();
@@ -2988,19 +2997,19 @@ async fn handle_telemetry(
         .and_then(|s| s.strip_prefix("Bearer "));
     let bearer = match bearer {
         Some(t) => t.to_string(),
-        None => return StatusCode::UNAUTHORIZED,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    // Combined existence + auth check (single indexed query).
-    let stored_token: Option<String> = sqlx::query_scalar::<_, String>(
-        "SELECT session_token FROM nodes WHERE wk_id = $1"
+    // Combined existence + auth + fleet-config check (single indexed query).
+    let node_row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT session_token, desired_profile FROM nodes WHERE wk_id = $1"
     ).bind(&node_id).fetch_optional(&state.pool).await.unwrap_or(None);
 
-    match stored_token {
-        None => return StatusCode::GONE, // 410 — node deleted from fleet
-        Some(ref t) if t != &bearer => return StatusCode::UNAUTHORIZED,
-        _ => {} // token matches — proceed
-    }
+    let desired_profile: Option<String> = match node_row {
+        None => return StatusCode::GONE.into_response(), // 410 — node deleted from fleet
+        Some((ref t, _)) if t != &bearer => return StatusCode::UNAUTHORIZED.into_response(),
+        Some((_, dp)) => dp,
+    };
 
     let duck_row = metrics_row_from_payload(&payload, ts);
     let live_activities = payload.live_activities.clone();
@@ -3087,7 +3096,10 @@ async fn handle_telemetry(
         }
     });
 
-    StatusCode::NO_CONTENT
+    // 200 + body (was 204): the response now carries fleet config for the
+    // agent — the desired deployment profile, applied within one push cycle.
+    // Old agents check only is_success() and ignore the body.
+    Json(serde_json::json!({ "desired_profile": desired_profile })).into_response()
 }
 
 /// GET /api/fleet
@@ -7802,6 +7814,76 @@ async fn fleet_alert_evaluator_task(state: AppState) {
 struct UpdateNodeRequest {
     display_name: Option<String>,
     tags: Option<String>,
+    /// Desired deployment profile ("sovereign_dev" | "dedicated_server" |
+    /// "production_fleet"; empty string clears → agent keeps local choice).
+    desired_profile: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FleetConfigBody {
+    tag:             String,
+    /// Empty string clears the desired profile for the matched nodes.
+    desired_profile: String,
+}
+
+/// POST /api/fleet/config (Team+, Member+) — apply a desired deployment
+/// profile to every node bearing a tag. The natural bulk form of the
+/// per-node PATCH: "all env:prod nodes run production_fleet."
+async fn handle_fleet_config_apply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FleetConfigBody>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.can_mutate() { return role_forbidden("member"); }
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_team_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Fleet config management requires Team tier or above" }))).into_response();
+    }
+
+    if !valid_scope_tag(&body.tag) {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+    }
+    let dp = body.desired_profile.trim();
+    if !dp.is_empty()
+        && !matches!(dp, "sovereign_dev" | "dedicated_server" | "production_fleet") {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "desired_profile must be sovereign_dev, dedicated_server, production_fleet, or empty to clear" }))).into_response();
+    }
+    let val = if dp.is_empty() { None } else { Some(dp.to_string()) };
+
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let sql = format!(
+        "UPDATE nodes SET desired_profile = $1
+         WHERE {tcol} = $2
+           AND (',' || replace(lower(COALESCE(tags,'')), ' ', '') || ',')
+               LIKE ('%,' || replace(lower($3), ' ', '') || ',%')");
+    let result = sqlx::query(&sql).bind(&val).bind(tval).bind(&body.tag)
+        .execute(&state.pool).await;
+
+    match result {
+        Ok(r) => {
+            let count = r.rows_affected();
+            audit(&state.pool, &user_id, &org_id, "fleet_config.applied", &body.tag,
+                serde_json::json!({ "desired_profile": &val, "nodes_affected": count }));
+            Json(serde_json::json!({ "nodes_affected": count, "tag": body.tag, "desired_profile": val })).into_response()
+        }
+        Err(e) => { eprintln!("[fleet-config] update failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() }
+    }
 }
 
 /// PATCH /api/nodes/:node_id — update display name and/or tags (Pro+ only)
@@ -7855,21 +7937,33 @@ async fn handle_update_node(
         let _ = sqlx::query("UPDATE nodes SET tags = $1 WHERE wk_id = $2")
             .bind(&val).bind(&node_id).execute(&state.pool).await;
     }
+    if let Some(ref dp) = body.desired_profile {
+        let trimmed = dp.trim();
+        if !trimmed.is_empty()
+            && !matches!(trimmed, "sovereign_dev" | "dedicated_server" | "production_fleet") {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "desired_profile must be sovereign_dev, dedicated_server, production_fleet, or empty to clear" }))).into_response();
+        }
+        let val = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+        let _ = sqlx::query("UPDATE nodes SET desired_profile = $1 WHERE wk_id = $2")
+            .bind(&val).bind(&node_id).execute(&state.pool).await;
+    }
 
     // Return updated node info
-    let row: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT wk_id, hostname, display_name, tags FROM nodes WHERE wk_id = $1"
+    let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT wk_id, hostname, display_name, tags, desired_profile FROM nodes WHERE wk_id = $1"
     ).bind(&node_id).fetch_optional(&state.pool).await.ok().flatten();
 
     match row {
-        Some((wk_id, hostname, display_name, tags)) => {
+        Some((wk_id, hostname, display_name, tags, desired_profile)) => {
             audit(&state.pool, &user_id, &org_id, "node.updated", &node_id,
-                serde_json::json!({ "display_name": &display_name, "tags": &tags }));
+                serde_json::json!({ "display_name": &display_name, "tags": &tags, "desired_profile": &desired_profile }));
             Json(serde_json::json!({
                 "node_id": wk_id,
                 "hostname": hostname,
                 "display_name": display_name,
                 "tags": tags,
+                "desired_profile": desired_profile,
             })).into_response()
         }
         None => (StatusCode::NOT_FOUND,
@@ -9678,6 +9772,7 @@ async fn main() {
         .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
         .route("/api/alerts/silences",          post(handle_create_silence).get(handle_list_silences))
         .route("/api/alerts/silences/:id",      delete(handle_delete_silence))
+        .route("/api/fleet/config",             post(handle_fleet_config_apply))
         .route("/api/slo",                      post(handle_create_slo).get(handle_list_slos))
         .route("/api/slo/:id",                  delete(handle_delete_slo))
         .route("/api/nodes/:node_id",    patch(handle_update_node))

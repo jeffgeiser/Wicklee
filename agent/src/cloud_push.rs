@@ -19,16 +19,18 @@ pub(crate) fn start_cloud_push(
     pairing_state: Arc<Mutex<PairingState>>,
     broadcast_tx:  tokio::sync::broadcast::Sender<String>,
     obs_cache:     crate::ObservationCache,
+    profile:       Arc<Mutex<crate::DeploymentProfile>>,
 ) {
-    start_cloud_push_inner(pairing_state, broadcast_tx, Some(obs_cache));
+    start_cloud_push_inner(pairing_state, broadcast_tx, Some(obs_cache), profile);
 }
 
 #[cfg(target_env = "musl")]
 pub(crate) fn start_cloud_push(
     pairing_state: Arc<Mutex<PairingState>>,
     broadcast_tx:  tokio::sync::broadcast::Sender<String>,
+    profile:       Arc<Mutex<crate::DeploymentProfile>>,
 ) {
-    start_cloud_push_inner(pairing_state, broadcast_tx, None);
+    start_cloud_push_inner(pairing_state, broadcast_tx, None, profile);
 }
 
 fn start_cloud_push_inner(
@@ -38,6 +40,7 @@ fn start_cloud_push_inner(
     obs_cache:     Option<crate::ObservationCache>,
     #[cfg(target_env = "musl")]
     _obs_cache:    Option<()>,
+    profile:       Arc<Mutex<crate::DeploymentProfile>>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
     use std::ops::ControlFlow;
@@ -48,6 +51,7 @@ fn start_cloud_push_inner(
     crate::supervisor::supervise_until("cloud-push", move || {
         let pairing_state = pairing_state.clone();
         let broadcast_tx  = broadcast_tx.clone();
+        let profile       = profile.clone();
         #[cfg(not(target_env = "musl"))]
         let obs_cache     = obs_cache.clone();
         async move {
@@ -100,6 +104,12 @@ fn start_cloud_push_inner(
             // overwrite it.
             let patched = if let Some(mut val) = parsed {
                 val["node_id"] = serde_json::json!(wk_id);
+                // Fleet config management: report the ACTUAL running profile
+                // so the dashboard can show intent vs. actual.
+                let current_profile = profile.lock()
+                    .map(|p| *p)
+                    .unwrap_or(crate::DeploymentProfile::DedicatedServer);
+                val["deployment_profile"] = serde_json::json!(current_profile.as_str());
                 // Embed current observations from the shared cache (non-musl only).
                 // Empty array is omitted by the cloud's serde(default) — no overhead.
                 #[cfg(not(target_env = "musl"))]
@@ -148,6 +158,27 @@ fn start_cloud_push_inner(
                 }
                 Ok(r) if r.status().is_success() => {
                     last_pushed_state = curr_state;
+                    // Fleet config management: the telemetry response carries
+                    // the cloud-side desired profile (NULL = keep local).
+                    // Apply within this push cycle: shared state (the 10s
+                    // evaluator re-reads it) + config.toml (survives restart).
+                    if let Ok(body) = r.json::<serde_json::Value>().await {
+                        if let Some(desired) = body.get("desired_profile").and_then(|v| v.as_str()) {
+                            if matches!(desired, "sovereign_dev" | "dedicated_server" | "production_fleet") {
+                                let next = crate::DeploymentProfile::from_config(Some(desired));
+                                let changed = profile.lock()
+                                    .map(|mut p| if *p != next { *p = next; true } else { false })
+                                    .unwrap_or(false);
+                                if changed {
+                                    let persisted = next.as_str().to_string();
+                                    crate::update_config(move |cfg| {
+                                        cfg.deployment_profile = Some(persisted);
+                                    });
+                                    eprintln!("[cloud_push] fleet config applied: deployment_profile → {desired}");
+                                }
+                            }
+                        }
+                    }
                 }
                 _ => {} // Network error or non-2xx — retry next cycle
             }

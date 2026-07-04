@@ -437,6 +437,15 @@ The three levers move together: `density_scale` multiplies the evidence-window d
 
 **API (localhost, no auth):** `GET /api/deployment-profile` returns the active profile plus the selectable set with each one's tuning; `PUT /api/deployment-profile` with `{ "profile": "sovereign_dev" | "dedicated_server" | "production_fleet" }` switches it.
 
+### Fleet config management (Pro+ per node, Team+ by tag)
+
+Set profiles centrally instead of per machine. The cloud stores a **desired profile** per node; every telemetry response carries it back to the agent, which applies it within one push cycle (~2 seconds — shared state + `config.toml`) and reports its **actual** profile in every frame, so the dashboard always shows truth, not intent.
+
+- **Per node:** the Profile column in Settings → Node Configuration (or `PATCH /api/nodes/:id` with `{ "desired_profile": "production_fleet" }`; empty string clears — the agent keeps its local choice).
+- **By tag (Team+):** `POST /api/fleet/config` with `{ "tag": "env:prod", "desired_profile": "production_fleet" }` applies to every node bearing the tag and returns the affected count. Audited as `fleet_config.applied`.
+
+Old agents ignore the response body — fleet config activates per node as agents upgrade.
+
 ---
 
 ## Environments & Tags (Pro+)

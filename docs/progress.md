@@ -22,11 +22,10 @@ the top of `ROADMAP.md` → Planned (July 2026 strategic review; 16 items,
 - **Phase 1 (trust gap): DONE** except item 2 — SSO/SAML is parked until the
   owner has time for the Clerk dashboard work (the roadmap item records the
   two options; the code side is trivial).
-- **Phase 2 (reliability): 3 of 4 done** — tags (item 6), silences (item 7),
-  SLOs v1 (item 5). **Next up: item 8, fleet config management** (push
-  deployment profiles cloud→agent per node/tag; agent reports actual profile
-  in MetricsPayload; the natural base for remote-upgrade rings). Touches the
-  agent — remember the `npm run build:agent` prerequisite below.
+- **Phase 2 (reliability): COMPLETE** — tags (6), silences (7), SLOs v1 (5),
+  fleet config management (8). **Next up: Phase 3, cost governance** —
+  showback/chargeback (item 9), idle-waste & right-sizing report (item 10),
+  capacity planner (item 11). The moat: watts AND tokens in one store.
 - Phase 3 (cost governance — the moat), Phase 4 (enterprise deployment),
   Phase 5 (AI-native) are specced and waiting.
 
@@ -51,6 +50,54 @@ backup branch from the recovery, safe to delete.
 - Pricing/tier facts live across ~9 surfaces (llms.txt, llms-full.txt, docs.md,
   DocsPage.tsx, PricingPage, README, Legal/ToS, Settings upgrade copy, types.ts) —
   they must all move together on any pricing change.
+
+---
+
+## Early July 2026 — Fleet config management v1 (Readiness Program, Phase 2 item 8 — Phase 2 COMPLETE)
+
+Deployment profiles were node-local (config.toml + localhost API) — fine
+for 3 nodes, unusable at 25. Profiles are now settable centrally, and the
+delivery mechanism cost zero new connections.
+
+### The delivery trick
+The agent already POSTs telemetry every 2s and the cloud already runs an
+indexed auth query per push. Fleet config rides both: the auth query now
+also fetches `nodes.desired_profile`, and the telemetry response (upgraded
+204 → 200+JSON — old agents check only `is_success()` and ignore bodies)
+carries it back. The agent's `cloud_push` success arm applies a changed
+desired profile within one push cycle: shared `Arc<Mutex<DeploymentProfile>>`
+(the 10s evaluator re-reads it each tick) + `update_config` persistence so
+it survives restarts.
+
+### Truth, not intent
+`cloud_push` also injects the ACTUAL running profile into every outgoing
+frame (at the same place it already patches node_id and embeds
+observations), and the cloud's `MetricsPayload` + frontend `SentinelMetrics`
+carry it — so the dashboard shows what each node is really running, and an
+intent-vs-actual drift indicator is now possible (roadmap follow-up).
+
+### Setting it
+- **Per node (Pro+):** `PATCH /api/nodes/:id { desired_profile }`
+  (validated; empty clears → agent keeps local choice; audited in
+  `node.updated`). Surfaced as a Profile select column in Settings → Node
+  Configuration showing the actual profile from the live frame.
+- **Bulk by tag (Team+, Member+ RBAC):** `POST /api/fleet/config
+  { tag, desired_profile }` — tag-predicate UPDATE across the tenant,
+  returns `nodes_affected`, audited as `fleet_config.applied`. "All
+  env:prod nodes run production_fleet" is one call.
+
+### Compatibility
+Old agents: ignore the response body, keep local profiles — the feature
+activates per node as agents upgrade. Old cloud + new agent: the injected
+`deployment_profile` frame field lands in serde(default) and is dropped
+harmlessly by pre-upgrade clouds.
+
+**Phase 2 (reliability maturity) is now complete**: tags → silences →
+SLOs → fleet config. Next: Phase 3 (cost governance — showback/chargeback,
+idle-waste reports, capacity planner).
+
+Verified: cloud `cargo test` 24 green, agent compile clean, `tsc` clean,
+vitest 80.
 
 ---
 
