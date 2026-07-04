@@ -1895,6 +1895,10 @@ curl https://wicklee.dev/api/v1/fleet \\
                     <Td>Cross-node model swap events. LAG window function over <code className="text-gray-400 text-xs">metrics_raw</code>, 1–168 hour window, capped at 200 rows.</Td>
                   </tr>
                   <tr>
+                    <Td mono>GET /api/v1/fleet/chargeback?days=30</Td>
+                    <Td>Chargeback/showback — cost + $/1M-token attribution by team tag / model / node + daily trend, from measured watts × sampled throughput. <code className="text-gray-400 text-xs">&amp;format=csv&amp;group=</code> for finance export (audited). <span className="text-emerald-400">Team+</span></Td>
+                  </tr>
+                  <tr>
                     <Td mono>GET /api/v1/fleet/cost-by-model?hours=24</Td>
                     <Td>Fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.</Td>
                   </tr>

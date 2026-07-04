@@ -8405,6 +8405,162 @@ async fn handle_delete_silence(
     }
 }
 
+// ── Chargeback / showback (Team+) ────────────────────────────────────────────
+
+/// Shared base CTE for chargeback: per-sample energy/token estimates from the
+/// 5-min rollup (older than 24h) UNION the raw tail (trailing 24h — the
+/// rollup only populates past 24h). Conventions match cost-by-model exactly:
+/// raw cadence ~30s, energy = watts × hours ÷ 1000, tokens ≈ tok/s × seconds.
+/// $1 = tenant, $2 = window interval string ("30 days").
+const CHARGEBACK_BASE: &str = "
+    WITH base AS (
+        SELECT node_id,
+               COALESCE(ollama_active_model, '(none)') AS model,
+               date_trunc('day', ts) AS day,
+               (COALESCE(watts_avg, 0) * sample_count * 30.0 / 3600.0 / 1000.0)::float8 AS energy_kwh,
+               (COALESCE(tok_s_avg, 0) * sample_count * 30.0)::float8 AS tokens,
+               (sample_count * 30.0 / 3600.0)::float8 AS hours_covered
+        FROM metrics_5min
+        WHERE tenant_id = $1
+          AND ts >= NOW() - ($2)::interval
+          AND ts <  NOW() - INTERVAL '24 hours'
+        UNION ALL
+        SELECT node_id,
+               COALESCE(ollama_active_model, '(none)'),
+               date_trunc('day', ts),
+               (COALESCE(watts, 0) * 30.0 / 3600.0 / 1000.0)::float8,
+               (COALESCE(tok_s, 0) * 30.0)::float8,
+               (30.0 / 3600.0)::float8
+        FROM metrics_raw
+        WHERE tenant_id = $1
+          AND ts >= NOW() - ($2)::interval
+          AND ts >= NOW() - INTERVAL '24 hours'
+    )";
+
+/// Build one chargeback row: measured energy → cost at the given rate,
+/// estimated tokens → $/1M tokens (the number nobody else can produce,
+/// because nobody else has watts AND tokens in the same store).
+fn chargeback_row(key: &str, energy_kwh: f64, tokens: f64, hours: f64, kwh_rate: f64) -> serde_json::Value {
+    let cost_usd = energy_kwh * kwh_rate;
+    let tokens_m = tokens / 1_000_000.0;
+    let usd_per_mtok = if tokens_m > 0.0001 { Some(cost_usd / tokens_m) } else { None };
+    serde_json::json!({
+        "key": key, "energy_kwh": energy_kwh, "cost_usd": cost_usd,
+        "tokens_m": tokens_m, "usd_per_mtok": usd_per_mtok, "hours_covered": hours,
+    })
+}
+
+/// GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16[&format=csv&group=tag]
+/// (Team+, JWT) — showback/chargeback report: cost and token attribution by
+/// tag (team), model, and node, plus a daily trend. A node with multiple tags
+/// counts fully under each tag — tag groupings overlap by design (showback,
+/// not double-billing). CSV downloads are audited.
+async fn handle_fleet_chargeback(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_team_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Chargeback reports require Team tier or above", "upgrade": true }))).into_response();
+    }
+
+    let days: i64 = params.get("days").and_then(|s| s.parse().ok()).unwrap_or(30).clamp(1, 90);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_KWH_RATE_USD as f64).clamp(0.01, 2.0);
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let window = format!("{days} days");
+
+    // Tags overlap by design; empty-string fragments from stray commas fold
+    // into (untagged) via NULLIF.
+    let by_tag_sql = format!("{CHARGEBACK_BASE}
+        SELECT COALESCE(NULLIF(t.tag, ''), '(untagged)') AS key,
+               SUM(b.energy_kwh), SUM(b.tokens), SUM(b.hours_covered)
+        FROM base b
+        LEFT JOIN LATERAL (
+            SELECT unnest(string_to_array(replace(lower(n.tags), ' ', ''), ',')) AS tag
+            FROM nodes n WHERE n.wk_id = b.node_id AND n.tags IS NOT NULL AND n.tags <> ''
+        ) t ON true
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 100");
+    let by_model_sql = format!("{CHARGEBACK_BASE}
+        SELECT model, SUM(energy_kwh), SUM(tokens), SUM(hours_covered)
+        FROM base GROUP BY model ORDER BY 2 DESC LIMIT 100");
+    let by_node_sql = format!("{CHARGEBACK_BASE}
+        SELECT node_id, SUM(energy_kwh), SUM(tokens), SUM(hours_covered)
+        FROM base GROUP BY node_id ORDER BY 2 DESC LIMIT 100");
+    let daily_sql = format!("{CHARGEBACK_BASE}
+        SELECT to_char(day, 'YYYY-MM-DD'), SUM(energy_kwh), SUM(tokens), SUM(hours_covered)
+        FROM base GROUP BY day ORDER BY day ASC");
+
+    let fetch = |sql: String| {
+        let pool = state.pool.clone();
+        let tval = tval.to_string();
+        let window = window.clone();
+        async move {
+            sqlx::query_as::<_, (String, f64, f64, f64)>(&sql)
+                .bind(&tval).bind(&window)
+                .fetch_all(&pool).await.unwrap_or_default()
+        }
+    };
+    let (by_tag, by_model, by_node, daily) = tokio::join!(
+        fetch(by_tag_sql), fetch(by_model_sql), fetch(by_node_sql), fetch(daily_sql));
+
+    let rows_of = |rows: &[(String, f64, f64, f64)]| -> Vec<serde_json::Value> {
+        rows.iter().map(|(k, e, t, h)| chargeback_row(k, *e, *t, *h, kwh_rate)).collect()
+    };
+
+    // CSV path: one grouping, finance-ready, formula-injection-hardened.
+    if params.get("format").map(|s| s.as_str()) == Some("csv") {
+        let group = params.get("group").map(|s| s.as_str()).unwrap_or("tag");
+        let rows = match group {
+            "model" => &by_model,
+            "node"  => &by_node,
+            "daily" => &daily,
+            _       => &by_tag,
+        };
+        let mut out = String::from("key,energy_kwh,cost_usd,tokens_m,usd_per_mtok,hours_covered\n");
+        for (k, e, t, h) in rows {
+            let cost = e * kwh_rate;
+            let tm = t / 1_000_000.0;
+            let upm = if tm > 0.0001 { format!("{:.4}", cost / tm) } else { String::new() };
+            out.push_str(&format!("{},{:.4},{:.4},{:.3},{},{:.2}\n",
+                csv_escape(k), e, cost, tm, upm, h));
+        }
+        audit(&state.pool, &user_id, &org_id, "chargeback.exported", group,
+            serde_json::json!({ "days": days, "rows": rows.len() }));
+        return (
+            [
+                ("Content-Type", "text/csv; charset=utf-8".to_string()),
+                ("Content-Disposition", format!("attachment; filename=\"wicklee-chargeback-{group}-{days}d.csv\"")),
+            ],
+            out,
+        ).into_response();
+    }
+
+    let (te, tt, th) = daily.iter().fold((0.0, 0.0, 0.0), |(e, t, h), r| (e + r.1, t + r.2, h + r.3));
+    Json(serde_json::json!({
+        "days": days,
+        "kwh_rate": kwh_rate,
+        "totals": chargeback_row("total", te, tt, th, kwh_rate),
+        "by_tag": rows_of(&by_tag),
+        "by_model": rows_of(&by_model),
+        "by_node": rows_of(&by_node),
+        "daily": rows_of(&daily),
+    })).into_response()
+}
+
 // ── SLOs with error budgets (Team+) ──────────────────────────────────────────
 
 /// The three SLIs computable from cloud-side metrics_raw samples — latency,
@@ -9773,6 +9929,7 @@ async fn main() {
         .route("/api/alerts/silences",          post(handle_create_silence).get(handle_list_silences))
         .route("/api/alerts/silences/:id",      delete(handle_delete_silence))
         .route("/api/fleet/config",             post(handle_fleet_config_apply))
+        .route("/api/v1/fleet/chargeback",      get(handle_fleet_chargeback))
         .route("/api/slo",                      post(handle_create_slo).get(handle_list_slos))
         .route("/api/slo/:id",                  delete(handle_delete_slo))
         .route("/api/nodes/:node_id",    patch(handle_update_node))
