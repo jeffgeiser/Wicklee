@@ -56,6 +56,50 @@ criteria. RBAC is in progress on this branch.
 
 ---
 
+## Early July 2026 — Audit export + SIEM drain (Readiness Program, Phase 1 item 3)
+
+Enterprises don't read audit logs in a Settings panel — they pull them into
+Splunk/Datadog. Two delivery paths shipped (item 2, SSO, is parked until the
+owner has time for the Clerk dashboard work):
+
+### Export
+`GET /api/audit-log/export?format=csv|json&action=&from=&to=` — Business+,
+same tenant scoping as the read endpoint, chronological, 100k-row cap,
+`Content-Disposition` attachment. CSV goes through a new `csv_escape` helper:
+RFC-4180 quoting plus spreadsheet formula-injection hardening (`= + - @`
+cells get a leading apostrophe) — audit fields like `target` can carry
+client-influenced strings (node display names). The helper is unit-tested and
+is the reusable fix for the June review's still-open CSV-escaping MEDIUM on
+the fleet export. Every export is itself audited (`audit_log.exported` with
+format + row count).
+
+### SIEM drain
+One per tenant (`audit_drains`: tenant_id PK + owner user_id/org_id so the
+delivery loop can re-resolve tier). `PUT /api/audit-log/drain { url }` is
+**org-Admin-only** (first consumer of RBAC's `is_admin` beyond node removal)
++ Business+; generates a 32-byte HMAC secret returned ONCE (re-PUT rotates
+it and re-enables a disabled drain). The delivery cursor starts at the
+tenant's current max audit id — the drain streams NEW events; backfill is
+the export's job. `audit_drain_task` (60s loop, spawned with the other cloud
+evaluators) ships ≤500-event JSON batches through the existing
+`deliver_webhook` (HMAC-SHA256 `X-Wicklee-Signature`, 5s timeout), re-checks
+tier at delivery time so downgraded tenants stop draining, and auto-disables
+after 20 consecutive failures (mirroring webhook subscriptions). Drain
+config changes are audited (`audit_drain.created/deleted`).
+
+### UI + docs
+AuditLogSection gained CSV/JSON export buttons (blob download, respects the
+action filter), and a SIEM drain panel: status (active / auto-disabled /
+failure count / last delivery), reveal-once secret with copy, URL form,
+remove. Docs propagated across docs.md, DocsPage, llms.txt, llms-full.txt
+(including the batch payload spec); retention stated as ≥365d Business /
+unlimited Enterprise (purge enforcement is a roadmap follow-up).
+
+Verified: cloud `cargo test` 20 green (3 new csv_escape tests), compile
+clean first try, `tsc` clean, vitest 80.
+
+---
+
 ## Early July 2026 — RBAC v1 (Business & Enterprise Readiness, Phase 1 item 1)
 
 First feature of the ★ Business & Enterprise Readiness Program (see ROADMAP).

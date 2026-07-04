@@ -2027,8 +2027,18 @@ curl https://wicklee.dev/api/v1/fleet \\
               </p>
             </div>
 
+            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-3">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Export &amp; SIEM Drain</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <code className="text-gray-300 font-mono text-[10px]">GET /api/audit-log/export?format=csv|json</code> downloads the full trail (chronological, up to 100k rows; optional <code className="text-gray-300 font-mono text-[10px]">action</code>/<code className="text-gray-300 font-mono text-[10px]">from</code>/<code className="text-gray-300 font-mono text-[10px]">to</code> filters). CSV is formula-injection hardened. Every export is itself audited.
+              </p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                The <strong className="text-white">SIEM drain</strong> (<code className="text-gray-300 font-mono text-[10px]">PUT /api/audit-log/drain</code>, org Admins) streams new events to your collector — Splunk, Datadog, any HTTPS receiver — as HMAC-signed JSON batches within ~1 minute (<code className="text-gray-300 font-mono text-[10px]">X-Wicklee-Signature</code>, secret shown once). Auto-disables after 20 consecutive failures; re-save to rotate the secret or re-enable. Retention: at least 365 days on Business, unlimited on Enterprise.
+              </p>
+            </div>
+
             <NoteBox>
-              Surfaced as the <strong className="text-white">Audit Log</strong> section in Settings — action filter, load-more pagination, and an upgrade nudge on lower tiers. Because events are recorded on every tier, upgrading to Business reveals the trail retroactively.
+              Surfaced as the <strong className="text-white">Audit Log</strong> section in Settings — action filter, load-more pagination, CSV/JSON export, SIEM drain configuration, and an upgrade nudge on lower tiers. Because events are recorded on every tier, upgrading to Business reveals the trail retroactively.
             </NoteBox>
           </Section>
 

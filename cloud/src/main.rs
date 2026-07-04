@@ -801,6 +801,25 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_org ON audit_log(org_id, ts DESC)")
         .execute(pool).await.ok();
 
+    // SIEM drain — one per tenant. Streams new audit events to a customer
+    // HTTPS endpoint, HMAC-signed like threshold webhooks. `last_id` is the
+    // delivery cursor (starts at the tenant's max id at creation — history
+    // backfill is the export endpoint's job, not the drain's).
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS audit_drains (
+            tenant_id        TEXT PRIMARY KEY,
+            user_id          TEXT NOT NULL,
+            org_id           TEXT,
+            url              TEXT NOT NULL,
+            secret           TEXT NOT NULL,
+            enabled          BOOLEAN NOT NULL DEFAULT true,
+            last_id          BIGINT NOT NULL DEFAULT 0,
+            failures         INT NOT NULL DEFAULT 0,
+            last_delivery_ms BIGINT,
+            created_at       BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("audit_drains migration failed");
+
     // Install telemetry — anonymous counter, no PII.
     sqlx::query("
         CREATE TABLE IF NOT EXISTS installs (
@@ -1328,6 +1347,310 @@ async fn handle_audit_log(
 
     let next_before = entries.last().and_then(|e| e["ts"].as_i64());
     Json(serde_json::json!({ "entries": entries, "next_before": next_before })).into_response()
+}
+
+/// Escape a value for CSV: RFC-4180 quoting (quotes, commas, newlines) plus
+/// spreadsheet formula-injection hardening — cells starting with = + - @ get
+/// a leading apostrophe so Excel/Sheets treat them as text, not formulas.
+/// (Audit fields like `target` and `details` can carry client-influenced
+/// strings, e.g. node display names.)
+fn csv_escape(s: &str) -> String {
+    let s = if s.starts_with(['=', '+', '-', '@']) {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    };
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s
+    }
+}
+
+/// GET /api/audit-log/export?format=csv|json&action=&from=&to= — full-history
+/// audit export, Business+ tier. Same tenant scoping as /api/audit-log.
+/// Chronological (ts ASC), capped at 100k rows. The export itself is audited.
+async fn handle_audit_log_export(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+
+    let format = params.get("format").map(|s| s.as_str()).unwrap_or("json");
+    if !matches!(format, "json" | "csv") {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "format must be json or csv" }))).into_response();
+    }
+    let from: i64 = params.get("from").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let to:   i64 = params.get("to").and_then(|s| s.parse().ok()).unwrap_or(i64::MAX);
+    let action = params.get("action").cloned();
+
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let mut sql = format!(
+        "SELECT id, ts, user_id, org_id, actor_email, action, target, COALESCE(details::text, '{{}}')
+         FROM audit_log WHERE {tcol} = $1 AND ts >= $2 AND ts <= $3");
+    if action.is_some() { sql.push_str(" AND action = $4"); }
+    sql.push_str(" ORDER BY ts ASC LIMIT 100000");
+
+    let mut q = sqlx::query_as::<_, (i64, i64, String, Option<String>, String, String, String, String)>(&sql)
+        .bind(tval).bind(from).bind(to);
+    if let Some(ref a) = action { q = q.bind(a); }
+    let rows = q.fetch_all(&state.pool).await.unwrap_or_default();
+    let row_count = rows.len();
+
+    audit(&state.pool, &user_id, &org_id, "audit_log.exported", "",
+        serde_json::json!({ "format": format, "rows": row_count }));
+
+    let stamp = now_ms();
+    if format == "csv" {
+        let mut out = String::from("id,ts,actor_email,user_id,org_id,action,target,details\n");
+        for (id, ts, uid, oid, email, action, target, details) in rows {
+            out.push_str(&format!("{},{},{},{},{},{},{},{}\n",
+                id, ts,
+                csv_escape(&email), csv_escape(&uid), csv_escape(oid.as_deref().unwrap_or("")),
+                csv_escape(&action), csv_escape(&target), csv_escape(&details)));
+        }
+        (
+            [
+                ("Content-Type", "text/csv; charset=utf-8".to_string()),
+                ("Content-Disposition", format!("attachment; filename=\"wicklee-audit-{stamp}.csv\"")),
+            ],
+            out,
+        ).into_response()
+    } else {
+        let entries: Vec<serde_json::Value> = rows.into_iter()
+            .map(|(id, ts, uid, oid, email, action, target, details)| serde_json::json!({
+                "id": id, "ts": ts, "user_id": uid, "org_id": oid,
+                "actor_email": email, "action": action, "target": target,
+                "details": serde_json::from_str::<serde_json::Value>(&details)
+                    .unwrap_or(serde_json::json!({})),
+            })).collect();
+        (
+            [
+                ("Content-Type", "application/json".to_string()),
+                ("Content-Disposition", format!("attachment; filename=\"wicklee-audit-{stamp}.json\"")),
+            ],
+            serde_json::json!({ "entries": entries, "count": row_count }).to_string(),
+        ).into_response()
+    }
+}
+
+/// GET /api/audit-log/drain — current SIEM drain status (no secret). Business+.
+async fn handle_get_audit_drain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let row: Option<(String, bool, i32, Option<i64>, i64)> = sqlx::query_as(
+        "SELECT url, enabled, failures, last_delivery_ms, created_at FROM audit_drains WHERE tenant_id = $1"
+    ).bind(tval).fetch_optional(&state.pool).await.ok().flatten();
+
+    match row {
+        Some((url, enabled, failures, last_delivery_ms, created_at)) => Json(serde_json::json!({
+            "configured": true, "url": url, "enabled": enabled,
+            "failures": failures, "last_delivery_ms": last_delivery_ms, "created_at": created_at,
+        })).into_response(),
+        None => Json(serde_json::json!({ "configured": false })).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PutDrainBody { url: String }
+
+/// PUT /api/audit-log/drain — create or replace the tenant's SIEM drain.
+/// Admin-only + Business+. Returns the HMAC secret ONCE (re-PUT rotates it).
+/// The delivery cursor starts at the tenant's current max audit id — the
+/// drain streams new events; history backfill is the export endpoint's job.
+async fn handle_put_audit_drain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PutDrainBody>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.is_admin() { return role_forbidden("admin"); }
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+    if !body.url.starts_with("https://") && !body.url.starts_with("http://") {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "url must be http(s) — https strongly recommended" }))).into_response();
+    }
+
+    let secret_bytes: [u8; 32] = std::array::from_fn(|_| rand::random());
+    let secret = hex::encode(secret_bytes);
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+
+    // Start the cursor at the tenant's current max id so only NEW events flow.
+    let start_sql = format!("SELECT COALESCE(MAX(id), 0) FROM audit_log WHERE {tcol} = $1");
+    let start_id: i64 = sqlx::query_scalar(&start_sql)
+        .bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
+
+    let result = sqlx::query(
+        "INSERT INTO audit_drains (tenant_id, user_id, org_id, url, secret, enabled, last_id, failures, created_at)
+         VALUES ($1, $2, $3, $4, $5, true, $6, 0, $7)
+         ON CONFLICT (tenant_id) DO UPDATE SET
+           url = EXCLUDED.url, secret = EXCLUDED.secret, enabled = true,
+           failures = 0, user_id = EXCLUDED.user_id, org_id = EXCLUDED.org_id"
+    ).bind(tval).bind(&user_id).bind(&org_id).bind(&body.url).bind(&secret)
+    .bind(start_id).bind(now_ms() as i64)
+    .execute(&state.pool).await;
+
+    match result {
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "audit_drain.created", &body.url,
+                serde_json::json!({}));
+            Json(serde_json::json!({
+                "url": body.url, "enabled": true,
+                "secret": secret,  // shown ONCE — verify X-Wicklee-Signature with it
+            })).into_response()
+        }
+        Err(e) => { eprintln!("[audit-drain] upsert failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response() }
+    }
+}
+
+/// DELETE /api/audit-log/drain — remove the tenant's SIEM drain. Admin-only.
+async fn handle_delete_audit_drain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.is_admin() { return role_forbidden("admin"); }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let result = sqlx::query("DELETE FROM audit_drains WHERE tenant_id = $1")
+        .bind(tval).execute(&state.pool).await;
+
+    match result {
+        Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "No drain configured" }))).into_response(),
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "audit_drain.deleted", "", serde_json::json!({}));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
+    }
+}
+
+/// SIEM drain delivery loop — every 60s, ships each enabled drain's new audit
+/// events (id > cursor) as an HMAC-signed batch via `deliver_webhook`. Tier is
+/// re-checked at delivery time so downgraded tenants stop draining. A drain
+/// auto-disables after 20 consecutive failures so a dead endpoint can't spin
+/// forever; re-PUT re-enables it.
+async fn audit_drain_task(pool: sqlx::PgPool) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        let drains: Vec<(String, String, Option<String>, String, String, i64, i32)> = sqlx::query_as(
+            "SELECT tenant_id, user_id, org_id, url, secret, last_id, failures
+             FROM audit_drains WHERE enabled = true"
+        ).fetch_all(&pool).await.unwrap_or_default();
+
+        for (tenant_id, user_id, org_id, url, secret, last_id, failures) in drains {
+            let tier = resolve_tier(&user_id, &org_id, &pool).await;
+            if !is_business_or_above(&tier) { continue; }
+
+            let (tcol, tval) = tenant_scope(&user_id, &org_id);
+            let sql = format!(
+                "SELECT id, ts, user_id, org_id, actor_email, action, target, COALESCE(details::text, '{{}}')
+                 FROM audit_log WHERE {tcol} = $1 AND id > $2 ORDER BY id ASC LIMIT 500");
+            let rows: Vec<(i64, i64, String, Option<String>, String, String, String, String)> =
+                sqlx::query_as(&sql).bind(tval).bind(last_id)
+                    .fetch_all(&pool).await.unwrap_or_default();
+            if rows.is_empty() { continue; }
+
+            let max_id = rows.last().map(|r| r.0).unwrap_or(last_id);
+            let events: Vec<serde_json::Value> = rows.into_iter()
+                .map(|(id, ts, uid, oid, email, action, target, details)| serde_json::json!({
+                    "id": id, "ts": ts, "user_id": uid, "org_id": oid,
+                    "actor_email": email, "action": action, "target": target,
+                    "details": serde_json::from_str::<serde_json::Value>(&details)
+                        .unwrap_or(serde_json::json!({})),
+                })).collect();
+            let count = events.len();
+            let payload = serde_json::json!({
+                "type": "audit.batch", "tenant_id": tenant_id, "events": events,
+            });
+
+            match deliver_webhook(&url, &secret, &payload).await {
+                Ok(status) if (200..300).contains(&status) => {
+                    let _ = sqlx::query(
+                        "UPDATE audit_drains SET last_id = $1, failures = 0, last_delivery_ms = $2
+                         WHERE tenant_id = $3"
+                    ).bind(max_id).bind(now_ms() as i64).bind(&tenant_id)
+                    .execute(&pool).await;
+                    eprintln!("[audit-drain] delivered {count} events to tenant {tenant_id}");
+                }
+                outcome => {
+                    let f = failures + 1;
+                    let disable = f >= 20;
+                    let _ = sqlx::query(
+                        "UPDATE audit_drains SET failures = $1, enabled = $2 WHERE tenant_id = $3"
+                    ).bind(f).bind(!disable).bind(&tenant_id)
+                    .execute(&pool).await;
+                    eprintln!("[audit-drain] delivery failed for tenant {tenant_id} ({outcome:?}, failure {f}{})",
+                        if disable { " — DISABLED after 20 consecutive failures" } else { "" });
+                }
+            }
+        }
+    }
 }
 
 /// Like require_user but also returns email, is_pro, the verified org_id,
@@ -8601,6 +8924,7 @@ async fn main() {
     tokio::spawn(node_offline_alert_task(state.clone()));
     tokio::spawn(fleet_alert_evaluator_task(state.clone()));
     tokio::spawn(wes_long_term_drift_evaluator_task(state.clone()));
+    tokio::spawn(audit_drain_task(pool.clone()));
     tokio::spawn(otel_exporter_task(state.clone()));
 
     // Refresh JWKS every 6 hours.
@@ -8670,6 +8994,8 @@ async fn main() {
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
         .route("/api/otel/config",       get(handle_get_otel_config).put(handle_put_otel_config))
         .route("/api/audit-log",         get(handle_audit_log))
+        .route("/api/audit-log/export",  get(handle_audit_log_export))
+        .route("/api/audit-log/drain",   get(handle_get_audit_drain).put(handle_put_audit_drain).delete(handle_delete_audit_drain))
         .with_state(state.clone())
         .layer(middleware::from_fn(cors_dashboard));
 
@@ -8738,6 +9064,38 @@ mod fit_wrapper_tests {
         let (score, label) = cloud_fit_score(-1, 24_576, 0.0, "Normal");
         // 0-byte clamp -> 512 MB floor still "fits"; just must not panic.
         assert!(score > 0, "{label}");
+    }
+}
+
+#[cfg(test)]
+mod csv_escape_tests {
+    use super::*;
+
+    #[test]
+    fn plain_values_pass_through_unquoted() {
+        assert_eq!(csv_escape("node.paired"), "node.paired");
+        assert_eq!(csv_escape("WK-1a2b3c4d"), "WK-1a2b3c4d");
+        assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn rfc4180_quoting_for_commas_quotes_newlines() {
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+        assert_eq!(csv_escape("cr\rhere"), "\"cr\rhere\"");
+    }
+
+    #[test]
+    fn formula_injection_is_neutralized() {
+        // A node display name like "=HYPERLINK(...)" must not execute when
+        // the export is opened in Excel/Sheets.
+        assert_eq!(csv_escape("=1+2"), "'=1+2");
+        assert_eq!(csv_escape("+SUM(A1)"), "'+SUM(A1)");
+        assert_eq!(csv_escape("-2+3"), "'-2+3");
+        assert_eq!(csv_escape("@cmd"), "'@cmd");
+        // Formula prefix + comma → apostrophe AND quoting compose.
+        assert_eq!(csv_escape("=cmd,arg"), "\"'=cmd,arg\"");
     }
 }
 

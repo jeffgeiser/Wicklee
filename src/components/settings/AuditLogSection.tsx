@@ -13,7 +13,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { ScrollText, Lock, AlertTriangle, RefreshCw } from 'lucide-react';
+import { ScrollText, Lock, AlertTriangle, RefreshCw, Download, Send, Trash2, Copy } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
 
 interface AuditEntry {
@@ -31,6 +31,14 @@ interface Props {
   subscriptionTier: string;
   getToken?: () => Promise<string | null>;
   onNavigateToPricing?: () => void;
+}
+
+interface DrainStatus {
+  configured:       boolean;
+  url?:             string;
+  enabled?:         boolean;
+  failures?:        number;
+  last_delivery_ms?: number | null;
 }
 
 const PAGE_SIZE = 50;
@@ -90,6 +98,14 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
   const [error,      setError]      = useState<string | null>(null);
   const [nextBefore, setNextBefore] = useState<number | null>(null);
   const [filter,     setFilter]     = useState('');
+  const [exporting,  setExporting]  = useState(false);
+
+  // SIEM drain state
+  const [drain,       setDrain]       = useState<DrainStatus | null>(null);
+  const [drainUrl,    setDrainUrl]    = useState('');
+  const [drainSecret, setDrainSecret] = useState<string | null>(null);
+  const [drainBusy,   setDrainBusy]   = useState(false);
+  const [showDrainForm, setShowDrainForm] = useState(false);
 
   const fetchPage = useCallback(async (before: number | null, append: boolean) => {
     if (!isBusinessOrAbove || !getToken) return;
@@ -123,6 +139,105 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
 
   // Reload from the top whenever the filter changes (or on mount).
   useEffect(() => { fetchPage(null, false); }, [fetchPage]);
+
+  const fetchDrain = useCallback(async () => {
+    if (!isBusinessOrAbove || !getToken) return;
+    try {
+      const token = await getToken();
+      const res = await fetch(`${CLOUD_URL}/api/audit-log/drain`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) setDrain(await res.json());
+    } catch { /* status panel is best-effort */ }
+  }, [isBusinessOrAbove, getToken]);
+
+  useEffect(() => { fetchDrain(); }, [fetchDrain]);
+
+  const handleExport = async (format: 'csv' | 'json') => {
+    if (!getToken || exporting) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const qs = new URLSearchParams({ format });
+      if (filter) qs.set('action', filter);
+      const res = await fetch(`${CLOUD_URL}/api/audit-log/export?${qs.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error ?? `Export failed: ${res.status}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `wicklee-audit-${Date.now()}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const saveDrain = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!getToken || drainBusy) return;
+    setDrainBusy(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${CLOUD_URL}/api/audit-log/drain`, {
+        method:  'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ url: drainUrl }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? `Save failed: ${res.status}`);
+        return;
+      }
+      setDrainSecret(data.secret ?? null);
+      setShowDrainForm(false);
+      setDrainUrl('');
+      fetchDrain();
+    } catch {
+      setError('Failed to save drain');
+    } finally {
+      setDrainBusy(false);
+    }
+  };
+
+  const deleteDrain = async () => {
+    if (!getToken || drainBusy) return;
+    if (!confirm('Remove the SIEM drain? New audit events will no longer be streamed.')) return;
+    setDrainBusy(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${CLOUD_URL}/api/audit-log/drain`, {
+        method:  'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok && res.status !== 404) {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error ?? `Delete failed: ${res.status}`);
+        return;
+      }
+      setDrain({ configured: false });
+      setDrainSecret(null);
+    } catch {
+      setError('Failed to delete drain');
+    } finally {
+      setDrainBusy(false);
+    }
+  };
 
   // ── Locked state ───────────────────────────────────────────────────────────
   if (!isBusinessOrAbove) {
@@ -176,6 +291,22 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
         >
           {ACTION_FILTERS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
         </select>
+        <button
+          onClick={() => handleExport('csv')}
+          disabled={exporting}
+          className="text-[10px] px-2 py-1.5 rounded-lg border border-gray-700 text-gray-300 hover:border-amber-500/50 hover:bg-amber-500/10 disabled:opacity-40 transition-colors flex items-center gap-1"
+          title="Download the full trail as CSV (respects the action filter)"
+        >
+          <Download size={11} /> CSV
+        </button>
+        <button
+          onClick={() => handleExport('json')}
+          disabled={exporting}
+          className="text-[10px] px-2 py-1.5 rounded-lg border border-gray-700 text-gray-300 hover:border-amber-500/50 hover:bg-amber-500/10 disabled:opacity-40 transition-colors flex items-center gap-1"
+          title="Download the full trail as JSON (respects the action filter)"
+        >
+          <Download size={11} /> JSON
+        </button>
         <button
           onClick={() => fetchPage(null, false)}
           disabled={loading}
@@ -250,8 +381,88 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
         )}
       </div>
 
+      {/* ── SIEM drain ── */}
+      <div className="px-6 py-4 border-t border-gray-700 space-y-3">
+        <div className="flex items-center gap-2">
+          <Send size={12} className="text-amber-400 shrink-0" />
+          <p className="text-xs font-semibold text-gray-200 flex-1">SIEM drain</p>
+          {drain?.configured ? (
+            <button
+              onClick={deleteDrain}
+              disabled={drainBusy}
+              className="text-[10px] px-2 py-1 rounded border border-gray-700 text-rose-400 hover:border-rose-500/50 hover:bg-rose-500/10 disabled:opacity-40 transition-colors flex items-center gap-1"
+            >
+              <Trash2 size={10} /> Remove
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowDrainForm(s => !s)}
+              className="text-[10px] px-2 py-1 rounded border border-gray-700 text-amber-300 hover:border-amber-500/50 hover:bg-amber-500/10 transition-colors"
+            >
+              Configure
+            </button>
+          )}
+        </div>
+        <p className="text-[10px] text-gray-600 leading-relaxed">
+          Streams new audit events to your endpoint (Splunk HEC proxy, Datadog intake, any HTTPS receiver) as JSON batches within ~1 minute, HMAC-SHA256 signed via <code className="text-gray-500 font-mono">X-Wicklee-Signature</code>. History backfill is the export buttons above. Admin-only to configure.
+        </p>
+
+        {drainSecret && (
+          <div className="rounded-lg bg-cyan-500/5 border border-cyan-500/20 px-3 py-2.5 space-y-1.5">
+            <p className="text-[11px] font-semibold text-cyan-300">⚠️ Save this signing secret — it won't be shown again</p>
+            <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5">
+              <code className="flex-1 text-[10px] text-gray-200 font-mono break-all">{drainSecret}</code>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(drainSecret).catch(() => {})}
+                className="text-gray-400 hover:text-gray-200"
+                title="Copy"
+              >
+                <Copy size={11} />
+              </button>
+            </div>
+            <button onClick={() => setDrainSecret(null)} className="text-[10px] text-cyan-300 hover:text-cyan-200">
+              I've saved it — dismiss
+            </button>
+          </div>
+        )}
+
+        {drain?.configured && (
+          <div className="rounded-lg bg-gray-900 border border-gray-700 px-3 py-2 text-[10px] text-gray-500 space-y-0.5">
+            <p className="text-[11px] text-gray-300 font-mono truncate" title={drain.url}>{drain.url}</p>
+            <p>
+              {drain.enabled
+                ? <span className="text-emerald-400">● active</span>
+                : <span className="text-rose-400">● auto-disabled after 20 consecutive failures — re-save to re-enable</span>}
+              {' · '}last delivery: {drain.last_delivery_ms ? new Date(drain.last_delivery_ms).toLocaleString() : 'none yet'}
+              {(drain.failures ?? 0) > 0 && <> · <span className="text-amber-400">{drain.failures} consecutive failure{drain.failures === 1 ? '' : 's'}</span></>}
+            </p>
+          </div>
+        )}
+
+        {(showDrainForm || (drain?.configured && !drain.enabled)) && (
+          <form onSubmit={saveDrain} className="flex items-center gap-2">
+            <input
+              type="url"
+              required
+              value={drainUrl}
+              onChange={e => setDrainUrl(e.target.value)}
+              placeholder="https://siem.example.com/wicklee-audit"
+              className="flex-1 px-3 py-2 text-xs bg-gray-900 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-600 focus:border-amber-500 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={drainBusy}
+              className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 disabled:text-gray-500 text-xs font-semibold text-white transition-colors"
+            >
+              {drainBusy ? 'Saving…' : 'Save'}
+            </button>
+          </form>
+        )}
+      </div>
+
       <div className="px-6 py-3 border-t border-gray-700 text-[10px] text-gray-600 leading-relaxed">
-        <strong className="text-gray-500">Append-only:</strong> entries are never edited or deleted. Events are recorded for every tier; only Business+ can read them here. Org members share one org-wide trail.
+        <strong className="text-gray-500">Append-only:</strong> entries are never edited or deleted. Events are recorded for every tier; only Business+ can read them here. Org members share one org-wide trail. Retention: at least 365 days on Business; unlimited on Enterprise.
       </div>
     </div>
   );

@@ -694,7 +694,20 @@ Recording is fire-and-forget: it runs off the request path and never delays or f
 
 **Endpoint:** `GET /api/audit-log` (Clerk JWT, Business+). Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Returns `{ entries: [...], next_before }` where each entry carries `ts`, `actor_email`, `action`, `target`, and a JSON `details` object.
 
-Surfaced as the **Audit Log** section in Settings — action filter, load-more pagination, and an upgrade nudge on lower tiers.
+### Export
+
+`GET /api/audit-log/export?format=csv|json&action=&from=&to=` — full-history download (chronological, up to 100k rows). CSV output is RFC-4180 quoted with spreadsheet formula-injection hardening. Every export is itself recorded in the trail (`audit_log.exported`). **Retention:** at least 365 days on Business; unlimited on Enterprise.
+
+### SIEM Drain
+
+Stream new audit events to your own collector — Splunk HEC proxy, Datadog intake, or any HTTPS receiver. One drain per tenant, configured by org **Admins** in Settings → Audit Log (or `PUT /api/audit-log/drain` with `{ "url": "https://..." }`). The HMAC signing secret is returned **once**; re-saving rotates it.
+
+- Delivery: JSON batches (≤500 events) within ~1 minute of the event, signed via `X-Wicklee-Signature: sha256=<hex>` — same HMAC-SHA256 scheme as Threshold Webhooks, verify on receipt.
+- The cursor starts at drain creation — the drain carries **new** events; use the export for history backfill.
+- A drain auto-disables after 20 consecutive delivery failures (visible in Settings); re-saving re-enables it.
+- Drain configuration changes are themselves audited (`audit_drain.created` / `audit_drain.deleted`).
+
+Surfaced as the **Audit Log** section in Settings — action filter, load-more pagination, CSV/JSON export buttons, SIEM drain configuration, and an upgrade nudge on lower tiers.
 
 ---
 

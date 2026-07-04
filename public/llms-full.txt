@@ -414,6 +414,22 @@ Immutable, append-only audit trail of sensitive fleet operations. Clerk JWT auth
 }
 ```
 
+### GET /api/audit-log/export
+Full-history audit export (Business+). Params: `format=csv|json` (default json), `action` (exact-match filter), `from`/`to` (ts_ms range). Chronological, capped at 100k rows, served with `Content-Disposition: attachment`. CSV is RFC-4180 quoted with spreadsheet formula-injection hardening (`= + - @` prefixed cells are neutralized). Every export is itself audited as `audit_log.exported`. Retention: at least 365 days on Business; unlimited on Enterprise.
+
+### GET/PUT/DELETE /api/audit-log/drain
+SIEM drain (Business+; PUT/DELETE are org-Admin-only). One drain per tenant. PUT `{ "url": "https://..." }` returns the HMAC secret ONCE (re-PUT rotates it) and starts the delivery cursor at the current max audit id — the drain streams NEW events; use the export endpoint for backfill. A background loop ships batches (≤500 events) every 60s as JSON, HMAC-SHA256 signed via `X-Wicklee-Signature: sha256=<hex>` (same scheme as threshold webhooks). Auto-disables after 20 consecutive delivery failures; re-PUT re-enables. Tier is re-checked at delivery time. Drain config changes are audited (`audit_drain.created` / `audit_drain.deleted`).
+```json
+{
+  "type": "audit.batch",
+  "tenant_id": "org_xyz",
+  "events": [
+    { "id": 43, "ts": 1774624299001, "user_id": "user_abc", "org_id": "org_xyz",
+      "actor_email": "ops@acme.com", "action": "alert_rule.created", "target": "rule-uuid", "details": { "event_type": "thermal_critical" } }
+  ]
+}
+```
+
 ---
 
 ## MetricsPayload Schema
