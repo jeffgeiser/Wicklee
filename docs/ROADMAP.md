@@ -189,6 +189,16 @@ The July 2026 Teams/Enterprise review found the Team tier strong and differentia
 
 **Packaging target once Phases 1–3 land:** Business = SSO + RBAC + audit export + org keys + SLO reports + cost governance (justifies $499). Enterprise = + self-hosted control plane + SCIM + custom SLA.
 
+### ★ GTM & Distribution Features (July 2026 — see docs/GTM.md)
+Features whose primary value is distribution and enterprise awareness, identified by the GTM review. Each is a product item that doubles as a channel:
+
+1. **Demo fleet mode** — a synthetic-fleet build of the dashboard (deterministic fake telemetry: mixed Apple/NVIDIA nodes, thermal events, model swaps) deployable as a public demo at demo.wicklee.dev AND as a Hugging Face Space. Kills the evaluate-before-install friction; the Space is the Show HN hook. Implementation: a `VITE_DEMO_MODE` build that feeds FleetStreamContext from a generated stream instead of SSE — no cloud account needed.
+2. **WES Leaderboard as GTM engine** (elevates the existing "WES Leaderboard (Public)" entry below): opt-in anonymous agent submissions (chip, model, quant, tok/s, watts, WES — nothing else; consistent with sovereignty), public programmatic pages per chip×model combo ("RTX 4090 · Llama 3.1 70B — measured tok/s, watts, $/1M tok") ending in the install one-liner, and the quarterly "State of Local Inference Efficiency" report from the corpus. Prerender machinery from the SEO pass is reusable.
+3. **Hardware-fit badge** — a tiny generator (SVG badge + link to wicklee.dev/fit/<model_id>) model authors paste into HF model cards / GitHub READMEs; the landing page runs the existing fit-check against the visitor's declared hardware. Every badge is a permanent inbound link on a high-intent page.
+4. **MSP / multi-org console (Business+)** — one login managing many client orgs (Clerk supports multi-org membership; needs an org-switcher rollup view + per-org billing attribution). Five MSP partners ≈ fifty enterprise deployments; this is the partnerships wedge.
+5. **Read-only fleet share links** — expiring, revocable, view-only dashboard URLs (a scoped stream token variant + a viewer route). "Look at our fleet" in a Slack channel is the viral loop.
+6. **FOCUS-format chargeback export** — the chargeback endpoint gains `format=focus` emitting the FinOps Foundation's open billing spec. Cheap (one serializer over the existing report) and it's the credential for FinOps X / OpenCost ecosystem listing.
+
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
 

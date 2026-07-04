@@ -30,6 +30,12 @@ the top of `ROADMAP.md` → Planned (July 2026 strategic review; 16 items,
   existing Resend path), then item 11 (capacity planner).
 - Phase 3 (cost governance — the moat), Phase 4 (enterprise deployment),
   Phase 5 (AI-native) are specced and waiting.
+- **GTM plan lives in `docs/GTM.md`** (July 2026): ecosystem embedding
+  (HF Space/Dataset, MCP registries, runtime docs, Grafana catalog), the
+  WES-leaderboard data flywheel, partnerships (hardware vendors, MSPs,
+  FinOps), monthly rocks. Six GTM-driven product items added to ROADMAP
+  (demo fleet mode, leaderboard engine, fit badge, MSP console, share
+  links, FOCUS export).
 
 **Deployment notes:** cloud changes go live on the next Railway deploy (all
 migrations are additive and run at startup: audit_log, audit_drains,
