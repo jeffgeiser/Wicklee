@@ -71,6 +71,7 @@ import type { HexHiveRow } from './shared/HexHive';
 import WESHistoryChart from './WESHistoryChart';
 import MetricsHistoryChart from './MetricsHistoryChart';
 import ThermalBudgetCard from './insights/ThermalBudgetCard';
+import ChargebackCard from './insights/ChargebackCard';
 import ObservationCard from './insights/ObservationCard';
 import AccordionObservationCard from './insights/AccordionObservationCard';
 import FleetObservationCard from './insights/FleetObservationCard';
@@ -2354,6 +2355,14 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   getToken={getToken}
                   subscriptionTier={subscriptionTier}
                   selectedNodeId={perfNodeId}
+                />
+              )}
+
+              {/* Chargeback / Showback (Team+, cloud only — watts × tokens attribution) */}
+              {!isLocalHost && getToken && (
+                <ChargebackCard
+                  getToken={getToken}
+                  subscriptionTier={subscriptionTier}
                 />
               )}
 

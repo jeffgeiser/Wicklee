@@ -508,6 +508,16 @@ Managed in Settings → SLOs & Error Budgets (compliance %, budget burn bar, lat
 
 ---
 
+## Chargeback & Showback (Team+)
+
+Cost and token attribution from **measured** telemetry — energy (watts × time) priced at your kWh rate, tokens estimated from sampled throughput — yielding **$ per 1M tokens by team tag, model, and node**, plus a daily trend. Generic LLM-observability tools see tokens *or* watts; Wicklee has both in one store, so this report exists nowhere else.
+
+`GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16` returns totals plus `by_tag` / `by_model` / `by_node` / `daily` groupings; each row carries `energy_kwh`, `cost_usd`, `tokens_m`, `usd_per_mtok`, `hours_covered`. Window 1–90 days (5-min rollup + raw trailing-day tail, same energy conventions as Cost by Model). Add `&format=csv&group=tag|model|node|daily` for a finance-ready CSV (formula-injection-hardened, audit-logged as `chargeback.exported`).
+
+Tag rows overlap when a node carries multiple tags — showback, not double-billing. Surfaced as the Chargeback & Showback card on Insights → Performance with grouping tabs, totals strip, and CSV download.
+
+---
+
 ## Deep Intelligence
 
 Wicklee uniquely has hardware telemetry, inference metrics, model identity, and per-request traces in the same DuckDB database. These endpoints leverage that combination:

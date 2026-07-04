@@ -23,11 +23,19 @@ the top of `ROADMAP.md` → Planned (July 2026 strategic review; 16 items,
   owner has time for the Clerk dashboard work (the roadmap item records the
   two options; the code side is trivial).
 - **Phase 2 (reliability): COMPLETE** — tags (6), silences (7), SLOs v1 (5),
-  fleet config management (8). **Next up: Phase 3, cost governance** —
-  showback/chargeback (item 9), idle-waste & right-sizing report (item 10),
-  capacity planner (item 11). The moat: watts AND tokens in one store.
+  fleet config management (8).
+- **Phase 3 (cost governance): 1 of 3** — chargeback/showback v1 (item 9)
+  shipped. **Next up: item 10, idle-waste & right-sizing report** (phantom-
+  load fleet rollup + quant-advisor savings + weekly email digest via the
+  existing Resend path), then item 11 (capacity planner).
 - Phase 3 (cost governance — the moat), Phase 4 (enterprise deployment),
   Phase 5 (AI-native) are specced and waiting.
+- **GTM plan lives in `docs/GTM.md`** (July 2026): ecosystem embedding
+  (HF Space/Dataset, MCP registries, runtime docs, Grafana catalog), the
+  WES-leaderboard data flywheel, partnerships (hardware vendors, MSPs,
+  FinOps), monthly rocks. Six GTM-driven product items added to ROADMAP
+  (demo fleet mode, leaderboard engine, fit badge, MSP console, share
+  links, FOCUS export).
 
 **Deployment notes:** cloud changes go live on the next Railway deploy (all
 migrations are additive and run at startup: audit_log, audit_drains,
@@ -50,6 +58,41 @@ backup branch from the recovery, safe to delete.
 - Pricing/tier facts live across ~9 surfaces (llms.txt, llms-full.txt, docs.md,
   DocsPage.tsx, PricingPage, README, Legal/ToS, Settings upgrade copy, types.ts) —
   they must all move together on any pricing change.
+
+---
+
+## Early July 2026 — Chargeback & showback v1 (Readiness Program, Phase 3 item 9)
+
+Phase 3 (cost governance — the moat) opens with the report finance asks
+for: **$ per million tokens by team, from measured data**. Datadog/Langfuse
+see tokens; DCGM sees watts; only Wicklee has both in one store.
+
+### Design
+- **One shared base CTE** (`CHARGEBACK_BASE`): per-sample energy and token
+  estimates from the 5-min rollup (older than 24h) UNION the raw trailing-
+  day tail — the same retention-hole handling as wes/metrics-history, and
+  the same energy conventions as cost-by-model (30s cadence, watts × hours
+  ÷ 1000) so the two surfaces can never disagree. Tokens ≈ tok/s × covered
+  seconds (sampled-throughput estimate; per-request exact counts are a
+  follow-up when trace shipping lands — stated in the UI footer).
+- **Four groupings from one endpoint** (`GET /api/v1/fleet/chargeback`,
+  Team+, days 1–90, kwh_rate param): by team tag (LATERAL unnest of the
+  comma-separated nodes.tags — multi-tag nodes count under each tag,
+  documented as showback-not-double-billing; untagged → `(untagged)`),
+  by model, by node, and a daily trend; run concurrently via tokio::join.
+  Each row: energy_kwh, cost_usd, tokens_m, `usd_per_mtok`, hours_covered.
+- **Finance CSV**: `&format=csv&group=tag|model|node|daily` — one grouping,
+  `csv_escape`-hardened, `Content-Disposition` download, audited as
+  `chargeback.exported` (consistent with the audit-export precedent).
+
+### UI
+Chargeback & Showback card on Insights → Performance (cloud, Team+ with
+upsell): 7/30/90-day picker, totals strip (cost / kWh / tokens / $ per 1M
+tokens headline), grouping tabs, per-row table, CSV download, and an honest
+footer about estimation and tag overlap.
+
+Verified: cloud `cargo test` 24 green, compile clean, `tsc` clean,
+vitest 80.
 
 ---
 
