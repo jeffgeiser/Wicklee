@@ -6,40 +6,38 @@
 
 ---
 
-## ⇢ Session handoff — current state (2026-07-03)
+## ⇢ Session handoff — current state (2026-07-04)
 
-**Working branch:** `claude/recent-progress-summary-jgw3rd` (ahead of `origin/main`
-@ v0.10.0). All work below is pushed there; **no PR opened yet** and nothing is
-merged to `main`. A fresh session should `git fetch` and check out this branch —
-do NOT restart from `main` or you'll lose the shipped work.
+**Everything below is MERGED to `main`.** PR #29 (audit logging + export/SIEM
+drain, RBAC, org-wide API keys, deployment profiles, pricing fix) and PR #30
+(Phase 2: tags, silences, SLOs) — the working branch
+`claude/recent-progress-summary-jgw3rd` is reset onto `main` after each merge.
+A fresh session starts from `main` / the reset branch as normal.
 
-**Shipped on this branch (all verified — cloud `cargo test` 13, agent
-deployment-profile tests 4/4, `tsc` clean, vitest 80):**
-1. **Audit Logging (Business+)** — cloud backend (`audit_log` table, `audit()`
-   helper, `GET /api/audit-log`, 9 instrumented actions) + `settings/AuditLogSection.tsx`.
-2. **Deployment Profiles** — agent `evaluate_local_observations` tuning
-   (3 levers), `GET/PUT /api/deployment-profile`, config persistence,
-   `settings/DeploymentProfileSection.tsx`.
-3. **`llms-full.txt` pricing fix** — stale table → correct 5-tier.
+**ACTIVE ITERATION FOCUS:** the ★ Business & Enterprise Readiness Program at
+the top of `ROADMAP.md` → Planned (July 2026 strategic review; 16 items,
+5 phases, each with implementation pointers + acceptance criteria).
 
-**Recovery context:** #1 and #2 were originally built in a prior session on a
-stale local `main`, lost when its container was reclaimed, and rebuilt/recovered
-here on the v0.10.0 baseline (see the two July entries below). `origin/claude/recovered-audit-logging`
-is a now-redundant backup branch, safe to delete.
+**Program scoreboard:**
+- **Phase 1 (trust gap): DONE** except item 2 — SSO/SAML is parked until the
+  owner has time for the Clerk dashboard work (the roadmap item records the
+  two options; the code side is trivial).
+- **Phase 2 (reliability): 3 of 4 done** — tags (item 6), silences (item 7),
+  SLOs v1 (item 5). **Next up: item 8, fleet config management** (push
+  deployment profiles cloud→agent per node/tag; agent reports actual profile
+  in MetricsPayload; the natural base for remote-upgrade rings). Touches the
+  agent — remember the `npm run build:agent` prerequisite below.
+- Phase 3 (cost governance — the moat), Phase 4 (enterprise deployment),
+  Phase 5 (AI-native) are specced and waiting.
 
-**Still open (were lost with the same container, NOT yet rebuilt):** the "Team
-intelligence" and "webhook event subscriptions v2" the prior session mentioned
-turned out to already be shipped on `origin/main` (Threshold Webhooks, SLA,
-Thermal Budget) — do **not** rebuild them. Remaining genuinely-open items live in
-`ROADMAP.md` → Planned (largest clusters: the June full-codebase-review MEDIUMs —
-cloud perf/hardening, remaining agent items, frontend; and the Pass-2/3 security
-follow-ups).
+**Deployment notes:** cloud changes go live on the next Railway deploy (all
+migrations are additive and run at startup: audit_log, audit_drains,
+api_keys.org_id, alert_rules.tag, webhook_subscriptions.tag, alert_silences,
+slo_definitions/slo_windows). Agent-side deployment profiles need a release
+tag (currently v0.10.0 → v0.11.0) to reach nodes.
 
-**ACTIVE ITERATION FOCUS:** the ★ Business & Enterprise Readiness Program at the
-top of `ROADMAP.md` → Planned (from the July 2026 Teams/Enterprise strategic
-review). Work Phase 1 in order: RBAC → SSO honesty fix → audit export/SIEM →
-org-wide API keys. Each item carries implementation pointers + acceptance
-criteria. RBAC is in progress on this branch.
+**Cleanup available:** `origin/claude/recovered-audit-logging` is a redundant
+backup branch from the recovery, safe to delete.
 
 **Process lessons (bit us this session):**
 - Push WIP to a *remote* branch before a container idles — ephemeral working
