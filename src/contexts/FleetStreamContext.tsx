@@ -170,9 +170,10 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             const wasLive   = prevLiveRef.current[nodeId];
 
             if (isNowLive && n.metrics) {
-              // Patch display_name into metrics.hostname so downstream consumers
-              // (AIInsights, Overview) always show the custom name when set.
-              const patched = { ...n.metrics, hostname: hostname };
+              // Patch display_name into metrics.hostname (custom name wins) and
+              // carry the node's tags so downstream consumers can tag-filter
+              // without extra fetches.
+              const patched = { ...n.metrics, hostname: hostname, tags: n.tags ?? null };
               updatedMetrics[nodeId] = patched;
             }
 

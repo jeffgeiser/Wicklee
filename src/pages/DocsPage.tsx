@@ -1493,6 +1493,14 @@ WES Version:     2
               When an observation pattern fires or a fleet alert triggers, Wicklee can deliver notifications to external channels. Alerts are configured in Settings → Alerts on the cloud dashboard.
             </p>
 
+            <p className="text-xs text-gray-400 leading-relaxed mt-2">
+              <strong className="text-white">Scoping:</strong> a rule can target the whole fleet, a single node, and/or a <strong className="text-white">tag</strong> — e.g. <code className="text-gray-300 font-mono text-[10px]">env:prod</code> to alert only on production nodes. Tags are comma-separated per node (Settings → Node Configuration, Pro+), matched case- and space-insensitively; the <code className="text-gray-300 font-mono text-[10px]">env:</code> prefix is the environment convention. Threshold webhooks accept the same optional tag scope.
+            </p>
+
+            <p className="text-xs text-gray-400 leading-relaxed mt-2">
+              <strong className="text-white">Silences &amp; maintenance windows (Pro+):</strong> suppress alert rules and threshold webhooks for a duration — by node, tag, and/or event type — so a planned driver upgrade doesn't page everyone. A future start time makes it a scheduled maintenance window. Managed in Settings → Alerts → Silences (<code className="text-gray-300 font-mono text-[10px]">POST/GET/DELETE /api/alerts/silences</code>); org members share silences, and every create/delete is audit-logged.
+            </p>
+
             <p className="text-xs font-bold text-red-400 uppercase tracking-wider mt-4">Notification Channels by Tier</p>
             <div className="overflow-x-auto mt-2">
               <table className="w-full">
@@ -1657,6 +1665,11 @@ WES Version:     2
             <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Inference Profiler</p>
             <p className="text-xs text-gray-400 leading-relaxed">
               <code className="text-gray-300 font-mono text-[10px]">GET /api/profile?minutes=60</code> — A correlated timeline of TTFT, tok/s, KV cache utilization, queue depth, thermal penalty, and power draw on a single time axis. Like Chrome DevTools for inference — see exactly what your hardware was doing at the moment latency spiked. Resolution auto-scales from 1-second raw data (10-minute window) to 60-second buckets (24-hour window). The Performance tab renders this as an interactive multi-series chart with toggleable metrics.
+            </p>
+
+            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">SLOs &amp; Error Budgets <span className="ml-1.5 text-[9px] text-emerald-400 normal-case tracking-normal">Team+</span></p>
+            <p className="text-xs text-gray-400 leading-relaxed mt-1">
+              Declare fleet-level objectives — <em>"p95 TTFT ≤ 500 ms for 99% of 5-minute windows over 30 days"</em> — scoped to the whole fleet, a tag (<code className="text-gray-300 font-mono text-[10px]">env:prod</code>), or a node. The cloud writes one time-slice verdict per SLO every 5 minutes (idle windows aren't counted) and alerts your notification channels once per 50/90/100% error-budget burn crossing. Three v1 metrics: p95 TTFT (≤), median tok/s (≥), median WES (≥). Managed in Settings → SLOs (<code className="text-gray-300 font-mono text-[10px]">POST/GET/DELETE /api/slo</code>); create/delete audited. Per-request percentiles remain on each node's SLA Monitor below.
             </p>
 
             <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Inference SLA Monitor <span className="ml-1.5 text-[9px] text-blue-400 normal-case tracking-normal">Pro</span></p>

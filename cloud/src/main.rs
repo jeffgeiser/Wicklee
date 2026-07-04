@@ -554,6 +554,66 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules(user_id)")
         .execute(pool).await.ok();
+    // Tag scoping: a rule with a tag fires only for nodes bearing that tag
+    // (comma-separated nodes.tags, matched case- and space-insensitively).
+    sqlx::query("ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS tag TEXT")
+        .execute(pool).await.ok();
+
+    // Alert silences & maintenance windows. A silence suppresses matching
+    // alert-rule notifications AND threshold-webhook fires while now is in
+    // [starts_at, ends_at). starts_at in the future = a scheduled
+    // maintenance window. Tenant-scoped: org members share silences.
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS alert_silences (
+            id         TEXT PRIMARY KEY,
+            tenant_id  TEXT NOT NULL,
+            user_id    TEXT NOT NULL,
+            node_id    TEXT,
+            tag        TEXT,
+            event_type TEXT,
+            reason     TEXT NOT NULL DEFAULT '',
+            starts_at  BIGINT NOT NULL,
+            ends_at    BIGINT NOT NULL,
+            created_at BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("alert_silences migration failed");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_silences_tenant ON alert_silences(tenant_id, ends_at)")
+        .execute(pool).await.ok();
+
+    // ── SLOs with error budgets (Team+) ─────────────────────────────────────
+    // An SLO declares "SLI within threshold for target_pct of 5-min windows
+    // over a rolling 30 days." The evaluator writes one slo_windows row per
+    // SLO per 5-min bucket (time-slice SLO — the standard shape), so monthly
+    // compliance survives metrics_raw's 24h retention. last_burn_notified
+    // tracks the highest burn threshold already alerted (0/50/90/100) so
+    // budget alerts fire once per crossing, not every 5 minutes.
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS slo_definitions (
+            id                  TEXT PRIMARY KEY,
+            tenant_id           TEXT NOT NULL,
+            user_id             TEXT NOT NULL,
+            name                TEXT NOT NULL,
+            tag                 TEXT,
+            node_id             TEXT,
+            metric              TEXT NOT NULL,
+            threshold           DOUBLE PRECISION NOT NULL,
+            target_pct          DOUBLE PRECISION NOT NULL,
+            enabled             BOOLEAN NOT NULL DEFAULT true,
+            last_burn_notified  SMALLINT NOT NULL DEFAULT 0,
+            created_at          BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("slo_definitions migration failed");
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS slo_windows (
+            slo_id    TEXT NOT NULL,
+            ts        BIGINT NOT NULL,
+            sli_value DOUBLE PRECISION,
+            ok        BOOLEAN,
+            PRIMARY KEY (slo_id, ts)
+        )
+    ").execute(pool).await.expect("slo_windows migration failed");
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_slo_windows_ts ON slo_windows(slo_id, ts DESC)")
+        .execute(pool).await.ok();
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_alert_rules_channel ON alert_rules(channel_id)")
         .execute(pool).await.ok();
 
@@ -747,6 +807,9 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     ").execute(pool).await.expect("webhook_subscriptions migration failed");
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_webhook_subs_tenant ON webhook_subscriptions(tenant_id, enabled)")
+        .execute(pool).await.ok();
+    // Tag scoping — same semantics as alert_rules.tag.
+    sqlx::query("ALTER TABLE webhook_subscriptions ADD COLUMN IF NOT EXISTS tag TEXT")
         .execute(pool).await.ok();
 
     // Per-(subscription, node) state used to detect transitions and crossings.
@@ -1169,6 +1232,14 @@ fn role_forbidden(required: &str) -> axum::response::Response {
         "error": format!("Your organization role does not permit this action ({required} required)"),
         "role_required": required,
     }))).into_response()
+}
+
+/// Validate a scoping tag for alert rules / webhook subscriptions.
+/// Comma-free (node tags are stored comma-separated) and restricted to a
+/// safe charset so the SQL LIKE match can't be gamed with % wildcards.
+fn valid_scope_tag(tag: &str) -> bool {
+    !tag.is_empty() && tag.len() <= 64
+        && tag.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_' | '.'))
 }
 
 /// Like `require_user_and_org` but also returns the caller's [`OrgRole`].
@@ -4196,6 +4267,9 @@ struct CreateWebhookBody {
     event_type: String,
     /// Optional — when None, fires for any node owned by the user.
     node_id:    Option<String>,
+    /// Optional tag scope — fires only for nodes bearing this tag.
+    #[serde(default)]
+    tag:        Option<String>,
     /// Required for `wes_below` / `wes_above`; ignored for state-changed types.
     threshold:  Option<f32>,
     /// Min seconds between fires for the same (subscription, node) pair.
@@ -4257,6 +4331,13 @@ async fn handle_webhook_create(
         }
     }
 
+    if let Some(ref t) = body.tag {
+        if !valid_scope_tag(t) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+        }
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     // 32-byte HMAC secret, hex-encoded → 64 chars. Returned ONCE on creation.
     let secret_bytes: [u8; 32] = std::array::from_fn(|_| rand::random());
@@ -4265,13 +4346,13 @@ async fn handle_webhook_create(
 
     let _ = sqlx::query(
         "INSERT INTO webhook_subscriptions
-         (id, user_id, tenant_id, url, secret, event_type, node_id, threshold, cooldown_s, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)"
+         (id, user_id, tenant_id, url, secret, event_type, node_id, threshold, cooldown_s, enabled, tag)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10)"
     )
     .bind(&id).bind(&user_id).bind(&tenant_id)
     .bind(&body.url).bind(&secret)
     .bind(&body.event_type).bind(&body.node_id)
-    .bind(body.threshold).bind(cooldown_s)
+    .bind(body.threshold).bind(cooldown_s).bind(&body.tag)
     .execute(&state.pool).await;
 
     audit(&state.pool, &user_id, &org_id, "webhook.created", &id,
@@ -4282,6 +4363,7 @@ async fn handle_webhook_create(
         "url":        body.url,
         "event_type": body.event_type,
         "node_id":    body.node_id,
+        "tag":        body.tag,
         "threshold":  body.threshold,
         "cooldown_s": cooldown_s,
         "secret":     secret,  // shown ONCE — receiver uses for HMAC verification
@@ -4306,19 +4388,20 @@ async fn handle_webhook_list(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let rows: Vec<(String, String, String, Option<String>, Option<f32>, i32, bool, Option<i64>)> = sqlx::query_as(
-        "SELECT id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms
+    let rows: Vec<(String, String, String, Option<String>, Option<f32>, i32, bool, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms, tag
          FROM webhook_subscriptions
          WHERE user_id = $1
          ORDER BY created_at DESC"
     ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let subs: Vec<serde_json::Value> = rows.into_iter().map(|(id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms)| {
+    let subs: Vec<serde_json::Value> = rows.into_iter().map(|(id, url, event_type, node_id, threshold, cooldown_s, enabled, last_fired_ms, tag)| {
         serde_json::json!({
             "id":            id,
             "url":           url,
             "event_type":    event_type,
             "node_id":       node_id,
+            "tag":           tag,
             "threshold":     threshold,
             "cooldown_s":    cooldown_s,
             "enabled":       enabled,
@@ -4828,13 +4911,15 @@ async fn handle_fleet_stream(
     let mut ordered_nodes  = initial_ordered;
     let mut tier           = initial_tier;
     let tval4 = tval_owned.clone();
-    // display_name cache: node_id → custom name (Pro+ feature)
-    let mut display_names: HashMap<String, String> = tokio::task::block_in_place(|| {
+    // Node metadata cache: node_id → (display_name, tags). Both ride the
+    // stream frame so the dashboard can label and tag-filter without extra
+    // fetches; refreshed every 30 ticks alongside the node set.
+    let mut node_meta: HashMap<String, (Option<String>, Option<String>)> = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            sqlx::query_as::<_, (String, String)>(
-                &format!("SELECT wk_id, display_name FROM nodes WHERE {} = $1 AND display_name IS NOT NULL", tc)
+            sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                &format!("SELECT wk_id, display_name, tags FROM nodes WHERE {} = $1 AND (display_name IS NOT NULL OR tags IS NOT NULL)", tc)
             ).bind(&tval4).fetch_all(&pool).await.unwrap_or_default()
-                .into_iter().collect()
+                .into_iter().map(|(id, dn, tg)| (id, (dn, tg))).collect()
         })
     });
     let mut tick: u32 = 0;
@@ -4864,12 +4949,12 @@ async fn handle_fleet_stream(
                     resolve_tier(&uid_ref, &oid_ref, &pool).await
                 })
             });
-            display_names = tokio::task::block_in_place(|| {
+            node_meta = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
-                    sqlx::query_as::<_, (String, String)>(
-                        &format!("SELECT wk_id, display_name FROM nodes WHERE {} = $1 AND display_name IS NOT NULL", tc)
+                    sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+                        &format!("SELECT wk_id, display_name, tags FROM nodes WHERE {} = $1 AND (display_name IS NOT NULL OR tags IS NOT NULL)", tc)
                     ).bind(&tv).fetch_all(&pool).await.unwrap_or_default()
-                        .into_iter().collect()
+                        .into_iter().map(|(id, dn, tg)| (id, (dn, tg))).collect()
                 })
             });
         }
@@ -4893,8 +4978,13 @@ async fn handle_fleet_stream(
                     "metrics":      entry.metrics,
                     "restricted":   restricted_ids.contains(node_id.as_str()),
                 });
-                if let Some(name) = display_names.get(node_id.as_str()) {
-                    obj["display_name"] = serde_json::Value::String(name.clone());
+                if let Some((dn, tg)) = node_meta.get(node_id.as_str()) {
+                    if let Some(name) = dn {
+                        obj["display_name"] = serde_json::Value::String(name.clone());
+                    }
+                    if let Some(tags) = tg {
+                        obj["tags"] = serde_json::Value::String(tags.clone());
+                    }
                 }
                 obj
             })
@@ -6124,6 +6214,7 @@ struct AlertRule {
     channel_id:      String,
     enabled:         bool,
     created_at:      i64,
+    tag:             Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -6140,6 +6231,10 @@ struct CreateRuleRequest {
     threshold_value: Option<f64>,
     urgency:         Option<String>,
     channel_id:      String,
+    /// Optional tag scope — the rule fires only for nodes bearing this tag.
+    /// Composes with node_id (both must match when both are set).
+    #[serde(default)]
+    tag:             Option<String>,
 }
 
 // ── Alerting — notification delivery ─────────────────────────────────────────
@@ -6390,10 +6485,24 @@ async fn evaluate_webhooks(
     let subs: Vec<(String, String, String, String, Option<String>, Option<f32>, i32, Option<i64>)> =
         sqlx::query_as(
             "SELECT id, url, secret, event_type, node_id, threshold, cooldown_s, last_fired_ms
-             FROM webhook_subscriptions
+             FROM webhook_subscriptions ws
              WHERE tenant_id = $1 AND enabled = true
-               AND (node_id IS NULL OR node_id = $2)"
-        ).bind(tenant_id).bind(node_id).fetch_all(pool).await.unwrap_or_default();
+               AND (node_id IS NULL OR node_id = $2)
+               AND (ws.tag IS NULL OR EXISTS(
+                     SELECT 1 FROM nodes n WHERE n.wk_id = $2
+                       AND (',' || replace(lower(COALESCE(n.tags,'')), ' ', '') || ',')
+                           LIKE ('%,' || replace(lower(ws.tag), ' ', '') || ',%')))
+               AND NOT EXISTS(
+                     SELECT 1 FROM alert_silences s
+                     WHERE s.tenant_id = $1
+                       AND $3 >= s.starts_at AND $3 < s.ends_at
+                       AND (s.node_id IS NULL OR s.node_id = $2)
+                       AND (s.event_type IS NULL OR s.event_type = ws.event_type)
+                       AND (s.tag IS NULL OR EXISTS(
+                             SELECT 1 FROM nodes n3 WHERE n3.wk_id = $2
+                               AND (',' || replace(lower(COALESCE(n3.tags,'')), ' ', '') || ',')
+                                   LIKE ('%,' || replace(lower(s.tag), ' ', '') || ',%'))))"
+        ).bind(tenant_id).bind(node_id).bind(now_ms() as i64).fetch_all(pool).await.unwrap_or_default();
 
     if subs.is_empty() { return; }
 
@@ -6597,8 +6706,22 @@ async fn evaluate_alerts(
          JOIN   notification_channels nc ON nc.id = ar.channel_id
          WHERE  ar.user_id  = $1
            AND  ar.enabled  = 1
-           AND  (ar.node_id IS NULL OR ar.node_id = $2)"
-    ).bind(user_id).bind(node_id)
+           AND  (ar.node_id IS NULL OR ar.node_id = $2)
+           AND  (ar.tag IS NULL OR EXISTS(
+                  SELECT 1 FROM nodes n WHERE n.wk_id = $2
+                    AND (',' || replace(lower(COALESCE(n.tags,'')), ' ', '') || ',')
+                        LIKE ('%,' || replace(lower(ar.tag), ' ', '') || ',%')))
+           AND  NOT EXISTS(
+                  SELECT 1 FROM alert_silences s
+                  WHERE s.tenant_id = (SELECT COALESCE(n2.org_id, n2.user_id) FROM nodes n2 WHERE n2.wk_id = $2)
+                    AND $3 >= s.starts_at AND $3 < s.ends_at
+                    AND (s.node_id IS NULL OR s.node_id = $2)
+                    AND (s.event_type IS NULL OR s.event_type = ar.event_type)
+                    AND (s.tag IS NULL OR EXISTS(
+                          SELECT 1 FROM nodes n3 WHERE n3.wk_id = $2
+                            AND (',' || replace(lower(COALESCE(n3.tags,'')), ' ', '') || ',')
+                                LIKE ('%,' || replace(lower(s.tag), ' ', '') || ',%'))))"
+    ).bind(user_id).bind(node_id).bind(now_ms() as i64)
     .fetch_all(pool).await.unwrap_or_default();
 
     let now = now_ms();
@@ -7916,25 +8039,32 @@ async fn handle_create_rule(
             Json(serde_json::json!({ "error": "Alerting requires Team tier or channel not found" }))).into_response();
     }
 
+    if let Some(ref t) = body.tag {
+        if !valid_scope_tag(t) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+        }
+    }
+
     let id      = Uuid::new_v4().to_string();
     let urgency = body.urgency.as_deref().unwrap_or("immediate").to_string();
     let ts      = now_ms() as i64;
 
     let result = sqlx::query(
-        "INSERT INTO alert_rules (id, user_id, node_id, event_type, threshold_value, urgency, channel_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+        "INSERT INTO alert_rules (id, user_id, node_id, event_type, threshold_value, urgency, channel_id, created_at, tag)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
     ).bind(&id).bind(&user_id).bind(&body.node_id).bind(&body.event_type)
-    .bind(body.threshold_value).bind(&urgency).bind(&body.channel_id).bind(ts)
+    .bind(body.threshold_value).bind(&urgency).bind(&body.channel_id).bind(ts).bind(&body.tag)
     .execute(&state.pool).await;
 
     match result {
         Ok(_) => {
             audit(&state.pool, &user_id, &org_id, "alert_rule.created", &id,
-                serde_json::json!({ "event_type": &body.event_type, "node_id": &body.node_id, "urgency": &urgency }));
+                serde_json::json!({ "event_type": &body.event_type, "node_id": &body.node_id, "urgency": &urgency, "tag": &body.tag }));
             (StatusCode::CREATED, Json(AlertRule {
                 id, node_id: body.node_id, event_type: body.event_type,
                 threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
-                enabled: true, created_at: ts,
+                enabled: true, created_at: ts, tag: body.tag,
             })).into_response()
         }
         Err(e) => { eprintln!("[alerts] rule insert failed: {e}");
@@ -7960,14 +8090,14 @@ async fn handle_list_rules(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let rows: Vec<(String, Option<String>, String, Option<f64>, String, String, i32, i64)> = sqlx::query_as(
-        "SELECT id, node_id, event_type, threshold_value, urgency, channel_id, enabled, created_at
+    let rows: Vec<(String, Option<String>, String, Option<f64>, String, String, i32, i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, node_id, event_type, threshold_value, urgency, channel_id, enabled, created_at, tag
          FROM alert_rules WHERE user_id = $1 ORDER BY created_at DESC"
     ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let rules: Vec<AlertRule> = rows.into_iter().map(|(id, nid, et, tv, u, cid, en, ca)| {
+    let rules: Vec<AlertRule> = rows.into_iter().map(|(id, nid, et, tv, u, cid, en, ca, tag)| {
         AlertRule { id, node_id: nid, event_type: et, threshold_value: tv, urgency: u,
-            channel_id: cid, enabled: en != 0, created_at: ca }
+            channel_id: cid, enabled: en != 0, created_at: ca, tag }
     }).collect();
 
     Json(serde_json::json!({ "rules": rules })).into_response()
@@ -8000,6 +8130,492 @@ async fn handle_delete_rule(
         Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Rule not found" }))).into_response(),
         Err(e) => { eprintln!("[alerts] rule delete failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
+    }
+}
+
+// ── Alert silences & maintenance windows ─────────────────────────────────────
+
+/// Event types a silence may target — the union of the alert-rule and
+/// threshold-webhook vocabularies (a silence suppresses both systems).
+const SILENCEABLE_EVENTS: &[&str] = &[
+    "thermal_serious", "thermal_critical", "memory_pressure_high", "wes_drop", "node_offline",
+    "ttft_regression", "throughput_low",
+    "thermal_state_changed", "inference_state_changed", "wes_below", "wes_above",
+];
+
+/// Longest allowed silence: 30 days. Anything longer is "delete the rule."
+const MAX_SILENCE_MIN: i64 = 30 * 24 * 60;
+
+#[derive(Deserialize)]
+struct CreateSilenceBody {
+    /// NULL = all nodes.
+    node_id:      Option<String>,
+    /// NULL = no tag filter; otherwise nodes bearing this tag.
+    tag:          Option<String>,
+    /// NULL = all event types; otherwise one of SILENCEABLE_EVENTS.
+    event_type:   Option<String>,
+    #[serde(default)]
+    reason:       Option<String>,
+    /// Unix ms. Omitted = starts now. Future = scheduled maintenance window.
+    starts_at:    Option<i64>,
+    duration_min: i64,
+}
+
+/// POST /api/alerts/silences (Pro+, Member+) — create a silence or a
+/// scheduled maintenance window.
+async fn handle_create_silence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateSilenceBody>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.can_mutate() { return role_forbidden("member"); }
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_pro_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "Alert silences require Pro tier or above" }))).into_response();
+    }
+
+    if body.duration_min < 1 || body.duration_min > MAX_SILENCE_MIN {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "duration_min must be 1..43200 (30 days)" }))).into_response();
+    }
+    if let Some(ref t) = body.tag {
+        if !valid_scope_tag(t) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+        }
+    }
+    if let Some(ref et) = body.event_type {
+        if !SILENCEABLE_EVENTS.contains(&et.as_str()) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("event_type must be one of: {}", SILENCEABLE_EVENTS.join(", ")) }))).into_response();
+        }
+    }
+    let now = now_ms() as i64;
+    let starts_at = body.starts_at.unwrap_or(now).max(now - 60_000); // small clock-skew grace
+    if starts_at > now + 90 * 24 * 3_600_000 {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "starts_at must be within 90 days" }))).into_response();
+    }
+    let ends_at = starts_at + body.duration_min * 60_000;
+    let reason: String = body.reason.unwrap_or_default().chars().take(200).collect();
+
+    let id = Uuid::new_v4().to_string();
+    let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
+    let result = sqlx::query(
+        "INSERT INTO alert_silences (id, tenant_id, user_id, node_id, tag, event_type, reason, starts_at, ends_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+    ).bind(&id).bind(&tenant_id).bind(&user_id)
+    .bind(&body.node_id).bind(&body.tag).bind(&body.event_type).bind(&reason)
+    .bind(starts_at).bind(ends_at).bind(now)
+    .execute(&state.pool).await;
+
+    match result {
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "alert_silence.created", &id,
+                serde_json::json!({ "node_id": &body.node_id, "tag": &body.tag,
+                    "event_type": &body.event_type, "reason": &reason,
+                    "starts_at": starts_at, "ends_at": ends_at }));
+            (StatusCode::CREATED, Json(serde_json::json!({
+                "id": id, "node_id": body.node_id, "tag": body.tag,
+                "event_type": body.event_type, "reason": reason,
+                "starts_at": starts_at, "ends_at": ends_at,
+            }))).into_response()
+        }
+        Err(e) => { eprintln!("[silences] insert failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() }
+    }
+}
+
+/// GET /api/alerts/silences — active + upcoming silences for the tenant
+/// (expired ones age out of the list; the table keeps them for the record).
+async fn handle_list_silences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let now = now_ms() as i64;
+    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, node_id, tag, event_type, reason, starts_at, ends_at, created_at
+         FROM alert_silences WHERE tenant_id = $1 AND ends_at > $2
+         ORDER BY starts_at ASC"
+    ).bind(tval).bind(now).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let silences: Vec<serde_json::Value> = rows.into_iter()
+        .map(|(id, node_id, tag, event_type, reason, starts_at, ends_at, created_at)| serde_json::json!({
+            "id": id, "node_id": node_id, "tag": tag, "event_type": event_type,
+            "reason": reason, "starts_at": starts_at, "ends_at": ends_at,
+            "created_at": created_at, "active": starts_at <= now,
+        })).collect();
+
+    Json(serde_json::json!({ "silences": silences })).into_response()
+}
+
+/// DELETE /api/alerts/silences/:id — end a silence early (Member+).
+async fn handle_delete_silence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(silence_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.can_mutate() { return role_forbidden("member"); }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let result = sqlx::query("DELETE FROM alert_silences WHERE id = $1 AND tenant_id = $2")
+        .bind(&silence_id).bind(tval).execute(&state.pool).await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => {
+            audit(&state.pool, &user_id, &org_id, "alert_silence.deleted", &silence_id,
+                serde_json::json!({}));
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Silence not found" }))).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response(),
+    }
+}
+
+// ── SLOs with error budgets (Team+) ──────────────────────────────────────────
+
+/// The three SLIs computable from cloud-side metrics_raw samples — latency,
+/// throughput, efficiency. (Per-request percentiles live agent-side in
+/// inference_traces; these are sampled-telemetry SLIs, documented as such.)
+const SLO_METRICS: &[&str] = &["ttft_p95_ms", "tok_s_p50", "wes_p50"];
+
+/// Direction of goodness per metric: TTFT is "at most", the rest "at least".
+fn sli_ok(metric: &str, sli: f64, threshold: f64) -> bool {
+    match metric {
+        "ttft_p95_ms" => sli <= threshold,
+        _             => sli >= threshold,
+    }
+}
+
+/// Aggregate expression + sample filter per metric. tok_s/wes filter to >0 —
+/// idle samples measure nothing being served and must not violate an SLO.
+fn slo_metric_sql(metric: &str) -> (&'static str, &'static str) {
+    match metric {
+        "ttft_p95_ms" => ("percentile_cont(0.95) WITHIN GROUP (ORDER BY m.ttft_ms)",
+                          "m.ttft_ms IS NOT NULL"),
+        "tok_s_p50"   => ("percentile_cont(0.5) WITHIN GROUP (ORDER BY m.tok_s)",
+                          "m.tok_s IS NOT NULL AND m.tok_s > 0"),
+        _             => ("percentile_cont(0.5) WITHIN GROUP (ORDER BY m.wes_penalized)",
+                          "m.wes_penalized IS NOT NULL AND m.wes_penalized > 0"),
+    }
+}
+
+/// SLO evaluation window size (ms). Time-slice SLO: one verdict per bucket.
+const SLO_WINDOW_MS: i64 = 300_000;
+/// Rolling budget horizon: 30 days.
+const SLO_BUDGET_MS: i64 = 30 * 24 * 3_600_000;
+const MAX_SLOS_PER_TENANT: i64 = 20;
+
+#[derive(Deserialize)]
+struct CreateSloBody {
+    name:       String,
+    #[serde(default)]
+    tag:        Option<String>,
+    #[serde(default)]
+    node_id:    Option<String>,
+    metric:     String,
+    threshold:  f64,
+    target_pct: f64,
+}
+
+/// POST /api/slo (Team+, Member+) — define an SLO.
+async fn handle_create_slo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateSloBody>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.can_mutate() { return role_forbidden("member"); }
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_team_or_above(&tier) {
+        return (StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({ "error": "SLOs require Team tier or above" }))).into_response();
+    }
+
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "name must be 1-64 chars" }))).into_response();
+    }
+    if !SLO_METRICS.contains(&body.metric.as_str()) {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("metric must be one of: {}", SLO_METRICS.join(", ")) }))).into_response();
+    }
+    if !(body.threshold > 0.0 && body.threshold.is_finite()) {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "threshold must be > 0" }))).into_response();
+    }
+    if !(50.0..=99.99).contains(&body.target_pct) {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "target_pct must be 50..99.99" }))).into_response();
+    }
+    if let Some(ref t) = body.tag {
+        if !valid_scope_tag(t) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
+        }
+    }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM slo_definitions WHERE tenant_id = $1")
+        .bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
+    if count >= MAX_SLOS_PER_TENANT {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("SLO limit reached ({MAX_SLOS_PER_TENANT} per fleet)") }))).into_response();
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let result = sqlx::query(
+        "INSERT INTO slo_definitions (id, tenant_id, user_id, name, tag, node_id, metric, threshold, target_pct, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+    ).bind(&id).bind(tval).bind(&user_id).bind(name)
+    .bind(&body.tag).bind(&body.node_id).bind(&body.metric)
+    .bind(body.threshold).bind(body.target_pct).bind(now_ms() as i64)
+    .execute(&state.pool).await;
+
+    match result {
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "slo.created", &id,
+                serde_json::json!({ "name": name, "metric": &body.metric,
+                    "threshold": body.threshold, "target_pct": body.target_pct,
+                    "tag": &body.tag, "node_id": &body.node_id }));
+            (StatusCode::CREATED, Json(serde_json::json!({
+                "id": id, "name": name, "metric": body.metric,
+                "threshold": body.threshold, "target_pct": body.target_pct,
+                "tag": body.tag, "node_id": body.node_id, "enabled": true,
+            }))).into_response()
+        }
+        Err(e) => { eprintln!("[slo] insert failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response() }
+    }
+}
+
+/// GET /api/slo — definitions with live budget status: 30d compliance,
+/// error-budget burn, and the most recent SLI window.
+async fn handle_list_slos(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_team_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "SLOs require Team tier or above", "upgrade": true }))).into_response();
+    }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let defs: Vec<(String, String, Option<String>, Option<String>, String, f64, f64, bool, i64)> = sqlx::query_as(
+        "SELECT id, name, tag, node_id, metric, threshold, target_pct, enabled, created_at
+         FROM slo_definitions WHERE tenant_id = $1 ORDER BY created_at ASC"
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
+
+    let budget_cutoff = now_ms() as i64 - SLO_BUDGET_MS;
+    let mut out = Vec::with_capacity(defs.len());
+    for (id, name, tag, node_id, metric, threshold, target_pct, enabled, created_at) in defs {
+        let (total, bad): (i64, i64) = sqlx::query_as(
+            "SELECT COUNT(*) FILTER (WHERE ok IS NOT NULL), COUNT(*) FILTER (WHERE ok = false)
+             FROM slo_windows WHERE slo_id = $1 AND ts > $2"
+        ).bind(&id).bind(budget_cutoff).fetch_one(&state.pool).await.unwrap_or((0, 0));
+        let latest: Option<(i64, Option<f64>, Option<bool>)> = sqlx::query_as(
+            "SELECT ts, sli_value, ok FROM slo_windows WHERE slo_id = $1 ORDER BY ts DESC LIMIT 1"
+        ).bind(&id).fetch_optional(&state.pool).await.ok().flatten();
+
+        let allowed = total as f64 * (1.0 - target_pct / 100.0);
+        let burn_pct = if allowed > 0.0 { (bad as f64 / allowed) * 100.0 }
+                       else if bad > 0 { 200.0 } else { 0.0 };
+        let compliance_pct = if total > 0 { (total - bad) as f64 / total as f64 * 100.0 } else { 100.0 };
+
+        out.push(serde_json::json!({
+            "id": id, "name": name, "tag": tag, "node_id": node_id,
+            "metric": metric, "threshold": threshold, "target_pct": target_pct,
+            "enabled": enabled, "created_at": created_at,
+            "windows_30d": total, "bad_30d": bad,
+            "compliance_pct": compliance_pct, "burn_pct": burn_pct,
+            "latest": latest.map(|(ts, sli, ok)| serde_json::json!({ "ts": ts, "sli": sli, "ok": ok })),
+        }));
+    }
+
+    Json(serde_json::json!({ "slos": out })).into_response()
+}
+
+/// DELETE /api/slo/:id (Member+) — remove an SLO and its window history.
+async fn handle_delete_slo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slo_id): Path<String>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.can_mutate() { return role_forbidden("member"); }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let result = sqlx::query("DELETE FROM slo_definitions WHERE id = $1 AND tenant_id = $2")
+        .bind(&slo_id).bind(tval).execute(&state.pool).await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => {
+            let _ = sqlx::query("DELETE FROM slo_windows WHERE slo_id = $1")
+                .bind(&slo_id).execute(&state.pool).await;
+            audit(&state.pool, &user_id, &org_id, "slo.deleted", &slo_id, serde_json::json!({}));
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "SLO not found" }))).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" }))).into_response(),
+    }
+}
+
+/// SLO evaluator — every 5 minutes, writes one time-slice verdict per enabled
+/// SLO for the just-completed window, then checks error-budget burn and fires
+/// one notification per threshold crossing (50/90/100%) to the SLO creator's
+/// channels. Tier re-checked at evaluation so downgraded tenants stop burning
+/// evaluation cycles.
+async fn slo_evaluator_task(pool: sqlx::PgPool) {
+    let mut interval = tokio::time::interval(Duration::from_secs(300));
+    loop {
+        interval.tick().await;
+        let now = now_ms() as i64;
+        let window_end   = (now / SLO_WINDOW_MS) * SLO_WINDOW_MS;
+        let window_start = window_end - SLO_WINDOW_MS;
+
+        let defs: Vec<(String, String, String, String, Option<String>, Option<String>, String, f64, f64, i16)> = sqlx::query_as(
+            "SELECT id, tenant_id, user_id, name, tag, node_id, metric, threshold, target_pct, last_burn_notified
+             FROM slo_definitions WHERE enabled = true"
+        ).fetch_all(&pool).await.unwrap_or_default();
+
+        for (id, tenant_id, user_id, name, tag, node_id, metric, threshold, target_pct, last_notified) in defs {
+            let org_id = if tenant_id != user_id { Some(tenant_id.clone()) } else { None };
+            let tier = resolve_tier(&user_id, &org_id, &pool).await;
+            if !is_team_or_above(&tier) { continue; }
+
+            // ── Compute the SLI for the just-completed window ──
+            let (agg, filter) = slo_metric_sql(&metric);
+            let sql = format!(
+                "SELECT ({agg})::float8 FROM metrics_raw m
+                 WHERE m.tenant_id = $1
+                   AND m.ts >= to_timestamp($2::float8 / 1000.0)
+                   AND m.ts <  to_timestamp($3::float8 / 1000.0)
+                   AND {filter}
+                   AND ($4::text IS NULL OR m.node_id = $4)
+                   AND ($5::text IS NULL OR EXISTS(
+                         SELECT 1 FROM nodes n WHERE n.wk_id = m.node_id
+                           AND (',' || replace(lower(COALESCE(n.tags,'')), ' ', '') || ',')
+                               LIKE ('%,' || replace(lower($5), ' ', '') || ',%')))");
+            let sli: Option<f64> = sqlx::query_scalar(&sql)
+                .bind(&tenant_id).bind(window_start).bind(window_end)
+                .bind(&node_id).bind(&tag)
+                .fetch_one(&pool).await.ok().flatten();
+            let ok = sli.map(|v| sli_ok(&metric, v, threshold));
+
+            let _ = sqlx::query(
+                "INSERT INTO slo_windows (slo_id, ts, sli_value, ok) VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (slo_id, ts) DO NOTHING"
+            ).bind(&id).bind(window_end).bind(sli).bind(ok)
+            .execute(&pool).await;
+
+            // ── Error-budget burn check (rolling 30d) ──
+            let (total, bad): (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*) FILTER (WHERE ok IS NOT NULL), COUNT(*) FILTER (WHERE ok = false)
+                 FROM slo_windows WHERE slo_id = $1 AND ts > $2"
+            ).bind(&id).bind(now - SLO_BUDGET_MS).fetch_one(&pool).await.unwrap_or((0, 0));
+            let allowed = total as f64 * (1.0 - target_pct / 100.0);
+            let burn = if allowed > 0.0 { (bad as f64 / allowed) * 100.0 }
+                       else if bad > 0 { 200.0 } else { 0.0 };
+
+            let level: i16 = if burn >= 100.0 { 100 } else if burn >= 90.0 { 90 } else if burn >= 50.0 { 50 } else { 0 };
+            if level > last_notified {
+                let scope = node_id.clone()
+                    .or_else(|| tag.clone().map(|t| format!("tag {t}")))
+                    .unwrap_or_else(|| "fleet".into());
+                let detail = format!(
+                    "SLO \"{name}\": error budget {burn:.0}% consumed — {bad} bad of {allowed:.0} allowed 5-min windows in the last 30 days ({metric} vs {threshold}, target {target_pct}%).");
+                let channels: Vec<(String, String)> = sqlx::query_as(
+                    "SELECT channel_type, config_json::text FROM notification_channels WHERE user_id = $1"
+                ).bind(&user_id).fetch_all(&pool).await.unwrap_or_default();
+                for (ct, cj) in channels {
+                    let (ni, dt) = (scope.clone(), detail.clone());
+                    tokio::task::spawn_blocking(move || { deliver_alert(&ct, &cj, &ni, "slo_budget_burn", &dt, false); });
+                }
+                eprintln!("[slo] budget burn {burn:.0}% on \"{name}\" (level {level})");
+            }
+            // Persist the level (also resets to 0 once burn recovers below 25%
+            // as the rolling window ages bad slices out).
+            let new_level: i16 = if burn < 25.0 { 0 } else { level.max(last_notified) };
+            if new_level != last_notified {
+                let _ = sqlx::query("UPDATE slo_definitions SET last_burn_notified = $1 WHERE id = $2")
+                    .bind(new_level).bind(&id).execute(&pool).await;
+            }
+        }
     }
 }
 
@@ -8995,6 +9611,7 @@ async fn main() {
     tokio::spawn(fleet_alert_evaluator_task(state.clone()));
     tokio::spawn(wes_long_term_drift_evaluator_task(state.clone()));
     tokio::spawn(audit_drain_task(pool.clone()));
+    tokio::spawn(slo_evaluator_task(pool.clone()));
     tokio::spawn(otel_exporter_task(state.clone()));
 
     // Refresh JWKS every 6 hours.
@@ -9059,6 +9676,10 @@ async fn main() {
         .route("/api/alerts/rules",             post(handle_create_rule))
         .route("/api/alerts/rules",             get(handle_list_rules))
         .route("/api/alerts/rules/:id",         delete(handle_delete_rule))
+        .route("/api/alerts/silences",          post(handle_create_silence).get(handle_list_silences))
+        .route("/api/alerts/silences/:id",      delete(handle_delete_silence))
+        .route("/api/slo",                      post(handle_create_slo).get(handle_list_slos))
+        .route("/api/slo/:id",                  delete(handle_delete_slo))
         .route("/api/nodes/:node_id",    patch(handle_update_node))
         .route("/api/billing/config",    get(handle_billing_config))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
@@ -9134,6 +9755,59 @@ mod fit_wrapper_tests {
         let (score, label) = cloud_fit_score(-1, 24_576, 0.0, "Normal");
         // 0-byte clamp -> 512 MB floor still "fits"; just must not panic.
         assert!(score > 0, "{label}");
+    }
+}
+
+#[cfg(test)]
+mod slo_tests {
+    use super::*;
+
+    #[test]
+    fn sli_direction_per_metric() {
+        // TTFT: lower is better — at or under threshold passes.
+        assert!(sli_ok("ttft_p95_ms", 450.0, 500.0));
+        assert!(sli_ok("ttft_p95_ms", 500.0, 500.0));
+        assert!(!sli_ok("ttft_p95_ms", 501.0, 500.0));
+        // Throughput / efficiency: higher is better.
+        assert!(sli_ok("tok_s_p50", 25.0, 20.0));
+        assert!(!sli_ok("tok_s_p50", 19.9, 20.0));
+        assert!(sli_ok("wes_p50", 8.0, 8.0));
+        assert!(!sli_ok("wes_p50", 7.9, 8.0));
+    }
+
+    #[test]
+    fn every_metric_has_sql_and_appears_in_the_valid_set() {
+        for m in SLO_METRICS {
+            let (agg, filter) = slo_metric_sql(m);
+            assert!(agg.contains("percentile_cont"), "{m} aggregate");
+            assert!(filter.contains("IS NOT NULL"), "{m} filter");
+        }
+        // Creation validates membership, so unknown metric strings can't
+        // reach slo_metric_sql's fallback arm at runtime.
+        assert_eq!(SLO_METRICS.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod scope_tag_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_conventional_tags() {
+        assert!(valid_scope_tag("env:prod"));
+        assert!(valid_scope_tag("gpu"));
+        assert!(valid_scope_tag("rack-2.us-east_1"));
+    }
+
+    #[test]
+    fn rejects_commas_wildcards_and_empties() {
+        // Commas would collide with the comma-separated nodes.tags storage;
+        // % could game the SQL LIKE match; empty/oversized are nonsense.
+        assert!(!valid_scope_tag(""));
+        assert!(!valid_scope_tag("a,b"));
+        assert!(!valid_scope_tag("100%"));
+        assert!(!valid_scope_tag("has space"));
+        assert!(!valid_scope_tag(&"x".repeat(65)));
     }
 }
 

@@ -6,40 +6,38 @@
 
 ---
 
-## ⇢ Session handoff — current state (2026-07-03)
+## ⇢ Session handoff — current state (2026-07-04)
 
-**Working branch:** `claude/recent-progress-summary-jgw3rd` (ahead of `origin/main`
-@ v0.10.0). All work below is pushed there; **no PR opened yet** and nothing is
-merged to `main`. A fresh session should `git fetch` and check out this branch —
-do NOT restart from `main` or you'll lose the shipped work.
+**Everything below is MERGED to `main`.** PR #29 (audit logging + export/SIEM
+drain, RBAC, org-wide API keys, deployment profiles, pricing fix) and PR #30
+(Phase 2: tags, silences, SLOs) — the working branch
+`claude/recent-progress-summary-jgw3rd` is reset onto `main` after each merge.
+A fresh session starts from `main` / the reset branch as normal.
 
-**Shipped on this branch (all verified — cloud `cargo test` 13, agent
-deployment-profile tests 4/4, `tsc` clean, vitest 80):**
-1. **Audit Logging (Business+)** — cloud backend (`audit_log` table, `audit()`
-   helper, `GET /api/audit-log`, 9 instrumented actions) + `settings/AuditLogSection.tsx`.
-2. **Deployment Profiles** — agent `evaluate_local_observations` tuning
-   (3 levers), `GET/PUT /api/deployment-profile`, config persistence,
-   `settings/DeploymentProfileSection.tsx`.
-3. **`llms-full.txt` pricing fix** — stale table → correct 5-tier.
+**ACTIVE ITERATION FOCUS:** the ★ Business & Enterprise Readiness Program at
+the top of `ROADMAP.md` → Planned (July 2026 strategic review; 16 items,
+5 phases, each with implementation pointers + acceptance criteria).
 
-**Recovery context:** #1 and #2 were originally built in a prior session on a
-stale local `main`, lost when its container was reclaimed, and rebuilt/recovered
-here on the v0.10.0 baseline (see the two July entries below). `origin/claude/recovered-audit-logging`
-is a now-redundant backup branch, safe to delete.
+**Program scoreboard:**
+- **Phase 1 (trust gap): DONE** except item 2 — SSO/SAML is parked until the
+  owner has time for the Clerk dashboard work (the roadmap item records the
+  two options; the code side is trivial).
+- **Phase 2 (reliability): 3 of 4 done** — tags (item 6), silences (item 7),
+  SLOs v1 (item 5). **Next up: item 8, fleet config management** (push
+  deployment profiles cloud→agent per node/tag; agent reports actual profile
+  in MetricsPayload; the natural base for remote-upgrade rings). Touches the
+  agent — remember the `npm run build:agent` prerequisite below.
+- Phase 3 (cost governance — the moat), Phase 4 (enterprise deployment),
+  Phase 5 (AI-native) are specced and waiting.
 
-**Still open (were lost with the same container, NOT yet rebuilt):** the "Team
-intelligence" and "webhook event subscriptions v2" the prior session mentioned
-turned out to already be shipped on `origin/main` (Threshold Webhooks, SLA,
-Thermal Budget) — do **not** rebuild them. Remaining genuinely-open items live in
-`ROADMAP.md` → Planned (largest clusters: the June full-codebase-review MEDIUMs —
-cloud perf/hardening, remaining agent items, frontend; and the Pass-2/3 security
-follow-ups).
+**Deployment notes:** cloud changes go live on the next Railway deploy (all
+migrations are additive and run at startup: audit_log, audit_drains,
+api_keys.org_id, alert_rules.tag, webhook_subscriptions.tag, alert_silences,
+slo_definitions/slo_windows). Agent-side deployment profiles need a release
+tag (currently v0.10.0 → v0.11.0) to reach nodes.
 
-**ACTIVE ITERATION FOCUS:** the ★ Business & Enterprise Readiness Program at the
-top of `ROADMAP.md` → Planned (from the July 2026 Teams/Enterprise strategic
-review). Work Phase 1 in order: RBAC → SSO honesty fix → audit export/SIEM →
-org-wide API keys. Each item carries implementation pointers + acceptance
-criteria. RBAC is in progress on this branch.
+**Cleanup available:** `origin/claude/recovered-audit-logging` is a redundant
+backup branch from the recovery, safe to delete.
 
 **Process lessons (bit us this session):**
 - Push WIP to a *remote* branch before a container idles — ephemeral working
@@ -53,6 +51,145 @@ criteria. RBAC is in progress on this branch.
 - Pricing/tier facts live across ~9 surfaces (llms.txt, llms-full.txt, docs.md,
   DocsPage.tsx, PricingPage, README, Legal/ToS, Settings upgrade copy, types.ts) —
   they must all move together on any pricing change.
+
+---
+
+## Early July 2026 — SLOs with error budgets v1 (Readiness Program, Phase 2 item 5)
+
+The Phase-2 headliner: *"our internal inference API met SLO 99.2% of the
+month"* is now a sentence Wicklee can produce.
+
+### The architectural constraint that shaped everything
+Per-request `inference_traces` live agent-side in DuckDB and are never
+shipped to the cloud; cloud-side, TTFT survives only in `metrics_raw`
+(1 Hz samples, 24h retention — the 5-min rollup doesn't carry it). So
+monthly percentiles over raw data are impossible cloud-side. The answer is
+the standard one: **time-slice SLOs**. The evaluator writes one verdict per
+SLO per 5-minute window into `slo_windows`; compliance = good windows /
+counted windows over a rolling 30 days. Verdict rows are tiny and persist
+independently of raw-telemetry retention.
+
+### What shipped
+- **Definitions** (`slo_definitions`, Team+, ≤20/fleet): name, metric,
+  threshold, target_pct (50–99.99), optional tag / node scope (tag matching
+  reuses the item-6 predicate). Three v1 SLIs from `metrics_raw` via
+  `percentile_cont`, filtered to active-inference samples: `ttft_p95_ms`
+  (≤), `tok_s_p50` (≥), `wes_p50` (≥) — latency, throughput, efficiency.
+  Idle windows yield NULL SLI and are **not counted against the budget** (a
+  fleet that served nothing overnight didn't violate its latency SLO).
+- **Evaluator** (`slo_evaluator_task`, 5-min loop): computes the SLI for
+  the just-completed aligned window, writes idempotently (`ON CONFLICT DO
+  NOTHING` — restarts can't double-count), re-checks tier per SLO so
+  downgraded tenants stop evaluating.
+- **Error-budget burn alerts**: rolling 30d — allowed bad windows = total ×
+  (1 − target); burn = bad/allowed. Fires `slo_budget_burn` through the
+  existing `deliver_alert` channel fan-out (Slack/email/PagerDuty) to the
+  SLO creator's channels, **once per crossing** of 50/90/100% via a
+  `last_burn_notified` latch that resets when burn recovers below 25% as
+  the rolling window ages bad slices out.
+- **API**: `POST/GET/DELETE /api/slo` — Team+, Member+ RBAC, audited
+  (`slo.created`/`slo.deleted`). GET returns each definition with live
+  status: 30d compliance %, burn %, bad/total windows, latest window SLI.
+- **UI**: Settings → SLOs & Error Budgets — create form (objective picker
+  with ≤/≥ semantics per metric, target presets 95–99.9%, tag/node scope),
+  per-SLO card with compliance %, color-banded budget-burn bar, latest
+  window verdict, and an honest footer: SLIs are sampled-telemetry, not
+  per-request — per-request percentiles remain on each node's SLA Monitor.
+- Unit tests: SLI direction table (≤ for TTFT, ≥ for the rest, boundary
+  inclusive) + metric registry completeness. 24 cloud tests green.
+
+### Deferred (recorded on the roadmap item)
+Monthly SLO report (email + endpoint), per-request-trace SLIs (needs trace
+shipping — the Fleet SLA Aggregation item), dashboard SLO cards outside
+Settings.
+
+Verified: cloud `cargo test` 24 green (2 new), compile clean first try,
+`tsc` clean, vitest 80.
+
+---
+
+## Early July 2026 — Alert silences & maintenance windows (Readiness Program, Phase 2 item 7)
+
+The "planned GPU driver upgrade paged everyone" fix, built directly on the
+tags substrate from item 6.
+
+### Design
+- **One table covers both concepts**: `alert_silences` (tenant-scoped — org
+  members share) with `starts_at`/`ends_at`. A silence starting now is a
+  silence; a future `starts_at` is a scheduled maintenance window. Same
+  storage, same matching, same UI list.
+- **Suppression lives in the evaluator queries**, not post-hoc: both
+  `evaluate_alerts` and `evaluate_webhooks` gained a `NOT EXISTS` predicate
+  on the telemetry hot path, so silenced conditions simply never fire —
+  no notification to dedupe, no cooldown interaction. The alerts evaluator
+  resolves the node's tenant via `COALESCE(nodes.org_id, nodes.user_id)`
+  (rules are per-user but silences are shared); the webhook evaluator is
+  already tenant-keyed.
+- **Match dimensions compose**: node_id, tag (same case/space-insensitive
+  membership match as scoping, same `valid_scope_tag` validation), and
+  event_type (NULL = all; vocabulary = `SILENCEABLE_EVENTS`, the union of
+  the alert-rule and threshold-webhook event types — one silence mutes both
+  systems).
+- CRUD: `POST/GET/DELETE /api/alerts/silences` — Pro+ tier, Member+ (RBAC),
+  duration clamped 1min–30d, `starts_at` ≤90d out with a 60s clock-skew
+  grace, reason ≤200 chars. List returns active + upcoming with an `active`
+  flag (expired rows age out of the list, stay in the table). Creation and
+  deletion are audit-logged (`alert_silence.created/deleted`).
+
+### UI
+Settings → Alerts gained a Silences block: create form (duration presets
+30m–7d, node scope, tag scope, event type, optional future start via
+datetime-local, reason) and a list with Silencing/Scheduled badges,
+scope · window summary, and end-early/cancel.
+
+### Known gap (recorded on the roadmap item)
+The fleet-alert evaluator (zombied_engine etc.) and the node-offline
+notification path don't yet honor silences — custom alert rules and
+threshold webhooks do. Escalation policies (the item's third phase) need an
+ack model, so they slot after SLOs; the fleet-path silencing folds in then.
+
+Verified: cloud `cargo test` 22 green, `tsc` clean, vitest 80.
+
+---
+
+## Early July 2026 — Environments & tags v1 (Readiness Program, Phase 2 item 6)
+
+Phase 2 opened with tags rather than SLOs — deliberately out of roadmap
+order, because SLO definitions and alert silences are both *per-tag/env*;
+tags are the substrate the rest of Phase 2 scopes against.
+
+### Starting point
+`nodes.tags` existed as a free-text column written by `PATCH /api/nodes/:id`
+and read by nothing — not the SSE stream, not alerts, not webhooks. There
+wasn't even a UI to set it.
+
+### What shipped
+- **Editable**: new Tags column in Settings → Node Configuration
+  (`NodeOverrideRow` gained a tags input synced on blur via
+  `saveTagsToCloud`, mirroring the display-name flow). Convention: comma-
+  separated; `env:` prefix reserved for environments (`env:prod`).
+- **On the wire**: the SSE stream's display-name cache became a `node_meta`
+  cache carrying `(display_name, tags)`; FleetStreamContext patches tags
+  into `metrics.tags` so every consumer can tag-filter with zero extra
+  fetches (`SentinelMetrics.tags` / `FleetNode.tags` types added).
+- **Scoping**: `alert_rules.tag` + `webhook_subscriptions.tag` (nullable,
+  additive migrations). Both evaluator queries gained the same predicate —
+  case- and space-insensitive membership match against the comma-separated
+  `nodes.tags` (`',' || replace(lower(tags),' ','') || ','` LIKE). Scope
+  tags are validated by `valid_scope_tag` (letters/digits/`: - _ .`, ≤64 —
+  comma-free so they can't collide with storage, %-free so they can't game
+  the LIKE). Tag inputs added to the alert-rule form (SettingsView) and the
+  webhook form (WebhooksSection); both list views show the tag.
+- Rule/webhook create audits carry the tag; composes with node_id scope
+  (both must match when both set).
+
+### Deferred (recorded on the roadmap item, not silent)
+Overview tag-filter chips, `?tag=` on V1 fleet/rollup endpoints, and the
+tag dimension on cost/WES rollups — they unlock when SLOs (item 5) consume
+tags next.
+
+Verified: cloud `cargo test` 22 green (2 new scope_tag tests), `tsc` clean,
+vitest 80.
 
 ---
 

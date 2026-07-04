@@ -5,6 +5,7 @@ import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import WebhooksSection from './settings/WebhooksSection';
 import AuditLogSection from './settings/AuditLogSection';
+import SLOSection from './settings/SLOSection';
 import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
@@ -32,6 +33,7 @@ interface AlertRule {
   channel_id: string;
   enabled: boolean;
   created_at: number;
+  tag?: string | null;
 }
 
 const EVENT_TYPES: { value: string; label: string; hasThreshold: boolean; thresholdLabel?: string; defaultThreshold?: number }[] = [
@@ -52,9 +54,21 @@ const URGENCY_OPTIONS = [
 
 // ── useAlerts hook ─────────────────────────────────────────────────────────────
 
+interface AlertSilence {
+  id:         string;
+  node_id:    string | null;
+  tag:        string | null;
+  event_type: string | null;
+  reason:     string;
+  starts_at:  number;
+  ends_at:    number;
+  active:     boolean;
+}
+
 function useAlerts(getToken: (() => Promise<string | null>) | undefined, isCloudMode: boolean) {
   const [channels, setChannels]   = useState<AlertChannel[]>([]);
   const [rules,    setRules]      = useState<AlertRule[]>([]);
+  const [silences, setSilences]   = useState<AlertSilence[]>([]);
   const [loading,  setLoading]    = useState(false);
   const [error,    setError]      = useState<string | null>(null);
 
@@ -78,12 +92,14 @@ function useAlerts(getToken: (() => Promise<string | null>) | undefined, isCloud
     setLoading(true);
     setError(null);
     try {
-      const [cRes, rRes] = await Promise.all([
+      const [cRes, rRes, sRes] = await Promise.all([
         authFetch('/api/alerts/channels'),
         authFetch('/api/alerts/rules'),
+        authFetch('/api/alerts/silences'),
       ]);
       setChannels(cRes?.channels ?? []);
       setRules(rRes?.rules ?? []);
+      setSilences(sRes?.silences ?? []);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -115,6 +131,7 @@ function useAlerts(getToken: (() => Promise<string | null>) | undefined, isCloud
   const createRule = useCallback(async (payload: {
     node_id: string | null; event_type: string;
     threshold_value: number | null; urgency: string; channel_id: string;
+    tag?: string | null;
   }) => {
     await authFetch('/api/alerts/rules', { method: 'POST', body: JSON.stringify(payload) });
     await refresh();
@@ -125,7 +142,20 @@ function useAlerts(getToken: (() => Promise<string | null>) | undefined, isCloud
     await refresh();
   }, [authFetch, refresh]);
 
-  return { channels, rules, loading, error, refresh, createChannel, deleteChannel, testChannel, createRule, deleteRule };
+  const createSilence = useCallback(async (payload: {
+    node_id: string | null; tag: string | null; event_type: string | null;
+    reason: string; starts_at?: number; duration_min: number;
+  }) => {
+    await authFetch('/api/alerts/silences', { method: 'POST', body: JSON.stringify(payload) });
+    await refresh();
+  }, [authFetch, refresh]);
+
+  const deleteSilence = useCallback(async (id: string) => {
+    await authFetch(`/api/alerts/silences/${id}`, { method: 'DELETE' });
+    await refresh();
+  }, [authFetch, refresh]);
+
+  return { channels, rules, silences, loading, error, refresh, createChannel, deleteChannel, testChannel, createRule, deleteRule, createSilence, deleteSilence };
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -254,6 +284,22 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         method: 'PATCH',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: name.trim() || null }),
+      });
+    } catch { /* best-effort sync */ }
+  }, [isProOrAbove, isCloudMode, getToken]);
+
+  // Save tags to cloud backend (Pro+ only). Comma-separated; `env:` prefix
+  // is the environment convention. Tags scope alert rules, webhooks, and
+  // fleet filtering.
+  const saveTagsToCloud = React.useCallback(async (nodeId: string, tags: string) => {
+    if (!isProOrAbove || !isCloudMode || !getToken) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      await fetch(`${CLOUD_URL}/api/nodes/${nodeId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: tags.trim() || null }),
       });
     } catch { /* best-effort sync */ }
   }, [isProOrAbove, isCloudMode, getToken]);
@@ -525,6 +571,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <th className="text-left px-4 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Node ID</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Display Name</th>
+                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[160px]" title="Comma-separated. env: prefix = environment (env:prod). Tags scope alert rules and webhooks.">Tags</th>
                     <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
                       <div>kWh Rate</div>
                       <ClearColumnButton
@@ -592,6 +639,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         fleetSettings={settings.fleet}
                         onOverride={(patch) => setNodeOverride(node.id, patch)}
                         onSaveDisplayName={saveDisplayNameToCloud}
+                        onSaveTags={saveTagsToCloud}
                       />
                     );
                   })}
@@ -646,6 +694,16 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         nodes={nodes}
         onNavigateToPricing={onNavigateToPricing}
       />
+
+      {/* ── ④⅝ SLOs & ERROR BUDGETS (Team+) ──────────────────────────────── */}
+      {isCloudMode && (
+        <SLOSection
+          subscriptionTier={subscriptionTier}
+          getToken={getToken}
+          nodes={nodes.map(n => ({ node_id: n.id, hostname: n.hostname }))}
+          onNavigateToPricing={onNavigateToPricing}
+        />
+      )}
 
       {/* ── ④¾ THRESHOLD WEBHOOKS (Pro+) ─────────────────────────────────── */}
       {isCloudMode && (
@@ -852,7 +910,7 @@ const AlertsSection: React.FC<{
   const isCloudMode    = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
   const isProOrAbove   = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
   const isTeam         = subscriptionTier === 'team' || subscriptionTier === 'enterprise';
-  const { channels, rules, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule } =
+  const { channels, rules, silences, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule, createSilence, deleteSilence } =
     useAlerts(getToken, isCloudMode && isProOrAbove);
 
   // ── Channel form state ────────────────────────────────────────────────────
@@ -868,10 +926,47 @@ const AlertsSection: React.FC<{
   const [ruleEventType, setRuleEventType] = useState(EVENT_TYPES[0].value);
   const [ruleChannelId, setRuleChannelId] = useState('');
   const [ruleNodeId,    setRuleNodeId]    = useState('');    // '' = fleet-wide
+  const [ruleTag,       setRuleTag]       = useState('');    // '' = no tag scope
   const [ruleUrgency,   setRuleUrgency]   = useState('immediate');
   const [ruleThreshold, setRuleThreshold] = useState('');
   const [ruleSaving,    setRuleSaving]    = useState(false);
   const [ruleError,     setRuleError]     = useState<string | null>(null);
+
+  // ── Silence form state ────────────────────────────────────────────────────
+  const [showSilenceForm, setShowSilenceForm] = useState(false);
+  const [silNodeId,   setSilNodeId]   = useState('');
+  const [silTag,      setSilTag]      = useState('');
+  const [silEvent,    setSilEvent]    = useState('');
+  const [silReason,   setSilReason]   = useState('');
+  const [silDuration, setSilDuration] = useState('60');
+  const [silStartsAt, setSilStartsAt] = useState('');   // datetime-local; '' = now
+  const [silSaving,   setSilSaving]   = useState(false);
+  const [silError,    setSilError]    = useState<string | null>(null);
+
+  const handleAddSilence = async () => {
+    setSilSaving(true);
+    setSilError(null);
+    try {
+      const payload: {
+        node_id: string | null; tag: string | null; event_type: string | null;
+        reason: string; starts_at?: number; duration_min: number;
+      } = {
+        node_id:      silNodeId || null,
+        tag:          silTag.trim() || null,
+        event_type:   silEvent || null,
+        reason:       silReason.trim(),
+        duration_min: parseInt(silDuration, 10) || 60,
+      };
+      if (silStartsAt) payload.starts_at = new Date(silStartsAt).getTime();
+      await createSilence(payload);
+      setShowSilenceForm(false);
+      setSilNodeId(''); setSilTag(''); setSilEvent(''); setSilReason(''); setSilStartsAt('');
+    } catch (e) {
+      setSilError((e as Error).message);
+    } finally {
+      setSilSaving(false);
+    }
+  };
 
   // ── Test state per channel ────────────────────────────────────────────────
   const [testState, setTestState] = useState<Record<string, 'idle' | 'sending' | 'ok' | 'fail'>>({});
@@ -909,9 +1004,11 @@ const AlertsSection: React.FC<{
           ? parseFloat(ruleThreshold) : null,
         urgency:         ruleUrgency,
         channel_id:      ruleChannelId,
+        tag:             ruleTag.trim() || null,
       });
       setShowRuleForm(false);
       setRuleThreshold('');
+      setRuleTag('');
     } catch (e) {
       setRuleError((e as Error).message);
     } finally {
@@ -1204,6 +1301,19 @@ const AlertsSection: React.FC<{
                   </div>
                 </div>
 
+                {/* Tag scope */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Tag scope (optional)</label>
+                  <input
+                    type="text"
+                    value={ruleTag}
+                    onChange={e => setRuleTag(e.target.value)}
+                    placeholder="env:prod"
+                    title="Rule fires only for nodes bearing this tag (set tags in Settings → Node Configuration). Composes with node scope."
+                    className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full`}
+                  />
+                </div>
+
                 {/* Urgency */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Urgency</label>
@@ -1267,6 +1377,7 @@ const AlertsSection: React.FC<{
                     </div>
                     <div className="flex items-center gap-2 text-[10px] text-gray-500">
                       <span>{rule.node_id ?? 'Fleet-wide'}</span>
+                      {rule.tag && <><span>·</span><span className="font-mono text-gray-400">{rule.tag}</span></>}
                       <span>·</span>
                       <span>{URGENCY_OPTIONS.find(u => u.value === rule.urgency)?.label ?? rule.urgency}</span>
                       <span>·</span>
@@ -1277,6 +1388,116 @@ const AlertsSection: React.FC<{
                     onClick={() => deleteRule(rule.id)}
                     className="p-1 rounded text-gray-600 hover:text-rose-400 transition-colors shrink-0"
                     title="Delete rule"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Silences & maintenance windows ── */}
+        <div className="px-6 py-5 border-t border-gray-100 dark:border-gray-700 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-gray-200">Silences & maintenance windows</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">Suppress alert rules and threshold webhooks for a node, tag, or event type — so a planned driver upgrade doesn't page everyone. Future start = scheduled maintenance window.</p>
+            </div>
+            <button
+              onClick={() => setShowSilenceForm(s => !s)}
+              className="text-[10px] font-semibold px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors shrink-0"
+            >
+              {showSilenceForm ? 'Cancel' : 'New silence'}
+            </button>
+          </div>
+
+          {silError && (
+            <p className="text-[11px] text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">{silError}</p>
+          )}
+
+          {showSilenceForm && (
+            <div className="rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/30 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Duration</label>
+                <select value={silDuration} onChange={e => setSilDuration(e.target.value)}
+                  className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full appearance-none`}>
+                  <option value="30">30 minutes</option>
+                  <option value="60">1 hour</option>
+                  <option value="240">4 hours</option>
+                  <option value="1440">24 hours</option>
+                  <option value="10080">7 days</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Node scope</label>
+                <select value={silNodeId} onChange={e => setSilNodeId(e.target.value)}
+                  className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full appearance-none`}>
+                  <option value="">All nodes</option>
+                  {nodes.map(n => <option key={n.id} value={n.id}>{n.id}{n.hostname ? ` · ${n.hostname}` : ''}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Tag scope (optional)</label>
+                <input type="text" value={silTag} onChange={e => setSilTag(e.target.value)} placeholder="env:prod"
+                  className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full`} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Event type</label>
+                <select value={silEvent} onChange={e => setSilEvent(e.target.value)}
+                  className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full appearance-none`}>
+                  <option value="">All events</option>
+                  {['thermal_serious','thermal_critical','memory_pressure_high','wes_drop','node_offline','ttft_regression','throughput_low','thermal_state_changed','inference_state_changed','wes_below','wes_above'].map(t =>
+                    <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Start (optional — blank = now)</label>
+                <input type="datetime-local" value={silStartsAt} onChange={e => setSilStartsAt(e.target.value)}
+                  className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full`} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Reason</label>
+                <input type="text" value={silReason} onChange={e => setSilReason(e.target.value)} placeholder="GPU driver upgrade" maxLength={200}
+                  className={`${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30 w-full`} />
+              </div>
+              <div className="sm:col-span-2">
+                <button
+                  onClick={handleAddSilence}
+                  disabled={silSaving}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white transition-colors"
+                >
+                  {silSaving ? 'Creating…' : 'Create silence'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {silences.length === 0 ? (
+            <p className="text-[11px] text-gray-500 py-1">No active or scheduled silences.</p>
+          ) : (
+            <div className="space-y-2">
+              {silences.map(s => (
+                <div key={s.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/30 gap-3">
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${s.active ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-sky-500/30 bg-sky-500/10 text-sky-300'}`}>
+                        {s.active ? 'Silencing' : 'Scheduled'}
+                      </span>
+                      <span className="text-xs font-semibold text-gray-200">{s.event_type ?? 'All events'}</span>
+                      {s.reason && <span className="text-[10px] text-gray-500 italic truncate">— {s.reason}</span>}
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] text-gray-500 flex-wrap">
+                      <span>{s.node_id ?? 'All nodes'}</span>
+                      {s.tag && <><span>·</span><span className="font-mono text-gray-400">{s.tag}</span></>}
+                      <span>·</span>
+                      <span>{s.active ? 'until' : `${new Date(s.starts_at).toLocaleString()} →`} {new Date(s.ends_at).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => deleteSilence(s.id)}
+                    className="p-1 rounded text-gray-600 hover:text-rose-400 transition-colors shrink-0"
+                    title={s.active ? 'End silence now' : 'Cancel scheduled window'}
                   >
                     <Trash2 size={13} />
                   </button>
@@ -1344,17 +1565,21 @@ const NodeOverrideRow: React.FC<{
   fleetSettings: FleetSettings;
   onOverride: (patch: Partial<NodeOverride>) => void;
   onSaveDisplayName?: (nodeId: string, name: string) => void;
-}> = ({ node, eff, ov, fleetSettings, onOverride, onSaveDisplayName }) => {
+  onSaveTags?: (nodeId: string, tags: string) => void;
+}> = ({ node, eff, ov, fleetSettings, onOverride, onSaveDisplayName, onSaveTags }) => {
   const [kwhDraft,  setKwhDraft]  = useState(ov.kwhRate?.toString() ?? '');
   const [pueDraft,  setPueDraft]  = useState(ov.pue?.toString()  ?? '');
   const [idleDraft, setIdleDraft] = useState(ov.systemIdleW?.toString() ?? '');
+  // Tags come from the cloud (via the stream's node payload), not local
+  // overrides — draft locally, sync on blur.
+  const [tagsDraft, setTagsDraft] = useState(node.metrics?.tags ?? '');
 
   React.useEffect(() => { setKwhDraft(ov.kwhRate?.toString() ?? ''); }, [ov.kwhRate]);
   React.useEffect(() => { setPueDraft(ov.pue?.toString()  ?? ''); }, [ov.pue]);
   React.useEffect(() => { setIdleDraft(ov.systemIdleW?.toString() ?? ''); }, [ov.systemIdleW]);
 
-  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | null>(null);
-  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc' | 'idle') => {
+  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags' | null>(null);
+  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags') => {
     setSavedCell(cell);
     setTimeout(() => setSavedCell(c => c === cell ? null : c), 1500);
   };
@@ -1422,6 +1647,24 @@ const NodeOverrideRow: React.FC<{
             className={`${cellBase} truncate ${valCls(!!ov.locationLabel)}`}
           />
           {savedCell === 'loc' && <SavedMark />}
+        </div>
+      </td>
+
+      {/* Tags */}
+      <td className="px-3 py-3 max-w-[160px]">
+        <div className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={tagsDraft}
+            onChange={e => setTagsDraft(e.target.value)}
+            onBlur={e => { onSaveTags?.(node.id, e.target.value); flashSaved('tags'); }}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder="env:prod, gpu"
+            title="Comma-separated tags. env: prefix = environment. Tags scope alert rules and webhooks."
+            maxLength={256}
+            className={`${cellBase} truncate ${valCls(!!tagsDraft)}`}
+          />
+          {savedCell === 'tags' && <SavedMark />}
         </div>
       </td>
 

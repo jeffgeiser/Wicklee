@@ -439,6 +439,20 @@ The three levers move together: `density_scale` multiplies the evidence-window d
 
 ---
 
+## Environments & Tags (Pro+)
+
+Group nodes with free-form, comma-separated tags — set them in **Settings → Node Configuration** (Tags column) or `PATCH /api/nodes/:id` with `{ "tags": "env:prod, gpu, rack-2" }`. The `env:` prefix is the reserved convention for environments (`env:prod`, `env:staging`).
+
+**What consumes tags:**
+
+- **Alert rules** — an optional *Tag scope* on a rule makes it fire only for nodes bearing that tag (composes with node scope; matching is case- and space-insensitive).
+- **Threshold webhooks** — same optional `tag` on a subscription.
+- **The fleet stream** — every node's SSE frame carries its tags, so dashboards and API consumers can group and filter without extra fetches.
+
+Tag values used for scoping are restricted to letters, digits, and `: - _ .` (max 64 chars) so a tag can't collide with the comma-separated storage or the matcher.
+
+---
+
 ## Alerts & Notifications
 
 When observations or fleet alerts fire, Wicklee delivers notifications to external channels.
@@ -454,6 +468,34 @@ Setup: Settings → Alerts → Add Channel → choose type → Test → Create R
 PagerDuty uses dedup keys (`wicklee-{node_id}-{event_type}`) for incident lifecycle — incidents auto-resolve when the condition clears.
 
 Community tier: observations appear on the dashboard but no outbound notifications.
+
+### Silences & Maintenance Windows (Pro+)
+
+Suppress alert rules **and** threshold webhooks for a duration — so a planned driver upgrade doesn't page everyone. A silence targets any combination of node, tag, and event type (blank = all); a future start time makes it a scheduled maintenance window. Org members share silences (tenant-scoped). Managed in Settings → Alerts → Silences, or:
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| `POST` | `/api/alerts/silences` | `{ node_id?, tag?, event_type?, reason?, starts_at?, duration_min }` — duration 1 min–30 days; omitted `starts_at` = now |
+| `GET` | `/api/alerts/silences` | Active + upcoming (expired age out); each entry carries `active` |
+| `DELETE` | `/api/alerts/silences/:id` | End a silence early / cancel a scheduled window |
+
+Silence creation and deletion are audit-logged. Suppression is enforced inside both evaluator queries on the telemetry hot path — a silenced rule simply never fires, so there's no notification to dedupe afterward.
+
+---
+
+## SLOs & Error Budgets (Team+)
+
+Declare objectives over the fleet's sampled telemetry — *"p95 TTFT ≤ 500 ms for 99% of 5-minute windows over a rolling 30 days"* — scoped to the whole fleet, a tag (`env:prod`), or a single node. The cloud evaluates one **time-slice verdict** per SLO every 5 minutes (windows with no inference activity aren't counted), so monthly compliance survives raw-telemetry retention. When the error budget crosses **50% / 90% / 100% burn**, the SLO creator's notification channels are alerted — once per crossing, resetting as the rolling window ages bad slices out.
+
+**Metrics (v1):** `ttft_p95_ms` (≤ threshold), `tok_s_p50` (≥), `wes_p50` (≥) — latency, throughput, efficiency, computed from 1 Hz sampled telemetry. Per-request percentiles remain on each node's SLA Monitor.
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| `POST` | `/api/slo` | `{ name, metric, threshold, target_pct, tag?, node_id? }` — target 50–99.99%, ≤20 SLOs per fleet |
+| `GET` | `/api/slo` | Definitions + live status: 30d compliance %, budget burn %, latest window SLI |
+| `DELETE` | `/api/slo/:id` | Removes the SLO and its window history |
+
+Managed in Settings → SLOs & Error Budgets (compliance %, budget burn bar, latest window). SLO create/delete is audit-logged.
 
 ---
 
