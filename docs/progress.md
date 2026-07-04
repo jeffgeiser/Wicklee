@@ -61,6 +61,51 @@ backup branch from the recovery, safe to delete.
 
 ---
 
+## Early July 2026 — Demo fleet mode (GTM Rock 2, item 1)
+
+The evaluate-before-install killer: the full cloud dashboard running against
+a synthetic fleet — no Clerk, no backend, no account. `npm run build:demo`
+emits a purely static bundle for demo.wicklee.dev and the Hugging Face Space.
+
+### Architecture (three small modules, zero production-code forks)
+- **`src/demo/demoFleet.ts`** — deterministic generator: six nodes with
+  personality (M4 Max studio, 4090 pair on env:prod, H100 box, a Mac mini
+  that thermally throttles every ~4 min, an edge node that drops offline
+  every 5 min, a model swap every ~2.5 min). Seeded PRNG + sines over
+  wall-clock time — no stored state, same demo every visit.
+- **`src/demo/demoEventSource.ts`** — a fake EventSource that feeds frames
+  through the PRODUCTION FleetStreamContext processing path at 1 Hz, so
+  events, smoothing, thermal transitions, and model-swap detection all run
+  their real code.
+- **`src/demo/demoApi.ts`** — fetch shim intercepting every `/api/*` call
+  (CLOUD_URL-prefixed AND same-origin relative — ModelsPage uses relative
+  URLs) with fixtures for history charts, observations, SLOs (one healthy,
+  one burning), chargeback, audit log, alerts/silences, webhooks, keys,
+  thermal budget. Writes return a friendly read-only 403 the settings
+  panels surface verbatim. Unknown /api paths → graceful 404.
+
+### The Clerk seam
+`AppCore` already takes auth as props (the agent build renders it without
+Clerk), so demo renders it directly with a fake Team-tier user. Four
+components gated Clerk on `IS_AGENT` only and crashed the demo (useAuth
+without ClerkProvider): Sidebar account actions, AddNodeModal, APIKeysView,
+TeamManagement — all now gate on demo too (build-time consts keep hook
+order stable).
+
+### Verification
+Playwright smoke test against the built bundle in the preinstalled
+Chromium (proxy-bypassed, served on a non-localhost alias so the app
+doesn't flip into agent mode): banner, node names, model names, install
+one-liner all render; zero page errors. First run caught real bugs:
+VRAM overcommit on the 4090 fixtures (26.6/24 GB) and empty TTFT tiles —
+both fixed (capped VRAM, proxy-TTFT fields added). Screenshot delivered.
+
+### Remaining (founder)
+demo.wicklee.dev DNS + static hosting, HF Space creation — exact steps and
+the Space README (front-matter included) in `docs/DEMO.md`.
+
+---
+
 ## Early July 2026 — Chargeback & showback v1 (Readiness Program, Phase 3 item 9)
 
 Phase 3 (cost governance — the moat) opens with the report finance asks

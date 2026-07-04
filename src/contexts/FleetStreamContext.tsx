@@ -5,6 +5,7 @@ import { CLOUD_URL } from '../utils/cloudUrl';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
+const IS_DEMO = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 const isLocalHost =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -101,7 +102,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
 
   // ── SSE Effect ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (isLocalHost || !isSignedIn) return;
+    if (!IS_DEMO && (isLocalHost || !isSignedIn)) return;
 
     let retryTimer: ReturnType<typeof setTimeout>;
     let cancelled = false;
@@ -129,10 +130,18 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
 
       if (cancelled) return;
 
-      // 2. Open EventSource
-      const es = new EventSource(
-        `${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`,
-      );
+      // 2. Open EventSource. Demo builds substitute a fake EventSource that
+      // feeds synthetic fleet frames through this exact processing path
+      // (dynamic import so the demo module never ships in cloud/agent bundles).
+      let es: EventSource;
+      if (IS_DEMO) {
+        const { DemoEventSource } = await import('../demo/demoEventSource');
+        es = new DemoEventSource() as unknown as EventSource;
+      } else {
+        es = new EventSource(
+          `${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`,
+        );
+      }
       esRef.current = es;
 
       es.onopen = () => {
@@ -446,7 +455,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   const seededRef = useRef(false);
 
   useEffect(() => {
-    if (isLocalHost || !connected || seededRef.current) return;
+    if ((!IS_DEMO && isLocalHost) || !connected || seededRef.current) return;
     seededRef.current = true;
 
     (async () => {

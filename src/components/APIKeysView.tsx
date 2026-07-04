@@ -191,8 +191,15 @@ const CreateKeyModal: React.FC<{
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+const IS_DEMO = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
+// Demo builds have no ClerkProvider — a build-time-constant branch keeps the
+// hook order stable while supplying stub auth (the fetch shim serves the data).
+const useAuthMaybe = () =>
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  IS_DEMO ? { getToken: async () => 'demo', isSignedIn: true } : useAuth();
+
 const APIKeysView: React.FC = () => {
-  const { getToken, isSignedIn } = useAuth();
+  const { getToken, isSignedIn } = useAuthMaybe();
 
   const [keys, setKeys]               = useState<ApiKey[]>([]);
   const [loading, setLoading]         = useState(true);
