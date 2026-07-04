@@ -115,6 +115,7 @@ const NAV = [
   { id: 'api-local',   label: 'Localhost API' },
   { id: 'api-fleet',   label: 'Fleet API v1' },
   { id: 'teams',       label: 'Teams & Orgs' },
+  { id: 'audit-log',   label: 'Audit Log' },
   { id: 'mcp',         label: 'MCP Server' },
   { id: 'proxy',       label: 'Inline Proxy' },
   { id: 'otel',        label: 'OTel & Prometheus' },
@@ -1464,6 +1465,21 @@ WES Version:     2
             <NoteBox>
               Confidence levels — <strong className="text-white">Building</strong> (under 50% of required window), <strong className="text-white">Moderate</strong> (50–90%), <strong className="text-white">High</strong> (≥ 90%) — are shown in the observation card header and as a progress bar while evidence accumulates. A pattern at High confidence means the condition has been sustained for the full required window. Point-in-time patterns (<code className="text-gray-300">vram_overcommit</code>) always fire at High confidence since a single observation provides complete evidence.
             </NoteBox>
+
+            <div className="bg-gray-900 border border-emerald-500/20 rounded-xl p-4 space-y-2 mt-2">
+              <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Deployment Profiles</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                One intent selector in <strong className="text-white">Settings → Deployment Profile</strong> (localhost) coherently shifts how sensitively every pattern fires — no per-pattern knobs. Three levers move together: the evidence-window density, the sustained-fraction gate, and a confidence floor. Applied within ~10s and persisted to <code className="text-gray-300">config.toml</code>. Node-local — it governs which observations this node raises, not fleet-wide alert rules.
+              </p>
+              <ul className="text-xs text-gray-400 leading-relaxed list-disc pl-4 space-y-1">
+                <li><strong className="text-white">Sovereign Dev</strong> — laptop running inference alongside other work: high bar + confidence floor so mixed-use noise stays quiet.</li>
+                <li><strong className="text-white">Dedicated Server</strong> <span className="text-[9px] text-gray-500">(default)</span> — single-purpose node: the baseline the patterns were tuned for.</li>
+                <li><strong className="text-white">Production Fleet</strong> — serving real users: aggressive early warning, degradations surface sooner.</li>
+              </ul>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                API (localhost, no auth): <code className="text-gray-300 font-mono text-[10px]">GET/PUT /api/deployment-profile</code>.
+              </p>
+            </div>
           </Section>
 
           {/* ── Alerts & Notifications ── */}
@@ -1710,6 +1726,10 @@ WES Version:     2
                     <Td>17 observation patterns (10-min DuckDB buffer). Each observation includes <code className="text-gray-400 font-mono text-[10px]">routing_hint</code> (steer_away / reduce_batch / monitor). Response envelope includes node-level <code className="text-gray-400 font-mono text-[10px]">routing_hint</code> + <code className="text-gray-400 font-mono text-[10px]">routing_hint_source</code> (worst active pattern)</Td>
                   </tr>
                   <tr>
+                    <Td mono>GET/PUT /api/deployment-profile</Td>
+                    <Td>Deployment Profiles — one intent selector (sovereign_dev / dedicated_server / production_fleet) that coherently shifts observation-pattern sensitivity. Persisted to config.toml; applied within one 10s eval cycle. Node-local.</Td>
+                  </tr>
+                  <tr>
                     <Td mono>GET /api/profile?minutes=60</Td>
                     <Td>Inference Profiler — correlated TTFT, KV cache, queue depth, thermal penalty, power on a single time axis. Auto-scaling resolution.</Td>
                   </tr>
@@ -1868,15 +1888,15 @@ curl https://wicklee.dev/api/v1/fleet \\
                   </tr>
                   <tr>
                     <Td mono>POST /api/v1/keys</Td>
-                    <Td>Create a new API key — returns the raw key once (prefix <code className="text-gray-400 text-xs">wk_live_</code>). Stored as SHA-256 hash at rest.</Td>
+                    <Td>Create a new API key — returns the raw key once (prefix <code className="text-gray-400 text-xs">wk_live_</code>). Stored as SHA-256 hash at rest. <code className="text-gray-400 text-xs">scope: "personal" | "org"</code> — org keys see the whole org fleet, inherit the org's tier, and are minted by org Admins only.</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/keys</Td>
-                    <Td>List all API keys for the authenticated user — returns key ID, prefix, created date. Hash is never exposed.</Td>
+                    <Td>List API keys — your personal keys plus the active org's keys (each entry carries its scope). Hash is never exposed.</Td>
                   </tr>
                   <tr>
                     <Td mono>DELETE /api/v1/keys/:key_id</Td>
-                    <Td>Revoke an API key by ID. Takes effect immediately — in-flight requests with the revoked key will fail.</Td>
+                    <Td>Revoke an API key by ID. Personal keys: owner only. Org keys: any Admin of the key's org. Takes effect immediately.</Td>
                   </tr>
                 </tbody>
               </table>
@@ -1970,6 +1990,55 @@ curl https://wicklee.dev/api/v1/fleet \\
 
             <NoteBox>
               <strong className="text-white">Solo users:</strong> Organizations are optional. Community and Pro users who don't need shared access can continue using Wicklee as a single-user dashboard — nothing changes.
+            </NoteBox>
+
+            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-2">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Roles (RBAC)</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Fleet permissions follow your Clerk organization role, verified from the signed session token on every request. <strong className="text-white">Admin</strong> (<code className="text-gray-300">org:admin</code>) can do everything, including removing nodes. <strong className="text-white">Member</strong> (<code className="text-gray-300">org:member</code> and custom roles) handles day-to-day operations — pairing and renaming nodes, alert rules and channels, webhooks, acknowledging observations. <strong className="text-white">Viewer</strong> (a custom <code className="text-gray-300">org:viewer</code> role you create in Clerk) is read-only — every mutation returns 403. Unknown roles map to Member, never Admin; solo users keep full control of their own resources.
+              </p>
+            </div>
+          </Section>
+
+          {/* ── Audit Log ── */}
+          <Section
+            id="audit-log"
+            icon={<Shield className="w-5 h-5" />}
+            accent="border-amber-500/20"
+            title="Audit Logging"
+          >
+            <p>
+              An immutable, append-only record of sensitive fleet operations — for SOC 2 / ISO change-management evidence and answering <em>"who changed what, when."</em> Backed by a Postgres <code className="text-gray-300">audit_log</code> table with no UPDATE or DELETE path anywhere in the codebase. Events are recorded for <strong className="text-white">every</strong> tier; reading the trail is gated to <strong className="text-white">Business+</strong>. Organization members share one org-wide trail, scoped from the verified session claim — never a client-supplied header.
+            </p>
+
+            <p className="text-xs text-gray-400 leading-relaxed mt-3">
+              Recording is fire-and-forget: it runs off the request path and never delays or fails the operation being audited. The actor's email is resolved server-side, so callers only pass IDs.
+            </p>
+
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Recorded actions (9)</p>
+            <p className="text-xs text-gray-400 leading-relaxed mt-1">
+              <code className="text-gray-300">node.paired</code>, <code className="text-gray-300">node.removed</code>, <code className="text-gray-300">node.updated</code>, <code className="text-gray-300">alert_rule.created</code>, <code className="text-gray-300">alert_channel.created</code>, <code className="text-gray-300">webhook.created</code>, <code className="text-gray-300">api_key.created</code>, <code className="text-gray-300">api_key.deleted</code>, <code className="text-gray-300">stream_tokens.revoked</code>.
+            </p>
+
+            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-4">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Endpoint <span className="ml-1.5 text-[9px] text-emerald-400 normal-case tracking-normal">Business+</span></p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <code className="text-gray-300 font-mono text-[10px]">GET /api/audit-log</code> (Clerk JWT). Query params: <code className="text-gray-300 font-mono text-[10px]">limit</code> (default 50, max 200), <code className="text-gray-300 font-mono text-[10px]">before</code> (ts_ms cursor), <code className="text-gray-300 font-mono text-[10px]">action</code> (exact-match filter). Returns <code className="text-gray-300 font-mono text-[10px]">{'{ entries, next_before }'}</code> — each entry carries <code className="text-gray-300 font-mono text-[10px]">ts</code>, <code className="text-gray-300 font-mono text-[10px]">actor_email</code>, <code className="text-gray-300 font-mono text-[10px]">action</code>, <code className="text-gray-300 font-mono text-[10px]">target</code>, and a JSON <code className="text-gray-300 font-mono text-[10px]">details</code> object.
+              </p>
+            </div>
+
+            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-3">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Export &amp; SIEM Drain</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                <code className="text-gray-300 font-mono text-[10px]">GET /api/audit-log/export?format=csv|json</code> downloads the full trail (chronological, up to 100k rows; optional <code className="text-gray-300 font-mono text-[10px]">action</code>/<code className="text-gray-300 font-mono text-[10px]">from</code>/<code className="text-gray-300 font-mono text-[10px]">to</code> filters). CSV is formula-injection hardened. Every export is itself audited.
+              </p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                The <strong className="text-white">SIEM drain</strong> (<code className="text-gray-300 font-mono text-[10px]">PUT /api/audit-log/drain</code>, org Admins) streams new events to your collector — Splunk, Datadog, any HTTPS receiver — as HMAC-signed JSON batches within ~1 minute (<code className="text-gray-300 font-mono text-[10px]">X-Wicklee-Signature</code>, secret shown once). Auto-disables after 20 consecutive failures; re-save to rotate the secret or re-enable. Retention: at least 365 days on Business, unlimited on Enterprise.
+              </p>
+            </div>
+
+            <NoteBox>
+              Surfaced as the <strong className="text-white">Audit Log</strong> section in Settings — action filter, load-more pagination, CSV/JSON export, SIEM drain configuration, and an upgrade nudge on lower tiers. Because events are recorded on every tier, upgrading to Business reveals the trail retroactively.
             </NoteBox>
           </Section>
 

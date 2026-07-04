@@ -6,6 +6,302 @@
 
 ---
 
+## ⇢ Session handoff — current state (2026-07-03)
+
+**Working branch:** `claude/recent-progress-summary-jgw3rd` (ahead of `origin/main`
+@ v0.10.0). All work below is pushed there; **no PR opened yet** and nothing is
+merged to `main`. A fresh session should `git fetch` and check out this branch —
+do NOT restart from `main` or you'll lose the shipped work.
+
+**Shipped on this branch (all verified — cloud `cargo test` 13, agent
+deployment-profile tests 4/4, `tsc` clean, vitest 80):**
+1. **Audit Logging (Business+)** — cloud backend (`audit_log` table, `audit()`
+   helper, `GET /api/audit-log`, 9 instrumented actions) + `settings/AuditLogSection.tsx`.
+2. **Deployment Profiles** — agent `evaluate_local_observations` tuning
+   (3 levers), `GET/PUT /api/deployment-profile`, config persistence,
+   `settings/DeploymentProfileSection.tsx`.
+3. **`llms-full.txt` pricing fix** — stale table → correct 5-tier.
+
+**Recovery context:** #1 and #2 were originally built in a prior session on a
+stale local `main`, lost when its container was reclaimed, and rebuilt/recovered
+here on the v0.10.0 baseline (see the two July entries below). `origin/claude/recovered-audit-logging`
+is a now-redundant backup branch, safe to delete.
+
+**Still open (were lost with the same container, NOT yet rebuilt):** the "Team
+intelligence" and "webhook event subscriptions v2" the prior session mentioned
+turned out to already be shipped on `origin/main` (Threshold Webhooks, SLA,
+Thermal Budget) — do **not** rebuild them. Remaining genuinely-open items live in
+`ROADMAP.md` → Planned (largest clusters: the June full-codebase-review MEDIUMs —
+cloud perf/hardening, remaining agent items, frontend; and the Pass-2/3 security
+follow-ups).
+
+**ACTIVE ITERATION FOCUS:** the ★ Business & Enterprise Readiness Program at the
+top of `ROADMAP.md` → Planned (from the July 2026 Teams/Enterprise strategic
+review). Work Phase 1 in order: RBAC → SSO honesty fix → audit export/SIEM →
+org-wide API keys. Each item carries implementation pointers + acceptance
+criteria. RBAC is in progress on this branch.
+
+**Process lessons (bit us this session):**
+- Push WIP to a *remote* branch before a container idles — ephemeral working
+  trees are not backups.
+- When running `cargo` in the background, let the tool's own backgrounding handle
+  it; a trailing `&` inside a backgrounded call double-forks and returns a bogus
+  "exit 0" while the build runs orphaned (this masked a real E0063).
+- The agent bin embeds `agent/frontend/dist` via rust-embed, so `cargo check`/
+  `test` on the agent requires `npm run build:agent` first, or `StaticAssets::get`
+  fails to resolve.
+- Pricing/tier facts live across ~9 surfaces (llms.txt, llms-full.txt, docs.md,
+  DocsPage.tsx, PricingPage, README, Legal/ToS, Settings upgrade copy, types.ts) —
+  they must all move together on any pricing change.
+
+---
+
+## Early July 2026 — Org-wide API keys (Readiness Program, Phase 1 item 4)
+
+Closes the June security review's "org-wide API keys" deferral and completes
+Phase 1 of the Readiness Program (except SSO, parked for owner Clerk time).
+Previously a Team member's key saw only their personal nodes — CI/automation
+had to ride on an individual's account.
+
+### Design
+- `api_keys.org_id` (NULL = personal — every existing key keeps its exact
+  behavior). An org key is bound to the verified org claim at mint time.
+- `validate_api_key` now returns `(key_id, user_id, org_id, tier)`. Tier is
+  resolved through `resolve_tier` — org keys inherit the ORG's subscription
+  (also replacing the legacy `users.is_pro` flag for rate-limit tiering with
+  the modern field every JWT-side gate uses).
+- All **7 API-key-authed sites** switched from `WHERE user_id = $1` to the
+  `tenant_scope` predicate (scripted transform with per-site count
+  assertions, compiled first try): `/api/v1/fleet`, `fleet/wes`,
+  `nodes/{id}`, `route/best`, `insights/latest`, `models/discover`, and
+  Prometheus `/metrics`. The insights/discover/prometheus handlers also
+  dropped their per-request `users.subscription_tier` lookups in favor of
+  the tier validate now returns.
+- **Lifecycle + RBAC:** `POST /api/v1/keys` takes `scope: "personal"|"org"`
+  (default personal; viewer-blocked either way). Org scope requires an
+  active org in the session AND the Admin role. GET lists personal + the
+  active org's keys (visible to all members — shared infrastructure), each
+  with its scope. DELETE: personal = owner; org = any Admin of the key's
+  org (proper 403-vs-404 distinction when a non-admin targets an org key).
+  All mints/revokes audited with scope.
+- **Drive-by fix:** the Prometheus tier gate was `tier != "team" && tier !=
+  "enterprise"` — which locked **Business** out of a feature its tier
+  includes ("everything in Team +"). Now `is_team_or_above`.
+
+### Frontend + docs
+APIKeysView: scope picker (Personal / Organization) in the create modal,
+amber Org badge in the key list; `scope` threaded through `ApiKey` /
+`CreateApiKeyResponse` types. Docs updated: docs.md Fleet API key-scopes
+paragraph, DocsPage key rows, llms.txt, llms-full.txt. Both roadmap entries
+(Readiness item 4 + the June security-review deferral) flipped to SHIPPED.
+
+Verified: cloud `cargo test` 20 green, compile clean first try, `tsc`
+clean, vitest 80.
+
+---
+
+## Early July 2026 — Audit export + SIEM drain (Readiness Program, Phase 1 item 3)
+
+Enterprises don't read audit logs in a Settings panel — they pull them into
+Splunk/Datadog. Two delivery paths shipped (item 2, SSO, is parked until the
+owner has time for the Clerk dashboard work):
+
+### Export
+`GET /api/audit-log/export?format=csv|json&action=&from=&to=` — Business+,
+same tenant scoping as the read endpoint, chronological, 100k-row cap,
+`Content-Disposition` attachment. CSV goes through a new `csv_escape` helper:
+RFC-4180 quoting plus spreadsheet formula-injection hardening (`= + - @`
+cells get a leading apostrophe) — audit fields like `target` can carry
+client-influenced strings (node display names). The helper is unit-tested and
+is the reusable fix for the June review's still-open CSV-escaping MEDIUM on
+the fleet export. Every export is itself audited (`audit_log.exported` with
+format + row count).
+
+### SIEM drain
+One per tenant (`audit_drains`: tenant_id PK + owner user_id/org_id so the
+delivery loop can re-resolve tier). `PUT /api/audit-log/drain { url }` is
+**org-Admin-only** (first consumer of RBAC's `is_admin` beyond node removal)
++ Business+; generates a 32-byte HMAC secret returned ONCE (re-PUT rotates
+it and re-enables a disabled drain). The delivery cursor starts at the
+tenant's current max audit id — the drain streams NEW events; backfill is
+the export's job. `audit_drain_task` (60s loop, spawned with the other cloud
+evaluators) ships ≤500-event JSON batches through the existing
+`deliver_webhook` (HMAC-SHA256 `X-Wicklee-Signature`, 5s timeout), re-checks
+tier at delivery time so downgraded tenants stop draining, and auto-disables
+after 20 consecutive failures (mirroring webhook subscriptions). Drain
+config changes are audited (`audit_drain.created/deleted`).
+
+### UI + docs
+AuditLogSection gained CSV/JSON export buttons (blob download, respects the
+action filter), and a SIEM drain panel: status (active / auto-disabled /
+failure count / last delivery), reveal-once secret with copy, URL form,
+remove. Docs propagated across docs.md, DocsPage, llms.txt, llms-full.txt
+(including the batch payload spec); retention stated as ≥365d Business /
+unlimited Enterprise (purge enforcement is a roadmap follow-up).
+
+Verified: cloud `cargo test` 20 green (3 new csv_escape tests), compile
+clean first try, `tsc` clean, vitest 80.
+
+---
+
+## Early July 2026 — RBAC v1 (Business & Enterprise Readiness, Phase 1 item 1)
+
+First feature of the ★ Business & Enterprise Readiness Program (see ROADMAP).
+The July strategic review found every org member could delete nodes, rewire
+alerts, and reconfigure OTel — no role was ever checked; the Clerk JWT's role
+claim was parsed and thrown away, exactly like the org_id claim was before the
+June tenancy fix.
+
+### Design
+- `validate_clerk_jwt` now returns `(sub, org_id, org_role)`, handling both
+  Clerk token shapes: v1 top-level `org_id`/`org_role` ("org:admin") and v2
+  nested `o: { id, rol }` (bare "admin"). The nested `o.id` also backstops
+  org_id resolution for v2 tokens.
+- `OrgRole { Admin, Member, Viewer }` with deliberate mapping rules: solo
+  users (no org in session) = Admin over their own resources (tenancy scoping
+  already confines them); "admin" → Admin; custom "viewer" role → Viewer;
+  **anything unknown → Member, never Admin** (a bespoke Clerk ops role must
+  not be locked out of day-to-day work, and must never be escalated).
+- `require_user_org_role()` is the new core; `require_user_and_org` and
+  `require_user_info` became thin wrappers, so the ~28 read-only call sites
+  needed zero changes. Only mutating handlers switched to the role-aware
+  helper (mechanical transform, applied by script, compiled first try).
+
+### Policy (enforced at 15 handlers)
+- **Viewer → 403 on every mutation:** update node, alert channel/rule
+  create+delete+test, webhook create/delete/test, acknowledge/resolve/submit
+  observations, OTel config PUT, pair/activate. 403 body carries
+  `role_required` so the frontend can render a real message (sections already
+  display `err.error`).
+- **Admin-only:** node removal (`handle_delete_node`).
+- **Deliberately ungated:** stream-token revoke (self-scoped — users revoke
+  their own tokens); personal API keys (per-user by design, see the org-keys
+  item — an org viewer's personal key reaches only their personal nodes).
+
+### Tests + docs
+4 new `rbac_tests` (role parsing incl. prefix variants and the
+unknown-role→Member rule, policy table); 17 cloud tests green. Docs updated
+across docs.md (Roles table in Teams & Orgs), DocsPage.tsx, llms.txt,
+llms-full.txt. Follow-ups on the roadmap item: role-aware UI hiding,
+`access.denied` audit events, Admin-gated org key minting.
+
+---
+
+## Early July 2026 — Deployment Profiles (agent)
+
+The second feature lost with the reclaimed container, rebuilt fresh on the
+v0.10.0 baseline. A single intent selector that coherently shifts how
+sensitively a node's local observation patterns fire — the roadmap's
+"eliminate per-pattern threshold knobs in favor of one declaration."
+
+### The design choice
+`evaluate_local_observations` is a ~1,200-line function with thresholds as
+inline literals across ~20 patterns. Rewriting every literal per-profile
+would be huge and risky. Instead, three coherent levers thread through the
+function at the chokepoints all patterns already share:
+- **`density_scale`** multiplies the two base densities (`min_density_5m`
+  = 210, `min_density_10m` = 420) that every pattern derives its
+  evidence-window requirement from — one change, all patterns shift.
+- **`evidence_ratio`** replaces the hardcoded `0.70` sustained-fraction
+  gate at the three ratio-gated patterns (thermal_drain, phantom_load,
+  swap_io_pressure).
+- **`min_confidence`** is a final `obs.retain()` filter dropping
+  low-confidence observations before return.
+
+| Profile | density_scale | evidence_ratio | min_confidence |
+|---|---|---|---|
+| sovereign_dev | 1.15 | 0.85 | 0.50 |
+| dedicated_server (default) | 1.00 | 0.70 | 0.00 |
+| production_fleet | 0.65 | 0.55 | 0.00 |
+
+**dedicated_server is byte-for-behavior identical to the pre-profile
+baseline** (scale 1.0, gate 0.70, no floor) — a locked unit test asserts
+this so the default can never silently drift. sovereign_dev raises the bar
+(mixed-use laptop shouldn't cry wolf); production_fleet lowers it (serving
+users → warn early). A test also asserts the three profiles are strictly
+ordered on all three levers and that scaled dev densities stay within their
+windows (≤300 / ≤600 samples @1Hz).
+
+### Plumbing
+- `deployment_profile: Option<String>` added to `WickleeConfig` (persists
+  to config.toml; None → dedicated_server).
+- Shared `Arc<Mutex<DeploymentProfile>>` initialized from config, re-read by
+  the 10s evaluator each tick (a runtime switch lands within one cycle),
+  exposed to handlers via an axum `Extension` layer.
+- `GET /api/deployment-profile` (current + selectable set with each
+  profile's tuning) and `PUT /api/deployment-profile` (validates, updates
+  shared state, persists via `update_config`). Localhost/agent, no auth.
+- Frontend `settings/DeploymentProfileSection.tsx` — three selectable
+  intent cards (same-origin fetch to the agent on :7700), rendered in
+  Settings only in localhost/agent mode (`!isCloudMode`).
+- Docs: ROADMAP → Shipped; llms-full.txt gained the endpoint spec.
+
+Verified: agent `cargo check` clean, deployment_profile unit tests green,
+frontend `tsc` clean, vitest (80) green. Only Deployment Profiles remains
+node-local — a future enhancement could push the active profile in
+telemetry so the fleet view shows each node's intent.
+
+## Early July 2026 — Audit Logging (Business+) shipped + a session-recovery story
+
+### The recovery
+A prior session built a batch of tier features (audit logging, Team
+intelligence, webhook event subscriptions, deployment profiles) on a
+**stale local `main`**, committed them, and on push discovered local
+`main` was ~150 commits behind the real `origin/main` (v0.10.0) — where
+most of that work had already shipped independently, and where a security
+fix had removed the org-tenancy pattern the code depended on. It chose
+"preserve + sync + port" and was mid-port of audit logging (adapting it
+to the new JWT-tenancy baseline) when it ran out of budget. The container
+was later reclaimed; the in-flight work survived only as one uncommitted
+`cloud/src/main.rs` in a local Mac working tree. We recovered that diff,
+pushed it to a branch, and finished the feature here. **Lesson (recorded
+as convention):** push WIP to a remote branch before the container idles
+— ephemeral working trees are not backups; the two never-pushed commits
+were unrecoverable.
+
+### What shipped — Audit Logging (Business+)
+The last **Planned** Business-tier item is now Shipped. Immutable,
+append-only trail of sensitive fleet operations.
+- **Backend** (`cloud/src/main.rs`): `audit_log` table (BIGSERIAL,
+  `ts`/`user_id`/`org_id`/`actor_email`/`action`/`target`/`details` JSONB;
+  user+ts and org+ts indexes; no UPDATE/DELETE path exists anywhere).
+  Fire-and-forget `audit()` helper — spawns off the request path, resolves
+  the actor email server-side, never delays or fails the caller. `org_id`
+  is taken from the verified `require_user_and_org` JWT claim, never a
+  client header. `GET /api/audit-log` reads are Business+-gated
+  (`is_business_or_above`), `tenant_scope`d, cursor-paginated (`before`),
+  and `action`-filterable, returning `{ entries, next_before }`.
+- **Instrumentation — 9 actions.** The recovered port wired five
+  (`api_key.created`/`deleted`, `node.removed`, `node.paired`,
+  `stream_tokens.revoked`); this pass added the four the roadmap spec
+  named but the port hadn't reached: `alert_rule.created`,
+  `alert_channel.created`, `webhook.created`, `node.updated` — each at the
+  handler's success path, referencing move-bound fields before they're
+  consumed by the response.
+- **Frontend**: new `settings/AuditLogSection.tsx` — Business+ gated via
+  `usePermissions`-style tier check, action-filter dropdown, load-more
+  cursor pagination, domain-coloured action chips, and an upgrade-nudge
+  locked state for lower tiers. Wired into `SettingsView` after the OTel
+  section. (Note: the pre-existing `AuditLogRecord` type in `types.ts` is
+  unrelated — it's the localhost TracesView CSV export — so the section
+  defines its own cloud-audit `AuditEntry` type.)
+- **Docs**: ROADMAP moved Audit Logging → Shipped; `public/llms-full.txt`
+  gained the `GET /api/audit-log` endpoint spec.
+- **Verification**: cloud `cargo check`/`cargo test` (13) green, frontend
+  `tsc` clean, vitest (80) green.
+
+### Known follow-ups (not in this change)
+- **`public/llms-full.txt` still carries stale pricing** ($9 Pro / $19
+  Team / "from $200" Enterprise, no Business tier) — a drift the prior
+  session had fixed on its lost branch. `public/llms.txt` is correct
+  ($29/$49/$499). Worth a focused doc-pricing sweep.
+- **Deployment Profiles** (agent-side `sovereign_dev` /
+  `dedicated_server` / `production_fleet`) — also built on the lost
+  branch, still absent on `origin/main`, still Planned.
+- The audit `before` cursor uses strict `ts <` so two entries sharing an
+  exact millisecond could straddle a page boundary — acceptable at
+  current volume; revisit with a `(ts, id)` composite cursor if needed.
+
 ## Mid June 2026 — Full-codebase quality review + fix campaign
 
 A four-surface review (cloud, agent, frontend data layer, frontend

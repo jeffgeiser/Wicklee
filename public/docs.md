@@ -423,6 +423,22 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 ---
 
+## Deployment Profiles
+
+A single intent selector that coherently shifts how sensitively a node's local observation patterns fire — instead of exposing a knob per pattern. Set it in Settings → Deployment Profile on the localhost dashboard; the agent applies it within ~10 seconds and persists it to `config.toml` (`deployment_profile`). Node-local: it governs which observations *this node* raises, not fleet-wide alert rules.
+
+| Profile | Intent | Evidence window | Sustained gate | Confidence floor |
+|---------|--------|-----------------|----------------|------------------|
+| **Sovereign Dev** | Laptop/workstation running inference alongside other work — high bar so mixed-use noise stays quiet | ×1.15 (more) | 0.85 | 0.50 |
+| **Dedicated Server** *(default)* | Single-purpose inference node — the baseline patterns were tuned for | ×1.00 | 0.70 | none |
+| **Production Fleet** | Serving real users where latency matters — aggressive early warning | ×0.65 (less) | 0.55 | none |
+
+The three levers move together: `density_scale` multiplies the evidence-window density every pattern derives from, `evidence_ratio` is the sustained-fraction gate a ratio-gated pattern must clear, and `min_confidence` drops low-confidence observations before they surface. `dedicated_server` reproduces the original pre-profile behavior exactly.
+
+**API (localhost, no auth):** `GET /api/deployment-profile` returns the active profile plus the selectable set with each one's tuning; `PUT /api/deployment-profile` with `{ "profile": "sovereign_dev" | "dedicated_server" | "production_fleet" }` switches it.
+
+---
+
 ## Alerts & Notifications
 
 When observations or fleet alerts fire, Wicklee delivers notifications to external channels.
@@ -628,6 +644,8 @@ curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | lengt
 Base URL: `https://wicklee.dev/api/v1`
 Auth: `X-API-Key: wk_live_...` header.
 
+**Key scopes:** keys are **personal** (see only your own nodes) or **org-wide** (see the whole organization fleet and inherit the org's subscription tier — for CI and automation that shouldn't ride on an individual's account). Org keys are minted and revoked by org Admins (`POST /api/v1/keys` with `"scope": "org"`); every member can see them in the key list. All key lifecycle events are captured in the audit log.
+
 | Method | Endpoint | Description | Tier |
 |--------|----------|-------------|------|
 | GET | /api/v1/fleet | All nodes with full MetricsPayload | All |
@@ -653,6 +671,45 @@ Wicklee uses Clerk Organizations for shared fleet access. When you create an org
 **Tier inheritance:** The org inherits the subscription tier of its creator. Upgrade to Team and all members benefit — no individual subscriptions needed.
 
 **Solo users:** Organizations are optional. Community and Pro users can use Wicklee as a single-user dashboard with no changes.
+
+### Roles (RBAC)
+
+Fleet permissions follow your Clerk organization role, verified from the signed session token on every request:
+
+| Role | Can |
+|------|-----|
+| **Admin** (`org:admin`) | Everything, including removing nodes from the fleet |
+| **Member** (`org:member`, custom roles) | Day-to-day operations — pair nodes, rename/tag nodes, alert rules & channels, webhooks, acknowledge/resolve observations, OTel config |
+| **Viewer** (`org:viewer`, custom Clerk role) | Read-only — dashboards, history, observations, exports; every mutation returns 403 |
+
+Node removal is Admin-only. Unknown custom roles map to Member (never Admin). Solo users without an organization have full control of their own resources. To use Viewer, create a custom `viewer` role in your Clerk organization settings and assign it to members.
+
+---
+
+## Audit Logging (Business+)
+
+An immutable, append-only record of sensitive fleet operations — for SOC 2 / ISO change-management evidence and answering "who changed what, when." Backed by a Postgres `audit_log` table with **no UPDATE or DELETE path anywhere in the codebase**. Events are recorded for **every** tier; reading the trail is gated to **Business+**. Org members share one org-wide trail (tenant-scoped from the verified JWT — never a client header).
+
+Recording is fire-and-forget: it runs off the request path and never delays or fails the operation being audited. The actor's email is resolved server-side, so callers only pass IDs.
+
+**Recorded actions (9):** `node.paired`, `node.removed`, `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created`, `api_key.deleted`, `stream_tokens.revoked`.
+
+**Endpoint:** `GET /api/audit-log` (Clerk JWT, Business+). Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Returns `{ entries: [...], next_before }` where each entry carries `ts`, `actor_email`, `action`, `target`, and a JSON `details` object.
+
+### Export
+
+`GET /api/audit-log/export?format=csv|json&action=&from=&to=` — full-history download (chronological, up to 100k rows). CSV output is RFC-4180 quoted with spreadsheet formula-injection hardening. Every export is itself recorded in the trail (`audit_log.exported`). **Retention:** at least 365 days on Business; unlimited on Enterprise.
+
+### SIEM Drain
+
+Stream new audit events to your own collector — Splunk HEC proxy, Datadog intake, or any HTTPS receiver. One drain per tenant, configured by org **Admins** in Settings → Audit Log (or `PUT /api/audit-log/drain` with `{ "url": "https://..." }`). The HMAC signing secret is returned **once**; re-saving rotates it.
+
+- Delivery: JSON batches (≤500 events) within ~1 minute of the event, signed via `X-Wicklee-Signature: sha256=<hex>` — same HMAC-SHA256 scheme as Threshold Webhooks, verify on receipt.
+- The cursor starts at drain creation — the drain carries **new** events; use the export for history backfill.
+- A drain auto-disables after 20 consecutive delivery failures (visible in Settings); re-saving re-enables it.
+- Drain configuration changes are themselves audited (`audit_drain.created` / `audit_drain.deleted`).
+
+Surfaced as the **Audit Log** section in Settings — action filter, load-more pagination, CSV/JSON export buttons, SIEM drain configuration, and an upgrade nudge on lower tiers.
 
 ---
 

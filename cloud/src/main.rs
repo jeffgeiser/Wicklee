@@ -511,6 +511,12 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
         .execute(pool).await.ok();
+    // Org-wide API keys: NULL = personal key (original behavior). An org key
+    // is minted by an org Admin and scopes the V1 API to the org's fleet.
+    sqlx::query("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id TEXT")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_org_id ON api_keys(org_id)")
+        .execute(pool).await.ok();
 
     sqlx::query("
         CREATE TABLE IF NOT EXISTS notification_channels (
@@ -781,6 +787,45 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("organizations migration failed");
 
+    // ── Audit log (Business+ tier) ──────────────────────────────────────────
+    // Append-only: no UPDATE/DELETE paths exist anywhere in the codebase.
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id          BIGSERIAL PRIMARY KEY,
+            ts          BIGINT NOT NULL,
+            user_id     TEXT NOT NULL,
+            org_id      TEXT,
+            actor_email TEXT NOT NULL DEFAULT '',
+            action      TEXT NOT NULL,
+            target      TEXT NOT NULL DEFAULT '',
+            details     JSONB
+        )
+    ").execute(pool).await.expect("audit_log migration failed");
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, ts DESC)")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_org ON audit_log(org_id, ts DESC)")
+        .execute(pool).await.ok();
+
+    // SIEM drain — one per tenant. Streams new audit events to a customer
+    // HTTPS endpoint, HMAC-signed like threshold webhooks. `last_id` is the
+    // delivery cursor (starts at the tenant's max id at creation — history
+    // backfill is the export endpoint's job, not the drain's).
+    sqlx::query("
+        CREATE TABLE IF NOT EXISTS audit_drains (
+            tenant_id        TEXT PRIMARY KEY,
+            user_id          TEXT NOT NULL,
+            org_id           TEXT,
+            url              TEXT NOT NULL,
+            secret           TEXT NOT NULL,
+            enabled          BOOLEAN NOT NULL DEFAULT true,
+            last_id          BIGINT NOT NULL DEFAULT 0,
+            failures         INT NOT NULL DEFAULT 0,
+            last_delivery_ms BIGINT,
+            created_at       BIGINT NOT NULL
+        )
+    ").execute(pool).await.expect("audit_drains migration failed");
+
     // Install telemetry — anonymous counter, no PII.
     sqlx::query("
         CREATE TABLE IF NOT EXISTS installs (
@@ -955,13 +1000,27 @@ fn fetch_jwks(url: &str) -> Vec<JwkKey> {
     }
 }
 
-/// Verify a Clerk JWT and return the `sub` claim (Clerk user ID) and optional `org_id`.
-fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<String>)> {
+/// Verify a Clerk JWT and return the `sub` claim (Clerk user ID), optional
+/// `org_id`, and optional org role string (e.g. "org:admin"). Handles both
+/// Clerk token shapes: v1 top-level `org_id`/`org_role`, and v2 nested
+/// `o: { id, rol }` (rol carries no "org:" prefix).
+fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<String>, Option<String>)> {
+    #[derive(Deserialize)]
+    struct ClerkOrgClaim {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        rol: Option<String>,
+    }
     #[derive(Deserialize)]
     struct ClerkClaims {
         sub: String,
         #[serde(default)]
         org_id: Option<String>,
+        #[serde(default)]
+        org_role: Option<String>,
+        #[serde(default)]
+        o: Option<ClerkOrgClaim>,
     }
 
     if keys.is_empty() {
@@ -997,8 +1056,12 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<St
             Err(e) => { eprintln!("[auth] DecodingKey build failed for kid={}: {e}", jwk.kid); }
             Ok(key) => match decode::<ClerkClaims>(token, &key, &val) {
                 Ok(data) => {
-                    eprintln!("[auth] JWT valid (org_id={:?})", data.claims.org_id);
-                    return Some((data.claims.sub, data.claims.org_id));
+                    let c = data.claims;
+                    let (o_id, o_rol) = c.o.map(|o| (o.id, o.rol)).unwrap_or((None, None));
+                    let org_id   = c.org_id.or(o_id);
+                    let org_role = c.org_role.or(o_rol);
+                    eprintln!("[auth] JWT valid (org_id={org_id:?} role={org_role:?})");
+                    return Some((c.sub, org_id, org_role));
                 }
                 Err(e) => { eprintln!("[auth] JWT decode failed for kid={}: {e}", jwk.kid); }
             }
@@ -1067,17 +1130,66 @@ async fn require_user_and_org(
     pool: &sqlx::PgPool,
     clerk_keys: &[JwkKey],
 ) -> Option<(String, Option<String>)> {
-    // Legacy DIY sessions — no org concept.
+    require_user_org_role(token, pool, clerk_keys).await
+        .map(|(uid, org, _role)| (uid, org))
+}
+
+/// RBAC role within the active organization, derived from the verified Clerk
+/// JWT's org role claim — never from the client. Solo users (no org in the
+/// session) are Admin over their own resources; tenancy scoping already
+/// confines them to those. Clerk built-in roles: "org:admin" / "org:member";
+/// a custom "org:viewer" role (configurable in Clerk) maps to read-only.
+/// Unknown custom roles default to Member so a bespoke ops role isn't
+/// accidentally locked out of day-to-day work — Admin is never inferred.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OrgRole { Admin, Member, Viewer }
+
+impl OrgRole {
+    fn from_claim(role: Option<&str>, has_org: bool) -> Self {
+        if !has_org { return OrgRole::Admin; }
+        match role.map(|r| r.strip_prefix("org:").unwrap_or(r)) {
+            Some("admin")  => OrgRole::Admin,
+            Some("viewer") => OrgRole::Viewer,
+            // "member", "basic_member", custom roles, or a missing claim on
+            // an org session → Member (least-privilege for Admin, but not
+            // read-only — Clerk always sends the role for org sessions).
+            _ => OrgRole::Member,
+        }
+    }
+
+    /// Viewers cannot mutate anything.
+    fn can_mutate(&self) -> bool { !matches!(self, OrgRole::Viewer) }
+    fn is_admin(&self)   -> bool { matches!(self, OrgRole::Admin) }
+}
+
+/// 403 body for role-policy denials — names the required role so the
+/// frontend can render a useful message instead of a generic failure.
+fn role_forbidden(required: &str) -> axum::response::Response {
+    (StatusCode::FORBIDDEN, Json(serde_json::json!({
+        "error": format!("Your organization role does not permit this action ({required} required)"),
+        "role_required": required,
+    }))).into_response()
+}
+
+/// Like `require_user_and_org` but also returns the caller's [`OrgRole`].
+/// Mutating handlers use this; read-only handlers keep the 2-tuple wrapper.
+async fn require_user_org_role(
+    token: &str,
+    pool: &sqlx::PgPool,
+    clerk_keys: &[JwkKey],
+) -> Option<(String, Option<String>, OrgRole)> {
+    // Legacy DIY sessions — no org concept, full control of own resources.
     if let Ok(id) = sqlx::query_scalar::<_, String>(
         "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1"
     ).bind(token).fetch_one(pool).await {
-        return Some((id, None));
+        return Some((id, None, OrgRole::Admin));
     }
 
-    // Clerk JWT — trust the signed org_id claim, never a header.
-    let (sub, org_id) = validate_clerk_jwt(token, clerk_keys)?;
+    // Clerk JWT — trust the signed org_id + role claims, never a header.
+    let (sub, org_id, org_role) = validate_clerk_jwt(token, clerk_keys)?;
     let user_id = resolve_clerk_user(&sub, pool).await?;
-    Some((user_id, org_id))
+    let role = OrgRole::from_claim(org_role.as_deref(), org_id.is_some());
+    Some((user_id, org_id, role))
 }
 
 /// Returns (column_name, bind_value) for tenant-scoped queries.
@@ -1156,17 +1268,409 @@ async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPoo
     .unwrap_or_else(|_| "community".to_string())
 }
 
-/// Like require_user but also returns email, is_pro, and the verified org_id.
+/// Record an audit event. Fire-and-forget — never delays or fails the request.
+/// Events are recorded for every tier; reading them is gated to Business+.
+/// org_id must come from the verified JWT claim (require_user_and_org), never
+/// a client header. The actor email is resolved here so callers only pass ids.
+fn audit(
+    pool: &sqlx::PgPool,
+    user_id: &str,
+    org_id: &Option<String>,
+    action: &'static str,
+    target: &str,
+    details: serde_json::Value,
+) {
+    let pool = pool.clone();
+    let user_id = user_id.to_owned();
+    let org_id = org_id.clone();
+    let target = target.to_owned();
+    tokio::spawn(async move {
+        let email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(&user_id).fetch_one(&pool).await.unwrap_or_default();
+        if let Err(e) = sqlx::query(
+            "INSERT INTO audit_log (ts, user_id, org_id, actor_email, action, target, details)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)"
+        ).bind(now_ms() as i64).bind(&user_id).bind(&org_id).bind(&email)
+        .bind(action).bind(&target).bind(details.to_string())
+        .execute(&pool).await {
+            eprintln!("[audit] write failed for {action}: {e}");
+        }
+    });
+}
+
+/// GET /api/audit-log — immutable audit trail, Business+ tier.
+/// Query params: limit (default 50, max 200), before (ts_ms cursor),
+/// action (exact-match filter). Org members see the whole org trail.
+async fn handle_audit_log(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+
+    let limit: i64 = params.get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50).clamp(1, 200);
+    let before: i64 = params.get("before")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(i64::MAX);
+    let action = params.get("action").cloned();
+
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let mut sql = format!(
+        "SELECT id, ts, user_id, org_id, actor_email, action, target, COALESCE(details::text, '{{}}')
+         FROM audit_log WHERE {tcol} = $1 AND ts < $2");
+    if action.is_some() { sql.push_str(" AND action = $4"); }
+    sql.push_str(" ORDER BY ts DESC LIMIT $3");
+
+    let mut q = sqlx::query_as::<_, (i64, i64, String, Option<String>, String, String, String, String)>(&sql)
+        .bind(tval).bind(before).bind(limit);
+    if let Some(ref a) = action { q = q.bind(a); }
+    let rows = q.fetch_all(&state.pool).await.unwrap_or_default();
+
+    let entries: Vec<serde_json::Value> = rows.into_iter()
+        .map(|(id, ts, uid, oid, email, action, target, details)| serde_json::json!({
+            "id": id, "ts": ts, "user_id": uid, "org_id": oid,
+            "actor_email": email, "action": action, "target": target,
+            "details": serde_json::from_str::<serde_json::Value>(&details)
+                .unwrap_or(serde_json::json!({})),
+        })).collect();
+
+    let next_before = entries.last().and_then(|e| e["ts"].as_i64());
+    Json(serde_json::json!({ "entries": entries, "next_before": next_before })).into_response()
+}
+
+/// Escape a value for CSV: RFC-4180 quoting (quotes, commas, newlines) plus
+/// spreadsheet formula-injection hardening — cells starting with = + - @ get
+/// a leading apostrophe so Excel/Sheets treat them as text, not formulas.
+/// (Audit fields like `target` and `details` can carry client-influenced
+/// strings, e.g. node display names.)
+fn csv_escape(s: &str) -> String {
+    let s = if s.starts_with(['=', '+', '-', '@']) {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    };
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s
+    }
+}
+
+/// GET /api/audit-log/export?format=csv|json&action=&from=&to= — full-history
+/// audit export, Business+ tier. Same tenant scoping as /api/audit-log.
+/// Chronological (ts ASC), capped at 100k rows. The export itself is audited.
+async fn handle_audit_log_export(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+
+    let format = params.get("format").map(|s| s.as_str()).unwrap_or("json");
+    if !matches!(format, "json" | "csv") {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "format must be json or csv" }))).into_response();
+    }
+    let from: i64 = params.get("from").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let to:   i64 = params.get("to").and_then(|s| s.parse().ok()).unwrap_or(i64::MAX);
+    let action = params.get("action").cloned();
+
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let mut sql = format!(
+        "SELECT id, ts, user_id, org_id, actor_email, action, target, COALESCE(details::text, '{{}}')
+         FROM audit_log WHERE {tcol} = $1 AND ts >= $2 AND ts <= $3");
+    if action.is_some() { sql.push_str(" AND action = $4"); }
+    sql.push_str(" ORDER BY ts ASC LIMIT 100000");
+
+    let mut q = sqlx::query_as::<_, (i64, i64, String, Option<String>, String, String, String, String)>(&sql)
+        .bind(tval).bind(from).bind(to);
+    if let Some(ref a) = action { q = q.bind(a); }
+    let rows = q.fetch_all(&state.pool).await.unwrap_or_default();
+    let row_count = rows.len();
+
+    audit(&state.pool, &user_id, &org_id, "audit_log.exported", "",
+        serde_json::json!({ "format": format, "rows": row_count }));
+
+    let stamp = now_ms();
+    if format == "csv" {
+        let mut out = String::from("id,ts,actor_email,user_id,org_id,action,target,details\n");
+        for (id, ts, uid, oid, email, action, target, details) in rows {
+            out.push_str(&format!("{},{},{},{},{},{},{},{}\n",
+                id, ts,
+                csv_escape(&email), csv_escape(&uid), csv_escape(oid.as_deref().unwrap_or("")),
+                csv_escape(&action), csv_escape(&target), csv_escape(&details)));
+        }
+        (
+            [
+                ("Content-Type", "text/csv; charset=utf-8".to_string()),
+                ("Content-Disposition", format!("attachment; filename=\"wicklee-audit-{stamp}.csv\"")),
+            ],
+            out,
+        ).into_response()
+    } else {
+        let entries: Vec<serde_json::Value> = rows.into_iter()
+            .map(|(id, ts, uid, oid, email, action, target, details)| serde_json::json!({
+                "id": id, "ts": ts, "user_id": uid, "org_id": oid,
+                "actor_email": email, "action": action, "target": target,
+                "details": serde_json::from_str::<serde_json::Value>(&details)
+                    .unwrap_or(serde_json::json!({})),
+            })).collect();
+        (
+            [
+                ("Content-Type", "application/json".to_string()),
+                ("Content-Disposition", format!("attachment; filename=\"wicklee-audit-{stamp}.json\"")),
+            ],
+            serde_json::json!({ "entries": entries, "count": row_count }).to_string(),
+        ).into_response()
+    }
+}
+
+/// GET /api/audit-log/drain — current SIEM drain status (no secret). Business+.
+async fn handle_get_audit_drain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let row: Option<(String, bool, i32, Option<i64>, i64)> = sqlx::query_as(
+        "SELECT url, enabled, failures, last_delivery_ms, created_at FROM audit_drains WHERE tenant_id = $1"
+    ).bind(tval).fetch_optional(&state.pool).await.ok().flatten();
+
+    match row {
+        Some((url, enabled, failures, last_delivery_ms, created_at)) => Json(serde_json::json!({
+            "configured": true, "url": url, "enabled": enabled,
+            "failures": failures, "last_delivery_ms": last_delivery_ms, "created_at": created_at,
+        })).into_response(),
+        None => Json(serde_json::json!({ "configured": false })).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PutDrainBody { url: String }
+
+/// PUT /api/audit-log/drain — create or replace the tenant's SIEM drain.
+/// Admin-only + Business+. Returns the HMAC secret ONCE (re-PUT rotates it).
+/// The delivery cursor starts at the tenant's current max audit id — the
+/// drain streams new events; history backfill is the export endpoint's job.
+async fn handle_put_audit_drain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PutDrainBody>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.is_admin() { return role_forbidden("admin"); }
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_business_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
+    }
+    if !body.url.starts_with("https://") && !body.url.starts_with("http://") {
+        return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "url must be http(s) — https strongly recommended" }))).into_response();
+    }
+
+    let secret_bytes: [u8; 32] = std::array::from_fn(|_| rand::random());
+    let secret = hex::encode(secret_bytes);
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+
+    // Start the cursor at the tenant's current max id so only NEW events flow.
+    let start_sql = format!("SELECT COALESCE(MAX(id), 0) FROM audit_log WHERE {tcol} = $1");
+    let start_id: i64 = sqlx::query_scalar(&start_sql)
+        .bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
+
+    let result = sqlx::query(
+        "INSERT INTO audit_drains (tenant_id, user_id, org_id, url, secret, enabled, last_id, failures, created_at)
+         VALUES ($1, $2, $3, $4, $5, true, $6, 0, $7)
+         ON CONFLICT (tenant_id) DO UPDATE SET
+           url = EXCLUDED.url, secret = EXCLUDED.secret, enabled = true,
+           failures = 0, user_id = EXCLUDED.user_id, org_id = EXCLUDED.org_id"
+    ).bind(tval).bind(&user_id).bind(&org_id).bind(&body.url).bind(&secret)
+    .bind(start_id).bind(now_ms() as i64)
+    .execute(&state.pool).await;
+
+    match result {
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "audit_drain.created", &body.url,
+                serde_json::json!({}));
+            Json(serde_json::json!({
+                "url": body.url, "enabled": true,
+                "secret": secret,  // shown ONCE — verify X-Wicklee-Signature with it
+            })).into_response()
+        }
+        Err(e) => { eprintln!("[audit-drain] upsert failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response() }
+    }
+}
+
+/// DELETE /api/audit-log/drain — remove the tenant's SIEM drain. Admin-only.
+async fn handle_delete_audit_drain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    if !role.is_admin() { return role_forbidden("admin"); }
+
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let result = sqlx::query("DELETE FROM audit_drains WHERE tenant_id = $1")
+        .bind(tval).execute(&state.pool).await;
+
+    match result {
+        Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "No drain configured" }))).into_response(),
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "audit_drain.deleted", "", serde_json::json!({}));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
+    }
+}
+
+/// SIEM drain delivery loop — every 60s, ships each enabled drain's new audit
+/// events (id > cursor) as an HMAC-signed batch via `deliver_webhook`. Tier is
+/// re-checked at delivery time so downgraded tenants stop draining. A drain
+/// auto-disables after 20 consecutive failures so a dead endpoint can't spin
+/// forever; re-PUT re-enables it.
+async fn audit_drain_task(pool: sqlx::PgPool) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        let drains: Vec<(String, String, Option<String>, String, String, i64, i32)> = sqlx::query_as(
+            "SELECT tenant_id, user_id, org_id, url, secret, last_id, failures
+             FROM audit_drains WHERE enabled = true"
+        ).fetch_all(&pool).await.unwrap_or_default();
+
+        for (tenant_id, user_id, org_id, url, secret, last_id, failures) in drains {
+            let tier = resolve_tier(&user_id, &org_id, &pool).await;
+            if !is_business_or_above(&tier) { continue; }
+
+            let (tcol, tval) = tenant_scope(&user_id, &org_id);
+            let sql = format!(
+                "SELECT id, ts, user_id, org_id, actor_email, action, target, COALESCE(details::text, '{{}}')
+                 FROM audit_log WHERE {tcol} = $1 AND id > $2 ORDER BY id ASC LIMIT 500");
+            let rows: Vec<(i64, i64, String, Option<String>, String, String, String, String)> =
+                sqlx::query_as(&sql).bind(tval).bind(last_id)
+                    .fetch_all(&pool).await.unwrap_or_default();
+            if rows.is_empty() { continue; }
+
+            let max_id = rows.last().map(|r| r.0).unwrap_or(last_id);
+            let events: Vec<serde_json::Value> = rows.into_iter()
+                .map(|(id, ts, uid, oid, email, action, target, details)| serde_json::json!({
+                    "id": id, "ts": ts, "user_id": uid, "org_id": oid,
+                    "actor_email": email, "action": action, "target": target,
+                    "details": serde_json::from_str::<serde_json::Value>(&details)
+                        .unwrap_or(serde_json::json!({})),
+                })).collect();
+            let count = events.len();
+            let payload = serde_json::json!({
+                "type": "audit.batch", "tenant_id": tenant_id, "events": events,
+            });
+
+            match deliver_webhook(&url, &secret, &payload).await {
+                Ok(status) if (200..300).contains(&status) => {
+                    let _ = sqlx::query(
+                        "UPDATE audit_drains SET last_id = $1, failures = 0, last_delivery_ms = $2
+                         WHERE tenant_id = $3"
+                    ).bind(max_id).bind(now_ms() as i64).bind(&tenant_id)
+                    .execute(&pool).await;
+                    eprintln!("[audit-drain] delivered {count} events to tenant {tenant_id}");
+                }
+                outcome => {
+                    let f = failures + 1;
+                    let disable = f >= 20;
+                    let _ = sqlx::query(
+                        "UPDATE audit_drains SET failures = $1, enabled = $2 WHERE tenant_id = $3"
+                    ).bind(f).bind(!disable).bind(&tenant_id)
+                    .execute(&pool).await;
+                    eprintln!("[audit-drain] delivery failed for tenant {tenant_id} ({outcome:?}, failure {f}{})",
+                        if disable { " — DISABLED after 20 consecutive failures" } else { "" });
+                }
+            }
+        }
+    }
+}
+
+/// Like require_user but also returns email, is_pro, the verified org_id,
+/// and the caller's [`OrgRole`].
 async fn require_user_info(
     token: &str,
     pool: &sqlx::PgPool,
     clerk_keys: &[JwkKey],
-) -> Option<(String, String, i32, Option<String>)> {
-    let (user_id, org_id) = require_user_and_org(token, pool, clerk_keys).await?;
+) -> Option<(String, String, i32, Option<String>, OrgRole)> {
+    let (user_id, org_id, role) = require_user_org_role(token, pool, clerk_keys).await?;
     let row = sqlx::query_as::<_, (String, i32)>(
         "SELECT email, is_pro FROM users WHERE id = $1"
     ).bind(&user_id).fetch_one(pool).await.ok()?;
-    Some((user_id, row.0, row.1, org_id))
+    Some((user_id, row.0, row.1, org_id, role))
 }
 
 // ── Agent API v1 helpers ──────────────────────────────────────────────────────
@@ -1206,21 +1710,26 @@ fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
 }
 
 /// Validate a raw API key, enforce rate limits, return (key_id, user_id, is_pro).
+/// Validate an API key and return `(key_id, user_id, org_id, tier)`.
+///
+/// `org_id` is the key's OWN org column (NULL = personal key) — an org key
+/// scopes the V1 API to the org's fleet regardless of which admin minted it.
+/// `tier` is resolved through `resolve_tier` (org subscription for org keys,
+/// the minting user's otherwise) — the same authority every JWT-side gate
+/// uses, replacing the legacy `users.is_pro` flag for rate limiting.
 async fn validate_api_key(
     raw_key: &str,
     pool: &sqlx::PgPool,
     rate_limits: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
-) -> Option<(String, String, bool)> {
+) -> Option<(String, String, Option<String>, String)> {
     let hash = sha256_hex(raw_key);
-    let row = sqlx::query_as::<_, (String, String, i32)>(
-        "SELECT k.key_id, k.user_id, u.is_pro
-         FROM api_keys k
-         JOIN users u ON u.id = k.user_id
-         WHERE k.key_hash = $1"
+    let row = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT key_id, user_id, org_id FROM api_keys WHERE key_hash = $1"
     ).bind(&hash).fetch_one(pool).await.ok()?;
 
-    let (key_id, user_id, is_pro_int) = row;
-    let limit = if is_pro_int != 0 { API_RATE_TEAM } else { API_RATE_COMMUNITY };
+    let (key_id, user_id, org_id) = row;
+    let tier = resolve_tier(&user_id, &org_id, pool).await;
+    let limit = if tier != "community" { API_RATE_TEAM } else { API_RATE_COMMUNITY };
     let now = now_ms();
     let window_start = now.saturating_sub(60_000);
     {
@@ -1237,7 +1746,7 @@ async fn validate_api_key(
         .bind(now as i64).bind(&key_id)
         .execute(pool).await;
 
-    Some((key_id, user_id, is_pro_int != 0))
+    Some((key_id, user_id, org_id, tier))
 }
 
 const AUTH_RATE_LIMIT: usize = 10; // max attempts per 60s per IP
@@ -1329,11 +1838,18 @@ struct V1KeyInfo {
     name:         String,
     created_at:   i64,
     last_used_ms: Option<i64>,
+    /// "personal" (default) or "org" — org keys scope the V1 API to the
+    /// org's whole fleet and are managed by org Admins.
+    scope:        &'static str,
 }
 
 #[derive(Deserialize)]
 struct V1CreateKeyRequest {
     name: String,
+    /// "personal" (default) or "org". Org scope requires an active org in
+    /// the session AND the Admin role.
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1342,6 +1858,7 @@ struct V1CreateKeyResponse {
     key:        String,
     name:       String,
     created_at: i64,
+    scope:      &'static str,
 }
 
 // ── Agent API v1 handlers — key management ────────────────────────────────────
@@ -1363,11 +1880,30 @@ async fn handle_v1_create_key(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
+
+    // Org-scoped keys: minted only by org Admins, bound to the verified org
+    // claim. Personal keys (the default) keep the original per-user scope.
+    let scope = body.scope.as_deref().unwrap_or("personal");
+    let key_org: Option<String> = match scope {
+        "personal" => None,
+        "org" => {
+            let Some(org) = org_id.clone() else {
+                return (StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "No active organization in session — switch to the org before minting an org key" }))).into_response();
+            };
+            if !role.is_admin() { return role_forbidden("admin"); }
+            Some(org)
+        }
+        _ => return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "scope must be personal or org" }))).into_response(),
+    };
+    let scope_label: &'static str = if key_org.is_some() { "org" } else { "personal" };
 
     let name     = body.name.trim().to_owned();
     let raw_key  = format!("wk_live_{}", Uuid::new_v4().to_string().replace('-', ""));
@@ -1376,15 +1912,19 @@ async fn handle_v1_create_key(
     let ts       = now_ms() as i64;
 
     let result = sqlx::query(
-        "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at)
-         VALUES ($1, $2, $3, $4, $5)"
-    ).bind(&key_id).bind(&key_hash).bind(&user_id).bind(&name).bind(ts)
+        "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at, org_id)
+         VALUES ($1, $2, $3, $4, $5, $6)"
+    ).bind(&key_id).bind(&key_hash).bind(&user_id).bind(&name).bind(ts).bind(&key_org)
     .execute(&state.pool).await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, Json(V1CreateKeyResponse {
-            key_id, key: raw_key, name, created_at: ts,
-        })).into_response(),
+        Ok(_) => {
+            audit(&state.pool, &user_id, &key_org, "api_key.created", &key_id,
+                serde_json::json!({ "name": &name, "scope": scope_label }));
+            (StatusCode::CREATED, Json(V1CreateKeyResponse {
+                key_id, key: raw_key, name, created_at: ts, scope: scope_label,
+            })).into_response()
+        }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     }
@@ -1402,19 +1942,24 @@ async fn handle_v1_list_keys(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let keys: Vec<(String, String, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT key_id, name, created_at, last_used_ms
-         FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+    // Personal keys (yours, org_id NULL) + the active org's keys (visible to
+    // every member — they're shared infrastructure; only Admins mint/revoke).
+    let keys: Vec<(String, String, i64, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT key_id, name, created_at, last_used_ms, org_id
+         FROM api_keys
+         WHERE (user_id = $1 AND org_id IS NULL) OR ($2::text IS NOT NULL AND org_id = $2)
+         ORDER BY created_at DESC"
+    ).bind(&user_id).bind(&org_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let key_list: Vec<V1KeyInfo> = keys.into_iter().map(|(key_id, name, created_at, last_used_ms)| {
-        V1KeyInfo { key_id, name, created_at, last_used_ms }
+    let key_list: Vec<V1KeyInfo> = keys.into_iter().map(|(key_id, name, created_at, last_used_ms, korg)| {
+        V1KeyInfo { key_id, name, created_at, last_used_ms,
+                    scope: if korg.is_some() { "org" } else { "personal" } }
     }).collect();
 
     Json(serde_json::json!({ "keys": key_list })).into_response()
@@ -1433,11 +1978,12 @@ async fn handle_delete_node(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.is_admin() { return role_forbidden("admin"); }
 
     // Org members can remove any node in the shared fleet; solo users only
     // their own. tenant_id on the metrics tables is the same scope column.
@@ -1460,6 +2006,7 @@ async fn handle_delete_node(
 
             // Evict from in-memory cache.
             state.metrics.write().unwrap().remove(&node_id);
+            audit(&state.pool, &user_id, &org_id, "node.removed", &node_id, serde_json::json!({}));
             StatusCode::NO_CONTENT.into_response()
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
@@ -1480,23 +2027,54 @@ async fn handle_v1_delete_key(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
-    let result = sqlx::query(
-        "DELETE FROM api_keys WHERE key_id = $1 AND user_id = $2"
+    // Personal keys: owner deletes their own. Org keys: any Admin of the
+    // key's org (checked against the verified claim, not ownership).
+    let personal = sqlx::query(
+        "DELETE FROM api_keys WHERE key_id = $1 AND user_id = $2 AND org_id IS NULL"
     ).bind(&key_id).bind(&user_id).execute(&state.pool).await;
 
-    match result {
-        Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
-        Ok(_)  => StatusCode::NO_CONTENT.into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+    match personal {
+        Ok(r) if r.rows_affected() > 0 => {
+            audit(&state.pool, &user_id, &None, "api_key.deleted", &key_id,
+                serde_json::json!({ "scope": "personal" }));
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
+        Ok(_) => {} // not a personal key — fall through to the org path
     }
+
+    if let Some(ref org) = org_id {
+        let is_org_key: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM api_keys WHERE key_id = $1 AND org_id = $2)"
+        ).bind(&key_id).bind(org).fetch_one(&state.pool).await.unwrap_or(false);
+        if is_org_key {
+            if !role.is_admin() { return role_forbidden("admin"); }
+            let result = sqlx::query("DELETE FROM api_keys WHERE key_id = $1 AND org_id = $2")
+                .bind(&key_id).bind(org).execute(&state.pool).await;
+            return match result {
+                Ok(r) if r.rows_affected() > 0 => {
+                    audit(&state.pool, &user_id, &org_id, "api_key.deleted", &key_id,
+                        serde_json::json!({ "scope": "org" }));
+                    StatusCode::NO_CONTENT.into_response()
+                }
+                Ok(_) => (StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
+                Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
+            };
+        }
+    }
+
+    (StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "Key not found" }))).into_response()
 }
 
 // ── Agent API v1 handlers — fleet data ────────────────────────────────────────
@@ -1512,15 +2090,16 @@ async fn handle_v1_fleet(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let persisted: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT wk_id, last_seen FROM nodes WHERE user_id = $1 ORDER BY last_seen DESC"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id, last_seen FROM nodes WHERE {tcol} = $1 ORDER BY last_seen DESC")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1548,15 +2127,16 @@ async fn handle_v1_fleet_wes(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let node_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT wk_id FROM nodes WHERE user_id = $1"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1583,15 +2163,16 @@ async fn handle_v1_node(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let owned: bool = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM nodes WHERE wk_id = $1 AND user_id = $2)"
-    ).bind(&node_id).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(false);
+        &format!("SELECT EXISTS(SELECT 1 FROM nodes WHERE wk_id = $1 AND {tcol} = $2)")
+    ).bind(&node_id).bind(tval).fetch_one(&state.pool).await.unwrap_or(false);
 
     if !owned {
         return (StatusCode::NOT_FOUND,
@@ -1631,17 +2212,18 @@ async fn handle_v1_route_best(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let model_filter = params.get("model").cloned();
 
     let node_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT wk_id FROM nodes WHERE user_id = $1"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1738,24 +2320,22 @@ async fn handle_v1_insights_latest(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     // Insights API is Team+ only
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
     if !is_team_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "Insights API requires Team tier or above", "upgrade": true }))).into_response();
     }
 
     let node_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT wk_id FROM nodes WHERE user_id = $1"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -1948,6 +2528,7 @@ async fn handle_revoke_stream_tokens(
     let _ = sqlx::query("DELETE FROM stream_tokens WHERE user_id = $1")
         .bind(&user_id).execute(&state.pool).await;
 
+    audit(&state.pool, &user_id, &None, "stream_tokens.revoked", "", serde_json::json!({}));
     StatusCode::NO_CONTENT
 }
 
@@ -2728,11 +3309,12 @@ async fn handle_acknowledge_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let now = now_ms() as i64;
     let result = sqlx::query(
@@ -2764,11 +3346,12 @@ async fn handle_submit_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Pro+ only — persistent insight cards
     // Org-aware: org members are entitled by the org subscription.
@@ -2842,11 +3425,12 @@ async fn handle_resolve_observation(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let now = now_ms() as i64;
     let result = sqlx::query(
@@ -3631,11 +4215,12 @@ async fn handle_webhook_create(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
@@ -3688,6 +4273,9 @@ async fn handle_webhook_create(
     .bind(&body.event_type).bind(&body.node_id)
     .bind(body.threshold).bind(cooldown_s)
     .execute(&state.pool).await;
+
+    audit(&state.pool, &user_id, &org_id, "webhook.created", &id,
+        serde_json::json!({ "event_type": &body.event_type, "url": &body.url }));
 
     Json(serde_json::json!({
         "id":         id,
@@ -3753,11 +4341,12 @@ async fn handle_webhook_delete(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let res = sqlx::query(
         "DELETE FROM webhook_subscriptions WHERE id = $1 AND user_id = $2"
@@ -3787,11 +4376,12 @@ async fn handle_webhook_test(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let row: Option<(String, String, String)> = sqlx::query_as(
         "SELECT url, secret, event_type FROM webhook_subscriptions
@@ -4108,11 +4698,13 @@ async fn handle_activate(
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
     let user_info = require_user_info(&token, &state.pool, &clerk_keys).await;
 
-    let (user_id, email, is_pro_db, org_id) = match user_info {
+    let (user_id, email, is_pro_db, org_id, role) = match user_info {
         Some(info) => info,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    // RBAC: pairing a node into the fleet is a mutation — viewers cannot.
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
     // Enforce per-tier node limits.
@@ -4170,6 +4762,8 @@ async fn handle_activate(
                 ).bind(oid).bind(&user_id).bind(now_ms() as i64)
                 .execute(&state.pool).await;
             }
+            audit(&state.pool, &user_id, &org_id, "node.paired", &node_id,
+                serde_json::json!({ "fleet_url": &fleet_url }));
             (StatusCode::OK, Json(serde_json::json!({ "node_id": node_id, "fleet_url": fleet_url }))).into_response()
         }
     }
@@ -5256,15 +5850,13 @@ async fn handle_v1_models_discover(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
 
     // ── Fleet matching (Team+) ────────────────────────────────────────────
     if params.get("fleet").map(|v| v == "true").unwrap_or(false) {
@@ -5288,8 +5880,8 @@ async fn handle_v1_models_discover(
 
         // Score each fleet node against the smallest fitting variant
         let node_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT wk_id FROM nodes WHERE user_id = $1"
-        ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+            &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+        ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
         let metrics_map = state.metrics.read().unwrap();
         let now = now_ms();
@@ -7103,11 +7695,12 @@ async fn handle_update_node(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
@@ -7147,6 +7740,8 @@ async fn handle_update_node(
 
     match row {
         Some((wk_id, hostname, display_name, tags)) => {
+            audit(&state.pool, &user_id, &org_id, "node.updated", &node_id,
+                serde_json::json!({ "display_name": &display_name, "tags": &tags }));
             Json(serde_json::json!({
                 "node_id": wk_id,
                 "hostname": hostname,
@@ -7178,11 +7773,12 @@ async fn handle_create_channel(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
@@ -7204,10 +7800,14 @@ async fn handle_create_channel(
     .execute(&state.pool).await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, Json(AlertChannel {
-            id, channel_type: body.channel_type, name: body.name,
-            config_json: body.config_json, verified: false, created_at: ts,
-        })).into_response(),
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "alert_channel.created", &id,
+                serde_json::json!({ "channel_type": &body.channel_type, "name": &body.name }));
+            (StatusCode::CREATED, Json(AlertChannel {
+                id, channel_type: body.channel_type, name: body.name,
+                config_json: body.config_json, verified: false, created_at: ts,
+            })).into_response()
+        }
         Err(e) => { eprintln!("[alerts] channel insert failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
@@ -7255,11 +7855,12 @@ async fn handle_delete_channel(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let result = sqlx::query("DELETE FROM notification_channels WHERE id = $1 AND user_id = $2")
         .bind(&channel_id).bind(&user_id).execute(&state.pool).await;
@@ -7292,11 +7893,12 @@ async fn handle_create_rule(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
@@ -7326,11 +7928,15 @@ async fn handle_create_rule(
     .execute(&state.pool).await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, Json(AlertRule {
-            id, node_id: body.node_id, event_type: body.event_type,
-            threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
-            enabled: true, created_at: ts,
-        })).into_response(),
+        Ok(_) => {
+            audit(&state.pool, &user_id, &org_id, "alert_rule.created", &id,
+                serde_json::json!({ "event_type": &body.event_type, "node_id": &body.node_id, "urgency": &urgency }));
+            (StatusCode::CREATED, Json(AlertRule {
+                id, node_id: body.node_id, event_type: body.event_type,
+                threshold_value: body.threshold_value, urgency, channel_id: body.channel_id,
+                enabled: true, created_at: ts,
+            })).into_response()
+        }
         Err(e) => { eprintln!("[alerts] rule insert failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal server error" }))).into_response() },
@@ -7379,11 +7985,12 @@ async fn handle_delete_rule(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let result = sqlx::query("DELETE FROM alert_rules WHERE id = $1 AND user_id = $2")
         .bind(&rule_id).bind(&user_id).execute(&state.pool).await;
@@ -7408,11 +8015,12 @@ async fn handle_test_channel(
             Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, _org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session or channel not found" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT channel_type, config_json::text FROM notification_channels WHERE id = $1 AND user_id = $2"
@@ -7670,10 +8278,11 @@ async fn handle_put_otel_config(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing auth token"}))).into_response(),
     };
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if tier != "team" && tier != "enterprise" {
@@ -8227,21 +8836,22 @@ async fn handle_prometheus_metrics(
         Some(k) if !k.is_empty() => k,
         _ => return (StatusCode::UNAUTHORIZED, "X-API-Key required").into_response(),
     };
-    let user_id = match validate_api_key(&api_key, &state.pool, &state.api_rate_limits).await {
-        Some((_key_id, uid, _is_pro)) => uid,
+    let (user_id, key_org, tier) = match validate_api_key(&api_key, &state.pool, &state.api_rate_limits).await {
+        Some((_key_id, uid, korg, t)) => (uid, korg, t),
         None => return (StatusCode::UNAUTHORIZED, "Invalid API key or rate limit exceeded").into_response(),
     };
 
-    // Tier gate
-    let tier: String = sqlx::query_scalar("SELECT subscription_tier FROM users WHERE id = $1")
-        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
-    if tier != "team" && tier != "enterprise" {
+    // Tier gate — Team and above (was `!= "team" && != "enterprise"`, which
+    // wrongly locked Business out of a feature its tier includes).
+    if !is_team_or_above(&tier) {
         return (StatusCode::FORBIDDEN, "Team tier required for Prometheus metrics").into_response();
     }
 
-    // Build Prometheus text format from in-memory cache for this user's nodes.
-    let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
-        .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+    // Build Prometheus text format from the tenant's nodes (org fleet for
+    // org keys, personal nodes otherwise).
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
+    let node_ids: Vec<String> = sqlx::query_scalar(&format!("SELECT wk_id FROM nodes WHERE {tcol} = $1"))
+        .bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let cache = state.metrics.read().unwrap();
     let mut output = String::with_capacity(4096);
@@ -8384,6 +8994,7 @@ async fn main() {
     tokio::spawn(node_offline_alert_task(state.clone()));
     tokio::spawn(fleet_alert_evaluator_task(state.clone()));
     tokio::spawn(wes_long_term_drift_evaluator_task(state.clone()));
+    tokio::spawn(audit_drain_task(pool.clone()));
     tokio::spawn(otel_exporter_task(state.clone()));
 
     // Refresh JWKS every 6 hours.
@@ -8452,6 +9063,9 @@ async fn main() {
         .route("/api/billing/config",    get(handle_billing_config))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
         .route("/api/otel/config",       get(handle_get_otel_config).put(handle_put_otel_config))
+        .route("/api/audit-log",         get(handle_audit_log))
+        .route("/api/audit-log/export",  get(handle_audit_log_export))
+        .route("/api/audit-log/drain",   get(handle_get_audit_drain).put(handle_put_audit_drain).delete(handle_delete_audit_drain))
         .with_state(state.clone())
         .layer(middleware::from_fn(cors_dashboard));
 
@@ -8520,6 +9134,82 @@ mod fit_wrapper_tests {
         let (score, label) = cloud_fit_score(-1, 24_576, 0.0, "Normal");
         // 0-byte clamp -> 512 MB floor still "fits"; just must not panic.
         assert!(score > 0, "{label}");
+    }
+}
+
+#[cfg(test)]
+mod csv_escape_tests {
+    use super::*;
+
+    #[test]
+    fn plain_values_pass_through_unquoted() {
+        assert_eq!(csv_escape("node.paired"), "node.paired");
+        assert_eq!(csv_escape("WK-1a2b3c4d"), "WK-1a2b3c4d");
+        assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn rfc4180_quoting_for_commas_quotes_newlines() {
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+        assert_eq!(csv_escape("cr\rhere"), "\"cr\rhere\"");
+    }
+
+    #[test]
+    fn formula_injection_is_neutralized() {
+        // A node display name like "=HYPERLINK(...)" must not execute when
+        // the export is opened in Excel/Sheets.
+        assert_eq!(csv_escape("=1+2"), "'=1+2");
+        assert_eq!(csv_escape("+SUM(A1)"), "'+SUM(A1)");
+        assert_eq!(csv_escape("-2+3"), "'-2+3");
+        assert_eq!(csv_escape("@cmd"), "'@cmd");
+        // Formula prefix + comma → apostrophe AND quoting compose.
+        assert_eq!(csv_escape("=cmd,arg"), "\"'=cmd,arg\"");
+    }
+}
+
+#[cfg(test)]
+mod rbac_tests {
+    use super::*;
+
+    #[test]
+    fn solo_users_are_admin_over_their_own_resources() {
+        // No org in the session → full control; tenancy scoping confines them.
+        assert_eq!(OrgRole::from_claim(None, false), OrgRole::Admin);
+        // Even a stray role claim without an org doesn't demote a solo user.
+        assert_eq!(OrgRole::from_claim(Some("org:viewer"), false), OrgRole::Admin);
+    }
+
+    #[test]
+    fn clerk_role_claims_map_with_and_without_prefix() {
+        // v1 tokens carry "org:admin"; v2 nested claims carry bare "admin".
+        assert_eq!(OrgRole::from_claim(Some("org:admin"), true), OrgRole::Admin);
+        assert_eq!(OrgRole::from_claim(Some("admin"), true), OrgRole::Admin);
+        assert_eq!(OrgRole::from_claim(Some("org:member"), true), OrgRole::Member);
+        assert_eq!(OrgRole::from_claim(Some("member"), true), OrgRole::Member);
+        assert_eq!(OrgRole::from_claim(Some("org:viewer"), true), OrgRole::Viewer);
+        assert_eq!(OrgRole::from_claim(Some("viewer"), true), OrgRole::Viewer);
+    }
+
+    #[test]
+    fn unknown_org_roles_default_to_member_never_admin() {
+        // A custom Clerk role must not be locked out of day-to-day work,
+        // and must never be silently escalated to Admin.
+        assert_eq!(OrgRole::from_claim(Some("org:ops_oncall"), true), OrgRole::Member);
+        assert_eq!(OrgRole::from_claim(Some("basic_member"), true), OrgRole::Member);
+        // Missing claim on an org session → Member (least privilege short of read-only).
+        assert_eq!(OrgRole::from_claim(None, true), OrgRole::Member);
+    }
+
+    #[test]
+    fn policy_table_viewer_reads_member_mutates_admin_deletes() {
+        assert!(!OrgRole::Viewer.can_mutate());
+        assert!(!OrgRole::Viewer.is_admin());
+        assert!(OrgRole::Member.can_mutate());
+        assert!(!OrgRole::Member.is_admin());
+        assert!(OrgRole::Admin.can_mutate());
+        assert!(OrgRole::Admin.is_admin());
     }
 }
 

@@ -47,6 +47,9 @@ Team dashboard sharing via Clerk Organizations. Org members see the same fleet �
 ### PagerDuty Alerts
 Events API v2 integration for Team+ tier. Trigger and resolve events with dedup key for incident lifecycle. Routing key configured in Settings → Alerts.
 
+### Audit Logging (Business+)
+Immutable, append-only audit trail for sensitive fleet operations, Postgres-backed (`audit_log` table, no UPDATE/DELETE paths anywhere in the codebase). `GET /api/audit-log` (Clerk JWT auth, tenant-scoped, cursor-paginated via `before`, filterable by `action`) is gated to Business+ for reads; events are recorded for every tier via a fire-and-forget `audit()` helper that never delays or fails the request and resolves the actor email server-side. `org_id` comes from the verified JWT claim, never a client header. Nine instrumented actions: `node.paired` / `node.removed` / `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created` / `api_key.deleted`, `stream_tokens.revoked`. Surfaced as the Audit Log section in Settings (Business+; action filter, load-more pagination, upgrade-nudge for lower tiers).
+
 ### Per-Tier Node Limits
 Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Business: 100 nodes (unlimited seats), Enterprise: unlimited. Enforced at pairing, fleet list, and SSE stream.
 
@@ -55,6 +58,9 @@ Community (Free) → Pro ($29/mo) → Team ($49/seat/mo) → Business ($499/mo) 
 
 ### Server-Side Pattern Evaluation (Phase 7)
 Migrated all 18 observation patterns from client-side TypeScript to server-side Rust. Agent evaluates 17 patterns against 10-min DuckDB buffer every 10s, pushes to cloud via telemetry. Cloud evaluates `fleet_load_imbalance`. Deleted `patternEngine.ts` (2,254 lines) and `useMetricHistory.ts` (284 lines).
+
+### Deployment Profiles
+Single intent selector — `sovereign_dev`, `dedicated_server` (default), `production_fleet` — that coherently shifts the sensitivity of every local observation pattern instead of exposing per-pattern threshold knobs. Implemented as three tuning levers threaded into `evaluate_local_observations`: `density_scale` (multiplies the evidence-window density every pattern derives from `min_density_5m`/`min_density_10m`), `evidence_ratio` (the sustained-fraction gate, baseline 0.70), and `min_confidence` (a final emission filter). sovereign_dev raises all three (high bar + confidence floor for a mixed-use laptop); production_fleet lowers them (aggressive early warning); dedicated_server preserves the original baseline exactly (scale 1.0, gate 0.70, no floor). Persisted in `config.toml` as `deployment_profile`, switchable at runtime via `GET`/`PUT /api/deployment-profile` (the 10s evaluator re-reads it each tick), and selected in the localhost Settings UI. Node-local: governs which observations a node raises, not fleet-wide alert rules.
 
 ---
 
@@ -147,12 +153,48 @@ The SPA served every route from one index.html shell with identical landing-page
 
 ## Planned
 
+### ★ Business & Enterprise Readiness Program (July 2026 strategic review)
+The July 2026 Teams/Enterprise review found the Team tier strong and differentiated, but the Business/Enterprise story thin where enterprise buyers screen. This program is the ship-order plan. Each item carries implementation pointers + acceptance criteria so any session can pick one up cold. Work items sequentially within a phase; phases 1→5 are priority order.
+
+**Phase 1 — Close the trust gap (blocks deals today)**
+
+1. **RBAC: Admin / Member / Viewer (v1 SHIPPED — backend enforcement).** `validate_clerk_jwt` now returns the org role (handles v1 `org_role` and v2 nested `o.rol` claim shapes); `OrgRole` enum (Admin/Member/Viewer, solo = Admin over own resources, unknown custom roles → Member never Admin) + `require_user_org_role()` with `require_user_and_org`/`require_user_info` as wrappers (zero churn at ~28 read call sites). Enforced at 15 mutating handlers: Viewer → 403 on all mutations (update node, channel/rule create+delete+test, webhook create/delete/test, ack/resolve/submit observations, OTel PUT, pair/activate); node removal is Admin-only. `stream_tokens.revoked` stays self-scoped (users revoke their own). Unit-tested (role parsing incl. prefix variants, policy table; 17 cloud tests green). **Remaining follow-ups:** role-aware UI hiding (Clerk `useOrganization` exposes the role client-side — hide destructive buttons for viewers); audit `access.denied` events; org-key minting gated to Admin when item 4 lands.
+2. **SSO/SAML (Business+) — ship it or stop advertising it.** Currently a claim on PricingPage/llms.txt with ZERO implementation. Clerk supports per-org SAML/OIDC (Enhanced Auth add-on) — the code-side work is small (org SSO enablement indicator + docs + an Enterprise setup guide); the real work is Clerk dashboard config, which needs the owner's Clerk account. Product decision recorded: either enable via Clerk and document the setup flow, or soften the pricing copy to "SSO/SAML (via Clerk, on request)" until enabled. A session without Clerk dashboard access should do the docs + copy honesty fix and leave enablement to the owner.
+3. **Audit log export + SIEM streaming (SHIPPED).** `GET /api/audit-log/export?format=csv|json&action=&from=&to=` — full-history download, chronological, 100k-row cap, `Content-Disposition` attachment; CSV via a new `csv_escape` helper (RFC-4180 + formula-injection hardening, unit-tested — also the reusable fix for the June review's open CSV-escaping MEDIUM on the fleet export). SIEM drain: one per tenant in `audit_drains` (owner user_id + org_id stored for tier re-resolution), `GET/PUT/DELETE /api/audit-log/drain` (PUT/DELETE Admin-only via RBAC; secret returned once, re-PUT rotates + re-enables; cursor starts at current max audit id — export covers backfill). `audit_drain_task` ships ≤500-event HMAC-signed JSON batches every 60s via the existing `deliver_webhook`, re-checks tier at delivery, auto-disables after 20 consecutive failures. Exports and drain config changes are themselves audited (`audit_log.exported`, `audit_drain.created/deleted`). Settings UI: CSV/JSON export buttons + drain panel (status, failures, reveal-once secret). Retention documented: ≥365d Business, unlimited Enterprise. **Follow-up:** automated retention purge enforcement (delete non-Enterprise rows past retention) — documented policy only for now.
+4. **Org-wide API keys (SHIPPED).** `api_keys.org_id` (NULL = personal). `validate_api_key` returns `(key_id, user_id, org_id, tier)` — tier now resolved via `resolve_tier` (org subscription for org keys; replaces the legacy `users.is_pro` rate-limit flag). All 7 API-key-authed sites (`/api/v1/fleet`, `fleet/wes`, `nodes/{id}`, `route/best`, `insights/latest`, `models/discover`, Prometheus `/metrics`) switched from `WHERE user_id` to `tenant_scope` — an org key sees the org fleet. Minting org keys: `POST /api/v1/keys` with `scope:"org"`, requires active org + Admin (RBAC); revoking org keys: any Admin of the key's org; list shows personal + active-org keys with scope. Key lifecycle audited with scope. Drive-by fix: the Prometheus tier gate was `!= "team" && != "enterprise"`, wrongly locking **Business** out — now `is_team_or_above`. Frontend: scope picker in the create-key modal + Org badge in the key list. **Phase 1 is now complete except SSO (item 2, parked for owner's Clerk time).**
+
+**Phase 2 — Reliability maturity (become the pager for AI infra)**
+
+5. **SLOs with error budgets** (extends the existing "Fleet SLA Aggregation" entry below). Per-tag/env SLO definitions (e.g. p95 TTFT < 500ms, 99% monthly), continuous evaluation from `inference_traces`/rollups, error-budget burn alerts through the existing channel/rule machinery, and a monthly SLO report (email + endpoint). The sentence "our internal inference API met SLO 99.2% of the month" is the renewal-insurance deliverable.
+6. **Environments & tag-based scoping.** `nodes.tags` exists as a free-text column nothing consumes. Make tags first-class: filter fleet dashboard/SSE by tag, tag-scoped alert rules + webhook subscriptions (add `tag` alongside `node_id` scope), tag dimension on cost/WES rollup endpoints. Convention: reserve `env:prod` / `env:staging` prefixes for the environment picker.
+7. **Alert escalation, silences, maintenance windows.** Silences first (suppress rule/node/tag for a duration — one table + a check in `evaluate_alerts`/`evaluate_webhooks`; without this the first planned driver upgrade pages everyone). Then maintenance windows (scheduled silences), then multi-step escalation policies (notify channel A, unacked after N min → channel B).
+8. **Fleet config management.** Deployment profiles are node-local (config.toml + localhost API). Add cloud-side desired-profile per node/tag; agent picks it up via the existing telemetry-response path (or a config-poll), applies through the same `update_config` machinery, reports actual profile in MetricsPayload so the fleet view shows intent vs. actual. Also the natural home for future agent remote-upgrade rings.
+
+**Phase 3 — Cost governance (the CFO wedge; only Wicklee has watts AND tokens)**
+
+9. **Showback/chargeback reports.** Per-team(tag)/per-model/per-node cost from measured watts × electricity rate, joined with token counts from proxy traces → $/1M tokens by team, trended. Endpoint + dashboard section + monthly export (CSV). Datadog/Langfuse see tokens; DCGM sees watts; nobody joins them — this is the moat feature.
+10. **Idle-waste & right-sizing report.** Fleet rollup of phantom-load cost + quant-advisor savings: "fleet burned $X idle last 30d; these N changes recover $Y" with per-node actions (unload idle model, quant swap, consolidate). Weekly email digest (Resend is already wired for alerts). This makes Wicklee unremovable — removing it makes waste invisible again.
+11. **Capacity planner with procurement scenarios** (sharpens the existing "Fleet Capacity Planner" entry below): "reach 200 tok/s sustained: 2×4090 vs 1×H100" priced from the fleet's own measured WES, not vendor benchmarks.
+
+**Phase 4 — Enterprise deployment surface**
+
+12. **Self-hosted control plane (Enterprise).** The cloud is one Rust binary + Postgres. Package as Docker Compose/Helm with license key; document Clerk-or-DIY-auth choice (legacy DIY session path still exists in `require_user_and_org`). Completes the "sovereign" brand honestly — the answer for buyers who won't ship telemetry to wicklee.dev.
+13. **Kubernetes operator + Helm** (existing entry below — becomes Phase 4).
+14. **Grafana datasource plugin + prebuilt dashboards; Terraform provider.** Meet platform teams inside tools they already defend budget for. Prometheus scrape + OTel export already exist — the plugin/dashboards are packaging, not new telemetry.
+
+**Phase 5 — AI-native moats**
+
+15. **Model governance.** Allowed-model registry per org; alert (or webhook) when an unapproved model appears on a tagged-prod node. The `model.changed` edge detection already exists in the webhook-subscription evaluator — this adds a policy table + a check in the same path. Compliance wedge for regulated industries.
+16. **Governed agentic operations.** MCP tools that ACT (drain node, unload idle model, swap quant) behind RBAC approval, every action audit-logged. Builds directly on Phase 1 RBAC + audit; first governed write surface for AI-agent-driven infra ops.
+
+**Packaging target once Phases 1–3 land:** Business = SSO + RBAC + audit export + org keys + SLO reports + cost governance (justifies $499). Enterprise = + self-hosted control plane + SCIM + custom SLA.
+
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
 
 1. **Agent task supervision (Pass 2, HIGH — SHIPPED).** Fire-and-forget `tokio::spawn` loops swallowed panics, so a dead subsystem left the agent running but silent. `agent/src/supervisor.rs` provides `supervise(name, factory)` (restart on panic/return, exponential backoff 1s→30s with reset after a 60s healthy run) and `supervise_until(name, factory)` (future returns `ControlFlow`; `Break` = deliberate permanent stop, not restarted). All four critical loops are now supervised: the metrics broadcast loop (`supervise`), and the Ollama / vLLM / llama.cpp harvester main loops + `cloud_push` (`supervise_until`, with their terminal exits — `port_rx.changed()` watch-close and 410-Gone — returning `Break` so shutdown doesn't restart-spin). Each wrap uses a compiler-checked clone-per-restart prelude with the body unchanged. Unit-tested (restart-on-panic, restart-on-return, no-restart-on-Break). Remaining nicety: the harvester *probe* sub-tasks (idle baseline measurement) are non-critical and still unsupervised — low priority.
 2. **Crash-safety + cancellation polish (Pass 2, MEDIUM).** Graceful shutdown via `tokio_util::sync::CancellationToken` so background tasks aren't force-killed mid-write; bound the proxy `per_model` HashMap with a periodic prune independent of `/api/ps` success; consider a poison-tolerant lock helper for the hottest shared state once the supervisor reduces panic frequency.
-3. **Org-wide API keys (Pass 1 deferral, MEDIUM).** API-key-authed endpoints (`/api/v1/*`, Prometheus `/metrics`) are intentionally per-user today, so a Team member's personal key sees only their own nodes, not the org's. If org-scoped keys are wanted, add an `org_id` column to `api_keys` (NULL = personal) and have `validate_api_key` + the node-scoping queries honor it via `tenant_scope`. Product decision first: should keys be issuable at the org level, and who can mint/revoke them.
+3. **Org-wide API keys (Pass 1 deferral — SHIPPED via the Readiness Program, Phase 1 item 4).** `api_keys.org_id` added; `validate_api_key` and all 7 key-authed endpoints now scope via `tenant_scope`; org keys are minted/revoked by org Admins (RBAC) and inherit the org tier. Personal keys unchanged.
 4. **Pass 3 — frontend state correctness (SHIPPED, core items).** Surveyed React state/effects/async lifecycle. Fixed: a React `ErrorBoundary` wrapping both render paths (the app had none — any uncaught render throw blanked the whole dashboard); SSE reconnect on org switch (`orgId` was missing from the connect-effect deps, so switching org kept the previous org's stream); AbortController on the MetricsHistoryChart/WESHistoryChart fetches (rapid range switches could let a stale earlier response overwrite newer data); stable React key on the cost-by-model table. Verified clean: the SSE lifecycle (cancelled guard, retry, EventSource closed on unmount, JSON.parse in try/catch) and the rolling smoothing store (correctly keyed/pruned per node). **Remaining (low priority):** fixed 5s SSE retry → exponential backoff; the broader untyped-React gap below.
 5. **Frontend has no React type declarations (surfaced by Pass 3, MEDIUM).** The project ships no `@types/react` and React resolves as implicit `any`, so the entire frontend's type-safety is illusory — `tsc` can't catch prop/hook/return-type mistakes across any component. The whole app compiles only because React is untyped. Adding `@types/react` + `@types/react-dom` is a dedicated cleanup with real blast radius (it will surface latent type errors app-wide that must each be triaged), so scope it deliberately — not a drive-by. Until then, class components need member `declare`s (see `ErrorBoundary.tsx`).
 
@@ -192,23 +234,15 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 ### Cross-Node Model Migration
 "Llama 3.1 70B on WK-A1B2 has WES 8.2, VRAM at 89%. WK-C3D4 has WES 12.1, VRAM at 52%. Recommend migrating for 47% efficiency gain." Fleet-wide model placement optimization based on measured performance.
 
-### Deployment Profiles
-Single config selector (`sovereign_dev`, `dedicated_server`, `production_fleet`) that adjusts all observation thresholds, evidence windows, and alert sensitivity coherently. sovereign_dev: high thresholds, long windows — laptop running inference alongside other workloads. dedicated_server: standard thresholds — single-purpose inference node. production_fleet: aggressive early warning — serving real users where latency matters. Eliminates per-pattern threshold knobs in favor of a single intent declaration. Maps cleanly to routing_hint severity: steer_away on a dev profile means genuinely broken, on production it means slightly degraded.
-
 ### Kubernetes Operator
 Helm chart and operator for automated Wicklee agent deployment across GPU node pools.
 
 ### Install Telemetry
 Anonymous install event tracking (OS, arch, version) via fire-and-forget ping from `install.sh` to cloud endpoint. Powers activation funnel metrics without collecting PII.
 
-### Audit Logging (Business+)
-Immutable audit trail for sensitive fleet operations: node add/remove, alert config changes, API key lifecycle, team member management. Postgres-backed with `GET /api/audit-log` endpoint and Settings UI.
 
 ### WES Leaderboard (Public)
 Anonymous hardware benchmark submissions with public ranking. "MPG for AI" — compare tok/W across hardware configurations. Public read API + submission endpoint.
-
-### SSO/SAML (Business+)
-SAML 2.0 single sign-on via Clerk Organizations. Configured per-org in Clerk dashboard. Business and Enterprise tiers.
 
 ---
 

@@ -162,6 +162,30 @@ The MetricsPayload carries a single boolean — `runtime_config_available` —
 so the frontend knows whether to render the "Config" affordance without
 having to hit the endpoint speculatively for every node.
 
+### GET/PUT /api/deployment-profile
+Deployment Profiles. A single intent selector that coherently shifts the
+sensitivity of every local observation pattern — replacing per-pattern
+threshold knobs. GET returns the active profile plus the selectable set and
+the tuning each applies; PUT `{ "profile": "sovereign_dev" | "dedicated_server"
+| "production_fleet" }` switches it (validated; 400 otherwise), persists to
+`config.toml`, and takes effect within one 10s evaluation cycle. Three coherent
+levers: `density_scale` (evidence-window density every pattern derives from
+`min_density_5m`/`min_density_10m`), `evidence_ratio` (sustained-fraction gate,
+baseline 0.70), `min_confidence` (final emission filter). dedicated_server is
+the default and preserves the original baseline exactly. Node-local, no auth
+(localhost endpoint) — governs which observations this node raises, not
+fleet-wide alert rules.
+```json
+{
+  "profile": "dedicated_server",
+  "available": [
+    { "id": "sovereign_dev",    "density_scale": 1.15, "evidence_ratio": 0.85, "min_confidence": 0.5 },
+    { "id": "dedicated_server", "density_scale": 1.0,  "evidence_ratio": 0.7,  "min_confidence": 0.0 },
+    { "id": "production_fleet", "density_scale": 0.65, "evidence_ratio": 0.55, "min_confidence": 0.0 }
+  ]
+}
+```
+
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
 ```json
@@ -367,16 +391,44 @@ Fleet intelligence snapshot. Team tier and above only.
 ```
 
 ### POST /api/v1/keys
-Create a new API key. Returns the raw key once (prefix `wk_live_`). Stored as SHA-256 hash.
+Create a new API key. Returns the raw key once (prefix `wk_live_`). Stored as SHA-256 hash. Body: `{ "name": "...", "scope": "personal" | "org" }` (scope defaults to personal). **Org keys** scope every V1 endpoint (and Prometheus `/metrics`) to the org's whole fleet and inherit the ORG's subscription tier — minting requires an active org session AND the org Admin role. Personal keys see only your personal nodes.
 ```json
-{ "key": "wk_live_abc123...", "key_id": "uuid", "created_at_ms": 1774622475195 }
+{ "key": "wk_live_abc123...", "key_id": "uuid", "created_at_ms": 1774622475195, "scope": "org" }
 ```
 
 ### GET /api/v1/keys
-List all API keys. Hash is never exposed.
+List API keys — your personal keys plus the active org's keys (org keys are visible to every member; each entry carries `scope`). Hash is never exposed.
 
 ### DELETE /api/v1/keys/{key_id}
-Revoke an API key. Takes effect immediately.
+Revoke an API key. Takes effect immediately. Personal keys: owner only. Org keys: any Admin of the key's org.
+
+### GET /api/audit-log
+Immutable, append-only audit trail of sensitive fleet operations. Clerk JWT auth; **Business tier and above** to read (events are recorded for every tier). Org members see the whole org-scoped trail. Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Recorded actions: `node.paired`, `node.removed`, `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created`, `api_key.deleted`, `stream_tokens.revoked`.
+```json
+{
+  "entries": [
+    { "id": 42, "ts": 1774624251478, "user_id": "user_abc", "org_id": "org_xyz",
+      "actor_email": "ops@acme.com", "action": "node.removed", "target": "WK-99E9", "details": {} }
+  ],
+  "next_before": 1774624251478
+}
+```
+
+### GET /api/audit-log/export
+Full-history audit export (Business+). Params: `format=csv|json` (default json), `action` (exact-match filter), `from`/`to` (ts_ms range). Chronological, capped at 100k rows, served with `Content-Disposition: attachment`. CSV is RFC-4180 quoted with spreadsheet formula-injection hardening (`= + - @` prefixed cells are neutralized). Every export is itself audited as `audit_log.exported`. Retention: at least 365 days on Business; unlimited on Enterprise.
+
+### GET/PUT/DELETE /api/audit-log/drain
+SIEM drain (Business+; PUT/DELETE are org-Admin-only). One drain per tenant. PUT `{ "url": "https://..." }` returns the HMAC secret ONCE (re-PUT rotates it) and starts the delivery cursor at the current max audit id — the drain streams NEW events; use the export endpoint for backfill. A background loop ships batches (≤500 events) every 60s as JSON, HMAC-SHA256 signed via `X-Wicklee-Signature: sha256=<hex>` (same scheme as threshold webhooks). Auto-disables after 20 consecutive delivery failures; re-PUT re-enables. Tier is re-checked at delivery time. Drain config changes are audited (`audit_drain.created` / `audit_drain.deleted`).
+```json
+{
+  "type": "audit.batch",
+  "tenant_id": "org_xyz",
+  "events": [
+    { "id": 43, "ts": 1774624299001, "user_id": "user_abc", "org_id": "org_xyz",
+      "actor_email": "ops@acme.com", "action": "alert_rule.created", "target": "rule-uuid", "details": { "event_type": "thermal_critical" } }
+  ]
+}
+```
 
 ---
 
@@ -579,12 +631,17 @@ Evaluated by the cloud backend every 60 seconds.
 
 ## Pricing
 
-| Tier | Price | Nodes | History | Patterns |
-|------|-------|-------|---------|----------|
-| Community | Free | 3 | 24h | 9 |
-| Pro | $9/mo | 10 | 7 days | 18 |
-| Team | $19/seat/mo | 25 | 90 days | 18 + shared dashboards |
-| Enterprise | From $200/mo | Custom | Custom | + proxy + sovereign deploy |
+| Tier | Price | Nodes | History | Patterns & features |
+|------|-------|-------|---------|---------------------|
+| Community | Free | 3 | 24h | 9 patterns |
+| Pro | $29/mo | 10 | 7 days | 20 patterns + custom alerts (Slack/email), threshold webhooks |
+| Team | $49/seat/mo | 25 (+$2/node over 25) | 90 days | + shared dashboards, PagerDuty, Cloud MCP, OTel/Prometheus export |
+| Business | $499/mo | 100 (unlimited seats) | 365 days | + SSO/SAML, audit logging |
+| Enterprise | Contact sales | Unlimited | Unlimited | + sovereign deployment, custom SLA |
+
+### Organization RBAC
+
+Shared fleets (Clerk Organizations) enforce role-based access from the signed session token's org role claim — never a client header. **Admin** (`org:admin`): everything, including node removal. **Member** (`org:member`, custom roles): day-to-day operations — pair/rename/tag nodes, alert rules & channels, webhooks, acknowledge/resolve observations, OTel config. **Viewer** (custom `org:viewer` Clerk role): read-only; every mutating endpoint returns 403 with `role_required`. Unknown roles map to Member, never Admin. Solo users (no org) have full control of their own resources.
 
 ---
 

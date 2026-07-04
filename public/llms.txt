@@ -44,6 +44,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `GET /api/model-switches?hours=24` — Model switching cost (swap frequency, idle gap)
 - `GET /api/model-candidates?search=llama&limit=20` — Model discovery: GGUF models from HuggingFace scored against local hardware
 - `GET /api/runtime-config?model=X` — Runtime Config Surface (v0.9.0): cached launch-time config (context_length, n_gpu_layers, quantization, parameter_count, template, system_prompt, process_args). Ollama via `/api/show`, vLLM via `/v1/server_info` or `ps aux`, llama.cpp via `/props` or `ps aux`. Templates and system prompts are local-only — never pushed to the fleet. 400 if `?model=` missing, 404 if not yet cached.
+- `GET/PUT /api/deployment-profile` — Deployment Profiles: one intent selector (sovereign_dev / dedicated_server / production_fleet) that coherently shifts local observation-pattern sensitivity (evidence window, sustained gate, confidence floor) instead of per-pattern knobs. Persisted to config.toml; applied within one 10s eval cycle. Node-local.
 - `GET /api/history?node_id=WK-XXXX` — DuckDB metric history (1h buffer)
 - `GET /api/traces` — Proxy inference traces
 - `GET /api/events/history` — Node event log
@@ -92,9 +93,12 @@ Base URL: `https://wicklee.dev/api/v1`
 - `GET /api/v1/fleet/model-switches?hours=24` — cross-node model swap events via LAG window function over `metrics_raw`. 1–168 hour window, capped at 200 rows.
 - `GET /api/v1/fleet/cost-by-model?hours=24` — fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.
 - `GET /api/v1/insights/latest` — Fleet intelligence snapshot (Team+)
-- `POST /api/v1/keys` — Create API key
-- `GET /api/v1/keys` — List API keys
-- `DELETE /api/v1/keys/{id}` — Revoke API key
+- `POST /api/v1/keys` — Create API key (`scope: personal|org` — org keys see the whole org fleet + inherit org tier; org-Admin-only to mint)
+- `GET /api/v1/keys` — List API keys (personal + active org's, with scope)
+- `DELETE /api/v1/keys/{id}` — Revoke API key (personal: owner; org: org Admins)
+- `GET /api/audit-log` — Immutable audit trail (Business+, Clerk JWT): sensitive-op events (node.paired/removed/updated, alert_rule.created, alert_channel.created, webhook.created, api_key.created/deleted, stream_tokens.revoked, audit_log.exported, audit_drain.created/deleted). Params: limit/before/action. Org-scoped, append-only.
+- `GET /api/audit-log/export?format=csv|json` — Full-history audit export (Business+), formula-injection-hardened CSV, ≤100k rows, itself audited.
+- `GET/PUT/DELETE /api/audit-log/drain` — SIEM drain (Business+, Admin to configure): streams new audit events to your HTTPS endpoint in HMAC-signed batches within ~1 min; auto-disables after 20 consecutive failures.
 - `GET /metrics` — Prometheus scrape endpoint (Team+, X-API-Key auth)
 
 ## Multi-Model Monitoring
@@ -149,3 +153,5 @@ wes_cliff, agent_version_mismatch
 - Team: $49/seat/mo, 25 nodes (+$2/node over 25), 90-day history, shared dashboards, PagerDuty, Cloud MCP, OTel+Prometheus
 - Business: $499/mo, unlimited seats, 100 nodes, 365-day history, everything in Team + SSO/SAML + audit logging
 - Enterprise: Contact sales, unlimited nodes, sovereign deployment, custom SLA
+
+Shared fleets use Clerk Organizations with RBAC enforced from the signed session token: Admin (org:admin) = everything incl. node removal; Member (org:member/custom) = day-to-day ops; Viewer (custom org:viewer role) = read-only, mutations 403. Solo users have full control of their own resources.
