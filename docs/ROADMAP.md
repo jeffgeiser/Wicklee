@@ -199,6 +199,46 @@ Features whose primary value is distribution and enterprise awareness, identifie
 5. **Read-only fleet share links** — expiring, revocable, view-only dashboard URLs (a scoped stream token variant + a viewer route). "Look at our fleet" in a Slack channel is the viral loop.
 6. **FOCUS-format chargeback export** — the chargeback endpoint gains `format=focus` emitting the FinOps Foundation's open billing spec. Cheap (one serializer over the existing report) and it's the credential for FinOps X / OpenCost ecosystem listing.
 
+### ★ GTM Execution Tracker (non-code workstreams — see docs/GTM.md for strategy)
+Trackable checklist for the marketing motions. Check items off as they land; each is durable (stays live once done). Items marked **[draftable]** can be prepared by a coding session (copy, PR text, listing metadata, page builds) with only the final submit needing the founder's accounts.
+
+**Rock 1 — Registry & ecosystem blitz**
+- [ ] MCP registry listings: Anthropic servers repo PR, mcp.so, Smithery, Glama **[draftable]**
+- [ ] awesome-list PRs: awesome-selfhosted, awesome-llmops, awesome-mcp, awesome-local-llm **[draftable]**
+- [ ] Ollama community-integrations PR **[draftable]**
+- [ ] vLLM ecosystem docs PR **[draftable]**
+- [ ] llama.cpp ecosystem/README listing PR **[draftable]**
+- [ ] Homebrew cask (`brew install --cask wicklee`) **[draftable — formula is code]**
+
+**Rock 2 — Hugging Face presence**
+- [ ] Demo fleet Space (depends on the demo-fleet-mode roadmap item) **[draftable — it's a build]**
+- [ ] WES benchmark HF Dataset (initial seed from own nodes; grows with leaderboard opt-ins) **[draftable]**
+- [ ] Hardware-fit badge generator + docs page (roadmap item 3 above) **[draftable]**
+
+**Rock 3 — Leaderboard SEO engine**
+- [ ] Opt-in anonymous benchmark submission in the agent (roadmap item 2 above)
+- [ ] Programmatic chip×model pages + sitemap wiring **[draftable — prerender machinery exists]**
+- [ ] Leaderboard landing + methodology page (credibility requires showing the measurement method) **[draftable]**
+
+**Rock 4 — Launch moments**
+- [ ] r/LocalLLaMA data post #1 (measured thermal/efficiency data across own fleet) **[draftable]**
+- [ ] Show HN: demo Space as the hook (save HN for this — features go to Reddit)
+- [ ] One blog data-post per shipped feature (rolling)
+
+**Rock 5 — Partnerships**
+- [ ] Partner one-pager: "bundle Wicklee with every box you sell" (hardware vendors/SIs) **[draftable]**
+- [ ] MSP pitch + multi-org console spec (roadmap item 4 above) **[draftable]**
+- [ ] Outreach list: 3 MSPs + 2 hardware vendors (founder — needs the human)
+- [ ] Design-partner program page: free Business year ↔ logo + case study **[draftable]**
+
+**Rock 6 — Enterprise credibility**
+- [ ] Trust page on wicklee.dev (data-flow diagram, sovereignty story, RBAC/audit/SIEM) **[draftable — security write-ups are 80% of the copy]**
+- [ ] FOCUS-format chargeback export (roadmap item 6 above) + OpenCost/FinOps ecosystem listing
+- [ ] Quarterly "State of Local Inference Efficiency" report #1 **[draftable once leaderboard data exists]**
+- [ ] Clerk / Railway / Ollama showcase submissions **[draftable]**
+
+**North star:** weekly paired-node activations. Review this tracker monthly; a motion that shipped gets its date noted, a motion skipped two months running gets deleted (the list must stay honest).
+
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
 
