@@ -8,6 +8,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 // The value is baked into the bundle at compile time via .env.agent, not read
 // at runtime. Rollup treats it as a constant and eliminates dead branches.
 const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Could not find root element to mount to');
@@ -22,7 +23,22 @@ const root = ReactDOM.createRoot(rootElement);
 // true (build-time constant), so Rollup excludes the Clerk module from the
 // agent bundle entirely.
 (async () => {
-  if (IS_AGENT) {
+  if (IS_DEMO) {
+    // Demo build: no Clerk, no backend. A fetch shim serves synthetic
+    // fixtures for every /api/* call, and FleetStreamContext runs against a
+    // fake EventSource — the production dashboard on generated data.
+    const { installDemoFetch } = await import('./demo/demoApi');
+    installDemoFetch();
+    const { default: DemoBanner } = await import('./demo/DemoBanner');
+    root.render(
+      <React.StrictMode>
+        <ErrorBoundary surface="cloud">
+          <App />
+          <DemoBanner />
+        </ErrorBoundary>
+      </React.StrictMode>
+    );
+  } else if (IS_AGENT) {
     // Agent / local binary: no Clerk. Auth is cloud-only.
     root.render(
       <React.StrictMode>

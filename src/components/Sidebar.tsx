@@ -6,6 +6,7 @@ import { usePermissions } from '../hooks/usePermissions';
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
 // In agent builds, ClerkProvider is absent — this gates all useClerk() calls.
 const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 
 // Clerk account actions are lazy-loaded so @clerk/clerk-react is never imported
 // in agent builds. The dynamic import is tree-shaken when IS_AGENT is true.
@@ -177,7 +178,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
               </div>
 
               {/* Manage Account + Sign out — cloud build only (ClerkProvider present) */}
-              {!IS_AGENT && !isLocalHost && (
+              {!IS_AGENT && !IS_DEMO && !isLocalHost && (
                 <Suspense fallback={
                   <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-700/50 space-y-0.5">
                     <div className="px-3 py-2 h-9" />

@@ -192,7 +192,7 @@ The July 2026 Teams/Enterprise review found the Team tier strong and differentia
 ### ★ GTM & Distribution Features (July 2026 — see docs/GTM.md)
 Features whose primary value is distribution and enterprise awareness, identified by the GTM review. Each is a product item that doubles as a channel:
 
-1. **Demo fleet mode** — a synthetic-fleet build of the dashboard (deterministic fake telemetry: mixed Apple/NVIDIA nodes, thermal events, model swaps) deployable as a public demo at demo.wicklee.dev AND as a Hugging Face Space. Kills the evaluate-before-install friction; the Space is the Show HN hook. Implementation: a `VITE_DEMO_MODE` build that feeds FleetStreamContext from a generated stream instead of SSE — no cloud account needed.
+1. **Demo fleet mode (BUILT — deploy pending).** `npm run build:demo` → static `dist-demo/` bundle: the full cloud dashboard against a six-node synthetic fleet (deterministic seeded generator, scripted thermal-throttle / model-swap / node-offline stories) with no Clerk and no backend — a fake EventSource drives the production FleetStreamContext, and a fetch shim serves fixtures for every /api/* panel (writes → friendly read-only 403). Verified headlessly with Playwright (banner, nodes, models, zero page errors). See `docs/DEMO.md` for the demo.wicklee.dev + HF Space deploy steps (founder: DNS + HF account). Rock-2 checklist item.
 2. **WES Leaderboard as GTM engine** (elevates the existing "WES Leaderboard (Public)" entry below): opt-in anonymous agent submissions (chip, model, quant, tok/s, watts, WES — nothing else; consistent with sovereignty), public programmatic pages per chip×model combo ("RTX 4090 · Llama 3.1 70B — measured tok/s, watts, $/1M tok") ending in the install one-liner, and the quarterly "State of Local Inference Efficiency" report from the corpus. Prerender machinery from the SEO pass is reusable.
 3. **Hardware-fit badge** — a tiny generator (SVG badge + link to wicklee.dev/fit/<model_id>) model authors paste into HF model cards / GitHub READMEs; the landing page runs the existing fit-check against the visitor's declared hardware. Every badge is a permanent inbound link on a high-intent page.
 4. **MSP / multi-org console (Business+)** — one login managing many client orgs (Clerk supports multi-org membership; needs an org-switcher rollup view + per-org billing attribution). Five MSP partners ≈ fifty enterprise deployments; this is the partnerships wedge.
@@ -211,7 +211,7 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 - [ ] Homebrew cask (`brew install --cask wicklee`) **[draftable — formula is code]**
 
 **Rock 2 — Hugging Face presence**
-- [ ] Demo fleet Space (depends on the demo-fleet-mode roadmap item) **[draftable — it's a build]**
+- [x] Demo fleet build shipped (`npm run build:demo`, docs/DEMO.md) — Space upload + demo.wicklee.dev DNS remain (founder)
 - [ ] WES benchmark HF Dataset (initial seed from own nodes; grows with leaderboard opt-ins) **[draftable]**
 - [ ] Hardware-fit badge generator + docs page (roadmap item 3 above) **[draftable]**
 

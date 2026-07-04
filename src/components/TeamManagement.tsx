@@ -25,8 +25,10 @@ interface TeamManagementProps {
   currentUser: { id: string; email: string; fullName: string; role: string };
 }
 
+const IS_DEMO = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
+
 const TeamManagement: React.FC<TeamManagementProps> = () => {
-  if (ClerkOrgProfile) {
+  if (!IS_DEMO && ClerkOrgProfile) {
     return (
       <div className="space-y-4">
         <div>

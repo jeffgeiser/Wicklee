@@ -120,6 +120,7 @@ const isLocalHost = window.location.hostname === 'localhost' || window.location.
 // Build-time flag: true in the agent binary where ClerkProvider is absent.
 // Hoisted to module scope so it's available to both AppCore and the export shim.
 const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 
 interface AppCoreProps {
   isSignedIn: boolean | undefined;
@@ -610,8 +611,20 @@ const LazyCloudApp = React.lazy(() => import('./components/CloudApp'));
 // Exported root component.
 // Agent builds: skip Clerk hooks entirely and render with local-mode defaults.
 // Cloud builds: delegate to CloudApp which calls hooks within ClerkProvider.
+// Demo build: signed-in Team-tier user, no Clerk anywhere. The object only
+// needs the fields AppCore reads off the Clerk user (id, publicMetadata.tier,
+// primaryEmailAddress, fullName).
+const DEMO_USER = {
+  id: 'demo-user',
+  publicMetadata: { tier: 'team' },
+  primaryEmailAddress: { emailAddress: 'demo@wicklee.dev' },
+  fullName: 'Demo Operator',
+};
+
 const App: React.FC = () =>
-  IS_AGENT
+  IS_DEMO
+    ? <AppCore isSignedIn={true} isLoaded={true} getToken={() => Promise.resolve('demo')} user={DEMO_USER} orgId={null} />
+    : IS_AGENT
     ? <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />
     : <React.Suspense fallback={null}><LazyCloudApp AppCore={AppCore} /></React.Suspense>;
 

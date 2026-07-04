@@ -11,6 +11,7 @@ interface AddNodeModalProps {
 
 // Build-time flag — AddNodeModal is cloud-only; agent builds never need it.
 const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 
 // ── Inline copy button ────────────────────────────────────────────────────────
 const CopyBtn: React.FC<{ text: string }> = ({ text }) => {
@@ -66,8 +67,8 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
     }
   }, [isOpen]);
 
-  // In agent builds ClerkProvider is absent — bail before calling useAuth().
-  if (IS_AGENT) return null;
+  // In agent/demo builds ClerkProvider is absent — bail before calling useAuth().
+  if (IS_AGENT || IS_DEMO) return null;
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const { getToken } = useAuth();
 
