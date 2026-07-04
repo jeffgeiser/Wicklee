@@ -93,9 +93,9 @@ Base URL: `https://wicklee.dev/api/v1`
 - `GET /api/v1/fleet/model-switches?hours=24` — cross-node model swap events via LAG window function over `metrics_raw`. 1–168 hour window, capped at 200 rows.
 - `GET /api/v1/fleet/cost-by-model?hours=24` — fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.
 - `GET /api/v1/insights/latest` — Fleet intelligence snapshot (Team+)
-- `POST /api/v1/keys` — Create API key
-- `GET /api/v1/keys` — List API keys
-- `DELETE /api/v1/keys/{id}` — Revoke API key
+- `POST /api/v1/keys` — Create API key (`scope: personal|org` — org keys see the whole org fleet + inherit org tier; org-Admin-only to mint)
+- `GET /api/v1/keys` — List API keys (personal + active org's, with scope)
+- `DELETE /api/v1/keys/{id}` — Revoke API key (personal: owner; org: org Admins)
 - `GET /api/audit-log` — Immutable audit trail (Business+, Clerk JWT): sensitive-op events (node.paired/removed/updated, alert_rule.created, alert_channel.created, webhook.created, api_key.created/deleted, stream_tokens.revoked, audit_log.exported, audit_drain.created/deleted). Params: limit/before/action. Org-scoped, append-only.
 - `GET /api/audit-log/export?format=csv|json` — Full-history audit export (Business+), formula-injection-hardened CSV, ≤100k rows, itself audited.
 - `GET/PUT/DELETE /api/audit-log/drain` — SIEM drain (Business+, Admin to configure): streams new audit events to your HTTPS endpoint in HMAC-signed batches within ~1 min; auto-disables after 20 consecutive failures.

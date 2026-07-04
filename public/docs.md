@@ -644,6 +644,8 @@ curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | lengt
 Base URL: `https://wicklee.dev/api/v1`
 Auth: `X-API-Key: wk_live_...` header.
 
+**Key scopes:** keys are **personal** (see only your own nodes) or **org-wide** (see the whole organization fleet and inherit the org's subscription tier — for CI and automation that shouldn't ride on an individual's account). Org keys are minted and revoked by org Admins (`POST /api/v1/keys` with `"scope": "org"`); every member can see them in the key list. All key lifecycle events are captured in the audit log.
+
 | Method | Endpoint | Description | Tier |
 |--------|----------|-------------|------|
 | GET | /api/v1/fleet | All nodes with full MetricsPayload | All |

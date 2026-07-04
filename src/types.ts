@@ -546,6 +546,8 @@ export interface ApiKey {
   name:         string;
   created_at:   number;        // unix ms
   last_used_ms: number | null;
+  /** "personal" (default) or "org" — org keys see the whole org fleet. */
+  scope?:       'personal' | 'org';
 }
 
 /** Response body for POST /api/v1/keys — raw key shown once, then gone. */
@@ -554,6 +556,7 @@ export interface CreateApiKeyResponse {
   key:        string;          // raw wk_live_... — copy immediately
   name:       string;
   created_at: number;          // unix ms
+  scope?:     'personal' | 'org';
 }
 
 // ── Local metric history (agent /api/history) ─────────────────────────────────

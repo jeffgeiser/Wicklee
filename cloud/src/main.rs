@@ -511,6 +511,12 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
         .execute(pool).await.ok();
+    // Org-wide API keys: NULL = personal key (original behavior). An org key
+    // is minted by an org Admin and scopes the V1 API to the org's fleet.
+    sqlx::query("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id TEXT")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_org_id ON api_keys(org_id)")
+        .execute(pool).await.ok();
 
     sqlx::query("
         CREATE TABLE IF NOT EXISTS notification_channels (
@@ -1704,21 +1710,26 @@ fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
 }
 
 /// Validate a raw API key, enforce rate limits, return (key_id, user_id, is_pro).
+/// Validate an API key and return `(key_id, user_id, org_id, tier)`.
+///
+/// `org_id` is the key's OWN org column (NULL = personal key) — an org key
+/// scopes the V1 API to the org's fleet regardless of which admin minted it.
+/// `tier` is resolved through `resolve_tier` (org subscription for org keys,
+/// the minting user's otherwise) — the same authority every JWT-side gate
+/// uses, replacing the legacy `users.is_pro` flag for rate limiting.
 async fn validate_api_key(
     raw_key: &str,
     pool: &sqlx::PgPool,
     rate_limits: &Arc<Mutex<HashMap<String, Vec<u64>>>>,
-) -> Option<(String, String, bool)> {
+) -> Option<(String, String, Option<String>, String)> {
     let hash = sha256_hex(raw_key);
-    let row = sqlx::query_as::<_, (String, String, i32)>(
-        "SELECT k.key_id, k.user_id, u.is_pro
-         FROM api_keys k
-         JOIN users u ON u.id = k.user_id
-         WHERE k.key_hash = $1"
+    let row = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT key_id, user_id, org_id FROM api_keys WHERE key_hash = $1"
     ).bind(&hash).fetch_one(pool).await.ok()?;
 
-    let (key_id, user_id, is_pro_int) = row;
-    let limit = if is_pro_int != 0 { API_RATE_TEAM } else { API_RATE_COMMUNITY };
+    let (key_id, user_id, org_id) = row;
+    let tier = resolve_tier(&user_id, &org_id, pool).await;
+    let limit = if tier != "community" { API_RATE_TEAM } else { API_RATE_COMMUNITY };
     let now = now_ms();
     let window_start = now.saturating_sub(60_000);
     {
@@ -1735,7 +1746,7 @@ async fn validate_api_key(
         .bind(now as i64).bind(&key_id)
         .execute(pool).await;
 
-    Some((key_id, user_id, is_pro_int != 0))
+    Some((key_id, user_id, org_id, tier))
 }
 
 const AUTH_RATE_LIMIT: usize = 10; // max attempts per 60s per IP
@@ -1827,11 +1838,18 @@ struct V1KeyInfo {
     name:         String,
     created_at:   i64,
     last_used_ms: Option<i64>,
+    /// "personal" (default) or "org" — org keys scope the V1 API to the
+    /// org's whole fleet and are managed by org Admins.
+    scope:        &'static str,
 }
 
 #[derive(Deserialize)]
 struct V1CreateKeyRequest {
     name: String,
+    /// "personal" (default) or "org". Org scope requires an active org in
+    /// the session AND the Admin role.
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1840,6 +1858,7 @@ struct V1CreateKeyResponse {
     key:        String,
     name:       String,
     created_at: i64,
+    scope:      &'static str,
 }
 
 // ── Agent API v1 handlers — key management ────────────────────────────────────
@@ -1861,11 +1880,30 @@ async fn handle_v1_create_key(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
+
+    // Org-scoped keys: minted only by org Admins, bound to the verified org
+    // claim. Personal keys (the default) keep the original per-user scope.
+    let scope = body.scope.as_deref().unwrap_or("personal");
+    let key_org: Option<String> = match scope {
+        "personal" => None,
+        "org" => {
+            let Some(org) = org_id.clone() else {
+                return (StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "No active organization in session — switch to the org before minting an org key" }))).into_response();
+            };
+            if !role.is_admin() { return role_forbidden("admin"); }
+            Some(org)
+        }
+        _ => return (StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "scope must be personal or org" }))).into_response(),
+    };
+    let scope_label: &'static str = if key_org.is_some() { "org" } else { "personal" };
 
     let name     = body.name.trim().to_owned();
     let raw_key  = format!("wk_live_{}", Uuid::new_v4().to_string().replace('-', ""));
@@ -1874,18 +1912,17 @@ async fn handle_v1_create_key(
     let ts       = now_ms() as i64;
 
     let result = sqlx::query(
-        "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at)
-         VALUES ($1, $2, $3, $4, $5)"
-    ).bind(&key_id).bind(&key_hash).bind(&user_id).bind(&name).bind(ts)
+        "INSERT INTO api_keys (key_id, key_hash, user_id, name, created_at, org_id)
+         VALUES ($1, $2, $3, $4, $5, $6)"
+    ).bind(&key_id).bind(&key_hash).bind(&user_id).bind(&name).bind(ts).bind(&key_org)
     .execute(&state.pool).await;
 
     match result {
         Ok(_) => {
-            // API keys are per-user by design (see roadmap: org-wide keys deferred).
-            audit(&state.pool, &user_id, &None, "api_key.created", &key_id,
-                serde_json::json!({ "name": &name }));
+            audit(&state.pool, &user_id, &key_org, "api_key.created", &key_id,
+                serde_json::json!({ "name": &name, "scope": scope_label }));
             (StatusCode::CREATED, Json(V1CreateKeyResponse {
-                key_id, key: raw_key, name, created_at: ts,
+                key_id, key: raw_key, name, created_at: ts, scope: scope_label,
             })).into_response()
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
@@ -1905,19 +1942,24 @@ async fn handle_v1_list_keys(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    let keys: Vec<(String, String, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT key_id, name, created_at, last_used_ms
-         FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+    // Personal keys (yours, org_id NULL) + the active org's keys (visible to
+    // every member — they're shared infrastructure; only Admins mint/revoke).
+    let keys: Vec<(String, String, i64, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT key_id, name, created_at, last_used_ms, org_id
+         FROM api_keys
+         WHERE (user_id = $1 AND org_id IS NULL) OR ($2::text IS NOT NULL AND org_id = $2)
+         ORDER BY created_at DESC"
+    ).bind(&user_id).bind(&org_id).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let key_list: Vec<V1KeyInfo> = keys.into_iter().map(|(key_id, name, created_at, last_used_ms)| {
-        V1KeyInfo { key_id, name, created_at, last_used_ms }
+    let key_list: Vec<V1KeyInfo> = keys.into_iter().map(|(key_id, name, created_at, last_used_ms, korg)| {
+        V1KeyInfo { key_id, name, created_at, last_used_ms,
+                    scope: if korg.is_some() { "org" } else { "personal" } }
     }).collect();
 
     Json(serde_json::json!({ "keys": key_list })).into_response()
@@ -1985,27 +2027,54 @@ async fn handle_v1_delete_key(
     };
 
     let clerk_keys = state.clerk_keys.read().unwrap().clone();
-    let user_id = match require_user(&token, &state.pool, &clerk_keys).await {
-        Some(id) => id,
+    let (user_id, org_id, role) = match require_user_org_role(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
+    if !role.can_mutate() { return role_forbidden("member"); }
 
-    let result = sqlx::query(
-        "DELETE FROM api_keys WHERE key_id = $1 AND user_id = $2"
+    // Personal keys: owner deletes their own. Org keys: any Admin of the
+    // key's org (checked against the verified claim, not ownership).
+    let personal = sqlx::query(
+        "DELETE FROM api_keys WHERE key_id = $1 AND user_id = $2 AND org_id IS NULL"
     ).bind(&key_id).bind(&user_id).execute(&state.pool).await;
 
-    match result {
-        Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
-        Ok(_)  => {
+    match personal {
+        Ok(r) if r.rows_affected() > 0 => {
             audit(&state.pool, &user_id, &None, "api_key.deleted", &key_id,
-                serde_json::json!({}));
-            StatusCode::NO_CONTENT.into_response()
+                serde_json::json!({ "scope": "personal" }));
+            return StatusCode::NO_CONTENT.into_response();
         }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
+        Ok(_) => {} // not a personal key — fall through to the org path
     }
+
+    if let Some(ref org) = org_id {
+        let is_org_key: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM api_keys WHERE key_id = $1 AND org_id = $2)"
+        ).bind(&key_id).bind(org).fetch_one(&state.pool).await.unwrap_or(false);
+        if is_org_key {
+            if !role.is_admin() { return role_forbidden("admin"); }
+            let result = sqlx::query("DELETE FROM api_keys WHERE key_id = $1 AND org_id = $2")
+                .bind(&key_id).bind(org).execute(&state.pool).await;
+            return match result {
+                Ok(r) if r.rows_affected() > 0 => {
+                    audit(&state.pool, &user_id, &org_id, "api_key.deleted", &key_id,
+                        serde_json::json!({ "scope": "org" }));
+                    StatusCode::NO_CONTENT.into_response()
+                }
+                Ok(_) => (StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "Key not found" }))).into_response(),
+                Err(_) => (StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
+            };
+        }
+    }
+
+    (StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "Key not found" }))).into_response()
 }
 
 // ── Agent API v1 handlers — fleet data ────────────────────────────────────────
@@ -2021,15 +2090,16 @@ async fn handle_v1_fleet(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let persisted: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT wk_id, last_seen FROM nodes WHERE user_id = $1 ORDER BY last_seen DESC"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id, last_seen FROM nodes WHERE {tcol} = $1 ORDER BY last_seen DESC")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -2057,15 +2127,16 @@ async fn handle_v1_fleet_wes(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let node_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT wk_id FROM nodes WHERE user_id = $1"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -2092,15 +2163,16 @@ async fn handle_v1_node(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let owned: bool = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM nodes WHERE wk_id = $1 AND user_id = $2)"
-    ).bind(&node_id).bind(&user_id).fetch_one(&state.pool).await.unwrap_or(false);
+        &format!("SELECT EXISTS(SELECT 1 FROM nodes WHERE wk_id = $1 AND {tcol} = $2)")
+    ).bind(&node_id).bind(tval).fetch_one(&state.pool).await.unwrap_or(false);
 
     if !owned {
         return (StatusCode::NOT_FOUND,
@@ -2140,17 +2212,18 @@ async fn handle_v1_route_best(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, _tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     let model_filter = params.get("model").cloned();
 
     let node_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT wk_id FROM nodes WHERE user_id = $1"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -2247,24 +2320,22 @@ async fn handle_v1_insights_latest(
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
 
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
     // Insights API is Team+ only
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
     if !is_team_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "Insights API requires Team tier or above", "upgrade": true }))).into_response();
     }
 
     let node_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT wk_id FROM nodes WHERE user_id = $1"
-    ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+        &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let metrics_map = state.metrics.read().unwrap();
     let now = now_ms();
@@ -5779,15 +5850,13 @@ async fn handle_v1_models_discover(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Missing API key" }))).into_response(),
     };
-    let (_key_id, user_id, _is_pro) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
+    let (_key_id, user_id, key_org, tier) = match validate_api_key(&raw_key, &state.pool, &state.api_rate_limits).await {
         Some(r) => r,
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid API key or rate limit exceeded" }))).into_response(),
     };
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
 
-    let tier: String = sqlx::query_scalar::<_, String>(
-        "SELECT subscription_tier FROM users WHERE id = $1"
-    ).bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
 
     // ── Fleet matching (Team+) ────────────────────────────────────────────
     if params.get("fleet").map(|v| v == "true").unwrap_or(false) {
@@ -5811,8 +5880,8 @@ async fn handle_v1_models_discover(
 
         // Score each fleet node against the smallest fitting variant
         let node_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT wk_id FROM nodes WHERE user_id = $1"
-        ).bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+            &format!("SELECT wk_id FROM nodes WHERE {tcol} = $1")
+        ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
         let metrics_map = state.metrics.read().unwrap();
         let now = now_ms();
@@ -8767,21 +8836,22 @@ async fn handle_prometheus_metrics(
         Some(k) if !k.is_empty() => k,
         _ => return (StatusCode::UNAUTHORIZED, "X-API-Key required").into_response(),
     };
-    let user_id = match validate_api_key(&api_key, &state.pool, &state.api_rate_limits).await {
-        Some((_key_id, uid, _is_pro)) => uid,
+    let (user_id, key_org, tier) = match validate_api_key(&api_key, &state.pool, &state.api_rate_limits).await {
+        Some((_key_id, uid, korg, t)) => (uid, korg, t),
         None => return (StatusCode::UNAUTHORIZED, "Invalid API key or rate limit exceeded").into_response(),
     };
 
-    // Tier gate
-    let tier: String = sqlx::query_scalar("SELECT subscription_tier FROM users WHERE id = $1")
-        .bind(&user_id).fetch_one(&state.pool).await.unwrap_or_else(|_| "community".to_string());
-    if tier != "team" && tier != "enterprise" {
+    // Tier gate — Team and above (was `!= "team" && != "enterprise"`, which
+    // wrongly locked Business out of a feature its tier includes).
+    if !is_team_or_above(&tier) {
         return (StatusCode::FORBIDDEN, "Team tier required for Prometheus metrics").into_response();
     }
 
-    // Build Prometheus text format from in-memory cache for this user's nodes.
-    let node_ids: Vec<String> = sqlx::query_scalar("SELECT wk_id FROM nodes WHERE user_id = $1")
-        .bind(&user_id).fetch_all(&state.pool).await.unwrap_or_default();
+    // Build Prometheus text format from the tenant's nodes (org fleet for
+    // org keys, personal nodes otherwise).
+    let (tcol, tval) = tenant_scope(&user_id, &key_org);
+    let node_ids: Vec<String> = sqlx::query_scalar(&format!("SELECT wk_id FROM nodes WHERE {tcol} = $1"))
+        .bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
     let cache = state.metrics.read().unwrap();
     let mut output = String::with_capacity(4096);

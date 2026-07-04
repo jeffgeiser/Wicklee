@@ -103,16 +103,17 @@ const KeyRevealModal: React.FC<{
 // ── Create Key Modal ──────────────────────────────────────────────────────────
 
 const CreateKeyModal: React.FC<{
-  onSubmit: (name: string) => Promise<void>;
+  onSubmit: (name: string, scope: 'personal' | 'org') => Promise<void>;
   onClose: () => void;
   loading: boolean;
   error: string | null;
 }> = ({ onSubmit, onClose, loading, error }) => {
   const [name, setName] = useState('');
+  const [scope, setScope] = useState<'personal' | 'org'>('personal');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name.trim()) onSubmit(name.trim());
+    if (name.trim()) onSubmit(name.trim(), scope);
   };
 
   return (
@@ -137,6 +138,29 @@ const CreateKeyModal: React.FC<{
               className="w-full bg-gray-900 border border-gray-700 focus:border-indigo-500 text-white text-sm rounded-xl px-4 py-3 outline-none transition-colors placeholder:text-gray-600"
             />
             <p className="text-xs text-gray-600 mt-1.5">A label to identify where this key is used.</p>
+          </div>
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-2 block">
+              Scope
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setScope('personal')}
+                className={`text-left rounded-xl border px-3 py-2.5 transition-colors ${scope === 'personal' ? 'border-indigo-500/60 bg-indigo-500/10' : 'border-gray-700 hover:border-gray-500'}`}
+              >
+                <p className={`text-xs font-semibold ${scope === 'personal' ? 'text-indigo-300' : 'text-gray-300'}`}>Personal</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Sees your own nodes only.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setScope('org')}
+                className={`text-left rounded-xl border px-3 py-2.5 transition-colors ${scope === 'org' ? 'border-indigo-500/60 bg-indigo-500/10' : 'border-gray-700 hover:border-gray-500'}`}
+              >
+                <p className={`text-xs font-semibold ${scope === 'org' ? 'text-indigo-300' : 'text-gray-300'}`}>Organization</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Whole org fleet. Org Admins only; org must be active.</p>
+              </button>
+            </div>
           </div>
           {error && (
             <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
@@ -219,7 +243,7 @@ const APIKeysView: React.FC = () => {
 
   // ── Create key ─────────────────────────────────────────────────────────────
 
-  const handleCreate = async (name: string) => {
+  const handleCreate = async (name: string, scope: 'personal' | 'org') => {
     setCreating(true);
     setCreateError(null);
     try {
@@ -228,7 +252,7 @@ const APIKeysView: React.FC = () => {
       const r = await fetch(`${CLOUD_URL}/api/v1/keys`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, scope }),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({})) as { error?: string };
@@ -357,6 +381,11 @@ const APIKeysView: React.FC = () => {
                         <Key className="w-4 h-4" />
                       </div>
                       <span className="text-sm font-semibold text-gray-200">{k.name}</span>
+                      {k.scope === 'org' && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300">
+                          Org
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-6 py-4">

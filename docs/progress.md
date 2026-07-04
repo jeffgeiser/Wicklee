@@ -56,6 +56,50 @@ criteria. RBAC is in progress on this branch.
 
 ---
 
+## Early July 2026 — Org-wide API keys (Readiness Program, Phase 1 item 4)
+
+Closes the June security review's "org-wide API keys" deferral and completes
+Phase 1 of the Readiness Program (except SSO, parked for owner Clerk time).
+Previously a Team member's key saw only their personal nodes — CI/automation
+had to ride on an individual's account.
+
+### Design
+- `api_keys.org_id` (NULL = personal — every existing key keeps its exact
+  behavior). An org key is bound to the verified org claim at mint time.
+- `validate_api_key` now returns `(key_id, user_id, org_id, tier)`. Tier is
+  resolved through `resolve_tier` — org keys inherit the ORG's subscription
+  (also replacing the legacy `users.is_pro` flag for rate-limit tiering with
+  the modern field every JWT-side gate uses).
+- All **7 API-key-authed sites** switched from `WHERE user_id = $1` to the
+  `tenant_scope` predicate (scripted transform with per-site count
+  assertions, compiled first try): `/api/v1/fleet`, `fleet/wes`,
+  `nodes/{id}`, `route/best`, `insights/latest`, `models/discover`, and
+  Prometheus `/metrics`. The insights/discover/prometheus handlers also
+  dropped their per-request `users.subscription_tier` lookups in favor of
+  the tier validate now returns.
+- **Lifecycle + RBAC:** `POST /api/v1/keys` takes `scope: "personal"|"org"`
+  (default personal; viewer-blocked either way). Org scope requires an
+  active org in the session AND the Admin role. GET lists personal + the
+  active org's keys (visible to all members — shared infrastructure), each
+  with its scope. DELETE: personal = owner; org = any Admin of the key's
+  org (proper 403-vs-404 distinction when a non-admin targets an org key).
+  All mints/revokes audited with scope.
+- **Drive-by fix:** the Prometheus tier gate was `tier != "team" && tier !=
+  "enterprise"` — which locked **Business** out of a feature its tier
+  includes ("everything in Team +"). Now `is_team_or_above`.
+
+### Frontend + docs
+APIKeysView: scope picker (Personal / Organization) in the create modal,
+amber Org badge in the key list; `scope` threaded through `ApiKey` /
+`CreateApiKeyResponse` types. Docs updated: docs.md Fleet API key-scopes
+paragraph, DocsPage key rows, llms.txt, llms-full.txt. Both roadmap entries
+(Readiness item 4 + the June security-review deferral) flipped to SHIPPED.
+
+Verified: cloud `cargo test` 20 green, compile clean first try, `tsc`
+clean, vitest 80.
+
+---
+
 ## Early July 2026 — Audit export + SIEM drain (Readiness Program, Phase 1 item 3)
 
 Enterprises don't read audit logs in a Settings panel — they pull them into

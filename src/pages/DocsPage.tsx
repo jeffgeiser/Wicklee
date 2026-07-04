@@ -1888,15 +1888,15 @@ curl https://wicklee.dev/api/v1/fleet \\
                   </tr>
                   <tr>
                     <Td mono>POST /api/v1/keys</Td>
-                    <Td>Create a new API key — returns the raw key once (prefix <code className="text-gray-400 text-xs">wk_live_</code>). Stored as SHA-256 hash at rest.</Td>
+                    <Td>Create a new API key — returns the raw key once (prefix <code className="text-gray-400 text-xs">wk_live_</code>). Stored as SHA-256 hash at rest. <code className="text-gray-400 text-xs">scope: "personal" | "org"</code> — org keys see the whole org fleet, inherit the org's tier, and are minted by org Admins only.</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/v1/keys</Td>
-                    <Td>List all API keys for the authenticated user — returns key ID, prefix, created date. Hash is never exposed.</Td>
+                    <Td>List API keys — your personal keys plus the active org's keys (each entry carries its scope). Hash is never exposed.</Td>
                   </tr>
                   <tr>
                     <Td mono>DELETE /api/v1/keys/:key_id</Td>
-                    <Td>Revoke an API key by ID. Takes effect immediately — in-flight requests with the revoked key will fail.</Td>
+                    <Td>Revoke an API key by ID. Personal keys: owner only. Org keys: any Admin of the key's org. Takes effect immediately.</Td>
                   </tr>
                 </tbody>
               </table>

@@ -391,16 +391,16 @@ Fleet intelligence snapshot. Team tier and above only.
 ```
 
 ### POST /api/v1/keys
-Create a new API key. Returns the raw key once (prefix `wk_live_`). Stored as SHA-256 hash.
+Create a new API key. Returns the raw key once (prefix `wk_live_`). Stored as SHA-256 hash. Body: `{ "name": "...", "scope": "personal" | "org" }` (scope defaults to personal). **Org keys** scope every V1 endpoint (and Prometheus `/metrics`) to the org's whole fleet and inherit the ORG's subscription tier — minting requires an active org session AND the org Admin role. Personal keys see only your personal nodes.
 ```json
-{ "key": "wk_live_abc123...", "key_id": "uuid", "created_at_ms": 1774622475195 }
+{ "key": "wk_live_abc123...", "key_id": "uuid", "created_at_ms": 1774622475195, "scope": "org" }
 ```
 
 ### GET /api/v1/keys
-List all API keys. Hash is never exposed.
+List API keys — your personal keys plus the active org's keys (org keys are visible to every member; each entry carries `scope`). Hash is never exposed.
 
 ### DELETE /api/v1/keys/{key_id}
-Revoke an API key. Takes effect immediately.
+Revoke an API key. Takes effect immediately. Personal keys: owner only. Org keys: any Admin of the key's org.
 
 ### GET /api/audit-log
 Immutable, append-only audit trail of sensitive fleet operations. Clerk JWT auth; **Business tier and above** to read (events are recorded for every tier). Org members see the whole org-scoped trail. Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Recorded actions: `node.paired`, `node.removed`, `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created`, `api_key.deleted`, `stream_tokens.revoked`.
