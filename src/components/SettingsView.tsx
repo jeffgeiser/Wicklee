@@ -288,6 +288,22 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     } catch { /* best-effort sync */ }
   }, [isProOrAbove, isCloudMode, getToken]);
 
+  // Set the desired deployment profile on the cloud (fleet config mgmt).
+  // The agent applies it within one telemetry push cycle (~2s) and reports
+  // the actual profile back in every frame. Empty = agent keeps local choice.
+  const saveDesiredProfileToCloud = React.useCallback(async (nodeId: string, prof: string) => {
+    if (!isProOrAbove || !isCloudMode || !getToken) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      await fetch(`${CLOUD_URL}/api/nodes/${nodeId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ desired_profile: prof }),
+      });
+    } catch { /* best-effort sync */ }
+  }, [isProOrAbove, isCloudMode, getToken]);
+
   // Save tags to cloud backend (Pro+ only). Comma-separated; `env:` prefix
   // is the environment convention. Tags scope alert rules, webhooks, and
   // fleet filtering.
@@ -572,6 +588,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24">Hostname</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[180px]">Display Name</th>
                     <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[160px]" title="Comma-separated. env: prefix = environment (env:prod). Tags scope alert rules and webhooks.">Tags</th>
+                    <th className="text-left px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-[130px]" title="Deployment profile governing observation sensitivity. Setting it here pushes the choice to the agent within ~5s; 'Agent local' leaves the node's own setting in charge.">Profile</th>
                     <th className="text-right px-3 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-32">
                       <div>kWh Rate</div>
                       <ClearColumnButton
@@ -640,6 +657,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         onOverride={(patch) => setNodeOverride(node.id, patch)}
                         onSaveDisplayName={saveDisplayNameToCloud}
                         onSaveTags={saveTagsToCloud}
+                        onSaveProfile={saveDesiredProfileToCloud}
                       />
                     );
                   })}
@@ -1566,7 +1584,8 @@ const NodeOverrideRow: React.FC<{
   onOverride: (patch: Partial<NodeOverride>) => void;
   onSaveDisplayName?: (nodeId: string, name: string) => void;
   onSaveTags?: (nodeId: string, tags: string) => void;
-}> = ({ node, eff, ov, fleetSettings, onOverride, onSaveDisplayName, onSaveTags }) => {
+  onSaveProfile?: (nodeId: string, profile: string) => void;
+}> = ({ node, eff, ov, fleetSettings, onOverride, onSaveDisplayName, onSaveTags, onSaveProfile }) => {
   const [kwhDraft,  setKwhDraft]  = useState(ov.kwhRate?.toString() ?? '');
   const [pueDraft,  setPueDraft]  = useState(ov.pue?.toString()  ?? '');
   const [idleDraft, setIdleDraft] = useState(ov.systemIdleW?.toString() ?? '');
@@ -1578,8 +1597,8 @@ const NodeOverrideRow: React.FC<{
   React.useEffect(() => { setPueDraft(ov.pue?.toString()  ?? ''); }, [ov.pue]);
   React.useEffect(() => { setIdleDraft(ov.systemIdleW?.toString() ?? ''); }, [ov.systemIdleW]);
 
-  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags' | null>(null);
-  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags') => {
+  const [savedCell, setSavedCell] = useState<'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags' | 'prof' | null>(null);
+  const flashSaved = (cell: 'kwh' | 'pue' | 'curr' | 'loc' | 'idle' | 'tags' | 'prof') => {
     setSavedCell(cell);
     setTimeout(() => setSavedCell(c => c === cell ? null : c), 1500);
   };
@@ -1665,6 +1684,24 @@ const NodeOverrideRow: React.FC<{
             className={`${cellBase} truncate ${valCls(!!tagsDraft)}`}
           />
           {savedCell === 'tags' && <SavedMark />}
+        </div>
+      </td>
+
+      {/* Deployment profile (actual, from the live frame; changing pushes desired) */}
+      <td className="px-3 py-3">
+        <div className="flex items-center gap-1.5">
+          <select
+            value={node.metrics?.deployment_profile ?? ''}
+            onChange={e => { if (e.target.value) { onSaveProfile?.(node.id, e.target.value); flashSaved('prof'); } }}
+            className="w-full bg-transparent border-0 outline-none text-xs font-telin text-gray-500 dark:text-gray-400"
+            title="Actual running profile. Selecting pushes the choice to the agent (~5s)."
+          >
+            {!node.metrics?.deployment_profile && <option value="">—</option>}
+            <option value="sovereign_dev">sovereign_dev</option>
+            <option value="dedicated_server">dedicated_server</option>
+            <option value="production_fleet">production_fleet</option>
+          </select>
+          {savedCell === 'prof' && <SavedMark />}
         </div>
       </td>
 

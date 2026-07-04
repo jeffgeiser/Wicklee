@@ -204,6 +204,8 @@ fleet-wide alert rules.
 }
 ```
 
+**Fleet config management (cloud-side):** the cloud stores a desired profile per node (`nodes.desired_profile`). `PATCH /api/nodes/:id` `{ "desired_profile": "..." }` (Pro+; empty clears) or `POST /api/fleet/config` `{ "tag": "env:prod", "desired_profile": "..." }` (Team+, applies to every node bearing the tag, returns `nodes_affected`). Delivery: every `/api/telemetry` response now carries `{ "desired_profile": ... }` (200+body, previously 204); the agent applies it within one 2s push cycle (shared state + config.toml) and injects its ACTUAL `deployment_profile` into every telemetry frame so dashboards show truth vs intent. Old agents ignore response bodies — the feature activates per node as agents upgrade. Bulk applies audited as `fleet_config.applied`.
+
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
 ```json

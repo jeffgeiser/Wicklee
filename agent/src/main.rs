@@ -2183,7 +2183,7 @@ static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// the session token. Funnelling every mutation through here makes the whole
 /// sequence atomic. Poison-tolerant: a panic elsewhere shouldn't wedge config
 /// saves forever.
-fn update_config(mutate: impl FnOnce(&mut WickleeConfig)) {
+pub(crate) fn update_config(mutate: impl FnOnce(&mut WickleeConfig)) {
     let _guard = CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut cfg = load_or_create_config();
     mutate(&mut cfg);
@@ -7559,9 +7559,10 @@ async fn main() {
         Arc::clone(&pairing_state),
         broadcast_tx.clone(),
         Arc::clone(&observation_cache),
+        Arc::clone(&deployment_profile),
     );
     #[cfg(target_env = "musl")]
-    cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone());
+    cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone(), Arc::clone(&deployment_profile));
 
     // ── Local metrics store (DuckDB) ──────────────────────────────────────────
     // Opens ~/.wicklee/metrics.db and subscribes to the broadcast channel.

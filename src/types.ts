@@ -38,6 +38,9 @@ export interface SentinelMetrics {
    *  the metrics object by FleetStreamContext; never sent by the agent).
    *  Convention: `env:` prefix reserved for environments (env:prod). */
   tags?: string | null;
+  /** Actual deployment profile the agent is running (fleet config mgmt —
+   *  injected into the telemetry frame by the agent's cloud_push). */
+  deployment_profile?: string | null;
   /** GPU model name — NVIDIA: nvmlDeviceGetName; Apple: system_profiler chip description */
   gpu_name?: string;
   /** CPU/chip name for non-GPU nodes — Linux: /proc/cpuinfo model name */
