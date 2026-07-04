@@ -56,6 +56,60 @@ criteria. RBAC is in progress on this branch.
 
 ---
 
+## Early July 2026 — SLOs with error budgets v1 (Readiness Program, Phase 2 item 5)
+
+The Phase-2 headliner: *"our internal inference API met SLO 99.2% of the
+month"* is now a sentence Wicklee can produce.
+
+### The architectural constraint that shaped everything
+Per-request `inference_traces` live agent-side in DuckDB and are never
+shipped to the cloud; cloud-side, TTFT survives only in `metrics_raw`
+(1 Hz samples, 24h retention — the 5-min rollup doesn't carry it). So
+monthly percentiles over raw data are impossible cloud-side. The answer is
+the standard one: **time-slice SLOs**. The evaluator writes one verdict per
+SLO per 5-minute window into `slo_windows`; compliance = good windows /
+counted windows over a rolling 30 days. Verdict rows are tiny and persist
+independently of raw-telemetry retention.
+
+### What shipped
+- **Definitions** (`slo_definitions`, Team+, ≤20/fleet): name, metric,
+  threshold, target_pct (50–99.99), optional tag / node scope (tag matching
+  reuses the item-6 predicate). Three v1 SLIs from `metrics_raw` via
+  `percentile_cont`, filtered to active-inference samples: `ttft_p95_ms`
+  (≤), `tok_s_p50` (≥), `wes_p50` (≥) — latency, throughput, efficiency.
+  Idle windows yield NULL SLI and are **not counted against the budget** (a
+  fleet that served nothing overnight didn't violate its latency SLO).
+- **Evaluator** (`slo_evaluator_task`, 5-min loop): computes the SLI for
+  the just-completed aligned window, writes idempotently (`ON CONFLICT DO
+  NOTHING` — restarts can't double-count), re-checks tier per SLO so
+  downgraded tenants stop evaluating.
+- **Error-budget burn alerts**: rolling 30d — allowed bad windows = total ×
+  (1 − target); burn = bad/allowed. Fires `slo_budget_burn` through the
+  existing `deliver_alert` channel fan-out (Slack/email/PagerDuty) to the
+  SLO creator's channels, **once per crossing** of 50/90/100% via a
+  `last_burn_notified` latch that resets when burn recovers below 25% as
+  the rolling window ages bad slices out.
+- **API**: `POST/GET/DELETE /api/slo` — Team+, Member+ RBAC, audited
+  (`slo.created`/`slo.deleted`). GET returns each definition with live
+  status: 30d compliance %, burn %, bad/total windows, latest window SLI.
+- **UI**: Settings → SLOs & Error Budgets — create form (objective picker
+  with ≤/≥ semantics per metric, target presets 95–99.9%, tag/node scope),
+  per-SLO card with compliance %, color-banded budget-burn bar, latest
+  window verdict, and an honest footer: SLIs are sampled-telemetry, not
+  per-request — per-request percentiles remain on each node's SLA Monitor.
+- Unit tests: SLI direction table (≤ for TTFT, ≥ for the rest, boundary
+  inclusive) + metric registry completeness. 24 cloud tests green.
+
+### Deferred (recorded on the roadmap item)
+Monthly SLO report (email + endpoint), per-request-trace SLIs (needs trace
+shipping — the Fleet SLA Aggregation item), dashboard SLO cards outside
+Settings.
+
+Verified: cloud `cargo test` 24 green (2 new), compile clean first try,
+`tsc` clean, vitest 80.
+
+---
+
 ## Early July 2026 — Alert silences & maintenance windows (Readiness Program, Phase 2 item 7)
 
 The "planned GPU driver upgrade paged everyone" fix, built directly on the

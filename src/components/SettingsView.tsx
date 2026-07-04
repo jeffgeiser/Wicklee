@@ -5,6 +5,7 @@ import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import WebhooksSection from './settings/WebhooksSection';
 import AuditLogSection from './settings/AuditLogSection';
+import SLOSection from './settings/SLOSection';
 import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
@@ -693,6 +694,16 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         nodes={nodes}
         onNavigateToPricing={onNavigateToPricing}
       />
+
+      {/* ── ④⅝ SLOs & ERROR BUDGETS (Team+) ──────────────────────────────── */}
+      {isCloudMode && (
+        <SLOSection
+          subscriptionTier={subscriptionTier}
+          getToken={getToken}
+          nodes={nodes.map(n => ({ node_id: n.id, hostname: n.hostname }))}
+          onNavigateToPricing={onNavigateToPricing}
+        />
+      )}
 
       {/* ── ④¾ THRESHOLD WEBHOOKS (Pro+) ─────────────────────────────────── */}
       {isCloudMode && (

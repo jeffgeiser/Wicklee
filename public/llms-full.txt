@@ -99,6 +99,16 @@ GET /api/alerts/silences         → { silences: [{ id, node_id, tag, event_type
 DELETE /api/alerts/silences/:id  → end early / cancel scheduled window
 ```
 
+### SLOs & Error Budgets (Team+, JWT auth)
+Time-slice SLOs over sampled fleet telemetry: one verdict per 5-minute window, rolling 30-day error budget. Metrics: `ttft_p95_ms` (SLI ≤ threshold), `tok_s_p50` (≥), `wes_p50` (≥) — computed from metrics_raw via percentile_cont, filtered to active-inference samples (idle windows return no data and are not counted against the budget). Scope: whole fleet, `tag`, or `node_id`. Burn alerts fire once per 50/90/100% crossing to the SLO creator's notification channels (`slo_budget_burn` event), resetting as the rolling window recovers. ≤20 SLOs per fleet; create/delete audited (`slo.created`/`slo.deleted`).
+```
+POST /api/slo       → { name, metric, threshold, target_pct (50..99.99), tag?, node_id? }
+GET /api/slo        → { slos: [{ id, name, metric, threshold, target_pct, tag, node_id,
+                        windows_30d, bad_30d, compliance_pct, burn_pct,
+                        latest: { ts, sli, ok } }] }
+DELETE /api/slo/:id → removes the SLO and its window history
+```
+
 ### GET /api/v1/thermal-budget?node_id=X
 Thermal Budget Calculator (Pro+, cloud, requires JWT). Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, and computes whether pushing a node harder backfires. Returns `sustainable_tps` (max during ≥30-min Normal blocks), `push_threshold_tps` (median tps in 10 min before transition), `time_to_fair_min` (avg duration before transition), `fair_penalized_tps` (push ÷ 1.25), confidence level (insufficient/low/medium/high), and a plain-English advice string comparing 1-hour token output of "stay sustainable" vs "push then drop to penalized."
 ```json

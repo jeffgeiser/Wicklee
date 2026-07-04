@@ -483,6 +483,22 @@ Silence creation and deletion are audit-logged. Suppression is enforced inside b
 
 ---
 
+## SLOs & Error Budgets (Team+)
+
+Declare objectives over the fleet's sampled telemetry — *"p95 TTFT ≤ 500 ms for 99% of 5-minute windows over a rolling 30 days"* — scoped to the whole fleet, a tag (`env:prod`), or a single node. The cloud evaluates one **time-slice verdict** per SLO every 5 minutes (windows with no inference activity aren't counted), so monthly compliance survives raw-telemetry retention. When the error budget crosses **50% / 90% / 100% burn**, the SLO creator's notification channels are alerted — once per crossing, resetting as the rolling window ages bad slices out.
+
+**Metrics (v1):** `ttft_p95_ms` (≤ threshold), `tok_s_p50` (≥), `wes_p50` (≥) — latency, throughput, efficiency, computed from 1 Hz sampled telemetry. Per-request percentiles remain on each node's SLA Monitor.
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| `POST` | `/api/slo` | `{ name, metric, threshold, target_pct, tag?, node_id? }` — target 50–99.99%, ≤20 SLOs per fleet |
+| `GET` | `/api/slo` | Definitions + live status: 30d compliance %, budget burn %, latest window SLI |
+| `DELETE` | `/api/slo/:id` | Removes the SLO and its window history |
+
+Managed in Settings → SLOs & Error Budgets (compliance %, budget burn bar, latest window). SLO create/delete is audit-logged.
+
+---
+
 ## Deep Intelligence
 
 Wicklee uniquely has hardware telemetry, inference metrics, model identity, and per-request traces in the same DuckDB database. These endpoints leverage that combination:
