@@ -74,8 +74,10 @@ interface LoadedModelRow {
   node_id: string;
   node_label: string;
   model: ModelLiveMetrics;
-  /** The node's current sentinel.ollama_active_model — used to decide Active vs Idle status. */
-  sentinel_active_model: string | null;
+  /** Runtime-aware Active flag: Ollama rows compare against the node's
+   *  ollama_active_model (most-recently-inferenced per /api/ps); vLLM and
+   *  llama.cpp keep the model resident, so Active = inference_state 'live'. */
+  active: boolean;
 }
 
 const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
@@ -128,23 +130,51 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   const rows: LoadedModelRow[] = useMemo(() => {
     const out: LoadedModelRow[] = [];
     const collectFromSentinel = (s: SentinelMetrics, label: string) => {
-      const shared = {
-        node_id: s.node_id,
-        node_label: label,
-        sentinel_active_model: s.ollama_active_model ?? null,
-      };
+      const shared = { node_id: s.node_id, node_label: label };
 
-      // Multi-model path
+      // ── Ollama ──
       if (s.active_models?.length) {
+        // Multi-model path
         for (const m of s.active_models) {
-          out.push({ ...shared, model: m });
+          out.push({ ...shared, model: m, active: m.model === s.ollama_active_model });
         }
-        return;
+      } else {
+        // Single-model fallback (legacy singular fields)
+        const fallback = singleModelFallback(s);
+        if (fallback) {
+          out.push({ ...shared, model: fallback, active: true });
+        }
       }
-      // Single-model fallback (legacy singular fields)
-      const fallback = singleModelFallback(s);
-      if (fallback) {
-        out.push({ ...shared, model: fallback });
+
+      // ── vLLM ── model identity lives in vllm_model_name, never in the
+      // Ollama-shaped fields above — without this branch, pure-vLLM nodes
+      // vanish from this page while Fleet Status still shows their model.
+      if (s.vllm_running && s.vllm_model_name) {
+        out.push({
+          ...shared,
+          active: s.inference_state === 'live' || (s.vllm_requests_running ?? 0) > 0,
+          model: {
+            model: s.vllm_model_name,
+            quantization: s.vllm_dtype ?? null,
+            vram_mb: s.nvidia_vram_used_mb && s.nvidia_vram_used_mb > 0 ? s.nvidia_vram_used_mb : null,
+            tok_s: s.vllm_tokens_per_sec ?? null,
+            request_count: s.vllm_requests_running ?? 0,
+          } as ModelLiveMetrics,
+        });
+      }
+
+      // ── llama.cpp ── same blind spot as vLLM.
+      if (s.llamacpp_running && s.llamacpp_model_name) {
+        out.push({
+          ...shared,
+          active: s.inference_state === 'live' || (s.llamacpp_slots_processing ?? 0) > 0,
+          model: {
+            model: s.llamacpp_model_name,
+            quantization: null,
+            tok_s: s.llamacpp_tokens_per_sec ?? null,
+            request_count: s.llamacpp_slots_processing ?? 0,
+          } as ModelLiveMetrics,
+        });
       }
     };
 
@@ -167,7 +197,7 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   }, [rows]);
 
   const activeCount = useMemo(() =>
-    rows.filter(r => r.model.model === r.sentinel_active_model).length,
+    rows.filter(r => r.active).length,
   [rows]);
 
   const meta = rows.length === 0
@@ -224,9 +254,10 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
                       ? 'GPU memory currently allocated to this model.'
                       : undefined;
 
-                  // Status: ● Active if this model is the node's currently-active one
-                  // (most-recently-inferenced per /api/ps), ○ Idle otherwise.
-                  const isActive = r.model.model === r.sentinel_active_model;
+                  // Status: ● Active per the runtime-aware flag computed at
+                  // collection (Ollama: most-recently-inferenced per /api/ps;
+                  // vLLM/llama.cpp: currently inferring), ○ Idle otherwise.
+                  const isActive = r.active;
 
                   return (
                     <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
