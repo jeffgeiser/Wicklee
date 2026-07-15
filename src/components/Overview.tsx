@@ -1809,6 +1809,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const efficiencyRatio = rankedWES.length >= 2
     ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes! : null;
 
+  // Honest empty-state reason for the power-derived tiles (WES, tok/W).
+  // A node can be actively inferring with no power telemetry (e.g. Apple
+  // Silicon agent running without root — powermetrics unavailable); saying
+  // "no active inference" next to a Live state tile reads as a contradiction.
+  const wesNullSub = wesEntries.some(e => e.nullReason === 'no power data')
+    ? 'no power data — run the agent as a service'
+    : wesEntries.length > 0 ? 'no active inference' : 'connect runtime';
+
   // ── Per-node cost rolling average ───────────────────────────────────────────
   // Smooth each node's raw $/1M over NODE_ROLLING_WINDOW samples using the
   // Map-based ref so no hook count grows with fleet size.
@@ -2347,7 +2355,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             ? isLocalMode
               ? 'inference efficiency · this node'
               : `${rankedWES.length} node${rankedWES.length !== 1 ? 's' : ''} · inference MPG`
-            : wesEntries.length > 0 ? 'no active inference' : 'connect runtime'}
+            : wesNullSub}
           icon={Zap}
           iconCls="text-amber-400"
         />
@@ -2438,7 +2446,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
             ? isLocalMode
               ? 'raw · no thermal penalty'
               : `${rankedTokW.length} node${rankedTokW.length !== 1 ? 's' : ''} reporting`
-            : 'no active inference'}
+            : wesNullSub}
           icon={Zap}
           iconCls={displayFleetAvgTokW != null && displayFleetAvgTokW > 10 ? 'text-emerald-400'
             : displayFleetAvgTokW != null && displayFleetAvgTokW >= 3 ? 'text-green-300'
