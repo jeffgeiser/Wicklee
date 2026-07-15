@@ -8455,6 +8455,269 @@ fn chargeback_row(key: &str, energy_kwh: f64, tokens: f64, hours: f64, kwh_rate:
 /// tag (team), model, and node, plus a daily trend. A node with multiple tags
 /// counts fully under each tag — tag groupings overlap by design (showback,
 /// not double-billing). CSV downloads are audited.
+/// Hardware class for capacity projections — Apple unified memory vs discrete NVIDIA.
+fn profile_class(profile: &str) -> &'static str {
+    if profile.starts_with("m4") { "apple" } else { "nvidia" }
+}
+
+/// GET /api/v1/fleet/capacity — Fleet Capacity Planner with procurement
+/// scenarios (Team+). "Reach 200 tok/s sustained: 2×4090 vs 1×H100" priced
+/// from the fleet's own measured tok/W per hardware class — never vendor
+/// benchmarks. Params: target_tok_s (default 2× current sustained),
+/// kwh_rate, days (observation window, 1–90, default 7).
+async fn handle_fleet_capacity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_team_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Fleet Capacity Planner requires Team tier or above", "upgrade": true }))).into_response();
+    }
+
+    let days: i64 = params.get("days").and_then(|s| s.parse().ok()).unwrap_or(7).clamp(1, 90);
+    let kwh_rate: f64 = params.get("kwh_rate").and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_KWH_RATE_USD as f64).clamp(0.01, 2.0);
+    let (_tcol, tval) = tenant_scope(&user_id, &org_id);
+    let window = format!("{days} days");
+
+    // Observed per-node averages: rollups for the window plus the raw
+    // trailing day (rollup lags 24h — same convention as chargeback).
+    let rows: Vec<(String, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT node_id,
+                AVG(tok_s) FILTER (WHERE tok_s > 0)::float8,
+                AVG(watts) FILTER (WHERE watts > 0)::float8
+         FROM (
+             SELECT node_id, tok_s_avg AS tok_s, watts_avg AS watts
+             FROM metrics_5min WHERE tenant_id = $1 AND ts > NOW() - $2::interval
+             UNION ALL
+             SELECT node_id, tok_s, watts
+             FROM metrics_raw WHERE tenant_id = $1 AND ts > NOW() - INTERVAL '1 day'
+         ) s GROUP BY node_id"
+    ).bind(tval).bind(&window).fetch_all(&state.pool).await.unwrap_or_default();
+
+    // Classify nodes from the live cache (NVIDIA board power vs Apple SoC power).
+    let cache = state.metrics.read().unwrap();
+    let classify = |node_id: &str| -> &'static str {
+        match cache.get(node_id).and_then(|e| e.metrics.as_ref()) {
+            Some(m) if m.nvidia_power_draw_w.is_some() => "nvidia",
+            Some(m) if m.apple_soc_power_w.is_some() || m.cpu_power_w.is_some() => "apple",
+            _ => "unknown",
+        }
+    };
+
+    let mut nodes = Vec::new();
+    let mut sustained_tok_s = 0.0_f64;
+    let mut total_watts = 0.0_f64;
+    let mut eff_by_class: HashMap<&'static str, Vec<f64>> = HashMap::new();
+    for (node_id, tok_s, watts) in &rows {
+        let class = classify(node_id);
+        let hostname = cache.get(node_id)
+            .and_then(|e| e.metrics.as_ref())
+            .and_then(|m| m.hostname.clone());
+        if let (Some(t), Some(w)) = (tok_s, watts) {
+            if *t > 0.0 && *w > 0.0 {
+                sustained_tok_s += t;
+                total_watts += w;
+                eff_by_class.entry(class).or_default().push(t / w);
+            }
+        }
+        nodes.push(serde_json::json!({
+            "node_id": node_id, "hostname": hostname, "class": class,
+            "avg_tok_s": tok_s, "avg_watts": watts,
+        }));
+    }
+    drop(cache);
+
+    let median = |mut v: Vec<f64>| -> Option<f64> {
+        if v.is_empty() { return None; }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        Some(v[v.len() / 2])
+    };
+    let apple_eff  = median(eff_by_class.remove("apple").unwrap_or_default());
+    let nvidia_eff = median(eff_by_class.remove("nvidia").unwrap_or_default());
+    let fleet_eff  = if total_watts > 0.0 { Some(sustained_tok_s / total_watts) } else { None };
+
+    let target_tok_s: f64 = params.get("target_tok_s").and_then(|s| s.parse().ok())
+        .unwrap_or((sustained_tok_s * 2.0).max(10.0))
+        .clamp(1.0, 1_000_000.0);
+    let deficit = (target_tok_s - sustained_tok_s).max(0.0);
+
+    const PROFILES: &[(&str, &str)] = &[
+        ("m4", "Mac Mini M4 16GB"), ("m4_pro_24gb", "M4 Pro 24GB"),
+        ("m4_max_36gb", "M4 Max 36GB"), ("m4_max_64gb", "M4 Max 64GB"),
+        ("m4_ultra_128gb", "M4 Ultra 128GB"),
+        ("nvidia_4060", "RTX 4060"), ("nvidia_4070", "RTX 4070"),
+        ("nvidia_4080", "RTX 4080"), ("nvidia_4090", "RTX 4090"),
+        ("nvidia_a100_40gb", "A100 40GB"), ("nvidia_a100_80gb", "A100 80GB"),
+        ("nvidia_h100", "H100 80GB"),
+    ];
+
+    // Procurement scenarios: how many units of each profile reach the target,
+    // and what that costs per day at 24h duty. Anchored to the fleet's own
+    // measured tok/W per class; each scenario states its basis.
+    let mut scenarios: Vec<serde_json::Value> = PROFILES.iter().filter_map(|(profile, label)| {
+        let (vram_mb, power_w) = hardware_profile(profile)?;
+        let class = profile_class(profile);
+        let (eff, basis) = match class {
+            "apple" => apple_eff.map(|e| (e, "your Apple nodes' measured efficiency"))
+                .or(fleet_eff.map(|e| (e, "fleet-wide measured efficiency")))?,
+            _       => nvidia_eff.map(|e| (e, "your NVIDIA nodes' measured efficiency"))
+                .or(fleet_eff.map(|e| (e, "fleet-wide measured efficiency")))?,
+        };
+        let unit_tok_s = eff * power_w as f64;
+        if unit_tok_s <= 0.0 { return None; }
+        let units = if deficit <= 0.0 { 0 } else { (deficit / unit_tok_s).ceil() as i64 };
+        if units > 16 { return None; } // absurd scenario — not worth listing
+        let added = unit_tok_s * units as f64;
+        Some(serde_json::json!({
+            "profile": profile, "label": label, "class": class,
+            "vram_mb": vram_mb, "power_w": power_w,
+            "units": units,
+            "unit_tok_s": (unit_tok_s * 10.0).round() / 10.0,
+            "est_added_tok_s": (added * 10.0).round() / 10.0,
+            "est_cost_per_day": ((units as f64 * power_w as f64) * 24.0 / 1000.0 * kwh_rate * 100.0).round() / 100.0,
+            "basis": format!("{basis} ({:.2} tok/W)", eff),
+        }))
+    }).collect();
+    scenarios.sort_by(|a, b| {
+        a["est_cost_per_day"].as_f64().partial_cmp(&b["est_cost_per_day"].as_f64()).unwrap()
+            .then_with(|| a["units"].as_i64().cmp(&b["units"].as_i64()))
+    });
+
+    Json(serde_json::json!({
+        "days": days,
+        "kwh_rate": kwh_rate,
+        "target_tok_s": (target_tok_s * 10.0).round() / 10.0,
+        "target_met": deficit <= 0.0,
+        "fleet": {
+            "nodes": nodes,
+            "sustained_tok_s": (sustained_tok_s * 10.0).round() / 10.0,
+            "total_watts": (total_watts * 10.0).round() / 10.0,
+            "cost_per_day": (total_watts * 24.0 / 1000.0 * kwh_rate * 100.0).round() / 100.0,
+        },
+        "scenarios": scenarios,
+    })).into_response()
+}
+
+/// GET /api/v1/fleet/migration-advisor — Cross-Node Model Migration (Team+).
+/// Compares each actively-inferring node's current WES against peers' 7-day
+/// demonstrated efficiency and free memory, and recommends moves with the
+/// estimated gain: "Llama on WK-A1B2 (WES 8.2) → WK-C3D4 (7d WES 12.1), +47%."
+async fn handle_migration_advisor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match extract_bearer(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Missing auth token" }))).into_response(),
+    };
+    let clerk_keys = state.clerk_keys.read().unwrap().clone();
+    let (user_id, org_id) = match require_user_and_org(&token, &state.pool, &clerk_keys).await {
+        Some(v) => v,
+        None => return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
+    };
+    let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
+    if !is_team_or_above(&tier) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Model Migration Advisor requires Team tier or above", "upgrade": true }))).into_response();
+    }
+
+    // 7d demonstrated efficiency per node (rollups + raw trailing day).
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let hist: Vec<(String, Option<f64>)> = sqlx::query_as(
+        "SELECT node_id, AVG(wes)::float8 FROM (
+             SELECT node_id, wes_penalized_avg AS wes FROM metrics_5min
+             WHERE tenant_id = $1 AND ts > NOW() - INTERVAL '7 days' AND wes_penalized_avg IS NOT NULL
+             UNION ALL
+             SELECT node_id, wes_penalized FROM metrics_raw
+             WHERE tenant_id = $1 AND ts > NOW() - INTERVAL '1 day' AND wes_penalized IS NOT NULL
+         ) s GROUP BY node_id"
+    ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
+    let hist_wes: HashMap<String, f64> = hist.into_iter()
+        .filter_map(|(n, w)| w.map(|w| (n, w))).collect();
+
+    let tenant_nodes: HashSet<String> =
+        sqlx::query_scalar::<_, String>(&format!("SELECT wk_id FROM nodes WHERE {tcol} = $1"))
+            .bind(tval).fetch_all(&state.pool).await.unwrap_or_default()
+            .into_iter().collect();
+
+    // Current placement snapshot from the live cache.
+    struct Snap {
+        hostname: Option<String>,
+        model: Option<String>,
+        model_size_mb: Option<f64>,
+        wes: Option<f64>,
+        free_mem_mb: f64,
+        online: bool,
+    }
+    let now = now_ms();
+    let cache = state.metrics.read().unwrap();
+    let snaps: Vec<(String, Snap)> = tenant_nodes.iter().filter_map(|nid| {
+        let e = cache.get(nid)?;
+        let m = e.metrics.as_ref()?;
+        let model = if m.vllm_running { m.vllm_model_name.clone() }
+            else if m.llamacpp_running { m.llamacpp_model_name.clone() }
+            else { m.ollama_active_model.clone() };
+        let free_mem_mb = match (m.nvidia_vram_total_mb, m.nvidia_vram_used_mb) {
+            (Some(t), Some(u)) => t.saturating_sub(u) as f64,
+            _ => m.available_memory_mb as f64,   // Apple unified memory
+        };
+        Some((nid.clone(), Snap {
+            hostname: m.hostname.clone(),
+            model,
+            model_size_mb: m.ollama_model_size_gb.map(|g| g as f64 * 1024.0),
+            wes: wes_for_payload(m).map(|w| w as f64),
+            free_mem_mb,
+            online: now.saturating_sub(e.last_seen_ms) < ONLINE_THRESHOLD_MS,
+        }))
+    }).collect();
+    drop(cache);
+
+    let mut recommendations = Vec::new();
+    for (from_id, from) in &snaps {
+        let (Some(model), Some(from_wes)) = (&from.model, from.wes) else { continue };
+        if !from.online || from_wes <= 0.0 { continue; }
+        // Model footprint: reported size + 20% headroom; unknown size assumes 8 GB.
+        let needed_mb = from.model_size_mb.unwrap_or(8192.0) * 1.2;
+        for (to_id, to) in &snaps {
+            if to_id == from_id || !to.online { continue; }
+            let Some(&to_wes) = hist_wes.get(to_id) else { continue };
+            if to_wes < from_wes * 1.2 { continue; }          // require ≥20% gain
+            if to.free_mem_mb < needed_mb { continue; }       // must fit with headroom
+            let gain_pct = (to_wes - from_wes) / from_wes * 100.0;
+            recommendations.push(serde_json::json!({
+                "model": model,
+                "from_node": from_id, "from_hostname": from.hostname,
+                "to_node": to_id, "to_hostname": to.hostname,
+                "from_wes": (from_wes * 10.0).round() / 10.0,
+                "to_wes_7d": (to_wes * 10.0).round() / 10.0,
+                "est_gain_pct": gain_pct.round(),
+                "to_free_mem_mb": to.free_mem_mb.round(),
+                "model_size_mb": from.model_size_mb,
+            }));
+        }
+    }
+    recommendations.sort_by(|a, b| b["est_gain_pct"].as_f64().partial_cmp(&a["est_gain_pct"].as_f64()).unwrap());
+    recommendations.truncate(10);
+
+    Json(serde_json::json!({ "recommendations": recommendations })).into_response()
+}
+
 async fn handle_fleet_chargeback(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -9930,6 +10193,8 @@ async fn main() {
         .route("/api/alerts/silences/:id",      delete(handle_delete_silence))
         .route("/api/fleet/config",             post(handle_fleet_config_apply))
         .route("/api/v1/fleet/chargeback",      get(handle_fleet_chargeback))
+        .route("/api/v1/fleet/capacity",           get(handle_fleet_capacity))
+        .route("/api/v1/fleet/migration-advisor",  get(handle_migration_advisor))
         .route("/api/slo",                      post(handle_create_slo).get(handle_list_slos))
         .route("/api/slo/:id",                  delete(handle_delete_slo))
         .route("/api/nodes/:node_id",    patch(handle_update_node))

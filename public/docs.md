@@ -514,6 +514,14 @@ Cost and token attribution from **measured** telemetry — energy (watts × time
 
 `GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16` returns totals plus `by_tag` / `by_model` / `by_node` / `daily` groupings; each row carries `energy_kwh`, `cost_usd`, `tokens_m`, `usd_per_mtok`, `hours_covered`. Window 1–90 days (5-min rollup + raw trailing-day tail, same energy conventions as Cost by Model). Add `&format=csv&group=tag|model|node|daily` for a finance-ready CSV (formula-injection-hardened, audit-logged as `chargeback.exported`).
 
+### Capacity Planner — procurement scenarios (Team+)
+
+`GET /api/v1/fleet/capacity?target_tok_s=200` — "Reach 200 tok/s sustained: 2× RTX 4090 vs 1× H100." Scenarios are priced from your fleet's **own measured tok/W** per hardware class (Apple vs NVIDIA, observed over the window) — never vendor benchmarks — and every scenario states its estimate basis. Default target is 2× current sustained throughput. Rendered on Insights → Performance with a target input and Apple/NVIDIA filter.
+
+### Model Migration Advisor (Team+)
+
+`GET /api/v1/fleet/migration-advisor` — compares each actively-inferring node's live WES against every peer's 7-day demonstrated WES and free memory (NVIDIA VRAM or Apple unified). Recommends moves with ≥20% estimated gain where the model fits with 1.2× headroom: "llama3.1:70b on WK-A1B2 (WES 8.2) → WK-C3D4 (7d WES 12.1), +47%." Rendered on Insights → Performance.
+
 Tag rows overlap when a node carries multiple tags — showback, not double-billing. Surfaced as the Chargeback & Showback card on Insights → Performance with grouping tabs, totals strip, and CSV download.
 
 ---

@@ -1903,6 +1903,14 @@ curl https://wicklee.dev/api/v1/fleet \\
                     <Td>Fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.</Td>
                   </tr>
                   <tr>
+                    <Td mono>GET /api/v1/fleet/capacity?target_tok_s=200</Td>
+                    <Td>Capacity planner with procurement scenarios — "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from your fleet's own measured tok/W per hardware class, never vendor benchmarks. Each scenario states its estimate basis. <span className="text-emerald-400">Team+</span></Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /api/v1/fleet/migration-advisor</Td>
+                    <Td>Cross-node model migration — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom. <span className="text-emerald-400">Team+</span></Td>
+                  </tr>
+                  <tr>
                     <Td mono>GET /api/v1/insights/latest</Td>
                     <Td>Fleet intelligence snapshot — fleet summary (online count, avg WES, fleet tok/s) + findings array (thermal stress, memory pressure, offline nodes, WES below baseline, low throughput)</Td>
                   </tr>
