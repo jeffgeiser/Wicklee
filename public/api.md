@@ -146,6 +146,9 @@ Auth: `X-API-Key: wk_live_...` header.
 | GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events (LAG window function over `metrics_raw`). 1–168 hour window, capped at 200 rows. | All |
 | GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost using $0.16/kWh default. 1–168 hour window. | All |
 | GET | /api/v1/insights/latest | Fleet intelligence snapshot | Team+ |
+| GET | /api/v1/fleet/chargeback?days=30 | Chargeback/showback (Clerk JWT auth) — cost + $/1M-token attribution by team tag / model / node + daily trend. `&format=csv&group=` for finance export (audited) | Team+ |
+| GET | /api/v1/fleet/capacity?target_tok_s=200 | Capacity planner with procurement scenarios (Clerk JWT auth) — "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from the fleet's own measured tok/W per hardware class; every scenario states its basis | Team+ |
+| GET | /api/v1/fleet/migration-advisor | Cross-node model migration (Clerk JWT auth) — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom | Team+ |
 | POST | /api/v1/keys | Create API key | All |
 | GET | /api/v1/keys | List API keys | All |
 | DELETE | /api/v1/keys/{id} | Revoke API key | All |
