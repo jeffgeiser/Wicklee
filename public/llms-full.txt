@@ -389,6 +389,18 @@ interval since `metrics_raw` is at 30s cadence.
 
 ### GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16
 Chargeback/showback (Team+, Clerk JWT). Cost + token attribution by team tag, model, and node, plus a daily trend — from MEASURED energy (watts × time at the given rate; 5-min rollup UNION raw trailing-day tail, same conventions as cost-by-model) and tokens estimated from sampled throughput (tok/s × covered seconds). `usd_per_mtok` is the headline: $ per million tokens, the number requiring watts AND tokens in one store. Tag rows overlap when a node carries multiple tags (showback, not double-billing); untagged nodes fold into `(untagged)`. Window 1–90 days. `&format=csv&group=tag|model|node|daily` downloads one grouping as formula-injection-hardened CSV, audited as `chargeback.exported`.
+
+### GET /api/v1/fleet/capacity?target_tok_s=200&kwh_rate=0.16&days=7
+Fleet Capacity Planner with procurement scenarios (Team+, Clerk JWT). Observed per-node tok/s + watts over the window (5-min rollups UNION raw trailing day), nodes classified Apple vs NVIDIA from their live power source, and a median measured tok/W per class. Scenarios answer "reach `target_tok_s` sustained": for each of 12 hardware profiles (M4 → H100), how many units close the gap and what that costs per day at 24h duty — priced from YOUR fleet's measured efficiency, never vendor benchmarks. Each scenario carries a `basis` string naming the efficiency source. Default target = 2× current sustained. Scenarios needing >16 units of one profile are omitted.
+```json
+{ "target_tok_s": 200, "target_met": false, "fleet": { "sustained_tok_s": 45.2, "total_watts": 74.5, "cost_per_day": 0.29 }, "scenarios": [{ "profile": "nvidia_4090", "label": "RTX 4090", "units": 2, "unit_tok_s": 81.0, "est_added_tok_s": 162.0, "est_cost_per_day": 3.46, "basis": "your NVIDIA nodes' measured efficiency (0.18 tok/W)" }] }
+```
+
+### GET /api/v1/fleet/migration-advisor
+Cross-node model migration (Team+, Clerk JWT). Current placement from the live cache (model identity across Ollama/vLLM/llama.cpp, live WES, free memory — NVIDIA VRAM or Apple available unified memory) compared against each peer's 7-day demonstrated WES (5-min rollups UNION raw trailing day). Recommends moves with ≥20% estimated gain where the model fits with 1.2× headroom (unknown footprint assumes 8 GB). Top 10 by gain.
+```json
+{ "recommendations": [{ "model": "llama3.1:70b", "from_node": "WK-A1B2", "to_node": "WK-C3D4", "from_wes": 8.2, "to_wes_7d": 12.1, "est_gain_pct": 47, "to_free_mem_mb": 49152 }] }
+```
 ```json
 { "days": 30, "kwh_rate": 0.16,
   "totals": { "key": "total", "energy_kwh": 42.1, "cost_usd": 6.74, "tokens_m": 812.4, "usd_per_mtok": 0.0083, "hours_covered": 1440.0 },

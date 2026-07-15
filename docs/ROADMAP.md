@@ -174,7 +174,7 @@ The July 2026 Teams/Enterprise review found the Team tier strong and differentia
 
 9. **Showback/chargeback reports (v1 SHIPPED).** `GET /api/v1/fleet/chargeback?days=1..90&kwh_rate=` (Team+, JWT) — cost + token attribution by team tag / model / node + daily trend, from a shared base CTE (5-min rollup UNION raw trailing-day tail; energy conventions identical to cost-by-model: 30s cadence, watts × hours ÷ 1000). Tokens estimated from sampled throughput (tok/s × covered seconds — proxy-trace exact counts are a follow-up when trace shipping lands); `usd_per_mtok` is the headline metric. Tag groupings overlap by design (multi-tag nodes count under each; documented as showback, not double-billing; untagged → `(untagged)`). `&format=csv&group=tag|model|node|daily` = finance CSV via `csv_escape`, audited `chargeback.exported`. UI: Chargeback & Showback card on Insights → Performance (window picker 7/30/90d, grouping tabs, totals strip with $/1M-tok headline, CSV button, Team-gate upsell). **Follow-ups:** per-request token counts once traces ship; budgets with alerts (natural extension of the SLO burn machinery); monthly email — shared with item 10's digest.
 10. **Idle-waste & right-sizing report.** Fleet rollup of phantom-load cost + quant-advisor savings: "fleet burned $X idle last 30d; these N changes recover $Y" with per-node actions (unload idle model, quant swap, consolidate). Weekly email digest (Resend is already wired for alerts). This makes Wicklee unremovable — removing it makes waste invisible again.
-11. **Capacity planner with procurement scenarios** (sharpens the existing "Fleet Capacity Planner" entry below): "reach 200 tok/s sustained: 2×4090 vs 1×H100" priced from the fleet's own measured WES, not vendor benchmarks.
+11. **Capacity planner with procurement scenarios (SHIPPED — with Cross-Node Migration Advisor).** `GET /api/v1/fleet/capacity?target_tok_s=&kwh_rate=&days=` (Team+, JWT): observed per-node tok/s + watts over the window (5-min rollups UNION raw trailing day), nodes classified Apple vs NVIDIA from their live power source, median measured tok/W per class. Scenarios answer "reach N tok/s sustained": units-needed × cost/day for 12 hardware profiles (M4 → H100), priced from the fleet's OWN measured efficiency (each scenario carries a `basis` string; >16-unit scenarios omitted; default target 2× current sustained). Companion `GET /api/v1/fleet/migration-advisor` (Team+): live placement from the cache (model identity across all 3 runtimes, live WES, free NVIDIA VRAM or Apple unified memory) vs peers' 7-day demonstrated WES — recommends moves with ≥20% estimated gain and 1.2× memory headroom, top 10. UI: CapacityPlannerCard (target input, Apple/NVIDIA filter, scenario table with basis tooltips) + MigrationAdvisorCard on Insights → Performance beside Chargeback. **Follow-ups:** thermal-aware sustained capacity (fold in the thermal-budget sustainable rate instead of raw averages); procurement scenarios mixing profiles.
 
 **Phase 4 — Enterprise deployment surface**
 
@@ -277,12 +277,6 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 
 ### Model-Hardware Fit Score
 "Is this model right for this hardware?" Auto-computed from VRAM headroom, tok/s vs model size ratio, thermal behavior under load, swap pressure. Returns score + recommendation (e.g., "62/100 — VRAM tight, consider Q3_K_M or smaller variant").
-
-### Fleet Capacity Planner
-"Your 3-node fleet sustains 45 tok/s at current thermal conditions. Adding one M4 Pro would add ~15 tok/s at $0.04/day." Uses real WES data from fleet to project capacity and cost of scaling.
-
-### Cross-Node Model Migration
-"Llama 3.1 70B on WK-A1B2 has WES 8.2, VRAM at 89%. WK-C3D4 has WES 12.1, VRAM at 52%. Recommend migrating for 47% efficiency gain." Fleet-wide model placement optimization based on measured performance.
 
 ### Kubernetes Operator
 Helm chart and operator for automated Wicklee agent deployment across GPU node pools.

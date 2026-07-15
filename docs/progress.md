@@ -6,6 +6,22 @@
 
 ---
 
+## July 15, 2026 — Capacity Planner (procurement scenarios) + Migration Advisor
+
+### Capacity Planner with procurement scenarios (Team+ — Readiness Program item 11)
+- **`GET /api/v1/fleet/capacity?target_tok_s=&kwh_rate=&days=1..90`** — observed per-node tok/s + watts (5-min rollups UNION raw trailing day, chargeback conventions), nodes classified Apple/NVIDIA from their live power source, median measured tok/W per class. Scenarios: units of each of 12 hardware profiles (M4 → H100) needed to close the gap to `target_tok_s`, with cost/day at 24h duty — priced from the fleet's OWN measured efficiency, never vendor benchmarks. Every scenario carries a `basis` string; >16-unit scenarios omitted; default target = 2× current sustained.
+- **CapacityPlannerCard** on Insights → Performance — sustained/target/gap strip with inline target input, Apple/NVIDIA filter, scenario table sorted by cost/day, basis on hover.
+
+### Cross-Node Model Migration Advisor (Team+)
+- **`GET /api/v1/fleet/migration-advisor`** — live placement snapshot from the metrics cache (model identity across Ollama/vLLM/llama.cpp, live WES via `wes_for_payload`, free memory = NVIDIA VRAM free or Apple `available_memory_mb`) vs peers' 7-day demonstrated WES. Recommends moves with ≥20% estimated gain where the model fits with 1.2× headroom (unknown footprint assumes 8 GB); top 10 by gain.
+- **MigrationAdvisorCard** beside the planner — from→to rows with WES delta and free memory; honest "models are well-placed" empty state.
+
+Both endpoints follow the chargeback pattern: `require_user_and_org` (JWT-claim tenancy) + `resolve_tier` + `is_team_or_above` + `tenant_scope`. Docs updated: DocsPage Fleet API table, docs.md, llms.txt, llms-full.txt (with response examples). Closes the last two pre-July roadmap entries in this family — Deployment Profiles had already shipped via fleet config management (item 8).
+
+Also this session (PR #35): Models tab Loaded table was blind to vLLM/llama.cpp nodes (Ollama-only field collection — the DGX Spark vanished while Fleet Status showed it); Overview WES/tok-W tiles claimed "no active inference" when the actual gap was missing power telemetry (unprivileged Apple agent → no powermetrics) — both fixed.
+
+---
+
 ## ⇢ Session handoff — current state (2026-07-04)
 
 **Everything below is MERGED to `main`.** PR #29 (audit logging + export/SIEM

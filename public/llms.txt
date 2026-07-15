@@ -97,6 +97,8 @@ Base URL: `https://wicklee.dev/api/v1`
 - `GET /api/v1/fleet/model-switches?hours=24` — cross-node model swap events via LAG window function over `metrics_raw`. 1–168 hour window, capped at 200 rows.
 - `GET /api/v1/fleet/cost-by-model?hours=24` — fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.
 - `GET /api/v1/fleet/chargeback?days=30` — Chargeback/showback (Team+, JWT): cost + $/1M-token attribution by team tag / model / node + daily trend, from measured watts × sampled throughput. `&format=csv&group=` for finance export (audited).
+- `GET /api/v1/fleet/capacity?target_tok_s=200` — Capacity planner with procurement scenarios (Team+, JWT): "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from the fleet's OWN measured tok/W per hardware class (Apple vs NVIDIA), never vendor benchmarks. Each scenario states its estimate basis. Default target = 2× current sustained.
+- `GET /api/v1/fleet/migration-advisor` — Cross-node model migration (Team+, JWT): compares each actively-inferring node's live WES against peers' 7-day demonstrated WES + free memory; recommends moves with ≥20% estimated gain and 1.2× memory headroom.
 - `GET /api/v1/insights/latest` — Fleet intelligence snapshot (Team+)
 - `POST /api/v1/keys` — Create API key (`scope: personal|org` — org keys see the whole org fleet + inherit org tier; org-Admin-only to mint)
 - `GET /api/v1/keys` — List API keys (personal + active org's, with scope)
