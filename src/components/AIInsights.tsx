@@ -74,6 +74,7 @@ import ThermalBudgetCard from './insights/ThermalBudgetCard';
 import ChargebackCard from './insights/ChargebackCard';
 import CapacityPlannerCard from './insights/CapacityPlannerCard';
 import MigrationAdvisorCard from './insights/MigrationAdvisorCard';
+import IdleWasteCard from './insights/IdleWasteCard';
 import ObservationCard from './insights/ObservationCard';
 import AccordionObservationCard from './insights/AccordionObservationCard';
 import FleetObservationCard from './insights/FleetObservationCard';
@@ -2374,6 +2375,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} />
                   <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} />
                 </div>
+              )}
+
+              {/* Idle Waste & right-sizing (Team+, cloud only — phantom-load cost + weekly digest) */}
+              {!isLocalHost && getToken && (
+                <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} />
               )}
 
               {/* Performance History — Tok/s · Power · GPU% · Mem% (cloud only) */}

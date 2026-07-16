@@ -390,6 +390,15 @@ interval since `metrics_raw` is at 30s cadence.
 ### GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16
 Chargeback/showback (Team+, Clerk JWT). Cost + token attribution by team tag, model, and node, plus a daily trend — from MEASURED energy (watts × time at the given rate; 5-min rollup UNION raw trailing-day tail, same conventions as cost-by-model) and tokens estimated from sampled throughput (tok/s × covered seconds). `usd_per_mtok` is the headline: $ per million tokens, the number requiring watts AND tokens in one store. Tag rows overlap when a node carries multiple tags (showback, not double-billing); untagged nodes fold into `(untagged)`. Window 1–90 days. `&format=csv&group=tag|model|node|daily` downloads one grouping as formula-injection-hardened CSV, audited as `chargeback.exported`.
 
+### GET /api/v1/fleet/idle-waste?days=30&kwh_rate=0.16
+Idle-waste & right-sizing report (Team+, Clerk JWT). Phantom load = a model held in memory while the node is NOT inferring — power burned for nothing. Idle/active energy split uses per-sample `inference_state` on raw rows and `inference_duty_pct` on 5-min rollups (same 30s-cadence energy conventions as chargeback). Actions: `unload_idle_model` per node×model (with `recovers_usd_month`, normalized so 7d and 30d reports advise consistently) and `consolidate` for nodes inferring <10% of the window. Quant-swap savings are a documented follow-up (needs agent Quant Sweet Spot data on the wire).
+```json
+{ "days": 30, "totals": { "phantom_cost_usd": 4.82, "baseline_idle_cost_usd": 1.10, "active_cost_usd": 9.4, "idle_pct_of_energy": 37.2, "projected_monthly_recovery_usd": 4.6 }, "by_node": [{ "node_id": "WK-C133", "idle_hours": 512.3, "duty_pct": 3.1, "phantom_cost_usd": 3.9 }], "actions": [{ "kind": "unload_idle_model", "node_id": "WK-C133", "model": "glm-4.7-flash:latest", "idle_hours": 480.0, "recovers_usd_month": 3.75, "detail": "glm-4.7-flash:latest sat loaded but idle for 480h on WK-C133 — unload when idle (or set a keep-alive timeout) to recover ~$3.75/mo" }] }
+```
+
+### GET/PUT /api/digest
+Weekly idle-waste digest settings (Team+, Clerk JWT). PUT `{"email","enabled"}` — one email per week via Resend with idle burn, energy share, and the top recovery actions. One setting per tenant (org members share it); tier re-checked at send time; `last_sent_ms` advances only on successful delivery. Changes audited as `digest.updated`.
+
 ### GET /api/v1/fleet/capacity?target_tok_s=200&kwh_rate=0.16&days=7
 Fleet Capacity Planner with procurement scenarios (Team+, Clerk JWT). Observed per-node tok/s + watts over the window (5-min rollups UNION raw trailing day), nodes classified Apple vs NVIDIA from their live power source, and a median measured tok/W per class. Scenarios answer "reach `target_tok_s` sustained": for each of 12 hardware profiles (M4 → H100), how many units close the gap and what that costs per day at 24h duty — priced from YOUR fleet's measured efficiency, never vendor benchmarks. Each scenario carries a `basis` string naming the efficiency source. Default target = 2× current sustained. Scenarios needing >16 units of one profile are omitted.
 ```json

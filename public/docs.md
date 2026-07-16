@@ -518,6 +518,10 @@ Cost and token attribution from **measured** telemetry — energy (watts × time
 
 `GET /api/v1/fleet/capacity?target_tok_s=200` — "Reach 200 tok/s sustained: 2× RTX 4090 vs 1× H100." Scenarios are priced from your fleet's **own measured tok/W** per hardware class (Apple vs NVIDIA, observed over the window) — never vendor benchmarks — and every scenario states its estimate basis. Default target is 2× current sustained throughput. Rendered on Insights → Performance with a target input and Apple/NVIDIA filter.
 
+### Idle Waste & Right-Sizing (Team+)
+
+`GET /api/v1/fleet/idle-waste?days=30` — "your fleet burned $X on idle loaded models last 30d; these changes recover $Y/mo." Phantom load = a model held in memory while the node is not inferring, split from active energy via per-sample `inference_state` (raw) and `inference_duty_pct` (rollups). Recovery actions: unload idle models (with monthly recovery estimates) and consolidate nodes inferring <10% of the window. The Insights → Performance card includes a **weekly email digest** opt-in (`GET/PUT /api/digest`, Resend-delivered, audited) — idle burn, energy share, and top recoveries in your inbox every week.
+
 ### Model Migration Advisor (Team+)
 
 `GET /api/v1/fleet/migration-advisor` — compares each actively-inferring node's live WES against every peer's 7-day demonstrated WES and free memory (NVIDIA VRAM or Apple unified). Recommends moves with ≥20% estimated gain where the model fits with 1.2× headroom: "llama3.1:70b on WK-A1B2 (WES 8.2) → WK-C3D4 (7d WES 12.1), +47%." Rendered on Insights → Performance.
