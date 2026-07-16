@@ -238,6 +238,16 @@ TTFT (Time to First Token) resolution priority:
 
 Most inference deployments run multiple models concurrently. Wicklee always detects all loaded models and their VRAM — per-model throughput attribution depends on the runtime and whether the proxy is enabled.
 
+**Where things live in the dashboard** — the three main tabs split by axis, not by feature:
+
+| Tab | Axis | Answers |
+|-----|------|---------|
+| **Intelligence** | now | Live tiles, fleet status, live hardware — what is every node doing this second? |
+| **Models** | the model | What's loaded and where (all runtimes), what each model ran and cost (7-day comparison, swap activity), what could you add (discovery). |
+| **Insights → Performance** | efficiency & money over time | Model fit, WES trends, SLA, thermal budget, chargeback, capacity planning, migration advice, idle waste. |
+
+The tabs cross-link where they hand off: the Migration Advisor (Performance) links to the Loaded table (Models) it acts on, and the Models comparison links to cost attribution and planning (Performance).
+
 **Per-model metrics (when attributed):** tok/s, VRAM allocation, average TTFT, average latency, request count, model size, and quantization level — all tracked independently for each loaded model.
 
 **Wire format:** When 2+ models are loaded, the `active_models` array is included in the SSE/WebSocket payload. Single-model deployments omit the field (zero overhead). Existing singular fields (`ollama_active_model`, `ollama_tokens_per_second`) report the most-recently-active model for backwards compatibility.

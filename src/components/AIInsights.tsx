@@ -539,6 +539,9 @@ interface AIInsightsProps {
   deepLink?: { tab: 'triage' | 'performance' | 'forensics'; scrollTo?: string };
   /** Called by AIInsights once it has handled the deep-link target. */
   onDeepLinkConsumed?: () => void;
+  /** Navigate to the Models tab — used by model-placement cards (e.g. the
+   *  Migration Advisor's "view what's loaded" handoff). */
+  onNavigateToModels?: () => void;
 }
 
 // ── InferenceProfiler — correlated multi-signal timeline (localhost) ────────────
@@ -991,6 +994,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   onNavigateToObservability,
   deepLink,
   onDeepLinkConsumed,
+  onNavigateToModels,
 }) => {
 
   // ── Hooks — all unconditional ──────────────────────────────────────────────
@@ -2373,7 +2377,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               {!isLocalHost && getToken && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} />
-                  <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} />
+                  <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} onViewModels={onNavigateToModels} />
                 </div>
               )}
 

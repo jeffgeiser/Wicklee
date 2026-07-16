@@ -9,6 +9,8 @@ interface ModelsPageProps {
   isLocalHost: boolean;
   getToken?: () => Promise<string | null>;
   nodes: FleetNode[];
+  /** Deep-link into Insights → Performance (fleet efficiency, planning, cost governance). */
+  onNavigateToInsightsPerformance?: () => void;
 }
 
 // ── Section wrapper — thin rule, small-caps eyebrow, optional inline meta ──
@@ -532,7 +534,11 @@ const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
 // Long-term: Swaps belongs in the Observability tab as a `model_swap_thrashing`
 // alert pattern (fires when swap frequency exceeds threshold). For now it
 // lives here as a manual deep-dive. See backlog.
-const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
+const PastActivityFooter: React.FC<{
+  isLocalHost: boolean;
+  getToken?: () => Promise<string | null>;
+  onNavigateToInsightsPerformance?: () => void;
+}> = ({ isLocalHost, getToken, onNavigateToInsightsPerformance }) => {
   const [openSection, setOpenSection] = useState<'recent' | 'swaps' | null>(null);
 
   const ToggleButton: React.FC<{ id: 'recent' | 'swaps'; label: string; hint: string }> = ({ id, label, hint }) => {
@@ -555,7 +561,24 @@ const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Prom
     <div className="space-y-3 pt-6 border-t border-gray-800">
       <p className="text-[10px] tracking-widest uppercase text-gray-600 font-medium">Past activity</p>
       <ToggleButton id="recent" label="7-day model performance comparison" hint="WES, tok/s, watts, TTFT, cost per model" />
-      {openSection === 'recent' && <RecentSection isLocalHost={isLocalHost} getToken={getToken} />}
+      {openSection === 'recent' && (
+        <>
+          <RecentSection isLocalHost={isLocalHost} getToken={getToken} />
+          {/* Handoff: this table answers "which model earns its watts" — the
+              team/fleet money questions live one tab over. */}
+          {onNavigateToInsightsPerformance && (
+            <p className="text-[11px] text-gray-600 px-1">
+              Cost attribution by team, capacity planning, and idle-waste recovery live on{' '}
+              <button
+                onClick={onNavigateToInsightsPerformance}
+                className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40 underline-offset-2 transition-colors"
+              >
+                Insights → Performance
+              </button>.
+            </p>
+          )}
+        </>
+      )}
       <ToggleButton id="swaps" label="Model swap activity" hint="last 24h · transitions and idle gaps" />
       {openSection === 'swaps' && <SwapsSection isLocalHost={isLocalHost} getToken={getToken} />}
     </div>
@@ -563,10 +586,14 @@ const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Prom
 };
 
 // ── Page ────────────────────────────────────────────────────────────────────
-const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
+const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, onNavigateToInsightsPerformance }) => {
   return (
     <div className="space-y-6 p-4 sm:p-6 max-w-7xl mx-auto">
-      {/* Page header — establishes identity, doesn't duplicate section subtitles */}
+      {/* Page header — establishes identity, doesn't duplicate section subtitles.
+          Platform contract: this tab is the MODEL axis — what's loaded and where,
+          what each model ran and cost, what you could add. Live node telemetry is
+          Intelligence; fleet efficiency/planning/cost governance over time is
+          Insights → Performance. Keep new features on the right side of that line. */}
       <header className="flex items-start gap-3 pb-2">
         <div className="h-10 w-10 rounded-xl bg-blue-600/10 border border-blue-600/20 flex items-center justify-center text-blue-400">
           <Boxes className="w-5 h-5" />
@@ -574,7 +601,21 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
         <div>
           <h1 className="text-2xl font-bold text-white">Models</h1>
           <p className="text-sm text-gray-400 mt-1">
-            What's loaded across your fleet, and what could you add. Inference performance lives on the Intelligence tab.
+            What's loaded and where, what each model ran and cost, and what you could add.
+            Live node telemetry is on Intelligence
+            {onNavigateToInsightsPerformance ? (
+              <>
+                ; fleet efficiency, planning, and cost governance live on{' '}
+                <button
+                  onClick={onNavigateToInsightsPerformance}
+                  className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40 underline-offset-2 transition-colors"
+                >
+                  Insights → Performance
+                </button>.
+              </>
+            ) : (
+              '; fleet efficiency, planning, and cost governance live on Insights → Performance.'
+            )}
           </p>
         </div>
       </header>
@@ -584,7 +625,7 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
       <BrowseSection isLocalHost={isLocalHost} getToken={getToken} />
 
       {/* Demoted secondary views — collapsed by default, expand for deep history. */}
-      <PastActivityFooter isLocalHost={isLocalHost} getToken={getToken} />
+      <PastActivityFooter isLocalHost={isLocalHost} getToken={getToken} onNavigateToInsightsPerformance={onNavigateToInsightsPerformance} />
     </div>
   );
 };

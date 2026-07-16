@@ -490,7 +490,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       case DashboardTab.OVERVIEW:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} getToken={isLocalHost ? undefined : getToken} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
       case DashboardTab.MODELS:
-        return <ModelsPage isLocalHost={isLocalHost} getToken={isLocalHost ? undefined : getToken} nodes={nodes} />;
+        return <ModelsPage isLocalHost={isLocalHost} getToken={isLocalHost ? undefined : getToken} nodes={nodes} onNavigateToInsightsPerformance={permissions.canRunAIAnalysis ? () => { setInsightsDeepLink({ tab: 'performance' }); setActiveTab(DashboardTab.AI_INSIGHTS); } : undefined} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} cloudUrl={isLocalHost ? undefined : CLOUD_URL} onNodesRemoved={handleNodeAdded} />;
       case DashboardTab.TRACES:
@@ -512,6 +512,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
             }}
             deepLink={insightsDeepLink}
             onDeepLinkConsumed={() => setInsightsDeepLink(undefined)}
+            onNavigateToModels={() => setActiveTab(DashboardTab.MODELS)}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
