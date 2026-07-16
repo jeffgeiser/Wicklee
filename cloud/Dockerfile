@@ -26,8 +26,9 @@ RUN cargo build --release
 # ── Stage 2: minimal runtime image ────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# wget: used by the self-hosted docker-compose healthcheck (GET /health).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates wget \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/wicklee-cloud /usr/local/bin/wicklee-cloud
