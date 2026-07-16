@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wicklee.fullname" . }}-frontend
+  labels:
+    {{- include "wicklee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "wicklee.labels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: "{{ required "frontend.image.repository is required (no public registry yet — build from the root Dockerfile with VITE_CLOUD_URL=/ and your Clerk publishable key)" .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.frontend.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.frontend.port | quote }}
+            # nginx proxies /api/* to the cloud Service (same-origin dashboard).
+            - name: BACKEND_HOST
+              value: "{{ include "wicklee.fullname" . }}-cloud:{{ .Values.cloud.port }}"
+            - name: RESOLVER
+              value: {{ .Values.frontend.dnsResolver | quote }}
+          readinessProbe:
+            httpGet: { path: /, port: {{ .Values.frontend.port }} }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wicklee.fullname" . }}-frontend
+  labels:
+    {{- include "wicklee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: frontend
+  ports:
+    - port: 80
+      targetPort: {{ .Values.frontend.port }}
