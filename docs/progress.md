@@ -6,6 +6,16 @@
 
 ---
 
+## July 16, 2026 — Models ↔ Insights/Performance rationalization (IA pass)
+
+Audited both surfaces for overlap and coherence after the July feature wave. Finding: **no hard duplication** (discovery lives only on Models; Model Fit's canonical home on Performance was a deliberate v0.7.x decision) — the gap was legibility and connection, not placement. The platform IA is three axes: **Intelligence = now** (live tiles/fleet status), **Models = the model axis** (what's loaded/where across all runtimes, what ran & cost per model, what to add), **Insights → Performance = efficiency & money over time** (fit, trends, SLA, thermal, chargeback, capacity, migration, idle waste).
+
+- **ModelsPage header contract rewritten** — the old subtitle claimed "inference performance lives on the Intelligence tab," which was both stale and contradicted by Models' own Recent section. New copy names both neighbors accurately, with a live deep-link into Insights → Performance (reusing the existing `insightsDeepLink` mechanism; hidden when the user's tier can't see Insights). A code comment pins the contract for future feature placement.
+- **Cross-links at the handoffs** — MigrationAdvisorCard gains "view loaded models →" (its recommendations act on the Loaded table); the Models 7-day comparison gains a pointer to cost attribution/planning on Performance. New `onNavigateToModels` prop threaded App → AIInsights → card.
+- **docs.md** — new "where things live" table under Multi-Model Monitoring documenting the three-axis split.
+
+---
+
 ## July 16, 2026 — Self-Hosted Control Plane v1 (item 12)
 
 - **`deploy/self-hosted/docker-compose.yml`** — TimescaleDB + the cloud binary + the nginx frontend, the exact images behind wicklee.dev. Frontend built with `VITE_CLOUD_URL="/"` (same-origin) and nginx's existing `BACKEND_HOST` envsubst pointed at `cloud:8081`, so zero new plumbing. `.env.example` documents required vs optional (Resend/HF degrade gracefully).

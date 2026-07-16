@@ -29,9 +29,11 @@ interface Props {
   getToken: () => Promise<string | null>;
   subscriptionTier: SubscriptionTier;
   onNavigateToPricing?: () => void;
+  /** Handoff to the Models tab — recommendations act on what's loaded there. */
+  onViewModels?: () => void;
 }
 
-const MigrationAdvisorCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigateToPricing }) => {
+const MigrationAdvisorCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigateToPricing, onViewModels }) => {
   const isTeamOrAbove = ['team', 'business', 'enterprise'].includes(subscriptionTier);
   const [recs, setRecs] = useState<Recommendation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,11 +89,22 @@ const MigrationAdvisorCard: React.FC<Props> = ({ getToken, subscriptionTier, onN
 
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-3">
-      <div className="flex items-center gap-2.5">
-        <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-indigo-500/10">
-          <ArrowRightLeft size={11} className="text-indigo-400" />
-        </span>
-        <h3 className="text-sm font-bold text-white">Model Migration Advisor</h3>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-indigo-500/10">
+            <ArrowRightLeft size={11} className="text-indigo-400" />
+          </span>
+          <h3 className="text-sm font-bold text-white">Model Migration Advisor</h3>
+        </div>
+        {onViewModels && (
+          <button
+            onClick={onViewModels}
+            className="text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+            title="See what's loaded and where on the Models tab"
+          >
+            view loaded models →
+          </button>
+        )}
       </div>
 
       {error && (
