@@ -1911,6 +1911,10 @@ curl https://wicklee.dev/api/v1/fleet \\
                     <Td>Cross-node model migration — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom. <span className="text-emerald-400">Team+</span></Td>
                   </tr>
                   <tr>
+                    <Td mono>GET /api/v1/fleet/idle-waste?days=30</Td>
+                    <Td>Idle-waste & right-sizing report — phantom-load cost (models loaded while not inferring) + recovery actions (unload idle model, consolidate low-duty nodes) with projected $/mo recovery. Weekly email digest via <code className="text-gray-400 text-xs">GET/PUT /api/digest</code> (Resend, audited). <span className="text-emerald-400">Team+</span></Td>
+                  </tr>
+                  <tr>
                     <Td mono>GET /api/v1/insights/latest</Td>
                     <Td>Fleet intelligence snapshot — fleet summary (online count, avg WES, fleet tok/s) + findings array (thermal stress, memory pressure, offline nodes, WES below baseline, low throughput)</Td>
                   </tr>

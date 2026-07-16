@@ -149,6 +149,8 @@ Auth: `X-API-Key: wk_live_...` header.
 | GET | /api/v1/fleet/chargeback?days=30 | Chargeback/showback (Clerk JWT auth) — cost + $/1M-token attribution by team tag / model / node + daily trend. `&format=csv&group=` for finance export (audited) | Team+ |
 | GET | /api/v1/fleet/capacity?target_tok_s=200 | Capacity planner with procurement scenarios (Clerk JWT auth) — "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from the fleet's own measured tok/W per hardware class; every scenario states its basis | Team+ |
 | GET | /api/v1/fleet/migration-advisor | Cross-node model migration (Clerk JWT auth) — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom | Team+ |
+| GET | /api/v1/fleet/idle-waste?days=30 | Idle-waste & right-sizing report (Clerk JWT auth) — phantom-load cost + recovery actions (unload idle model, consolidate) with projected $/mo recovery | Team+ |
+| GET/PUT | /api/digest | Weekly idle-waste email digest settings (Clerk JWT auth) — Resend-delivered, one per tenant, audited | Team+ |
 | POST | /api/v1/keys | Create API key | All |
 | GET | /api/v1/keys | List API keys | All |
 | DELETE | /api/v1/keys/{id} | Revoke API key | All |

@@ -6,6 +6,25 @@
 
 ---
 
+## July 16, 2026 — Idle-Waste & Right-Sizing Report + Weekly Digest (item 10)
+
+### `GET /api/v1/fleet/idle-waste?days=1..90` (Team+)
+- **Phantom load** = model held in memory while the node is NOT inferring. Idle/active energy split: per-sample `inference_state` on raw rows (exact), `inference_duty_pct` on 5-min rollups (proportional) — `IDLE_WASTE_BASE` CTE reuses chargeback's 30s-cadence energy conventions (rollups for the window + raw trailing day).
+- **Actions**: `unload_idle_model` per node×model with monthly-normalized `recovers_usd_month` (so 7d and 30d reports advise consistently; thresholds >$0.005/window + >1h idle, top 10); `consolidate` for nodes inferring <10% of a ≥24h-covered window. Baseline idle (no model loaded) reported separately as context, not counted as phantom.
+- Quant-swap savings deliberately deferred — honest version needs the agent's Quant Sweet Spot output on the wire.
+
+### Weekly digest (Resend)
+- `digest_settings` — one row per tenant (org members share), owner user_id + org_id kept for tier re-resolution at send time (audit_drains pattern). `GET/PUT /api/digest` (Team+, PUT audited `digest.updated`, email validated when enabling).
+- `idle_digest_task` — hourly tick; sends the 7-day report when ≥7d since last send; tier re-checked at delivery; `last_sent_ms` advances **only on successful send** so a Resend outage retries next tick. Subject carries the numbers: "Wicklee weekly: $X burned idle · $Y/mo recoverable".
+- Shared `compute_idle_waste()` feeds both the HTTP handler and the email so they can never disagree.
+
+### UI
+- **IdleWasteCard** on Insights → Performance below Capacity Planner/Migration Advisor: 7/30/90d picker, totals strip (burned idle / idle energy share / recoverable per month), kind-badged action list, and the digest opt-in footer (email + enable/disable) — subscription managed where the report lives, not buried in Settings.
+
+Docs: api.md, docs.md, llms.txt, llms-full.txt (response examples), DocsPage fleet table, ROADMAP item 10 → SHIPPED with follow-ups.
+
+---
+
 ## July 15, 2026 — Capacity Planner (procurement scenarios) + Migration Advisor
 
 ### Capacity Planner with procurement scenarios (Team+ — Readiness Program item 11)
