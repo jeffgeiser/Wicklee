@@ -6,6 +6,17 @@
 
 ---
 
+## July 16, 2026 — Self-Hosted Control Plane v1 (item 12)
+
+- **`deploy/self-hosted/docker-compose.yml`** — TimescaleDB + the cloud binary + the nginx frontend, the exact images behind wicklee.dev. Frontend built with `VITE_CLOUD_URL="/"` (same-origin) and nginx's existing `BACKEND_HOST` envsubst pointed at `cloud:8081`, so zero new plumbing. `.env.example` documents required vs optional (Resend/HF degrade gracefully).
+- **`SELF_HOSTED=true`** — `is_self_hosted()` (OnceLock env check) short-circuits `resolve_tier` + `resolve_node_tier` to `enterprise`: no Paddle in the box, entitlement came with the license. Covers JWT reads, API-key reads (validate_api_key resolves via resolve_tier), and background paths (digest, alerts) in one place.
+- **License: soft-enforced deliberately.** `WICKLEE_LICENSE_KEY` presence-checked: masked boot log, `licensed` flag added to `/health` **only in self-hosted mode** (the endpoint keeps leaking zero platform stats on wicklee.dev), unlicensed = evaluation mode with a sales pointer. Cryptographic validation + issuance is the follow-up — hard-gating with no issuance infra would brick legitimate evals.
+- **`docs/SELF_HOSTING.md`** — quick start, licensing, the auth choice (Clerk BYO-app = supported UI path with orgs/RBAC/SSO; DIY legacy sessions documented honestly as API-only, no org/RBAC/UI), agent pairing, **network-egress inventory** (nothing phones home to wicklee.dev; each optional outbound named for firewall policy), backup surface, and the Compose→K8s mapping note pending item 13.
+- cloud/Dockerfile runtime image gained `wget` for the compose healthcheck.
+- Docs: Sovereignty sections in docs.md + llms.txt now carry the self-hosted story; ROADMAP item 12 → v1 SHIPPED with follow-ups.
+
+---
+
 ## July 16, 2026 — Idle-Waste & Right-Sizing Report + Weekly Digest (item 10)
 
 ### `GET /api/v1/fleet/idle-waste?days=1..90` (Team+)

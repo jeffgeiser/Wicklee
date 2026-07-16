@@ -154,6 +154,10 @@ wes_cliff, agent_version_mismatch
 - vLLM (Linux)
 - llama.cpp / llama-box (macOS, Linux)
 
+## Self-Hosted Control Plane (Enterprise)
+
+The entire fleet backend runs on your infrastructure: `deploy/self-hosted/docker-compose.yml` (TimescaleDB + cloud binary + nginx frontend — the same images behind wicklee.dev). `SELF_HOSTED=true` resolves every tenant to enterprise tier; `WICKLEE_LICENSE_KEY` soft-enforced (evaluation mode without it, `licensed` flag in /health). Auth: bring-your-own Clerk app (orgs/RBAC/SSO work as on wicklee.dev) or legacy DIY sessions (API-only, no org/UI). Guide with network-egress inventory: docs/SELF_HOSTING.md.
+
 ## Pricing
 
 - Community: Free forever, 3 nodes, 24h history, 9 patterns, local MCP, Ollama proxy

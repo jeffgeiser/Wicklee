@@ -1,0 +1,77 @@
+# Wicklee self-hosted control plane (Enterprise).
+#
+# Three services — the same shapes that run wicklee.dev:
+#   postgres  — TimescaleDB (plain Postgres also works; hypertable creation
+#               is best-effort and skipped when the extension is absent)
+#   cloud     — the Rust control plane (telemetry ingest, fleet API, alerting)
+#   frontend  — the React dashboard served by nginx, /api/* proxied to cloud
+#
+# Quick start:
+#   cd deploy/self-hosted
+#   cp .env.example .env    # fill in secrets
+#   docker compose up -d --build
+#   open http://localhost:8080
+#
+# Full guide (auth choice, agent pairing, licensing): docs/SELF_HOSTING.md
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wicklee
+      POSTGRES_USER: wicklee
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wicklee -d wicklee"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cloud:
+    build:
+      context: ../../cloud
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SELF_HOSTED: "true"
+      WICKLEE_LICENSE_KEY: ${WICKLEE_LICENSE_KEY:-}
+      DATABASE_URL: postgres://wicklee:${POSTGRES_PASSWORD}@postgres:5432/wicklee
+      PORT: "8081"
+      # Auth — bring your own Clerk application (see docs/SELF_HOSTING.md).
+      CLERK_JWKS_URL: ${CLERK_JWKS_URL:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      # Optional integrations — features degrade gracefully when unset.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      FROM_EMAIL: ${FROM_EMAIL:-}
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ../..
+      args:
+        # Baked at build time (Vite compile-time substitution).
+        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-}
+        # Empty = same-origin; nginx proxies /api/* to the cloud service.
+        VITE_CLOUD_URL: "/"
+    restart: unless-stopped
+    depends_on:
+      - cloud
+    environment:
+      PORT: "8080"
+      BACKEND_HOST: cloud:8081
+      RESOLVER: 127.0.0.11   # Docker's embedded DNS
+    ports:
+      - "${WICKLEE_HTTP_PORT:-8080}:8080"
+
+volumes:
+  pgdata:

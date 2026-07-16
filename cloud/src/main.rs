@@ -1334,6 +1334,7 @@ async fn node_tenant_id(node_id: &str, pool: &sqlx::PgPool) -> Option<String> {
 /// an org id for org-paired nodes — resolving to 'community' and silently
 /// disabling alerts/webhooks for every org fleet.
 async fn resolve_node_tier(node_id: &str, pool: &sqlx::PgPool) -> String {
+    if is_self_hosted() { return "enterprise".to_string(); }
     sqlx::query_scalar::<_, String>(
         "SELECT COALESCE(
              (SELECT o.subscription_tier FROM organizations o WHERE o.org_id = n.org_id),
@@ -1345,9 +1346,24 @@ async fn resolve_node_tier(node_id: &str, pool: &sqlx::PgPool) -> String {
     .unwrap_or_else(|_| "community".to_string())
 }
 
+/// Self-hosted control plane mode (`SELF_HOSTED=true`). An Enterprise
+/// deployment running the cloud on its own infrastructure has no Paddle in
+/// the box — every tenant resolves to the enterprise tier, because feature
+/// entitlement came with the license, not a subscription row. The license
+/// key itself is soft-enforced: logged at boot and surfaced in /health, so
+/// evaluations aren't bricked but production use is honest about licensing.
+fn is_self_hosted() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        matches!(std::env::var("SELF_HOSTED").as_deref(), Ok("true") | Ok("1"))
+    })
+}
+
 /// Resolve subscription tier — checks organizations table for org users,
-/// falls back to users table for solo users.
+/// falls back to users table for solo users. Self-hosted deployments are
+/// always enterprise (see is_self_hosted).
 async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPool) -> String {
+    if is_self_hosted() { return "enterprise".to_string(); }
     if let Some(oid) = org_id {
         // Org-level tier takes precedence
         if let Ok(tier) = sqlx::query_scalar::<_, String>(
@@ -5035,6 +5051,14 @@ async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
         .fetch_one(&state.pool).await.is_ok();
 
     let status = if db_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    if is_self_hosted() {
+        // Deployment config only — still no platform stats.
+        return (status, Json(serde_json::json!({
+            "status": if db_ok { "ok" } else { "degraded" },
+            "self_hosted": true,
+            "licensed": std::env::var("WICKLEE_LICENSE_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false),
+        }))).into_response();
+    }
     (status, Json(serde_json::json!({
         "status": if db_ok { "ok" } else { "degraded" },
     }))).into_response()
@@ -10469,6 +10493,20 @@ async fn main() {
     tokio::spawn(slo_evaluator_task(pool.clone()));
     tokio::spawn(idle_digest_task(pool.clone()));
     tokio::spawn(otel_exporter_task(state.clone()));
+
+    // Self-hosted control plane: announce mode + license state at boot.
+    if is_self_hosted() {
+        match std::env::var("WICKLEE_LICENSE_KEY").ok().filter(|k| !k.trim().is_empty()) {
+            Some(key) => {
+                let tail: String = key.chars().rev().take(4).collect::<String>().chars().rev().collect();
+                println!("[self-hosted] control plane licensed (key …{tail}) — all tenants resolve to enterprise tier");
+            }
+            None => {
+                println!("[self-hosted] EVALUATION MODE — no WICKLEE_LICENSE_KEY set.");
+                println!("[self-hosted] Production self-hosting requires an Enterprise license: sales@wicklee.dev");
+            }
+        }
+    }
 
     // Refresh JWKS every 6 hours.
     if let Some(url) = jwks_url {
