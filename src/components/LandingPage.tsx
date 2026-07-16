@@ -692,6 +692,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         <p>&copy; 2026 Wicklee OSS Project. All rights reserved.</p>
         <div className="flex items-center justify-center gap-6 mt-4">
           <button onClick={() => onNavigate('/docs')} className="hover:text-white transition-colors">Documentation</button>
+          <button onClick={() => onNavigate('/trust')} className="hover:text-white transition-colors">Trust &amp; Security</button>
+          <button onClick={() => onNavigate('/design-partners')} className="hover:text-white transition-colors">Design Partners</button>
           <button onClick={() => onNavigate('/terms')} className="hover:text-white transition-colors">Terms</button>
           <button onClick={() => onNavigate('/privacy')} className="hover:text-white transition-colors">Privacy</button>
           <button onClick={() => onNavigate('/refund')} className="hover:text-white transition-colors">Refunds</button>

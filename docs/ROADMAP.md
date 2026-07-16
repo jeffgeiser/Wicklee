@@ -229,10 +229,10 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 - [ ] Partner one-pager: "bundle Wicklee with every box you sell" (hardware vendors/SIs) **[draftable]**
 - [ ] MSP pitch + multi-org console spec (roadmap item 4 above) **[draftable]**
 - [ ] Outreach list: 3 MSPs + 2 hardware vendors (founder — needs the human)
-- [ ] Design-partner program page: free Business year ↔ logo + case study **[draftable]**
+- [x] Design-partner program page: free Business year ↔ logo + case study — **shipped 2026-07-16** (`/design-partners`, footer-linked, sitemap'd; mailto CTA with structured application prompt)
 
 **Rock 6 — Enterprise credibility**
-- [ ] Trust page on wicklee.dev (data-flow diagram, sovereignty story, RBAC/audit/SIEM) **[draftable — security write-ups are 80% of the copy]**
+- [x] Trust page on wicklee.dev (data-flow split, sovereignty story, RBAC/audit/SIEM, honest compliance posture) — **shipped 2026-07-16** (`/trust`, footer-linked, sitemap'd; cross-links design-partner program)
 - [ ] FOCUS-format chargeback export (roadmap item 6 above) + OpenCost/FinOps ecosystem listing
 - [ ] Quarterly "State of Local Inference Efficiency" report #1 **[draftable once leaderboard data exists]**
 - [ ] Clerk / Railway / Ollama showcase submissions **[draftable]**
