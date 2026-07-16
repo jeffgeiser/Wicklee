@@ -1138,7 +1138,7 @@ Wicklee is sovereign by default:
 - No outbound connections by default — structural guarantee
 - Local dashboard at localhost:7700 works with zero configuration
 
-**Self-hosted control plane (Enterprise):** the entire fleet backend — ingest, dashboard, alerting, SLOs, cost governance — runs on your infrastructure via `deploy/self-hosted/docker-compose.yml` (TimescaleDB + one Rust binary + nginx frontend, the same images behind wicklee.dev). Bring your own Clerk app for auth, pair agents against your URL, and nothing ships to wicklee.dev. Requires an Enterprise license (`WICKLEE_LICENSE_KEY`; evaluation mode without one). Full guide: `docs/SELF_HOSTING.md` in the repo, including a network-egress inventory for firewall policy.
+**Self-hosted control plane (Enterprise):** the entire fleet backend — ingest, dashboard, alerting, SLOs, cost governance — runs on your infrastructure via `deploy/self-hosted/docker-compose.yml` or the Helm chart at `deploy/helm/wicklee` (TimescaleDB + one Rust binary + nginx frontend, the same images behind wicklee.dev). Bring your own Clerk app for auth, pair agents against your URL, and nothing ships to wicklee.dev. Requires an Enterprise license (`WICKLEE_LICENSE_KEY`; evaluation mode without one). Full guide: `docs/SELF_HOSTING.md` in the repo, including a network-egress inventory for firewall policy.
 
 ---
 

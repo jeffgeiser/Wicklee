@@ -79,8 +79,41 @@ at boot; upgrades are `git pull && docker compose up -d --build`.
 
 Back up the `pgdata` volume; that's the entire state of the control plane.
 
-## Kubernetes
+## Kubernetes (Helm)
 
-A Helm chart / operator is on the roadmap (Readiness Program item 13). The
-Compose services map 1:1 onto a Deployment each + a StatefulSet for Postgres
-if you want to hand-roll it sooner.
+`deploy/helm/wicklee` deploys the same control plane onto a cluster: cloud
+Deployment, frontend Deployment (nginx proxies `/api/*`, `/mcp`, `/metrics`
+same-origin), optional bundled TimescaleDB StatefulSet, and an optional
+Ingress. There is no public image registry yet — build and push the two
+images first:
+
+```bash
+docker build -t REGISTRY/wicklee-cloud:0.11.0 cloud/
+docker build -t REGISTRY/wicklee-frontend:0.11.0 \
+  --build-arg VITE_CLOUD_URL=/ \
+  --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_... .
+
+helm install wicklee deploy/helm/wicklee \
+  --set cloud.image.repository=REGISTRY/wicklee-cloud \
+  --set frontend.image.repository=REGISTRY/wicklee-frontend \
+  --set postgresql.password=... \
+  --set config.clerkJwksUrl=... --set config.clerkSecretKey=... \
+  --set config.licenseKey=...
+```
+
+Bring your own Postgres with `--set postgresql.enabled=false
+--set externalDatabaseUrl=postgres://...`. The Clerk publishable key is baked
+into the frontend image at build time (Vite) — it cannot be set via values.
+Check `frontend.dnsResolver` matches your cluster's CoreDNS ClusterIP.
+
+### Agents on Kubernetes
+
+The chart deploys the **control plane**, not agents. Agents monitor the
+*node* — bare-metal telemetry (powermetrics/NVML), host processes, node-local
+runtimes — so on Kubernetes they belong on each GPU node (hostNetwork, with
+`[runtime_ports]` pointed at your inference services), not behind a Service.
+Today, enrollment is the blocker for a DaemonSet: pairing is an interactive
+6-digit flow, one node at a time. A proper operator with bulk token-based
+enrollment is the recorded follow-up (Readiness Program item 13); until then,
+run agents on the GPU hosts themselves via `install.sh` and pair each against
+your self-hosted URL.

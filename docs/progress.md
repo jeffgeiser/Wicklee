@@ -6,6 +6,15 @@
 
 ---
 
+## July 16, 2026 — Helm chart for the control plane (item 13 v1) + /mcp proxy fix
+
+- **`deploy/helm/wicklee`** — the Kubernetes equivalent of the compose bundle: cloud Deployment (SELF_HOSTED=true, env via Secret, /health readiness+liveness), frontend Deployment (nginx same-origin proxy: `BACKEND_HOST` = cloud Service, `RESOLVER` = CoreDNS ClusterIP via `frontend.dnsResolver`), optional TimescaleDB StatefulSet + PVC or `externalDatabaseUrl`, optional Ingress (single rule — the frontend proxies API paths). `required` guards fail fast on missing images/passwords. **Validated with helm 4.0.4**: lint clean, `helm template` rendered for bundled-PG, external-DB + Ingress, and missing-password paths.
+- **Production bug found while writing the Ingress comment**: nginx.conf never proxied `/mcp` — the documented `POST wicklee.dev/mcp` Cloud MCP endpoint fell into the SPA catch-all and returned index.html to MCP clients. Added a `/mcp` proxy block (covers `/mcp/manifest` too); fixes wicklee.dev on next frontend deploy and the chart inherits it.
+- **Operator honestly deferred**: an agent DaemonSet can't self-enroll — pairing is an interactive 6-digit flow. Recorded design sketch (org-scoped enrollment tokens, Admin-minted, RBAC + audited) in ROADMAP; SELF_HOSTING.md's "Agents on Kubernetes" section explains the current recipe and the blocker instead of pretending.
+- SELF_HOSTING.md Kubernetes section rewritten with build/push/install steps and the values that matter (Clerk publishable key is build-time-baked; dnsResolver must match CoreDNS).
+
+---
+
 ## July 16, 2026 — Models ↔ Insights/Performance rationalization (IA pass)
 
 Audited both surfaces for overlap and coherence after the July feature wave. Finding: **no hard duplication** (discovery lives only on Models; Model Fit's canonical home on Performance was a deliberate v0.7.x decision) — the gap was legibility and connection, not placement. The platform IA is three axes: **Intelligence = now** (live tiles/fleet status), **Models = the model axis** (what's loaded/where across all runtimes, what ran & cost per model, what to add), **Insights → Performance = efficiency & money over time** (fit, trends, SLA, thermal, chargeback, capacity, migration, idle waste).

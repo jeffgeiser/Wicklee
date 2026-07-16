@@ -1,0 +1,71 @@
+# Wicklee self-hosted control plane — Helm values.
+#
+# There is no public image registry yet (roadmap follow-up): build and push
+# the two images from the repo, then point these at your registry:
+#
+#   docker build -t REGISTRY/wicklee-cloud:0.11.0 cloud/
+#   docker build -t REGISTRY/wicklee-frontend:0.11.0 \
+#     --build-arg VITE_CLOUD_URL=/ \
+#     --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_... .
+#
+# NOTE: the Clerk publishable key is baked into the frontend at BUILD time
+# (Vite compile-time substitution) — it cannot be injected here at runtime.
+
+cloud:
+  image:
+    repository: ""        # e.g. registry.example.com/wicklee-cloud
+    tag: "0.11.0"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 8081
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "2", memory: 1Gi }
+
+frontend:
+  image:
+    repository: ""        # e.g. registry.example.com/wicklee-frontend
+    tag: "0.11.0"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 8080
+  # nginx needs a DNS resolver IP for the BACKEND_HOST proxy target.
+  # Default CoreDNS ClusterIP on most distributions; adjust if yours differs
+  # (kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}').
+  dnsResolver: 10.96.0.10
+  resources:
+    requests: { cpu: 100m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+config:
+  # Enterprise license (sales@wicklee.dev). Empty = evaluation mode.
+  licenseKey: ""
+  # Bring-your-own Clerk application (docs/SELF_HOSTING.md).
+  clerkJwksUrl: ""
+  clerkSecretKey: ""
+  # Optional — features degrade gracefully when unset.
+  resendApiKey: ""
+  fromEmail: ""
+  huggingfaceToken: ""
+
+postgresql:
+  # Bundled TimescaleDB StatefulSet. Disable to bring your own Postgres
+  # and set externalDatabaseUrl instead.
+  enabled: true
+  image: timescale/timescaledb:latest-pg16
+  password: ""            # REQUIRED when enabled
+  storage: 20Gi
+  storageClassName: ""    # empty = cluster default
+
+# Used only when postgresql.enabled=false.
+# e.g. postgres://user:pass@host:5432/wicklee
+externalDatabaseUrl: ""
+
+ingress:
+  enabled: false
+  className: ""
+  host: wicklee.example.com
+  tls:
+    enabled: false
+    secretName: ""
+  annotations: {}

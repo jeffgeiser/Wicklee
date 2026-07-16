@@ -156,7 +156,7 @@ wes_cliff, agent_version_mismatch
 
 ## Self-Hosted Control Plane (Enterprise)
 
-The entire fleet backend runs on your infrastructure: `deploy/self-hosted/docker-compose.yml` (TimescaleDB + cloud binary + nginx frontend — the same images behind wicklee.dev). `SELF_HOSTED=true` resolves every tenant to enterprise tier; `WICKLEE_LICENSE_KEY` soft-enforced (evaluation mode without it, `licensed` flag in /health). Auth: bring-your-own Clerk app (orgs/RBAC/SSO work as on wicklee.dev) or legacy DIY sessions (API-only, no org/UI). Guide with network-egress inventory: docs/SELF_HOSTING.md.
+The entire fleet backend runs on your infrastructure: `deploy/self-hosted/docker-compose.yml` or the Helm chart at `deploy/helm/wicklee` (TimescaleDB + cloud binary + nginx frontend — the same images behind wicklee.dev). `SELF_HOSTED=true` resolves every tenant to enterprise tier; `WICKLEE_LICENSE_KEY` soft-enforced (evaluation mode without it, `licensed` flag in /health). Auth: bring-your-own Clerk app (orgs/RBAC/SSO work as on wicklee.dev) or legacy DIY sessions (API-only, no org/UI). Guide with network-egress inventory: docs/SELF_HOSTING.md.
 
 ## Pricing
 
