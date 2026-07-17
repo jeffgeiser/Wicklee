@@ -197,7 +197,7 @@ Features whose primary value is distribution and enterprise awareness, identifie
 3. **Hardware-fit badge** — a tiny generator (SVG badge + link to wicklee.dev/fit/<model_id>) model authors paste into HF model cards / GitHub READMEs; the landing page runs the existing fit-check against the visitor's declared hardware. Every badge is a permanent inbound link on a high-intent page.
 4. **MSP / multi-org console (Business+)** — one login managing many client orgs (Clerk supports multi-org membership; needs an org-switcher rollup view + per-org billing attribution). Five MSP partners ≈ fifty enterprise deployments; this is the partnerships wedge.
 5. **Read-only fleet share links** — expiring, revocable, view-only dashboard URLs (a scoped stream token variant + a viewer route). "Look at our fleet" in a Slack channel is the viral loop.
-6. **FOCUS-format chargeback export** — the chargeback endpoint gains `format=focus` emitting the FinOps Foundation's open billing spec. Cheap (one serializer over the existing report) and it's the credential for FinOps X / OpenCost ecosystem listing.
+6. **FOCUS-format chargeback export (SHIPPED 2026-07-17).** `format=focus` on `/api/v1/fleet/chargeback`: day×node×model rows in the FinOps Foundation FOCUS column set (BilledCost/EffectiveCost/ListCost in USD, ConsumedQuantity in tokens, PricingQuantity in kWh, model in Tags, provider/service identity), formula-injection-hardened, audited as `chargeback.exported`. The credential for FinOps X / OpenCost ecosystem listing — remaining half of the tracker item is the listing/outreach itself.
 
 ### ★ GTM Execution Tracker (non-code workstreams — see docs/GTM.md for strategy)
 Trackable checklist for the marketing motions. Check items off as they land; each is durable (stays live once done). Items marked **[draftable]** can be prepared by a coding session (copy, PR text, listing metadata, page builds) with only the final submit needing the founder's accounts.
@@ -226,14 +226,14 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 - [ ] One blog data-post per shipped feature (rolling)
 
 **Rock 5 — Partnerships**
-- [ ] Partner one-pager: "bundle Wicklee with every box you sell" (hardware vendors/SIs) **[draftable]**
-- [ ] MSP pitch + multi-org console spec (roadmap item 4 above) **[draftable]**
+- [x] Partner one-pager: "bundle Wicklee with every box you sell" — **drafted 2026-07-17** (`docs/partners/HARDWARE_VENDOR_ONE_PAGER.md`, paste-ready copy)
+- [x] MSP pitch + multi-org console spec — **drafted 2026-07-17** (`docs/partners/MSP_CONSOLE_SPEC.md`: what works today via Clerk multi-org, v1 rollup + billing-attribution scope, acceptance criteria; build on first MSP commitment)
 - [ ] Outreach list: 3 MSPs + 2 hardware vendors (founder — needs the human)
 - [x] Design-partner program page: free Business year ↔ logo + case study — **shipped 2026-07-16** (`/design-partners`, footer-linked, sitemap'd; mailto CTA with structured application prompt)
 
 **Rock 6 — Enterprise credibility**
 - [x] Trust page on wicklee.dev (data-flow split, sovereignty story, RBAC/audit/SIEM, honest compliance posture) — **shipped 2026-07-16** (`/trust`, footer-linked, sitemap'd; cross-links design-partner program)
-- [ ] FOCUS-format chargeback export (roadmap item 6 above) + OpenCost/FinOps ecosystem listing
+- [x] FOCUS-format chargeback export — **shipped 2026-07-17**; OpenCost/FinOps ecosystem listing remains (founder submit)
 - [ ] Quarterly "State of Local Inference Efficiency" report #1 **[draftable once leaderboard data exists]**
 - [ ] Clerk / Railway / Ollama showcase submissions **[draftable]**
 
