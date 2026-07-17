@@ -6,6 +6,18 @@
 
 ---
 
+## July 16, 2026 — Trust page + Design-Partner program page (GTM Rocks 5/6, pulled forward)
+
+GTM decision recorded: for the near-term mid-market/enterprise goal, the enterprise motions (Rocks 5–6) were pulled ahead of the developer-volume rocks — enterprise lead times are longest, and the product completed the Business/Enterprise claim set this month (RBAC, audit+SIEM, org keys, SLOs, cost governance, self-hosted, Helm; SSO in progress).
+
+- **`/trust`** — the security-reviewer page: transmitted-vs-never-leaves data split, tenancy-from-JWT + RBAC + hardened pairing, append-only audit with export/SIEM story, hosted vs self-hosted deployment models, and an **honest compliance section** (independent review June 2026: yes; SOC 2: not yet, planned when a deal requires it — the GTM doc's own guidance). Every claim on the page is shipped behavior; nothing aspirational.
+- **`/design-partners`** — the offer page: 3–5 companies, Business free for 12 months ↔ logo + case study + monthly feedback call; targeted at regulated/on-prem verticals with real fleets. Mailto CTA pre-structures the application (company / fleet / what you run and why). Cross-links /trust.
+- Both routed in App.tsx, added to STATIC_PAGE_META + the sitemap (0.6 priority), and linked from the landing footer. GTM execution tracker items checked with dates.
+
+Founder-side next (needs the human): SSO/Clerk enablement, demo Space upload, ~10 outreach targets, first emails.
+
+---
+
 ## July 16, 2026 — Helm chart for the control plane (item 13 v1) + /mcp proxy fix
 
 - **`deploy/helm/wicklee`** — the Kubernetes equivalent of the compose bundle: cloud Deployment (SELF_HOSTED=true, env via Secret, /health readiness+liveness), frontend Deployment (nginx same-origin proxy: `BACKEND_HOST` = cloud Service, `RESOLVER` = CoreDNS ClusterIP via `frontend.dnsResolver`), optional TimescaleDB StatefulSet + PVC or `externalDatabaseUrl`, optional Ingress (single rule — the frontend proxies API paths). `required` guards fail fast on missing images/passwords. **Validated with helm 4.0.4**: lint clean, `helm template` rendered for bundled-PG, external-DB + Ingress, and missing-password paths.

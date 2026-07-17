@@ -111,6 +111,19 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
                  'longer history, alerting, SLA monitoring, and fleet APIs.',
     path:        '/pricing',
   },
+  '/trust': {
+    title:       'Trust & Security — Wicklee',
+    description: 'What leaves a node (hardware telemetry) vs what never does (prompts, templates). ' +
+                 'Tenancy, RBAC, append-only audit with SIEM streaming, and the self-hosted control plane.',
+    path:        '/trust',
+  },
+  '/design-partners': {
+    title:       'Design Partner Program — Wicklee',
+    description: 'Running local AI in production? 3–5 companies get Business free for a year — ' +
+                 'SSO, RBAC, audit, SLOs, and cost governance on your real fleet — for a logo, ' +
+                 'a case study, and monthly feedback.',
+    path:        '/design-partners',
+  },
   '/terms': {
     title:       'Terms of Service — Wicklee',
     description: 'Wicklee terms of service.',

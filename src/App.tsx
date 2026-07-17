@@ -32,6 +32,8 @@ import PricingPage from './components/PricingPage';
 import MetricsPage from './pages/MetricsPage';
 import DocsPage from './pages/DocsPage';
 import LegalPage from './pages/LegalPage';
+import TrustPage from './pages/TrustPage';
+import DesignPartnersPage from './pages/DesignPartnersPage';
 import AIProvidersView from './components/AIProvidersView';
 import PairingModal from './components/PairingModal';
 const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
@@ -421,6 +423,14 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   // Documentation route — public, no auth required (trailing slash tolerant)
   if (currentPath === '/docs' || currentPath === '/docs/') {
     return <DocsPage onNavigate={navigate} />;
+  }
+
+  // Trust & design-partner routes — public, no auth required
+  if (currentPath === '/trust' || currentPath === '/trust/') {
+    return <TrustPage onNavigate={navigate} />;
+  }
+  if (currentPath === '/design-partners' || currentPath === '/design-partners/') {
+    return <DesignPartnersPage onNavigate={navigate} />;
   }
 
   // Legal routes — public, no auth required
