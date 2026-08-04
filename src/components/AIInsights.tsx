@@ -89,9 +89,7 @@ import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const isLocalHost =
-  window.location.hostname === 'localhost' ||
-  window.location.hostname === '127.0.0.1';
+import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
