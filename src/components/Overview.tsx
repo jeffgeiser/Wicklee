@@ -19,7 +19,7 @@ import EventFeed from './EventFeed';
 import MetricTooltip from './MetricTooltip';
 import RuntimeConfigModal from './RuntimeConfigModal';
 
-const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
 /**
  * GPU utilisation thresholds for the four-state TOK/S display:

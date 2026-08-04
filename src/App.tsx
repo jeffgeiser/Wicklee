@@ -114,15 +114,13 @@ const LOCAL_USER: UserType = {
   isPro: false,
 };
 
-const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+import { IS_AGENT, IS_DEMO, IS_LOCAL_HOST as isLocalHost } from './utils/buildTarget';
 
 // Cloud backend URL — env var takes precedence; falls back to the known Railway service.
 // Resolution rules + rationale documented in src/utils/cloudUrl.ts (single source of truth).
 
-// Build-time flag: true in the agent binary where ClerkProvider is absent.
-// Hoisted to module scope so it's available to both AppCore and the export shim.
-const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
+// IS_AGENT / IS_DEMO / isLocalHost come from src/utils/buildTarget (imported
+// above) — module scope, so they reach both AppCore and the export shim.
 
 interface AppCoreProps {
   isSignedIn: boolean | undefined;

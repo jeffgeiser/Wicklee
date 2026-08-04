@@ -36,9 +36,7 @@ import { CLOUD_URL } from '../utils/cloudUrl';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useEventHistory } from '../hooks/useEventHistory';
 
-const isLocalHost =
-  window.location.hostname === 'localhost' ||
-  window.location.hostname === '127.0.0.1';
+import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
 // ── Proxy status hook — one-shot fetch from /api/metrics ─────────────────────
 // Proxy config is immutable at runtime (set at agent startup), so a single

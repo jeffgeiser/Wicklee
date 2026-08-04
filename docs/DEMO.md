@@ -41,34 +41,54 @@ demo never calls out.
 
 ## Publishing the Hugging Face Space
 
-1. Create a new Space → SDK: **Static**.
-2. Copy `dist-demo/*` into the Space repo root.
-3. Add this `README.md` at the Space root (front-matter is required by HF):
+The Space card is version-controlled at `deploy/hf-space/README.md` — copy it
+in rather than retyping the front-matter (HF requires it).
 
-```markdown
----
-title: Wicklee Fleet Demo
-emoji: 🕯️
-colorFrom: indigo
-colorTo: gray
-sdk: static
-pinned: false
-license: mit
-short_description: Live demo of Wicklee — hardware-first observability for local AI fleets
----
+```bash
+npm run build:demo                                   # → dist-demo/
 
-# Wicklee — Fleet Demo
+git clone https://huggingface.co/spaces/<user>/wicklee-fleet-demo hf-space
+cp -r dist-demo/*                 hf-space/          # index.html + assets/
+cp    deploy/hf-space/README.md   hf-space/README.md  # Space card
 
-A synthetic six-node GPU fleet streaming live into the real Wicklee
-dashboard: WES (tokens per watt with thermal penalty), thermal throttling,
-model swaps, cost & $/1M-token chargeback, SLO error budgets.
-
-Install on your own nodes: `curl -fsSL https://wicklee.dev/install.sh | bash`
-→ https://wicklee.dev
+cd hf-space && git add -A && git commit -m "Wicklee fleet demo" && git push
 ```
 
-4. Commit — the Space serves `index.html` at its root.
+Notes:
 
-Verification: `demo-smoke` (Playwright) drives the built bundle headlessly and
-asserts the banner, nodes, models, and install snippet render with zero page
-errors — run before every re-deploy.
+- Create the Space first at https://huggingface.co/new-space → SDK **Static**.
+  Push over HTTPS with an HF access token (write scope) as the password, or
+  add an SSH key.
+- The Space serves `index.html` from the repo root — `dist-demo/*` must land
+  at the root, not inside a subdirectory.
+- Assets are referenced with **absolute** paths (`/assets/…`, Vite's default
+  `base: '/'`). That is fine on HF: a static Space is served from its own
+  subdomain root (`https://<user>-<space>.hf.space/`), so no base-URL rebuild
+  is needed. It would break only if the bundle were hosted under a sub-path.
+- `index.html` carries `<link rel="canonical" href="https://wicklee.dev/">`,
+  so the Space does not compete with the real site in search results.
+- Re-deploying is the same three copies plus a push; the demo is deterministic,
+  so there is no state to migrate.
+
+## Verifying before you deploy
+
+The bundle is static, so serve it and look at it — but serve it on a **real
+hostname, or on localhost** (both work; see below):
+
+```bash
+npm run build:demo
+npx serve dist-demo -l 8099        # → http://localhost:8099
+```
+
+Check: six nodes in Fleet Status, non-zero throughput/WES tiles, the demo
+banner with the install one-liner, and a clean browser console (no
+`ws://…/ws`, no `/api/*` 404s — those mean the demo shim was bypassed).
+
+> Historical note: before `src/utils/buildTarget.ts` existed, five modules
+> each did a bare `window.location.hostname === 'localhost'` check to decide
+> "talk to the local agent." Previewing the demo on localhost therefore tripped
+> every one of them and rendered an empty dashboard reading *"Connecting to
+> local agent…"*, even though the synthetic stream was running fine underneath.
+> `IS_LOCAL_HOST` now excludes the demo target, so local preview matches
+> production. There is no automated smoke test yet — a Playwright check that
+> asserts the six nodes and a clean console would be a cheap, worthwhile add.
