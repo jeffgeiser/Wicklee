@@ -40,7 +40,7 @@ fn millis_to_iso8601(ms: i64) -> String {
     let frac_ms    = ms.rem_euclid(1000) as u32;
 
     // Days since Unix epoch using the civil-from-days algorithm (Howard Hinnant).
-    let mut days  = total_secs.div_euclid(86400) as i64;
+    let mut days  = total_secs.div_euclid(86400);
     let day_secs  = total_secs.rem_euclid(86400) as u32;
     let hh        = day_secs / 3600;
     let mm        = (day_secs % 3600) / 60;
@@ -1550,15 +1550,14 @@ impl Store {
                     "detail": format!("KV cache at {kv:.0}% — approaching saturation"), "value": kv, "threshold": 75.0 }));
             }
         }
-        if let Some(penalty) = hw.1 {
-            if penalty > 1.2 {
+        if let Some(penalty) = hw.1
+            && penalty > 1.2 {
                 let sev = if penalty >= 1.75 { "high" } else { "moderate" };
                 let thermal = hw.2.as_deref().unwrap_or("unknown");
                 factors.push(serde_json::json!({ "factor": "thermal_penalty", "severity": sev,
                     "detail": format!("Thermal state {thermal} ({penalty:.2}x penalty)"), "value": penalty, "threshold": 1.25 }));
                 summary_parts.push(format!("thermal penalty {penalty:.2}x ({thermal})"));
             }
-        }
         if let Some(queue) = hw.3 {
             if queue >= 3.0 {
                 factors.push(serde_json::json!({ "factor": "queue_depth", "severity": if queue >= 5.0 { "high" } else { "moderate" },
@@ -1569,25 +1568,22 @@ impl Store {
                     "detail": format!("{queue:.0} concurrent request(s) in queue"), "value": queue, "threshold": 3.0 }));
             }
         }
-        if let Some(swap) = hw.7 {
-            if swap > 2.0 {
+        if let Some(swap) = hw.7
+            && swap > 2.0 {
                 factors.push(serde_json::json!({ "factor": "swap_pressure", "severity": if swap > 10.0 { "high" } else { "moderate" },
                     "detail": format!("Swap write rate {swap:.1} MB/s — model layers spilling to disk"), "value": swap, "threshold": 2.0 }));
                 summary_parts.push(format!("swap at {swap:.1} MB/s"));
             }
-        }
-        if let Some(mem) = hw.8 {
-            if mem > 80.0 {
+        if let Some(mem) = hw.8
+            && mem > 80.0 {
                 factors.push(serde_json::json!({ "factor": "memory_pressure", "severity": if mem > 95.0 { "high" } else { "moderate" },
                     "detail": format!("Memory pressure at {mem:.0}%"), "value": mem, "threshold": 80.0 }));
             }
-        }
-        if let Some(throttle) = hw.9 {
-            if throttle > 15.0 {
+        if let Some(throttle) = hw.9
+            && throttle > 15.0 {
                 factors.push(serde_json::json!({ "factor": "clock_throttle", "severity": if throttle > 35.0 { "high" } else { "moderate" },
                     "detail": format!("Clock throttled {throttle:.0}% from maximum"), "value": throttle, "threshold": 15.0 }));
             }
-        }
 
         // Sort factors by severity (high > moderate > low)
         factors.sort_by(|a, b| {
@@ -1900,7 +1896,6 @@ impl Store {
 /// Lightweight sample for server-side pattern evaluation.
 /// Pulled from `metrics_raw` over a short window (typically 5 min).
 #[derive(Debug)]
-#[allow(dead_code)] // mem_pressure_pct reserved for Pattern F
 pub struct ObsSample {
     pub ts_ms:              i64,
     pub model:              Option<String>,
