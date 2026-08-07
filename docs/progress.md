@@ -6,6 +6,15 @@
 
 ---
 
+## July 17, 2026 — FOCUS chargeback export + Rock-5 partner documents
+
+- **`format=focus` on `/api/v1/fleet/chargeback`** (GTM feature 6): day×node×model rows in the FinOps Foundation FOCUS column set — BilledCost/EffectiveCost/ListCost (USD, measured watts × time), ConsumedQuantity in tokens, PricingQuantity in kWh, model in Tags, provider/service identity columns. Reuses `CHARGEBACK_BASE` (rollups + raw trailing day) with a new day×node×model grouping; `csv_escape` on every free-text field; audited as `chargeback.exported` (target `focus`). This is the credential for OpenCost/FinOps ecosystem listing — the listing submit itself remains founder-side.
+- **`docs/partners/MSP_CONSOLE_SPEC.md`** — the Rock-5 outreach artifact: what already works today (Clerk multi-org membership + per-client RBAC + per-org chargeback = no new auth surface), the v1 build scope (rollup view via `GET /api/msp/rollup` fan-out, per-org billing attribution with a bundled FOCUS export, stretch alert inbox), explicit non-goals, a straw commercial shape flagged as founder decision, acceptance criteria. Spec-first deliberately: build on first MSP commitment.
+- **`docs/partners/HARDWARE_VENDOR_ONE_PAGER.md`** — paste-ready pitch for DGX/Spark-class vendors and SIs: one-command install, WES as the "prove the box performs" metric, sovereignty for regulated customers, margin structure, /trust and demo links.
+- Tracker: FOCUS export checked (listing remains), MSP spec + one-pager checked with dates. Docs: api.md, llms.txt, llms-full.txt chargeback entries updated.
+
+---
+
 ## July 16, 2026 — Trust page + Design-Partner program page (GTM Rocks 5/6, pulled forward)
 
 GTM decision recorded: for the near-term mid-market/enterprise goal, the enterprise motions (Rocks 5–6) were pulled ahead of the developer-volume rocks — enterprise lead times are longest, and the product completed the Business/Enterprise claim set this month (RBAC, audit+SIEM, org keys, SLOs, cost governance, self-hosted, Helm; SSO in progress).

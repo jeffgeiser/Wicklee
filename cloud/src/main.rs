@@ -9150,6 +9150,49 @@ async fn handle_fleet_chargeback(
         rows.iter().map(|(k, e, t, h)| chargeback_row(k, *e, *t, *h, kwh_rate)).collect()
     };
 
+    // FOCUS path: the FinOps Foundation's open billing spec (focus.finops.org).
+    // Day × node × model rows so the file drops into FinOps tooling next to
+    // cloud bills — the credential for the OpenCost/FinOps ecosystem. Energy
+    // is the pricing basis (kWh), tokens the consumed quantity; costs are
+    // measured watts × time at the given rate, same conventions as everywhere.
+    if params.get("format").map(|s| s.as_str()) == Some("focus") {
+        let focus_sql = format!("{CHARGEBACK_BASE}
+            SELECT to_char(day, 'YYYY-MM-DD'),
+                   to_char(day + INTERVAL '1 day', 'YYYY-MM-DD'),
+                   to_char(NOW() - ($2)::interval, 'YYYY-MM-DD'),
+                   to_char(NOW() + INTERVAL '1 day', 'YYYY-MM-DD'),
+                   node_id, model,
+                   SUM(energy_kwh), SUM(tokens)
+            FROM base GROUP BY 1, 2, 3, 4, 5, 6 ORDER BY 1, 5, 6");
+        let rows: Vec<(String, String, String, String, String, String, f64, f64)> =
+            sqlx::query_as(&focus_sql).bind(tval).bind(&window)
+            .fetch_all(&state.pool).await.unwrap_or_default();
+
+        let mut out = String::from(
+            "BillingPeriodStart,BillingPeriodEnd,ChargePeriodStart,ChargePeriodEnd,\
+             BilledCost,EffectiveCost,ListCost,BillingCurrency,ChargeCategory,ChargeDescription,\
+             ConsumedQuantity,ConsumedUnit,PricingQuantity,PricingUnit,\
+             ProviderName,PublisherName,InvoiceIssuerName,ServiceCategory,ServiceName,\
+             ResourceId,ResourceType,Tags\n");
+        for (cps, cpe, bps, bpe, node_id, model, kwh, tokens) in &rows {
+            let cost = kwh * kwh_rate;
+            let desc = format!("Local AI inference energy — {model} on {node_id}");
+            let tags = format!("{{\"model\":\"{}\"}}", model.replace('"', ""));
+            out.push_str(&format!(
+                "{bps},{bpe},{cps},{cpe},{cost:.6},{cost:.6},{cost:.6},USD,Usage,{},{tokens:.0},tokens,{kwh:.6},kWh,Wicklee,Wicklee,Wicklee,AI and Machine Learning,Local AI Inference,{},GPU Node,{}\n",
+                csv_escape(&desc), csv_escape(node_id), csv_escape(&tags)));
+        }
+        audit(&state.pool, &user_id, &org_id, "chargeback.exported", "focus",
+            serde_json::json!({ "days": days, "rows": rows.len() }));
+        return (
+            [
+                ("Content-Type", "text/csv; charset=utf-8".to_string()),
+                ("Content-Disposition", format!("attachment; filename=\"wicklee-chargeback-focus-{days}d.csv\"")),
+            ],
+            out,
+        ).into_response();
+    }
+
     // CSV path: one grouping, finance-ready, formula-injection-hardened.
     if params.get("format").map(|s| s.as_str()) == Some("csv") {
         let group = params.get("group").map(|s| s.as_str()).unwrap_or("tag");
