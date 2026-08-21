@@ -339,30 +339,47 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
 
-  // Paddle checkout. Intentionally retained but currently UNREFERENCED: the
-  // 'pro' and 'team' price IDs it fetches from /api/billing/config are the
-  // retired $29 / $49 products, so nothing should route a user here until
-  // Paddle holds products matching the published Team price. Kept rather than
-  // deleted so the integration doesn't have to be rebuilt from scratch.
-  const handleCheckoutTier = useCallback(async (tier: 'pro' | 'team') => {
+  // Open Paddle checkout for Team.
+  //
+  // Team is the only self-serve tier: Community is free and Enterprise is a
+  // conversation. The server decides whether checkout may run at all — it
+  // returns `checkout_enabled` only when PADDLE_CHECKOUT_ENABLED=true AND a
+  // real (non-placeholder) Team price is configured. A price ID looks the same
+  // whether it points at the current $200 plan or the retired $49 one, so that
+  // flag is an explicit operator assertion, not something either side can infer.
+  //
+  // Resolves false when checkout can't run, so callers fall back to /pricing
+  // rather than billing the wrong amount or failing silently.
+  const openTeamCheckout = useCallback(async (
+    cycle: 'monthly' | 'annual' = 'monthly',
+  ): Promise<boolean> => {
     try {
       const token = await getToken();
       const r = await fetch(`${CLOUD_URL}/api/billing/config`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!r.ok) return;
+      if (!r.ok) return false;
       const config = await r.json() as {
         environment: 'sandbox' | 'production';
         client_token: string;
-        prices: { pro: string; team: string };
+        checkout_enabled?: boolean;
+        prices: { team?: string; team_annual?: string };
         custom_data: { user_id: string };
         customer_email: string | null;
       };
 
+      if (!config.checkout_enabled) return false;
+
+      const priceId = cycle === 'annual' ? config.prices.team_annual : config.prices.team;
+      if (!priceId) {
+        console.warn(`[billing] no Paddle price configured for Team ${cycle}`);
+        return false;
+      }
+
       const Paddle = window.Paddle;
       if (!Paddle) {
         console.error('[billing] Paddle.js not loaded');
-        return;
+        return false;
       }
 
       // Initialize Paddle with client token (idempotent).
@@ -370,9 +387,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       Paddle.Environment.set(config.environment);
       Paddle.Initialize({ token: config.client_token });
 
-      const priceId = tier === 'team' ? config.prices.team : config.prices.pro;
+      // quantity 1: Team is a flat $200/mo, not the old $49/seat with a
+      // 3-seat minimum.
       Paddle.Checkout.open({
-        items: [{ priceId, quantity: tier === 'team' ? 3 : 1 }],
+        items: [{ priceId, quantity: 1 }],
         customData: config.custom_data,
         customer: currentUser.email ? { email: currentUser.email } : undefined,
         settings: {
@@ -381,23 +399,19 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           successUrl: `${window.location.origin}/dashboard?upgraded=1`,
         },
       });
+      return true;
     } catch (e) {
       console.error('[billing] checkout failed:', e);
+      return false;
     }
-  }, [getToken]);
+  }, [getToken, currentUser.email]);
 
-  // Send upgrade intent to /pricing rather than straight into Paddle.
-  //
-  // This used to call handleCheckoutTier('pro'). Pro is no longer a tier we
-  // sell, and the Paddle price IDs behind handleCheckoutTier still point at the
-  // retired $29 / $49 products — so opening checkout here would charge the old
-  // amount for a plan that no longer exists. /pricing carries the current tiers
-  // and their contact CTAs. Re-wire this to checkout only once Paddle holds
-  // products matching the published prices.
-  const handleUpgrade = useCallback(() => {
+  const handleUpgrade = useCallback(async () => {
     setIsUpgradeModalOpen(false);
-    navigate('/pricing');
-  }, [navigate]);
+    // Falls back to the pricing page (contact CTAs) whenever self-serve
+    // checkout isn't live.
+    if (!(await openTeamCheckout('monthly'))) navigate('/pricing');
+  }, [openTeamCheckout, navigate]);
 
   const handleToggleSentinel = (nodeId: string) => {
     setNodes(prev => prev.map(node => 

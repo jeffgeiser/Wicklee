@@ -122,7 +122,7 @@ const TIERS: TierDef[] = [
       'Everything in Team',
       'Self-hosted control plane — runs on your own infrastructure',
       'Helm chart for Kubernetes deployment',
-      'SSO / SAML',
+      'SSO / SAML — your IdP, via Clerk enterprise connections',
       'Audit log export + SIEM streaming',
       '12-month metric history',
       'SLA + dedicated support',
