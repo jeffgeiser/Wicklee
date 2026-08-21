@@ -9541,6 +9541,78 @@ async fn handle_test_channel(
 
 // ── Billing handlers ──────────────────────────────────────────────────────────
 
+/// Paddle price IDs, read from the environment.
+///
+/// `team_annual` has no historical counterpart — the annual Team plan
+/// ($2,000/yr) is advertised on /pricing, and without its own price ID an
+/// annual subscription would arrive as an unrecognized price.
+struct PaddlePrices {
+    pro:          String,
+    team_monthly: String,
+    team_annual:  String,
+    business:     String,
+}
+
+impl PaddlePrices {
+    fn from_env() -> Self {
+        let get = |k: &str| std::env::var(k).unwrap_or_default();
+        Self {
+            pro:          get("PADDLE_PRO_PRICE_ID"),
+            team_monthly: get("PADDLE_TEAM_PRICE_ID"),
+            team_annual:  get("PADDLE_TEAM_ANNUAL_PRICE_ID"),
+            business:     get("PADDLE_BUSINESS_PRICE_ID"),
+        }
+    }
+
+    /// A price ID is usable only if it is set and not one of the historical
+    /// `pri_placeholder_*` defaults.
+    fn is_real(id: &str) -> bool {
+        !id.is_empty() && !id.starts_with("pri_placeholder")
+    }
+
+    /// True when at least one real Team price is configured. Checkout must stay
+    /// closed until this holds, or the overlay would bill an unset/placeholder
+    /// price.
+    fn team_configured(&self) -> bool {
+        Self::is_real(&self.team_monthly) || Self::is_real(&self.team_annual)
+    }
+}
+
+/// Map a Paddle price ID to a subscription tier.
+///
+/// Returns `None` when the price is not recognized — and callers MUST NOT
+/// substitute a paid tier for `None`.
+///
+/// This deliberately fails closed. The previous form ended in `else { "pro" }`,
+/// so any price ID the environment didn't know about silently granted Pro:
+///   - With the env vars unset (`unwrap_or_default()` → ""), EVERY subscription
+///     became Pro.
+///   - After the three-tier repricing, a new $200 Team price whose ID hadn't
+///     been wired to PADDLE_TEAM_PRICE_ID would land a paying customer on Pro —
+///     a tier that is no longer sold and that fails `is_team_or_above`, locking
+///     them out of chargeback, idle-waste, capacity planning and SLOs: exactly
+///     what they had paid for. Silently, with nothing logged.
+/// Granting nothing is recoverable (the customer says so, and the log names the
+/// price); granting the wrong entitlements quietly is not.
+fn tier_for_price_id(price_id: &str, prices: &PaddlePrices) -> Option<&'static str> {
+    if !PaddlePrices::is_real(price_id) {
+        return None;
+    }
+    // Compare only against configured values, so an unset env var (empty
+    // string) can never match anything.
+    let matches = |configured: &str| PaddlePrices::is_real(configured) && configured == price_id;
+
+    if matches(&prices.team_monthly) || matches(&prices.team_annual) {
+        Some("team")
+    } else if matches(&prices.business) {
+        Some("business")
+    } else if matches(&prices.pro) {
+        Some("pro")
+    } else {
+        None
+    }
+}
+
 /// GET /api/billing/config — returns Paddle client-side config for Paddle.js overlay
 async fn handle_billing_config(
     State(state): State<AppState>,
@@ -9565,14 +9637,35 @@ async fn handle_billing_config(
 
     let paddle_env = std::env::var("PADDLE_ENV").unwrap_or_else(|_| "sandbox".to_string());
     let paddle_client_token = std::env::var("PADDLE_CLIENT_TOKEN").unwrap_or_else(|_| "".to_string());
-    let pro_price_id = std::env::var("PADDLE_PRO_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_pro".to_string());
-    let team_price_id = std::env::var("PADDLE_TEAM_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_team".to_string());
-    let business_price_id = std::env::var("PADDLE_BUSINESS_PRICE_ID").unwrap_or_else(|_| "pri_placeholder_business".to_string());
+    let prices = PaddlePrices::from_env();
+
+    // Self-serve checkout is OFF unless explicitly switched on AND a real Team
+    // price exists AND Paddle.js can initialise.
+    //
+    // The kill switch is deliberate rather than inferred: a configured price ID
+    // looks identical whether it points at the current $200 Team plan or the
+    // retired $49 one, so the server cannot tell "correct" from "stale" on its
+    // own. PADDLE_CHECKOUT_ENABLED=true is the operator asserting that Paddle
+    // now holds products matching the published prices. Until then the frontend
+    // routes upgrade intent to /pricing (contact CTAs) instead of billing
+    // someone the wrong amount.
+    let checkout_enabled = std::env::var("PADDLE_CHECKOUT_ENABLED")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        && prices.team_configured()
+        && !paddle_client_token.is_empty();
 
     Json(serde_json::json!({
         "environment": paddle_env,
         "client_token": paddle_client_token,
-        "prices": { "pro": pro_price_id, "team": team_price_id, "business": business_price_id },
+        "checkout_enabled": checkout_enabled,
+        // Only Team is sellable. `pro` and `business` are intentionally absent:
+        // existing subscriptions on those prices keep working through the
+        // webhook, but nothing may start a new one.
+        "prices": {
+            "team":        prices.team_monthly,
+            "team_annual": prices.team_annual,
+        },
         "custom_data": { "user_id": user_id },
         "customer_email": email,
     })).into_response()
@@ -9653,13 +9746,28 @@ async fn handle_paddle_webhook(
                 .and_then(|items| items.first())
                 .and_then(|item| item["price"]["id"].as_str())
                 .unwrap_or("");
-            let pro_price = std::env::var("PADDLE_PRO_PRICE_ID").unwrap_or_default();
-            let team_price = std::env::var("PADDLE_TEAM_PRICE_ID").unwrap_or_default();
-            let business_price = std::env::var("PADDLE_BUSINESS_PRICE_ID").unwrap_or_default();
-            let tier = if price_id == business_price { "business" }
-                       else if price_id == team_price { "team" }
-                       else if price_id == pro_price { "pro" }
-                       else { "pro" };
+            let prices = PaddlePrices::from_env();
+            let tier = match tier_for_price_id(price_id, &prices) {
+                Some(t) => t,
+                None => {
+                    // Fail closed: link the subscription so it can be repaired by
+                    // hand, but never guess an entitlement. See tier_for_price_id.
+                    eprintln!(
+                        "[billing] paddle: UNRECOGNIZED price_id={price_id:?} on \
+                         {event_type} (user_id={user_id:?}, sub={subscription_id}) — \
+                         tier NOT changed. Wire this price to PADDLE_TEAM_PRICE_ID / \
+                         PADDLE_TEAM_ANNUAL_PRICE_ID and re-send the event, or set \
+                         the tier manually."
+                    );
+                    if !user_id.is_empty() {
+                        let _ = sqlx::query(
+                            "UPDATE users SET paddle_customer_id = $1, paddle_subscription_id = $2 WHERE id = $3"
+                        ).bind(&customer_id).bind(&subscription_id).bind(&user_id)
+                        .execute(&state.pool).await;
+                    }
+                    return StatusCode::OK.into_response();
+                }
+            };
 
             let status = data["status"].as_str().unwrap_or("active");
             if status == "active" || status == "trialing" {
@@ -10624,6 +10732,85 @@ async fn main() {
     println!("  Wicklee Cloud — Postgres listening on {addr}");
 
     axum::serve(listener, app).await.expect("Server exited unexpectedly");
+}
+
+#[cfg(test)]
+mod paddle_price_tests {
+    use super::*;
+
+    fn prices() -> PaddlePrices {
+        PaddlePrices {
+            pro:          "pri_pro_29".into(),
+            team_monthly: "pri_team_200".into(),
+            team_annual:  "pri_team_2000".into(),
+            business:     "pri_business_499".into(),
+        }
+    }
+
+    #[test]
+    fn maps_each_configured_price_to_its_tier() {
+        let p = prices();
+        assert_eq!(tier_for_price_id("pri_team_200",     &p), Some("team"));
+        assert_eq!(tier_for_price_id("pri_team_2000",    &p), Some("team"));
+        assert_eq!(tier_for_price_id("pri_business_499", &p), Some("business"));
+        assert_eq!(tier_for_price_id("pri_pro_29",       &p), Some("pro"));
+    }
+
+    #[test]
+    fn unknown_price_grants_nothing() {
+        // The regression this guards: an unrecognized price used to fall through
+        // to "pro", so a paying Team customer silently landed on a tier that
+        // fails is_team_or_above.
+        assert_eq!(tier_for_price_id("pri_brand_new_price", &prices()), None);
+    }
+
+    #[test]
+    fn empty_price_id_never_matches_an_unset_env_var() {
+        // Both sides empty must NOT compare equal — with the env vars unset this
+        // was how every subscription became Pro.
+        let unset = PaddlePrices {
+            pro: String::new(), team_monthly: String::new(),
+            team_annual: String::new(), business: String::new(),
+        };
+        assert_eq!(tier_for_price_id("", &unset), None);
+        assert_eq!(tier_for_price_id("pri_team_200", &unset), None);
+        assert_eq!(tier_for_price_id("", &prices()), None);
+    }
+
+    #[test]
+    fn placeholder_price_ids_are_not_real() {
+        let placeholders = PaddlePrices {
+            pro: "pri_placeholder_pro".into(),
+            team_monthly: "pri_placeholder_team".into(),
+            team_annual: String::new(),
+            business: "pri_placeholder_business".into(),
+        };
+        assert_eq!(tier_for_price_id("pri_placeholder_team", &placeholders), None);
+        assert!(!placeholders.team_configured());
+    }
+
+    #[test]
+    fn team_configured_needs_one_real_team_price() {
+        let mut p = prices();
+        assert!(p.team_configured());
+
+        p.team_annual = String::new();
+        assert!(p.team_configured(), "monthly alone is enough");
+
+        p.team_monthly = String::new();
+        assert!(!p.team_configured(), "no team price at all");
+
+        p.team_annual = "pri_team_2000".into();
+        assert!(p.team_configured(), "annual alone is enough");
+    }
+
+    #[test]
+    fn business_price_still_maps_so_existing_subscribers_are_grandfathered() {
+        // Business is not sold any more, but existing subscriptions stay on
+        // their original Paddle price. Dropping PADDLE_BUSINESS_PRICE_ID would
+        // reclassify those customers on their next subscription.updated event.
+        assert_eq!(tier_for_price_id("pri_business_499", &prices()), Some("business"));
+    }
 }
 
 #[cfg(test)]
