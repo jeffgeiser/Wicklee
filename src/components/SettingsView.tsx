@@ -1073,9 +1073,9 @@ const AlertsSection: React.FC<{
           <div className="rounded-xl bg-indigo-500/5 border border-indigo-500/20 px-5 py-4 flex items-start gap-3">
             <Bell size={14} className="text-indigo-400 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-200">Alerts & Notifications — Pro+</p>
+              <p className="text-xs font-semibold text-gray-200">Alerts &amp; Notifications — Team+</p>
               <p className="text-[11px] text-gray-500 leading-relaxed">
-                Custom alert thresholds, Slack notifications, and stateful alerting. Pro: single Slack channel with custom thresholds. Team: unlimited channels + PagerDuty.
+                Custom alert thresholds, stateful alerting, and unlimited Slack, Email &amp; PagerDuty channels.
               </p>
             </div>
           </div>
@@ -1093,7 +1093,7 @@ const AlertsSection: React.FC<{
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Pro — $29/mo
+            Upgrade to Team — $200/mo
           </button>
         </div>
       </Section>

@@ -781,7 +781,7 @@ Recording is fire-and-forget: it runs off the request path and never delays or f
 
 ### Export
 
-`GET /api/audit-log/export?format=csv|json&action=&from=&to=` — full-history download (chronological, up to 100k rows). CSV output is RFC-4180 quoted with spreadsheet formula-injection hardening. Every export is itself recorded in the trail (`audit_log.exported`). **Retention:** at least 365 days on Business; unlimited on Enterprise.
+`GET /api/audit-log/export?format=csv|json&action=&from=&to=` — full-history download (chronological, up to 100k rows). CSV output is RFC-4180 quoted with spreadsheet formula-injection hardening. Every export is itself recorded in the trail (`audit_log.exported`). **Retention:** unlimited — audit entries are never pruned.
 
 ### SIEM Drain
 
@@ -1162,18 +1162,26 @@ Wicklee is sovereign by default:
 
 ## Pricing
 
-| | Community | Pro | Team | Business | Enterprise |
-|---|---|---|---|---|---|
-| Price | Free | $29/mo | $49/seat/mo | $499/mo | Contact Sales |
-| Nodes | 3 | 10 | 25 (+$2/node over) | 100 (unlimited seats) | Unlimited |
-| History | 24h | 7 days | 90 days | 365 days | Custom |
-| Patterns | 9 | 18 | 18 | 18 | 18 |
-| Local MCP | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cloud MCP | — | — | ✅ | ✅ | ✅ |
-| OTel + Prometheus | — | — | ✅ | ✅ | ✅ |
-| SSO / SAML | — | — | — | ✅ | ✅ |
-| Audit Logging | — | — | — | ✅ | ✅ |
-| Alerts | — | Slack, Email | + PagerDuty | + PagerDuty | All + SIEM |
+| | Community | Team | Enterprise |
+|---|---|---|---|
+| Price | Free | $200/mo ($2,000/yr) | Custom |
+| Local nodes | Unlimited | Unlimited | Unlimited |
+| Nodes in cloud fleet view | 3 | Unlimited | Unlimited |
+| History | 24h | 90 days | 12 months |
+| Patterns | 9 | 18 | 18 |
+| Local API + MCP | ✅ | ✅ | ✅ |
+| Fleet API (`/api/v1/*`) | — | ✅ | ✅ |
+| Cloud MCP | — | ✅ | ✅ |
+| OTel + Prometheus | — | ✅ | ✅ |
+| Alerts | — | Slack, Email, PagerDuty | All + SIEM |
+| Cost & chargeback reports | — | ✅ | ✅ |
+| Idle-waste + capacity planner | — | ✅ | ✅ |
+| SLOs with error budgets | — | ✅ | ✅ |
+| Audit log export + SIEM drain | — | — | ✅ |
+| SSO / SAML | — | — | ✅ |
+| Self-hosted control plane | — | — | ✅ |
+
+Contact for Team or Enterprise: jeff@wicklee.dev
 
 ---
 

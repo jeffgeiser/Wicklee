@@ -55,7 +55,7 @@ const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) =
             <h2 className="text-base font-bold text-white">You get</h2>
             <ul className="text-sm text-gray-400 space-y-2">
               {[
-                'Business tier free for 12 months (normally $499/mo): 100 nodes, unlimited seats, SSO/SAML, RBAC, audit log + SIEM streaming, 365-day history',
+                'Enterprise tier free for 12 months: unlimited nodes and seats, SSO/SAML, RBAC, audit log export + SIEM streaming, 12-month history',
                 'SLOs with error budgets, chargeback/showback, capacity planning, idle-waste recovery — the cost-governance suite, on your real fleet',
                 'A direct line to the founder: monthly call, priority on your feature requests and fixes',
                 'Self-hosted control plane evaluation if telemetry can’t leave your network',

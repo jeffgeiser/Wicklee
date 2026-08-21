@@ -1564,7 +1564,7 @@ WES Version:     2
             </NoteBox>
 
             <NoteBox>
-              <strong className="text-white">Community tier:</strong> Observations appear on the dashboard but no outbound notifications are sent. Upgrade to Pro for Slack/Email or Team for PagerDuty.
+              <strong className="text-white">Community tier:</strong> Observations appear on the dashboard but no outbound notifications are sent. Upgrade to Team for Slack, Email and PagerDuty notifications.
             </NoteBox>
           </Section>
 
@@ -2017,7 +2017,7 @@ curl https://wicklee.dev/api/v1/fleet \\
             </div>
 
             <NoteBox>
-              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team ($49/seat/mo), the org unlocks 25 nodes, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
+              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team ($200/mo), the org unlocks unlimited nodes in the fleet view, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
             </NoteBox>
 
             <NoteBox>
@@ -2065,7 +2065,7 @@ curl https://wicklee.dev/api/v1/fleet \\
                 <code className="text-gray-300 font-mono text-[10px]">GET /api/audit-log/export?format=csv|json</code> downloads the full trail (chronological, up to 100k rows; optional <code className="text-gray-300 font-mono text-[10px]">action</code>/<code className="text-gray-300 font-mono text-[10px]">from</code>/<code className="text-gray-300 font-mono text-[10px]">to</code> filters). CSV is formula-injection hardened. Every export is itself audited.
               </p>
               <p className="text-xs text-gray-400 leading-relaxed">
-                The <strong className="text-white">SIEM drain</strong> (<code className="text-gray-300 font-mono text-[10px]">PUT /api/audit-log/drain</code>, org Admins) streams new events to your collector — Splunk, Datadog, any HTTPS receiver — as HMAC-signed JSON batches within ~1 minute (<code className="text-gray-300 font-mono text-[10px]">X-Wicklee-Signature</code>, secret shown once). Auto-disables after 20 consecutive failures; re-save to rotate the secret or re-enable. Retention: at least 365 days on Business, unlimited on Enterprise.
+                The <strong className="text-white">SIEM drain</strong> (<code className="text-gray-300 font-mono text-[10px]">PUT /api/audit-log/drain</code>, org Admins) streams new events to your collector — Splunk, Datadog, any HTTPS receiver — as HMAC-signed JSON batches within ~1 minute (<code className="text-gray-300 font-mono text-[10px]">X-Wicklee-Signature</code>, secret shown once). Auto-disables after 20 consecutive failures; re-save to rotate the secret or re-enable. Retention: unlimited — audit entries are never pruned.
               </p>
             </div>
 
@@ -2436,7 +2436,7 @@ sudo systemctl restart wicklee`}
                   <thead>
                     <tr>
                       <Th>Tier</Th>
-                      <Th>Nodes</Th>
+                      <Th>Nodes in fleet view</Th>
                       <Th>Patterns</Th>
                       <Th>History</Th>
                       <Th>Alerts</Th>
@@ -2450,39 +2450,23 @@ sudo systemctl restart wicklee`}
                       <Td>9</Td>
                       <Td>24h</Td>
                       <Td>Dashboard only</Td>
-                      <Td>Local MCP, Ollama proxy</Td>
+                      <Td>Local API + MCP, Ollama proxy</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-blue-400 font-medium">Pro ($29/mo)</span></Td>
-                      <Td>10</Td>
-                      <Td>18</Td>
-                      <Td>7 day</Td>
-                      <Td>Slack + Email</Td>
-                      <Td>Custom thresholds, node names</Td>
-                    </tr>
-                    <tr>
-                      <Td><span className="text-amber-400 font-medium">Team ($49/seat)</span></Td>
-                      <Td>25</Td>
+                      <Td><span className="text-blue-400 font-medium">Team ($200/mo)</span></Td>
+                      <Td>Unlimited</Td>
                       <Td>18</Td>
                       <Td>90 day</Td>
                       <Td>Slack + Email + PagerDuty</Td>
-                      <Td>Shared dashboard, Cloud MCP, CSV/JSON, OTel</Td>
+                      <Td>Shared dashboard, Fleet API, Cloud MCP, OTel, chargeback, idle-waste, capacity planner, SLOs</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-teal-400 font-medium">Business ($499/mo)</span></Td>
-                      <Td>100 (unlimited seats)</Td>
-                      <Td>18</Td>
-                      <Td>365 day</Td>
-                      <Td>All Team + SSO</Td>
-                      <Td>SSO/SAML, audit logging, priority support</Td>
-                    </tr>
-                    <tr>
-                      <Td><span className="text-purple-400 font-medium">Enterprise</span></Td>
+                      <Td><span className="text-purple-400 font-medium">Enterprise (custom)</span></Td>
                       <Td>Unlimited</Td>
                       <Td>18</Td>
-                      <Td>Custom</Td>
+                      <Td>12 month</Td>
                       <Td>All + SIEM</Td>
-                      <Td>On-prem, K8s operator, custom SLA</Td>
+                      <Td>Self-hosted control plane (Compose or Helm), SSO/SAML, audit log export, custom SLA</Td>
                     </tr>
                   </tbody>
                 </table>

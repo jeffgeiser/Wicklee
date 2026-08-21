@@ -137,7 +137,7 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
             audit log</strong> (no update or delete paths exist in the codebase). Business+ tenants can read it
             in-app, export the full history as CSV/JSON (formula-injection-hardened), or stream it
             continuously to a SIEM via HMAC-signed webhook batches with automatic tier re-verification
-            and delivery-failure cutoff. Retention: 365 days on Business, unlimited on Enterprise.
+            and delivery-failure cutoff. Retention: unlimited — audit entries are never pruned.
           </p>
         </Section>
 

@@ -112,16 +112,26 @@ An **optional transparent proxy** (port 11434) is available for teams that want 
 
 For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates all paired agents into a single dashboard with SSE real-time streaming.
 
-| | Community | Pro | Team |
+| | Community | Team | Enterprise |
 |---|---|---|---|
-| Nodes | 3 | 10 | 25+ |
-| History | 2 days | 7 days | 90 days |
+| Price | Free | $200/mo | Custom |
+| Nodes in fleet view | 3 | Unlimited | Unlimited |
+| History | 24 hours | 90 days | 12 months |
 | Patterns | 9 | 18 | 18 |
-| Alerts | — | Slack, Email | Slack, Email, PagerDuty |
-| API | — | ✅ | ✅ |
-| Local MCP | ✅ | ✅ | ✅ |
-| Cloud MCP | — | — | ✅ |
-| OTel + Prometheus | — | — | ✅ |
+| Alerts | — | Slack, Email, PagerDuty | Slack, Email, PagerDuty |
+| Local API + MCP | ✅ | ✅ | ✅ |
+| Fleet API (`/api/v1/*`) | — | ✅ | ✅ |
+| Cloud MCP | — | ✅ | ✅ |
+| OTel + Prometheus | — | ✅ | ✅ |
+| Cost & chargeback reports | — | ✅ | ✅ |
+| Idle-waste + capacity planner | — | ✅ | ✅ |
+| SLOs with error budgets | — | ✅ | ✅ |
+| Audit log export + SIEM drain | — | — | ✅ |
+| SSO / SAML | — | — | ✅ |
+| Self-hosted control plane | — | — | ✅ |
+
+Unlimited local nodes on every tier — the node limit applies only to the cloud
+fleet view. Full detail at [wicklee.dev/pricing](https://wicklee.dev/pricing).
 
 To pair a node: open `localhost:7700` and click **Connect to Fleet**, or run `wicklee --pair`.
 
