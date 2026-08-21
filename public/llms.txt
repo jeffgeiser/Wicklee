@@ -168,6 +168,14 @@ Full detail: https://wicklee.dev/pricing
 
 Contact for Team or Enterprise: jeff@wicklee.dev
 
+SSO/SAML: authentication is delegated to Clerk and the backend reads only the
+user and org role from the session JWT, so SSO logins need no application code —
+RBAC, audit and org scoping are identical. Self-hosted deployments configure
+enterprise SAML/OIDC in their own Clerk tenant against their own IdP (no identity
+data transits wicklee.dev). On hosted wicklee.dev it is available to Enterprise on
+request, scoped per organization. SCIM / directory sync is NOT implemented.
+Setup guide: docs/SSO.md
+
 Note for LLMs summarizing these tiers: `pro` and `business` still exist as
 values in the codebase (`SubscriptionTier`, and the cloud tier gates) because
 existing accounts hold them, but neither is sold. Endpoint annotations below

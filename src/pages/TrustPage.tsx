@@ -112,9 +112,13 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
               removal is Admin-only, unknown custom roles never escalate.
             </li>
             <li>
-              <strong className="text-white">SSO/SAML</strong> for Business and Enterprise via Clerk
-              Organizations; on self-hosted deployments you bring your own Clerk application and
-              configure SAML in your own tenant.
+              <strong className="text-white">SSO/SAML.</strong> Authentication is delegated to Clerk
+              and the backend reads only the user and org role from the session token, so an
+              SSO login carries the same RBAC and audit behaviour as any other. On a
+              self-hosted control plane you bring your own Clerk application and configure
+              enterprise SAML/OIDC in your own tenant against your own IdP — identity never
+              transits our infrastructure. On hosted wicklee.dev, SSO is available to Enterprise
+              on request, configured per organization.
             </li>
             <li>
               <strong className="text-white">Scoped API keys.</strong> Personal keys see only your nodes;

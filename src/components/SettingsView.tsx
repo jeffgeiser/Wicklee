@@ -5,6 +5,7 @@ import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import WebhooksSection from './settings/WebhooksSection';
 import AuditLogSection from './settings/AuditLogSection';
+import SsoSection from './settings/SsoSection';
 import SLOSection from './settings/SLOSection';
 import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
@@ -771,6 +772,14 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         <AuditLogSection
           subscriptionTier={subscriptionTier}
           getToken={getToken}
+          onNavigateToPricing={onNavigateToPricing}
+        />
+      )}
+
+      {/* ── ④⅞·⑤ SINGLE SIGN-ON (Enterprise) ──────────────────────────── */}
+      {isCloudMode && (
+        <SsoSection
+          subscriptionTier={subscriptionTier}
           onNavigateToPricing={onNavigateToPricing}
         />
       )}
