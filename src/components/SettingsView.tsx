@@ -6,6 +6,7 @@ import { useFleetStream } from '../contexts/FleetStreamContext';
 import WebhooksSection from './settings/WebhooksSection';
 import AuditLogSection from './settings/AuditLogSection';
 import SsoSection from './settings/SsoSection';
+import ModelGovernanceSection from './settings/ModelGovernanceSection';
 import SLOSection from './settings/SLOSection';
 import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
@@ -780,6 +781,15 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       {isCloudMode && (
         <SsoSection
           subscriptionTier={subscriptionTier}
+          onNavigateToPricing={onNavigateToPricing}
+        />
+      )}
+
+      {/* ── ④⅞·⑥ MODEL GOVERNANCE (Enterprise) ────────────────────────── */}
+      {isCloudMode && (
+        <ModelGovernanceSection
+          subscriptionTier={subscriptionTier}
+          getToken={getToken}
           onNavigateToPricing={onNavigateToPricing}
         />
       )}
