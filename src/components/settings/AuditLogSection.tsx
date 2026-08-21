@@ -256,7 +256,7 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
           <div className="rounded-xl bg-amber-500/5 border border-amber-500/20 px-5 py-4 flex items-start gap-3">
             <Lock size={14} className="text-amber-400 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-200">Audit Log — Business+</p>
+              <p className="text-xs font-semibold text-gray-200">Audit Log — Enterprise</p>
               <p className="text-[11px] text-gray-500 leading-relaxed">
                 An append-only record of who did what, when — node add/remove/rename, alert &amp; webhook configuration, and API-key lifecycle. Org members share one org-wide trail. Required for SOC 2 / ISO change-management evidence.
               </p>
@@ -266,7 +266,7 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Business
+            Talk to us about Enterprise
           </button>
         </div>
       </div>
@@ -462,7 +462,7 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
       </div>
 
       <div className="px-6 py-3 border-t border-gray-700 text-[10px] text-gray-600 leading-relaxed">
-        <strong className="text-gray-500">Append-only:</strong> entries are never edited or deleted. Events are recorded for every tier; only Business+ can read them here. Org members share one org-wide trail. Retention: at least 365 days on Business; unlimited on Enterprise.
+        <strong className="text-gray-500">Append-only:</strong> entries are never edited or deleted. Events are recorded for every tier; only Enterprise can read them here. Org members share one org-wide trail. Retention: unlimited — audit entries are never pruned.
       </div>
     </div>
   );

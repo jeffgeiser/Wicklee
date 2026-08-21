@@ -84,10 +84,9 @@ const TermsOfService: React.FC = () => (
     <h2>3. Subscription Tiers</h2>
     <p>The Service is offered in multiple tiers:</p>
     <ul>
-      <li><strong>Community (Free):</strong> Up to 3 nodes, 24-hour history, 9 observation patterns, local MCP server, local inline proxy.</li>
-      <li><strong>Pro ($9/month):</strong> Up to 10 nodes, 7-day history, 18 observation patterns, Slack and email alerts, custom alert thresholds, fleet proxy metrics, node naming.</li>
-      <li><strong>Team ($19/seat/month, 3-seat minimum):</strong> Up to 25 nodes, 90-day history, OpenTelemetry and Prometheus export, Cloud MCP, PagerDuty alerts, shared dashboards.</li>
-      <li><strong>Enterprise:</strong> Custom pricing and terms. Contact us for details.</li>
+      <li><strong>Community (Free):</strong> Unlimited local nodes, up to 3 nodes in the cloud fleet view, 24-hour history, 9 observation patterns, local API and MCP server, local inline proxy.</li>
+      <li><strong>Team ($200/month, or $2,000/year):</strong> Unlimited nodes in the cloud fleet view, 90-day history, 18 observation patterns, Fleet API access, OpenTelemetry and Prometheus export, Cloud MCP, Slack/email/PagerDuty alerts, shared dashboards, cost and chargeback reporting, capacity planning, SLOs with error budgets.</li>
+      <li><strong>Enterprise:</strong> Custom pricing and terms. Everything in Team, plus a self-hosted control plane, SSO/SAML, audit log export and SIEM streaming, 12-month history, and a service level agreement. Contact us for details.</li>
     </ul>
     <p>Pricing is subject to change with 30 days notice to existing subscribers.</p>
 

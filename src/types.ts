@@ -437,7 +437,12 @@ export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
 
 /**
  * Subscription tier stored in Clerk publicMetadata.tier.
- * Community = free, Pro = $9/mo, Team = $29/mo, Enterprise = $199/mo.
+ *
+ * Sold tiers: Community (free), Team ($200/mo), Enterprise (custom).
+ * 'pro' and 'business' are RETAINED, not sold — existing accounts still hold
+ * them and the cloud tier gates still honour them. Keep both in this union and
+ * in every tier-rank table, or those accounts silently lose access (see the
+ * tierRank map in MetricsHistoryChart for the bug this caused).
  */
 export type SubscriptionTier = 'community' | 'pro' | 'team' | 'business' | 'enterprise';
 

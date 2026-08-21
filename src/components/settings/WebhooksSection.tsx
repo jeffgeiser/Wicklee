@@ -198,7 +198,7 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
           <div className="rounded-xl bg-violet-500/5 border border-violet-500/20 px-5 py-4 flex items-start gap-3">
             <Lock size={14} className="text-violet-400 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-200">Threshold Webhooks — Pro+</p>
+              <p className="text-xs font-semibold text-gray-200">Threshold Webhooks — Team+</p>
               <p className="text-[11px] text-gray-500 leading-relaxed">
                 Replace polling with sub-second push notifications. Subscribe to thermal/inference state transitions and WES threshold crossings; Wicklee POSTs an HMAC-signed payload to your URL the moment a condition triggers. Essential for NRO and agent-automation loops.
               </p>
@@ -208,7 +208,7 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Pro
+            Upgrade to Team
           </button>
         </div>
       </div>

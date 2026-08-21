@@ -59,9 +59,10 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-white">Unlock Wicklee Pro</h2>
+            <h2 className="text-2xl font-bold text-white">Unlock Wicklee Team</h2>
             <p className="text-gray-400 text-sm">
-              Upgrade to Wicklee Pro to connect unlimited nodes and unlock Accelerator-tier patterns across your entire fleet.
+              Upgrade to Wicklee Team to connect unlimited nodes and unlock the full
+              pattern engine, cost reporting, and Fleet API across your entire fleet.
             </p>
           </div>
 
@@ -88,7 +89,7 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
               onClick={onUpgrade}
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-500/20"
             >
-              Upgrade to Pro
+              Upgrade to Team
             </button>
             <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
               Maybe later
@@ -338,6 +339,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
 
+  // Paddle checkout. Intentionally retained but currently UNREFERENCED: the
+  // 'pro' and 'team' price IDs it fetches from /api/billing/config are the
+  // retired $29 / $49 products, so nothing should route a user here until
+  // Paddle holds products matching the published Team price. Kept rather than
+  // deleted so the integration doesn't have to be rebuilt from scratch.
   const handleCheckoutTier = useCallback(async (tier: 'pro' | 'team') => {
     try {
       const token = await getToken();
@@ -380,10 +386,18 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     }
   }, [getToken]);
 
-  const handleUpgrade = useCallback(async () => {
+  // Send upgrade intent to /pricing rather than straight into Paddle.
+  //
+  // This used to call handleCheckoutTier('pro'). Pro is no longer a tier we
+  // sell, and the Paddle price IDs behind handleCheckoutTier still point at the
+  // retired $29 / $49 products — so opening checkout here would charge the old
+  // amount for a plan that no longer exists. /pricing carries the current tiers
+  // and their contact CTAs. Re-wire this to checkout only once Paddle holds
+  // products matching the published prices.
+  const handleUpgrade = useCallback(() => {
     setIsUpgradeModalOpen(false);
-    await handleCheckoutTier('pro');
-  }, [handleCheckoutTier]);
+    navigate('/pricing');
+  }, [navigate]);
 
   const handleToggleSentinel = (nodeId: string) => {
     setNodes(prev => prev.map(node => 
@@ -449,7 +463,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         currentTier={permissions.subscriptionTier}
         isLoggedIn={isLoggedIn}
         onNavigate={navigate}
-        onCheckout={handleCheckoutTier}
         onSignIn={() => navigate('/sign-in')}
         onSignUp={() => navigate('/sign-up')}
       />
@@ -556,11 +569,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       case DashboardTab.PREFERENCES:
         return <PreferencesView currentTenant={currentTenant} theme={theme} />;
       case DashboardTab.PRICING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} embedded />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} embedded />;
       case DashboardTab.AI_PROVIDERS:
         return <AIProvidersView />;
       case DashboardTab.BILLING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} embedded />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} embedded />;
       default:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }

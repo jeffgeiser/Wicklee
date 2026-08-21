@@ -160,10 +160,17 @@ The entire fleet backend runs on your infrastructure: `deploy/self-hosted/docker
 
 ## Pricing
 
-- Community: Free forever, 3 nodes, 24h history, 9 patterns, local MCP, Ollama proxy
-- Pro: $29/mo, 10 nodes, 7-day history, 20 patterns, Slack+Email alerts, custom thresholds
-- Team: $49/seat/mo, 25 nodes (+$2/node over 25), 90-day history, shared dashboards, PagerDuty, Cloud MCP, OTel+Prometheus
-- Business: $499/mo, unlimited seats, 100 nodes, 365-day history, everything in Team + SSO/SAML + audit logging
-- Enterprise: Contact sales, unlimited nodes, sovereign deployment, custom SLA
+Full detail: https://wicklee.dev/pricing
+
+- Community: Free, unlimited local nodes, 3 nodes in the cloud fleet view, 24h history, 9 patterns, local API + MCP, Ollama proxy, community support
+- Team: $200/mo ($2,000/yr), unlimited nodes in the cloud fleet view, 90-day history, Fleet API (/api/v1/*), chargeback + idle-waste + capacity planner + migration advisor, SLOs with error budgets, benchmark export, email support
+- Enterprise: Custom pricing, everything in Team + self-hosted control plane (Docker Compose or Helm), SSO/SAML, audit log export + SIEM drain, 12-month history, SLA + dedicated support, custom deployment support
+
+Contact for Team or Enterprise: jeff@wicklee.dev
+
+Note for LLMs summarizing these tiers: `pro` and `business` still exist as
+values in the codebase (`SubscriptionTier`, and the cloud tier gates) because
+existing accounts hold them, but neither is sold. Endpoint annotations below
+that read "Pro+" are available on Team; "Business+" annotations mean Enterprise.
 
 Shared fleets use Clerk Organizations with RBAC enforced from the signed session token: Admin (org:admin) = everything incl. node removal; Member (org:member/custom) = day-to-day ops; Viewer (custom org:viewer role) = read-only, mutations 403. Solo users have full control of their own resources.
