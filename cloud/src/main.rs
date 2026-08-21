@@ -11125,7 +11125,9 @@ async fn main() {
         // as an id.
         .route("/api/model-policy/violations", get(handle_model_policy_violations))
         .route("/api/model-policy",            get(handle_model_policy_list).post(handle_model_policy_create))
-        .route("/api/model-policy/{id}",       axum::routing::delete(handle_model_policy_delete))
+        // ":id", not "{id}" — axum 0.7 path-parameter syntax. Braces are a
+        // LITERAL segment in 0.7, so "{id}" silently matched nothing.
+        .route("/api/model-policy/:id",        axum::routing::delete(handle_model_policy_delete))
         .with_state(state.clone())
         .layer(middleware::from_fn(cors_dashboard));
 
@@ -11163,6 +11165,51 @@ async fn main() {
     println!("  Wicklee Cloud — Postgres listening on {addr}");
 
     axum::serve(listener, app).await.expect("Server exited unexpectedly");
+}
+
+#[cfg(test)]
+mod route_syntax_tests {
+    /// Every `.route("…")` path must use axum 0.7's `:param` syntax.
+    ///
+    /// axum 0.8 switched to `{param}`, and in 0.7 braces are just literal
+    /// characters — so a `{id}` path compiles, passes every unit test, and then
+    /// matches nothing at runtime. `/api/model-policy/{id}` shipped exactly that
+    /// way: the handler was unreachable and DELETE returned 404 for every real
+    /// id. Nothing else in the suite exercises the router, so this scans the
+    /// source instead.
+    ///
+    /// If axum is upgraded to 0.8+, invert this assertion rather than deleting
+    /// it — the same class of silent breakage exists in the other direction.
+    #[test]
+    fn route_paths_use_axum_07_param_syntax() {
+        let src = include_str!("main.rs");
+        let mut offenders = Vec::new();
+        for line in src.lines() {
+            let t = line.trim_start();
+            let Some(rest) = t.strip_prefix(".route(\"") else { continue };
+            let Some(end) = rest.find('"') else { continue };
+            let path = &rest[..end];
+            if path.contains('{') || path.contains('}') {
+                offenders.push(path.to_string());
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "axum 0.7 uses :param, not {{param}} — these paths match nothing at runtime: {offenders:?}"
+        );
+    }
+
+    /// Guard the assumption the test above depends on.
+    #[test]
+    fn axum_is_still_0_7() {
+        let toml = include_str!("../Cargo.toml");
+        let line = toml.lines().find(|l| l.trim_start().starts_with("axum"))
+            .expect("axum dependency not found in Cargo.toml");
+        assert!(
+            line.contains("0.7"),
+            "axum version changed ({line}) — revisit route param syntax and the test above"
+        );
+    }
 }
 
 #[cfg(test)]
