@@ -126,9 +126,9 @@ function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
  */
 function landingBodyHtml() {
   const features = [
-    ['See every node', 'Live GPU temp, VRAM usage, and inference throughput across your entire fleet — auto-detected, zero configuration.'],
-    ['Thermal Intelligence', 'Monitor thermal thresholds and health signals across your entire fleet. Prevent hardware degradation with real-time alerts and WES-aware health telemetry.'],
-    ['Understand your costs', 'WES — the MPG for AI — scores each node on tok/s per watt, thermally adjusted. Wattage-per-Token is the metric cloud providers don’t surface. Now you have it for your local fleet.'],
+    ['Stop paying for idle hardware', 'Find models sitting in memory drawing power while nothing is using them — priced per node, with what you’d recover by unloading or consolidating.'],
+    ['Know which node to trust', 'Catch a box that is thermally throttling, memory-starved for the model you want to run, or simply the wrong place to send the next request — before users feel it.'],
+    ['Answer the cost question', 'Real cost per model and per million tokens, measured from actual watts and actual throughput on your own hardware — not a vendor TDP figure or a cloud price list.'],
   ];
   const featureHtml = features.map(([t, d]) =>
     `<li style="margin-bottom:1rem"><strong style="color:#f9fafb">${esc(t)}</strong> — ${esc(d)}</li>`
@@ -136,11 +136,15 @@ function landingBodyHtml() {
 
   return `
 <main>
-  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Self-hosted AI inference, fully observable.</h1>
-  <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1.5rem">
-    WES (thermally-honest MPG for AI), 18 observation patterns, instant model fit checks, and
-    programmable APIs for Ollama, vLLM, and llama.cpp. Install in 60 seconds — no sudo, no account,
-    nothing to configure.
+  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">See what your self-hosted AI actually costs.</h1>
+  <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1rem">
+    Wicklee measures watts and tokens together on every node — so you get real cost per model,
+    catch hardware burning power while nothing is using it, and get warned before a box thermally
+    throttles. Installs in 60 seconds — no sudo, no account, nothing to configure.
+  </p>
+  <p style="font-size:1rem;color:#6b7280;line-height:1.6;margin:0 0 1.5rem">
+    LLM observability has your tokens. GPU monitoring has your watts. Neither can tell you what a
+    million tokens cost.
   </p>
   <p style="margin:0 0 2rem">
     <code style="background:#1f2937;border:1px solid #374151;border-radius:0.375rem;padding:0.5rem 0.75rem;color:#f9fafb;font-family:ui-monospace,monospace;font-size:0.875rem">curl -fsSL https://wicklee.dev/install.sh | bash</code>
@@ -149,10 +153,20 @@ function landingBodyHtml() {
   <ul style="list-style:none;padding:0;color:#9ca3af;line-height:1.6">
 ${featureHtml}
   </ul>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Sovereign by design</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Start local, add a fleet when you need one</h2>
   <p style="color:#9ca3af;line-height:1.6">
-    Telemetry never leaves your hardware. Self-hostable, air-gap friendly, and built to complement
-    your existing Prometheus / Grafana / Datadog stack rather than replace it.
+    The agent is free forever and works on its own: full dashboard at localhost:7700, unlimited
+    local nodes, per-model cost attribution. Pair nodes into a fleet view for chargeback by node,
+    model and team, idle-waste recovery and capacity planning. Enterprise runs the entire control
+    plane on your own infrastructure.
+  </p>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">What leaves the machine</h2>
+  <p style="color:#9ca3af;line-height:1.6">
+    Prompts and responses are never read, stored or transmitted — by default Wicklee is not in the
+    request path at all. Hardware telemetry stays local until you explicitly pair a node. The
+    optional inline proxy records only timing and the model name, never request or response
+    bodies. Built to complement your existing Prometheus / Grafana / Datadog stack rather than
+    replace it.
   </p>
   <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Built for agents &amp; LLMs</h2>
   <p style="color:#9ca3af;line-height:1.6">
@@ -187,7 +201,7 @@ const shell = await readFile(join(DIST, 'index.html'), 'utf8');
     name: SITE_NAME,
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'macOS, Linux, Windows',
-    description: 'Self-hosted AI inference observability for Ollama, vLLM, and llama.cpp fleets.',
+    description: 'See what your self-hosted AI actually costs. Watts and tokens measured together on every node — real cost per model, phantom-load detection and thermal early warning for Ollama, vLLM and llama.cpp fleets.',
     url: ORIGIN,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   };

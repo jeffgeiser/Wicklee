@@ -48,12 +48,12 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
 
   <!-- Hero -->
   <g font-family="${FONT}" font-weight="700">
-    <text x="78" y="290" font-size="62" fill="#f9fafb">Self-hosted AI inference,</text>
-    <text x="78" y="370" font-size="62" fill="#60a5fa">fully observable.</text>
+    <text x="78" y="290" font-size="62" fill="#f9fafb">See what your self-hosted AI</text>
+    <text x="78" y="370" font-size="62" fill="#60a5fa">actually costs.</text>
   </g>
 
   <!-- Subline -->
-  <text x="80" y="452" font-family="${FONT}" font-weight="400" font-size="30" fill="#9ca3af">WES — the MPG for local AI   ·   Ollama · vLLM · llama.cpp</text>
+  <text x="80" y="452" font-family="${FONT}" font-weight="400" font-size="30" fill="#9ca3af">Watts and tokens, measured together   ·   Ollama · vLLM · llama.cpp</text>
 
   <!-- Footer -->
   <g font-family="${FONT}" font-weight="400" font-size="26">
