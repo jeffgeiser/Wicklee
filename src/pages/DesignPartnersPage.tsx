@@ -9,12 +9,17 @@
 
 import React, { useEffect } from 'react';
 import { ArrowLeft, Handshake, Check, Building2, ShieldCheck, LineChart } from 'lucide-react';
+import { CONTACT_EMAIL, mailto } from '../utils/contact';
 
 interface DesignPartnersPageProps {
   onNavigate: (path: string) => void;
 }
 
-const MAILTO = 'mailto:sales@wicklee.dev?subject=Design%20partner%20program&body=Company%3A%0AFleet%20(nodes%2C%20hardware%2C%20runtimes)%3A%0AWhat%20you%20run%20locally%20and%20why%3A%0A';
+const MAILTO = mailto(
+  CONTACT_EMAIL,
+  'Design partner program',
+  'Company:\nFleet (nodes, hardware, runtimes):\nWhat you run locally and why:\n',
+);
 
 const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) => {
   useEffect(() => { window.scrollTo(0, 0); }, []);
@@ -127,7 +132,7 @@ const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) =
             href={MAILTO}
             className="inline-block px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-sm font-semibold text-white transition-colors"
           >
-            sales@wicklee.dev →
+            {CONTACT_EMAIL} →
           </a>
         </div>
       </div>

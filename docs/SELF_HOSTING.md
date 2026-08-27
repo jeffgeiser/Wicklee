@@ -21,7 +21,7 @@ open http://localhost:8080
 ## Licensing
 
 Self-hosting for production requires an **Enterprise license** — contact
-[sales@wicklee.dev](mailto:sales@wicklee.dev). Set the key as `WICKLEE_LICENSE_KEY`
+[jeff@wicklee.dev](mailto:jeff@wicklee.dev). Set the key as `WICKLEE_LICENSE_KEY`
 in `.env`. Without a key the control plane runs in **evaluation mode**: fully
 functional, but it announces itself as unlicensed at boot and in `/health`.
 

@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import type { SubscriptionTier } from '../types';
 import Logo from './Logo';
+import { CONTACT_EMAIL, mailto } from '../utils/contact';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -107,7 +108,7 @@ const TIERS: TierDef[] = [
       'Email support',
     ],
     highlight: true,
-    cta: { label: 'Contact us', href: 'mailto:jeff@wicklee.dev?subject=Wicklee%20Team' },
+    cta: { label: 'Contact us', href: mailto(CONTACT_EMAIL, 'Wicklee Team') },
   },
   {
     id: 'enterprise',
@@ -129,7 +130,7 @@ const TIERS: TierDef[] = [
       'Custom deployment support',
     ],
     highlight: false,
-    cta: { label: 'Talk to us', href: 'mailto:jeff@wicklee.dev?subject=Wicklee%20Enterprise' },
+    cta: { label: 'Talk to us', href: mailto(CONTACT_EMAIL, 'Wicklee Enterprise') },
   },
 ];
 
