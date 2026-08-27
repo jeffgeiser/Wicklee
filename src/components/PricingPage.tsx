@@ -152,6 +152,15 @@ const PricingPage: React.FC<PricingPageProps> = ({
           <Logo className="text-3xl" connectionState="connected" />
         </button>
         <div className="flex items-center gap-4 sm:gap-8">
+          {/* Mirrors the landing nav — a separate deployment, not a route. */}
+          <a
+            href="https://demo.wicklee.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:block text-sm font-medium text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            Live demo
+          </a>
           <button onClick={() => onNavigate?.('/docs')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</button>
           <button onClick={() => onNavigate?.('/pricing')} className="hidden sm:block text-sm font-medium text-white transition-colors">Pricing</button>
           <a

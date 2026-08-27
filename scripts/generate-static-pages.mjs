@@ -174,10 +174,13 @@ ${featureHtml}
     AI agents can query your fleet's status, efficiency, and model fit directly.
   </p>
   <p style="margin-top:2.5rem">
+    <a href="https://demo.wicklee.dev" style="color:#60a5fa">Live demo</a> ·
     <a href="/docs" style="color:#60a5fa">Documentation</a> ·
     <a href="/pricing" style="color:#60a5fa">Pricing</a> ·
     <a href="/blog" style="color:#60a5fa">Blog</a> ·
-    <a href="/metrics-reference" style="color:#60a5fa">Metrics reference</a>
+    <a href="/metrics-reference" style="color:#60a5fa">Metrics reference</a> ·
+    <a href="/design-partners" style="color:#60a5fa">Design partners</a> ·
+    <a href="/trust" style="color:#60a5fa">Trust &amp; security</a>
   </p>
 </main>`.trim();
 }
