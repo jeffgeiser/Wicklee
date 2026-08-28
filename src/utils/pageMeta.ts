@@ -17,7 +17,7 @@ export const SITE_NAME   = 'Wicklee';
 /** Social/link-preview card (1200×630). Regenerate via scripts/gen-og-image.mjs. */
 export const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
 
-export const DEFAULT_TITLE       = 'Wicklee — Local AI inference, finally observable.';
+export const DEFAULT_TITLE       = 'Wicklee — Private AI, finally observable.';
 export const DEFAULT_DESCRIPTION =
   'Routing intelligence. True inference cost. Thermal state. Live, across every node. ' +
   'Built for Ollama and vLLM. Install in 60 seconds — nothing to configure.';
@@ -107,8 +107,9 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
   },
   '/pricing': {
     title:       'Pricing — Wicklee',
-    description: 'Free for 3 nodes. Pro, Team, and Business tiers for growing fleets — ' +
-                 'longer history, alerting, SLA monitoring, and fleet APIs.',
+    description: 'Community free forever — unlimited local nodes, 3 in the cloud fleet view. ' +
+                 'Team $200/mo adds unlimited fleet nodes, 90-day history, the Fleet API, ' +
+                 'chargeback and capacity planning. Enterprise is self-hosted, with SSO and audit export.',
     path:        '/pricing',
   },
   '/trust': {
@@ -119,9 +120,9 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
   },
   '/design-partners': {
     title:       'Design Partner Program — Wicklee',
-    description: 'Running local AI in production? 3–5 companies get Business free for a year — ' +
-                 'SSO, RBAC, audit, SLOs, and cost governance on your real fleet — for a logo, ' +
-                 'a case study, and monthly feedback.',
+    description: 'Running private AI in production? A small number of design partners get ' +
+                 'the Enterprise tier free for 12 months — SSO, RBAC, audit export, SLOs and cost ' +
+                 'governance on your real fleet — for a logo, a case study, and monthly feedback.',
     path:        '/design-partners',
   },
   '/terms': {

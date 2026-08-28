@@ -1,6 +1,6 @@
 # Wicklee Documentation
 
-> Sovereign GPU fleet monitor for local AI inference.
+> Sovereign GPU fleet monitor for self-hosted AI inference — on-prem, private cloud, or colo.
 > One Rust binary per node, React dashboard at localhost:7700, fleet aggregation at wicklee.dev.
 
 ---

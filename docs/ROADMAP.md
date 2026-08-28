@@ -201,6 +201,50 @@ Features whose primary value is distribution and enterprise awareness, identifie
 
    **Why this was promoted (Aug 2026):** the standing objection to the cost positioning is that Wicklee cannot give a CFO a holistic view of AI spend, because it only sees self-hosted inference — not API spend, not coding-assistant licences, not rented GPU. That is true and it is not worth fixing by expansion: Finout, CloudZero and Vantage already own the whole-bill view, and competing there trades a defensible moat (watts AND tokens on the node) for a contested one. FOCUS export is the alternative answer. Rather than building the holistic view, Wicklee becomes the *correctly measured self-hosted line item inside* the tools that already aggregate it — the only source able to price that line from measured watts rather than a vendor TDP guess. It converts the scope limitation from a weakness into a distribution channel, and it is one serializer's worth of work. Treat it as the highest-leverage remaining cost-governance item, ahead of further depth in the reports themselves.
 
+7. **★ AI-gateway price feed (LiteLLM et al.) — "be the meter, not the dashboard".**
+   Most organisations will front their models with a gateway (LiteLLM, Portkey, Kong AI
+   Gateway, Cloudflare AI Gateway). The gateway becomes the highway: it brokers public
+   vs private models, holds virtual keys and per-team budgets, and attributes spend by
+   team/app/key.
+
+   **The gap it cannot close:** a gateway computes cost by multiplying token counts by a
+   *provider price list*. For a self-hosted model there is no price list — LiteLLM lets an
+   operator hand-enter `input_cost_per_token` / `output_cost_per_token`, which is a guess.
+   So a gateway's cost dashboard is accurate for OpenAI and fictional for the org's own
+   vLLM endpoint. Wicklee is the only thing that can produce that rate, because it comes
+   from measured watts against measured throughput.
+
+   **Build (small — the numbers already exist):** an endpoint returning measured
+   per-model $/1M tokens in a shape a gateway can consume directly as custom pricing,
+   derived from the same data behind `/api/v1/fleet/cost-by-model`. Ship it with a docs
+   page showing the LiteLLM `model_list` wiring. Two properties matter: the rate must
+   carry its basis (kWh rate, window, sample count) so it is auditable rather than
+   another magic number, and it must degrade honestly — no throughput samples means no
+   rate, not a fabricated one.
+
+   **Then, in order of depth:**
+   - *Routing signal.* `/api/v1/route/best` already returns the healthiest node by live
+     WES and thermal state. A gateway doing cost- or latency-weighted routing can consult
+     it — feeding the highway rather than competing with it.
+   - *Reconciliation.* The gateway knows tokens by team/app/key; Wicklee knows $/token by
+     model/node. Joined, that is **true cost per team including self-hosted** — the
+     holistic CFO view, delivered through the gateway instead of by building an
+     aggregator we would lose building.
+
+   **Why this is strategic, not an integration chore:** it is the same move as item 6
+   (FOCUS export) at a different layer. Wicklee does not win by owning the dashboard —
+   gateways and FinOps tools already own it. It wins by being the authoritative source
+   for the one number neither can compute. Every such integration also buys a durable,
+   zero-outreach distribution channel: a LiteLLM ecosystem listing reaches exactly the
+   teams running self-hosted models, the same way the Grafana catalog reaches platform
+   teams.
+
+   **Terminology note (Aug 2026):** this is also why positioning copy moved from "local
+   AI" to "self-hosted AI". Buyers' GPUs are increasingly their own hardware in a private
+   cloud or colo, not a machine under a desk. "Local" remains correct in the community
+   channel (r/LocalLLaMA, the blog, the "MPG for local AI" coinage) and undersells
+   everywhere else.
+
 ### ★ GTM Execution Tracker (non-code workstreams — see docs/GTM.md for strategy)
 Trackable checklist for the marketing motions. Check items off as they land; each is durable (stays live once done). Items marked **[draftable]** can be prepared by a coding session (copy, PR text, listing metadata, page builds) with only the final submit needing the founder's accounts.
 
@@ -235,11 +279,66 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 
 **Rock 6 — Enterprise credibility**
 - [x] Trust page on wicklee.dev (data-flow split, sovereignty story, RBAC/audit/SIEM, honest compliance posture) — **shipped 2026-07-16** (`/trust`, footer-linked, sitemap'd; cross-links design-partner program)
+- [ ] **AI-gateway price feed + LiteLLM ecosystem listing (roadmap item 7)** — gateways guess the $/token for self-hosted models because no price list exists; we measure it. Same "be the meter, not the dashboard" play as FOCUS. **[draftable]**
 - [ ] **FOCUS-format chargeback export (roadmap item 6 — promoted)** + OpenCost/FinOps ecosystem listing. This is the answer to "we can't give a CFO the whole AI bill": be the accurate self-hosted line inside the tools that already show the whole bill, rather than trying to out-aggregate them.
 - [ ] Quarterly "State of Local Inference Efficiency" report #1 **[draftable once leaderboard data exists]**
 - [ ] Clerk / Railway / Ollama showcase submissions **[draftable]**
 
 **North star:** weekly paired-node activations. Review this tracker monthly; a motion that shipped gets its date noted, a motion skipped two months running gets deleted (the list must stay honest).
+
+### ★ Power-Cap Advisory — the missing cost lever
+
+**Why this exists (Aug 2026 review).** Reviewing whether the cost positioning is
+actually *actionable*, we enumerated the levers a team has on self-hosted inference
+spend. Most are already covered — unload idle models (idle-waste), quantization choice
+(quant sweet spot + perplexity tax), runtime config, route to the efficient node,
+consolidate (migration advisor), fix thermal throttling, defer the next purchase
+(capacity planner). One real lever is missing, and it is the most direct one: **capping
+GPU power draw.**
+
+GPUs run near the top of a steep efficiency curve. Capping to roughly 70–80% of rated
+power typically costs a few percent of throughput. That is a bill reduction that
+requires no hardware change, no model change, and no fleet change — the only lever on
+the list with that property.
+
+**We already give this advice, badly.** `agent/src/main.rs` emits
+`"Lower power limit: sudo nvidia-smi -pl <watts> (try 80% of TDP)"` — but only as a
+*thermal* remediation step inside the NVIDIA-redline observation, and "80% of TDP" is a
+generic heuristic, not a measurement. Wicklee is the one tool that can replace that
+guess with this node's own measured knee point.
+
+**What is already collected:** `nvidia_power_draw_w` per frame, throughput per frame,
+and history in `metrics_raw` / `metrics_5min` — i.e. a scatter of (watts, tok/s)
+operating points per node/model over time.
+
+**What is missing:**
+
+1. **The adjustable range.** NVML exposes the enforced power limit plus the min/max
+   constraint (`nvidia-smi --query-gpu=power.limit,power.min_limit,power.max_limit`).
+   None of it is captured today, so we cannot say what a node *could* be set to, only
+   what it currently draws. This is the one new telemetry field required.
+2. **The curve fit.** Derive tok/s-per-watt across observed operating points and
+   identify the knee — the cap below which throughput loss accelerates. Must be honest
+   about coverage: a fleet that has only ever run at stock power has no observations
+   below it, so the recommendation is an extrapolation and must say so rather than
+   presenting a fitted number as measured. Prefer "insufficient range observed" over a
+   confident guess.
+3. **The framing.** Present it as a cost lever with a projected $/mo saving at the
+   node's kWh rate and the estimated throughput cost, not as thermal advice. Same shape
+   as the idle-waste report: a number, an action, and what it recovers.
+
+**Caveats to state in the product, not discover later:** setting a power limit needs
+root (`sudo nvidia-smi -pl`) and does not persist across reboot without a systemd unit
+or persistence mode; it is NVIDIA-only, since Apple Silicon exposes no equivalent
+control; and on a latency-sensitive fleet a few percent of throughput may not be an
+acceptable trade — the advisory should surface the trade, not assume it.
+
+**Strategic note.** This is the lever that makes the cost story *actionable* rather than
+merely informative. The Aug 2026 review concluded the cost number's main value is
+decision support (justify the fleet, size the next purchase, choose in-house vs API)
+rather than bill reduction — which is a fine position, but it is stronger with at least
+one credible "do this and your bill drops" recommendation attached. This is that
+recommendation, and it comes from data nobody else is collecting.
 
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
