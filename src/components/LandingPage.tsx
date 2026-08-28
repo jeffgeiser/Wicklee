@@ -145,16 +145,13 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           is using it, and get real cost per model. Installs in 60 seconds — no sudo, no
           account, nothing to configure.
         </p>
-        {/* The one-sentence category answer. LLM-observability tools and GPU monitors
-            each hold half the inputs; only a tool holding both can answer any of
-            these. Cost is the last clause, not the punchline — it is the proof the
-            observability is different, not the product. */}
-        <p className="text-sm sm:text-base text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed">
-          LLM observability has your tokens. GPU monitoring has your watts.
-          <span className="text-gray-300"> Neither can tell you if a node is throttling,
-          sitting idle, or what it actually costs to run.</span>
-        </p>
-        <div className="flex items-center justify-center">
+        {/* The "why not Datadog/Grafana" answer used to sit here as a third block
+            of prose. Removed — four stacked text blocks above the CTA made the
+            hero busy, and the eyebrow already names the category. The argument
+            itself is not lost: it is made at full length below the fold, in
+            "Standard monitors stop at the hardware. We see the inference layer."
+            Keep the hero to eyebrow -> headline -> subhead -> CTA. */}
+        <div className="flex items-center justify-center mt-10">
           <button
             onClick={() => document.getElementById('install-snippet')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             className="w-full sm:w-auto px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 text-lg"
