@@ -33,6 +33,7 @@
  */
 
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { marked } from 'marked';
@@ -102,12 +103,36 @@ function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
   if (bodyHtml) {
     const rootTag = '<div id="root" role="application" aria-label="Wicklee dashboard">';
     if (!html.includes(rootTag)) throw new Error('#root div not found in built index.html');
-    // Content lives inside #root: visible to crawlers and during the
-    // pre-hydration paint; React's createRoot().render() replaces it with
-    // the live page once the bundle loads.
+
+    // Content lives inside #root so React's createRoot().render() clears it once
+    // the bundle loads. That is also why it used to FLASH: the block paints
+    // immediately, the ~1.6 MB bundle lands a beat later, and the user sees a
+    // narrower, nav-less version of the page shift away.
+    //
+    // The block has to keep doing two jobs, which rules out a plain display:none:
+    //
+    //   - Raw-HTML consumers (link unfurlers, LLM fetchers, curl, non-rendering
+    //     crawlers) must find real content in the source. They don't run CSS or
+    //     JS, so whatever we do here is invisible to them.
+    //   - It is the graceful fallback when the bundle fails or the network
+    //     stalls. Hiding it unconditionally turns a slow load into a blank page.
+    //
+    // public/prerender.js hides it on parse and puts it back after 4s if React
+    // never mounted. A CSS delayed-reveal was tried first and rejected: it
+    // depends on the document animation clock, which is suspended in some
+    // environments, and where animations don't run the content would never
+    // appear at all. See the header comment in public/prerender.js.
+    // Fail loudly if the script isn't in the build. A 404 here degrades safely
+    // (the block just stays visible, i.e. today's flash), so it would otherwise
+    // slip through review as "works fine" while the fix is silently dead.
+    if (!existsSync(join(DIST, 'prerender.js'))) {
+      throw new Error('dist/prerender.js missing — the injected <script src="/prerender.js"> would 404 and the flash fix would be inert');
+    }
+
     const style = wrapStyle ?? 'max-width:48rem;margin:0 auto;padding:3rem 1.5rem';
     html = html.replace(rootTag,
-      `${rootTag}<div class="blog-content" style="${style}">${bodyHtml}</div>`);
+      `${rootTag}<div id="wk-prerender" class="blog-content" style="${style}">${bodyHtml}</div>` +
+      '<script src="/prerender.js"></script>');
   }
   return html;
 }
