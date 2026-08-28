@@ -286,6 +286,60 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 
 **North star:** weekly paired-node activations. Review this tracker monthly; a motion that shipped gets its date noted, a motion skipped two months running gets deleted (the list must stay honest).
 
+### ★ Power-Cap Advisory — the missing cost lever
+
+**Why this exists (Aug 2026 review).** Reviewing whether the cost positioning is
+actually *actionable*, we enumerated the levers a team has on self-hosted inference
+spend. Most are already covered — unload idle models (idle-waste), quantization choice
+(quant sweet spot + perplexity tax), runtime config, route to the efficient node,
+consolidate (migration advisor), fix thermal throttling, defer the next purchase
+(capacity planner). One real lever is missing, and it is the most direct one: **capping
+GPU power draw.**
+
+GPUs run near the top of a steep efficiency curve. Capping to roughly 70–80% of rated
+power typically costs a few percent of throughput. That is a bill reduction that
+requires no hardware change, no model change, and no fleet change — the only lever on
+the list with that property.
+
+**We already give this advice, badly.** `agent/src/main.rs` emits
+`"Lower power limit: sudo nvidia-smi -pl <watts> (try 80% of TDP)"` — but only as a
+*thermal* remediation step inside the NVIDIA-redline observation, and "80% of TDP" is a
+generic heuristic, not a measurement. Wicklee is the one tool that can replace that
+guess with this node's own measured knee point.
+
+**What is already collected:** `nvidia_power_draw_w` per frame, throughput per frame,
+and history in `metrics_raw` / `metrics_5min` — i.e. a scatter of (watts, tok/s)
+operating points per node/model over time.
+
+**What is missing:**
+
+1. **The adjustable range.** NVML exposes the enforced power limit plus the min/max
+   constraint (`nvidia-smi --query-gpu=power.limit,power.min_limit,power.max_limit`).
+   None of it is captured today, so we cannot say what a node *could* be set to, only
+   what it currently draws. This is the one new telemetry field required.
+2. **The curve fit.** Derive tok/s-per-watt across observed operating points and
+   identify the knee — the cap below which throughput loss accelerates. Must be honest
+   about coverage: a fleet that has only ever run at stock power has no observations
+   below it, so the recommendation is an extrapolation and must say so rather than
+   presenting a fitted number as measured. Prefer "insufficient range observed" over a
+   confident guess.
+3. **The framing.** Present it as a cost lever with a projected $/mo saving at the
+   node's kWh rate and the estimated throughput cost, not as thermal advice. Same shape
+   as the idle-waste report: a number, an action, and what it recovers.
+
+**Caveats to state in the product, not discover later:** setting a power limit needs
+root (`sudo nvidia-smi -pl`) and does not persist across reboot without a systemd unit
+or persistence mode; it is NVIDIA-only, since Apple Silicon exposes no equivalent
+control; and on a latency-sensitive fleet a few percent of throughput may not be an
+acceptable trade — the advisory should surface the trade, not assume it.
+
+**Strategic note.** This is the lever that makes the cost story *actionable* rather than
+merely informative. The Aug 2026 review concluded the cost number's main value is
+decision support (justify the fleet, size the next purchase, choose in-house vs API)
+rather than bill reduction — which is a fine position, but it is stronger with at least
+one credible "do this and your bill drops" recommendation attached. This is that
+recommendation, and it comes from data nobody else is collecting.
+
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
 
