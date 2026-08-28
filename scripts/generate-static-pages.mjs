@@ -168,10 +168,6 @@ function landingBodyHtml() {
     for the same output, find hardware burning power while nothing is using it, and get real cost
     per model. Installs in 60 seconds — no sudo, no account, nothing to configure.
   </p>
-  <p style="font-size:1rem;color:#6b7280;line-height:1.6;margin:0 0 1.5rem">
-    LLM observability has your tokens. GPU monitoring has your watts. Neither can tell you what a
-    million tokens cost.
-  </p>
   <p style="margin:0 0 2rem">
     <code style="background:#1f2937;border:1px solid #374151;border-radius:0.375rem;padding:0.5rem 0.75rem;color:#f9fafb;font-family:ui-monospace,monospace;font-size:0.875rem">curl -fsSL https://wicklee.dev/install.sh | bash</code>
   </p>
