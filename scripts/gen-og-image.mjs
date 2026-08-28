@@ -48,8 +48,8 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
 
   <!-- Hero -->
   <g font-family="${FONT}" font-weight="700">
-    <text x="78" y="290" font-size="62" fill="#f9fafb">See what your private AI</text>
-    <text x="78" y="370" font-size="62" fill="#60a5fa">actually costs.</text>
+    <text x="78" y="290" font-size="62" fill="#f9fafb">Health, efficiency,</text>
+    <text x="78" y="370" font-size="62" fill="#60a5fa">and true cost.</text>
   </g>
 
   <!-- Subline -->
