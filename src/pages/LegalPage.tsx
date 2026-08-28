@@ -72,7 +72,7 @@ const TermsOfService: React.FC = () => (
     <p>These Terms of Service ("Terms") govern your use of Wicklee ("Service"), operated by Wicklee ("we", "us", "our"). By using the Service, you agree to these Terms.</p>
 
     <h2>1. Service Description</h2>
-    <p>Wicklee is a sovereign GPU fleet monitoring platform for local AI inference. The Service consists of:</p>
+    <p>Wicklee is a sovereign GPU fleet monitoring platform for self-hosted AI inference. The Service consists of:</p>
     <ul>
       <li><strong>Agent:</strong> A local binary installed on your machine(s) that collects hardware and inference telemetry. The agent runs entirely on your device and does not transmit data unless you explicitly enable fleet pairing.</li>
       <li><strong>Cloud Dashboard:</strong> An optional hosted service at wicklee.dev for fleet aggregation, team collaboration, and alerting.</li>

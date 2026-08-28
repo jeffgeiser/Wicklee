@@ -126,7 +126,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
             visitor scanning for the category saw the word attached to everyone
             else. Category here, outcome in the H1. */}
         <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
-          Hardware-aware observability for local AI fleets
+          Hardware-aware observability for self-hosted AI fleets
         </p>
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
           See what your self-hosted AI{' '}

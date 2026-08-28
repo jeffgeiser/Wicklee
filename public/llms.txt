@@ -1,6 +1,6 @@
 # Wicklee
 
-> Sovereign GPU fleet monitor for local AI inference.
+> Sovereign GPU fleet monitor for self-hosted AI inference — on-prem, private cloud, or colo.
 > One Rust binary per node, React dashboard at localhost:7700, fleet aggregation at wicklee.dev.
 > WES (Wicklee Efficiency Score) = tok/s / (Watts x ThermalPenalty) — the MPG for local AI.
 > v0.9.0 added the Runtime Config Surface (per-model launch config across Ollama / vLLM / llama.cpp) and a top-level Models tab (Loaded / Browse / Past activity).

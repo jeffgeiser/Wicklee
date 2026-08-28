@@ -44,10 +44,10 @@ const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) =
             <Handshake className="w-3.5 h-3.5" /> 3–5 companies · applications open
           </div>
           <h1 className="text-3xl font-bold text-white leading-tight">
-            Run local AI in production?<br />Help us build your fleet's observability — Business tier free for a year.
+            Run self-hosted AI in production?<br />Help us build your fleet's observability — Business tier free for a year.
           </h1>
           <p className="text-gray-400 leading-relaxed max-w-2xl">
-            Wicklee is the observability layer for on-prem and local AI inference: hardware telemetry
+            Wicklee is the observability layer for self-hosted AI inference — on-prem, private cloud, or colo: hardware telemetry
             and token throughput in one store, so you can see efficiency, cost, and reliability the way
             you see them for the rest of your infrastructure. We're taking on a small number of design
             partners whose fleets and requirements will steer the roadmap.

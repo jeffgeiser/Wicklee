@@ -189,7 +189,7 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
           <p className="text-sm text-gray-400 leading-relaxed">
             Security questionnaires, architecture review calls, or a self-hosted evaluation license:{' '}
             <a href={mailto(CONTACT_EMAIL)} className="text-emerald-400 underline">{CONTACT_EMAIL}</a>.
-            Running local AI in a regulated environment? Our{' '}
+            Running self-hosted AI in a regulated environment? Our{' '}
             <button onClick={() => onNavigate('/design-partners')} className="text-emerald-400 underline">
               design-partner program
             </button>{' '}

@@ -201,6 +201,50 @@ Features whose primary value is distribution and enterprise awareness, identifie
 
    **Why this was promoted (Aug 2026):** the standing objection to the cost positioning is that Wicklee cannot give a CFO a holistic view of AI spend, because it only sees self-hosted inference — not API spend, not coding-assistant licences, not rented GPU. That is true and it is not worth fixing by expansion: Finout, CloudZero and Vantage already own the whole-bill view, and competing there trades a defensible moat (watts AND tokens on the node) for a contested one. FOCUS export is the alternative answer. Rather than building the holistic view, Wicklee becomes the *correctly measured self-hosted line item inside* the tools that already aggregate it — the only source able to price that line from measured watts rather than a vendor TDP guess. It converts the scope limitation from a weakness into a distribution channel, and it is one serializer's worth of work. Treat it as the highest-leverage remaining cost-governance item, ahead of further depth in the reports themselves.
 
+7. **★ AI-gateway price feed (LiteLLM et al.) — "be the meter, not the dashboard".**
+   Most organisations will front their models with a gateway (LiteLLM, Portkey, Kong AI
+   Gateway, Cloudflare AI Gateway). The gateway becomes the highway: it brokers public
+   vs private models, holds virtual keys and per-team budgets, and attributes spend by
+   team/app/key.
+
+   **The gap it cannot close:** a gateway computes cost by multiplying token counts by a
+   *provider price list*. For a self-hosted model there is no price list — LiteLLM lets an
+   operator hand-enter `input_cost_per_token` / `output_cost_per_token`, which is a guess.
+   So a gateway's cost dashboard is accurate for OpenAI and fictional for the org's own
+   vLLM endpoint. Wicklee is the only thing that can produce that rate, because it comes
+   from measured watts against measured throughput.
+
+   **Build (small — the numbers already exist):** an endpoint returning measured
+   per-model $/1M tokens in a shape a gateway can consume directly as custom pricing,
+   derived from the same data behind `/api/v1/fleet/cost-by-model`. Ship it with a docs
+   page showing the LiteLLM `model_list` wiring. Two properties matter: the rate must
+   carry its basis (kWh rate, window, sample count) so it is auditable rather than
+   another magic number, and it must degrade honestly — no throughput samples means no
+   rate, not a fabricated one.
+
+   **Then, in order of depth:**
+   - *Routing signal.* `/api/v1/route/best` already returns the healthiest node by live
+     WES and thermal state. A gateway doing cost- or latency-weighted routing can consult
+     it — feeding the highway rather than competing with it.
+   - *Reconciliation.* The gateway knows tokens by team/app/key; Wicklee knows $/token by
+     model/node. Joined, that is **true cost per team including self-hosted** — the
+     holistic CFO view, delivered through the gateway instead of by building an
+     aggregator we would lose building.
+
+   **Why this is strategic, not an integration chore:** it is the same move as item 6
+   (FOCUS export) at a different layer. Wicklee does not win by owning the dashboard —
+   gateways and FinOps tools already own it. It wins by being the authoritative source
+   for the one number neither can compute. Every such integration also buys a durable,
+   zero-outreach distribution channel: a LiteLLM ecosystem listing reaches exactly the
+   teams running self-hosted models, the same way the Grafana catalog reaches platform
+   teams.
+
+   **Terminology note (Aug 2026):** this is also why positioning copy moved from "local
+   AI" to "self-hosted AI". Buyers' GPUs are increasingly their own hardware in a private
+   cloud or colo, not a machine under a desk. "Local" remains correct in the community
+   channel (r/LocalLLaMA, the blog, the "MPG for local AI" coinage) and undersells
+   everywhere else.
+
 ### ★ GTM Execution Tracker (non-code workstreams — see docs/GTM.md for strategy)
 Trackable checklist for the marketing motions. Check items off as they land; each is durable (stays live once done). Items marked **[draftable]** can be prepared by a coding session (copy, PR text, listing metadata, page builds) with only the final submit needing the founder's accounts.
 
@@ -235,6 +279,7 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 
 **Rock 6 — Enterprise credibility**
 - [x] Trust page on wicklee.dev (data-flow split, sovereignty story, RBAC/audit/SIEM, honest compliance posture) — **shipped 2026-07-16** (`/trust`, footer-linked, sitemap'd; cross-links design-partner program)
+- [ ] **AI-gateway price feed + LiteLLM ecosystem listing (roadmap item 7)** — gateways guess the $/token for self-hosted models because no price list exists; we measure it. Same "be the meter, not the dashboard" play as FOCUS. **[draftable]**
 - [ ] **FOCUS-format chargeback export (roadmap item 6 — promoted)** + OpenCost/FinOps ecosystem listing. This is the answer to "we can't give a CFO the whole AI bill": be the accurate self-hosted line inside the tools that already show the whole bill, rather than trying to out-aggregate them.
 - [ ] Quarterly "State of Local Inference Efficiency" report #1 **[draftable once leaderboard data exists]**
 - [ ] Clerk / Railway / Ollama showcase submissions **[draftable]**

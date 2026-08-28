@@ -195,7 +195,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               Wicklee Docs
             </h1>
             <p className="text-gray-400 text-base max-w-2xl leading-relaxed">
-              Wicklee is a zero-config control plane for local AI inference.
+              Wicklee is a zero-config control plane for self-hosted AI inference.
               One agent binary, live metrics across your entire fleet, sovereign by design.
             </p>
           </div>
