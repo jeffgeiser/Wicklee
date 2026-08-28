@@ -128,23 +128,31 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
           Hardware-aware observability for private AI fleets
         </p>
+        {/* Three nouns, and the subhead below expands them in the same order:
+            health -> efficiency -> true cost. A list headline gives up the punch
+            a single claim has, so the ordering does that work instead — and the
+            page stops resolving to cost four times above the fold. Cost stays,
+            last, as the payoff rather than the pitch. */}
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
-          See what your private AI{' '}
+          Know your fleet&rsquo;s{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-400">
-            actually costs.
+            health, efficiency, and true cost.
           </span>
         </h1>
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-6 leading-relaxed">
-          Wicklee measures watts and tokens together on every node — so you get real cost
-          per model, catch hardware burning power while nothing is using it, and get
-          warned before a box thermally throttles. Installs in 60 seconds — no sudo, no
+          Wicklee measures watts and tokens together on every node — so you catch a box
+          working harder for the same output, find hardware burning power while nothing
+          is using it, and get real cost per model. Installs in 60 seconds — no sudo, no
           account, nothing to configure.
         </p>
         {/* The one-sentence category answer. LLM-observability tools and GPU monitors
-            each hold half the inputs; only a tool holding both can price a token. */}
+            each hold half the inputs; only a tool holding both can answer any of
+            these. Cost is the last clause, not the punchline — it is the proof the
+            observability is different, not the product. */}
         <p className="text-sm sm:text-base text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed">
           LLM observability has your tokens. GPU monitoring has your watts.
-          <span className="text-gray-300"> Neither can tell you what a million tokens cost.</span>
+          <span className="text-gray-300"> Neither can tell you if a node is throttling,
+          sitting idle, or what it actually costs to run.</span>
         </p>
         <div className="flex items-center justify-center">
           <button

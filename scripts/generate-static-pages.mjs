@@ -162,11 +162,11 @@ function landingBodyHtml() {
   return `
 <main>
   <p style="font-size:0.8rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#22d3ee;margin:0 0 0.75rem">Hardware-aware observability for private AI fleets</p>
-  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">See what your private AI actually costs.</h1>
+  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Know your fleet&rsquo;s health, efficiency, and true cost.</h1>
   <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1rem">
-    Wicklee measures watts and tokens together on every node — so you get real cost per model,
-    catch hardware burning power while nothing is using it, and get warned before a box thermally
-    throttles. Installs in 60 seconds — no sudo, no account, nothing to configure.
+    Wicklee measures watts and tokens together on every node — so you catch a box working harder
+    for the same output, find hardware burning power while nothing is using it, and get real cost
+    per model. Installs in 60 seconds — no sudo, no account, nothing to configure.
   </p>
   <p style="font-size:1rem;color:#6b7280;line-height:1.6;margin:0 0 1.5rem">
     LLM observability has your tokens. GPU monitoring has your watts. Neither can tell you what a
@@ -230,7 +230,7 @@ const shell = await readFile(join(DIST, 'index.html'), 'utf8');
     name: SITE_NAME,
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'macOS, Linux, Windows',
-    description: 'Hardware-aware observability for private AI fleets. See what your private AI actually costs: watts and tokens measured together on every node — real cost per model, phantom-load detection and thermal early warning for Ollama, vLLM and llama.cpp.',
+    description: 'Hardware-aware observability for private AI fleets. Know your fleet\u2019s health, efficiency, and true cost: watts and tokens measured together on every node — thermal early warning, phantom-load detection and real cost per model for Ollama, vLLM and llama.cpp.',
     url: ORIGIN,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   };
