@@ -1,0 +1,26 @@
+# Cloudflare Pages SPA fallback.
+#
+# Only these paths get a real prerendered file at build time (see
+# scripts/generate-static-pages.mjs): /, /docs, /blog and each blog post.
+# Every other route is client-side only — App.tsx switches on
+# window.location.pathname — so a static host must serve index.html for them or
+# a direct hit / refresh / shared link 404s.
+#
+# nginx already does this via `try_files $uri $uri/ /index.html` (nginx.conf),
+# so this file is inert on the Railway deployment and only matters wherever
+# Cloudflare Pages serves the site. Harmless to have in both.
+#
+# Routes are listed EXPLICITLY rather than using a blanket `/* /index.html 200`:
+# a catch-all would also swallow /api/*, /mcp and /metrics, which must reach the
+# backend rather than return the SPA shell. Add a line here when you add a route
+# to App.tsx that isn't prerendered.
+
+/pricing            /index.html   200
+/trust              /index.html   200
+/design-partners    /index.html   200
+/metrics-reference  /index.html   200
+/terms              /index.html   200
+/privacy            /index.html   200
+/refund             /index.html   200
+/sign-in            /index.html   200
+/sign-up            /index.html   200

@@ -23,6 +23,7 @@
 import React, { useEffect, useState } from 'react';
 import { KeyRound, Lock, ExternalLink } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { CONTACT_EMAIL, mailto } from '../../utils/contact';
 
 interface Props {
   subscriptionTier: string;
@@ -120,8 +121,8 @@ const SsoSection: React.FC<Props> = ({ subscriptionTier, onNavigateToPricing }) 
             <p className="text-[11px] text-gray-400 leading-relaxed">
               On wicklee.dev the connection is created in our Clerk instance and scoped
               to your organization. Email us at{' '}
-              <a href="mailto:jeff@wicklee.dev?subject=Wicklee%20SSO%20setup" className="text-blue-400 hover:text-blue-300">
-                jeff@wicklee.dev
+              <a href={mailto(CONTACT_EMAIL, 'Wicklee SSO setup')} className="text-blue-400 hover:text-blue-300">
+                {CONTACT_EMAIL}
               </a>{' '}
               with your IdP and the full list of email domains your team signs in with.
             </p>

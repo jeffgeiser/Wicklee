@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import type { SubscriptionTier } from '../types';
 import Logo from './Logo';
+import { CONTACT_EMAIL, mailto } from '../utils/contact';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -107,7 +108,7 @@ const TIERS: TierDef[] = [
       'Email support',
     ],
     highlight: true,
-    cta: { label: 'Contact us', href: 'mailto:jeff@wicklee.dev?subject=Wicklee%20Team' },
+    cta: { label: 'Contact us', href: mailto(CONTACT_EMAIL, 'Wicklee Team') },
   },
   {
     id: 'enterprise',
@@ -129,7 +130,7 @@ const TIERS: TierDef[] = [
       'Custom deployment support',
     ],
     highlight: false,
-    cta: { label: 'Talk to us', href: 'mailto:jeff@wicklee.dev?subject=Wicklee%20Enterprise' },
+    cta: { label: 'Talk to us', href: mailto(CONTACT_EMAIL, 'Wicklee Enterprise') },
   },
 ];
 
@@ -152,6 +153,15 @@ const PricingPage: React.FC<PricingPageProps> = ({
           <Logo className="text-3xl" connectionState="connected" />
         </button>
         <div className="flex items-center gap-4 sm:gap-8">
+          {/* Mirrors the landing nav — a separate deployment, not a route. */}
+          <a
+            href="https://demo.wicklee.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:block text-sm font-medium text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            Live demo
+          </a>
           <button onClick={() => onNavigate?.('/docs')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</button>
           <button onClick={() => onNavigate?.('/pricing')} className="hidden sm:block text-sm font-medium text-white transition-colors">Pricing</button>
           <a

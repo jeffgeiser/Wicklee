@@ -75,6 +75,17 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <Logo className="text-3xl" connectionState="connected" />
         <div className="flex items-center gap-4 sm:gap-8">
+          {/* Demo first: for a cold visitor the live fleet is the strongest thing
+              we have, and it was previously unlinked from anywhere on the site.
+              External — it's a separate deployment, not a route. */}
+          <a
+            href="https://demo.wicklee.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:block text-sm font-medium text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            Live demo
+          </a>
           <button onClick={() => onNavigate('/docs')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</button>
           <button onClick={() => onNavigate?.('/pricing')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Pricing</button>
           <button
@@ -108,6 +119,15 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Hero Section */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-16 sm:pb-32 text-center relative z-10">
+        {/* Category eyebrow. The headline is an outcome, which is right — but
+            without this the page never says WHAT Wicklee is above the fold. The
+            only above-fold uses of "observability" were in the contrast line
+            below, where they describe the alternatives rather than us, so a
+            visitor scanning for the category saw the word attached to everyone
+            else. Category here, outcome in the H1. */}
+        <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
+          Hardware-aware observability for local AI fleets
+        </p>
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
           See what your self-hosted AI{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-400">
@@ -912,6 +932,39 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <div className="absolute -top-6 -right-6 w-32 h-32 bg-blue-600/20 rounded-full blur-3xl"></div>
               <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-cyan-400/10 rounded-full blur-3xl"></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Design partner program ───────────────────────────────────────────
+          Surfaced above the footer deliberately. The program page has been live
+          since July and was reachable only from the footer, which is why it has
+          had no applicants — an offer nobody sees isn't a program.
+      ─────────────────────────────────────────────────────────────────────── */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-16 sm:pb-24 relative z-10">
+        <div className="rounded-[32px] border border-emerald-500/25 bg-gradient-to-r from-emerald-500/5 to-blue-500/5 p-6 sm:p-10">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+            <div className="max-w-2xl">
+              <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-3">
+                Design partner program
+              </p>
+              <h2 className="text-2xl sm:text-3xl font-bold text-white mb-3 tracking-tight">
+                Run a real fleet? Get Enterprise free for a year.
+              </h2>
+              <p className="text-gray-400 text-sm sm:text-base leading-relaxed">
+                We&apos;re taking on a small number of design partners: the full Enterprise
+                tier — self-hosted control plane, SSO, audit export, cost governance — free
+                for twelve months, on your actual hardware. In exchange we ask for a logo,
+                a case study, and a monthly call that shapes the roadmap.
+              </p>
+            </div>
+            <button
+              onClick={() => onNavigate?.('/design-partners')}
+              className="shrink-0 px-8 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2"
+            >
+              See the program
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </section>

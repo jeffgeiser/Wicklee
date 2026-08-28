@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
+import { CONTACT_EMAIL, PRIVACY_EMAIL, mailto } from '../utils/contact';
 
 type LegalTab = 'terms' | 'privacy' | 'refund';
 
@@ -132,7 +133,7 @@ const TermsOfService: React.FC = () => (
     <p>We may update these Terms from time to time. Material changes will be communicated via email or dashboard notification at least 30 days in advance. Continued use of the Service after changes constitutes acceptance.</p>
 
     <h2>12. Contact</h2>
-    <p>Questions about these Terms? Contact us at <a href="mailto:legal@wicklee.dev">legal@wicklee.dev</a>.</p>
+    <p>Questions about these Terms? Contact us at <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a>.</p>
   </>
 );
 
@@ -220,7 +221,7 @@ const PrivacyPolicy: React.FC = () => (
     <p>We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated date.</p>
 
     <h2>11. Contact</h2>
-    <p>Privacy questions? Contact us at <a href="mailto:privacy@wicklee.dev">privacy@wicklee.dev</a>.</p>
+    <p>Privacy questions? Contact us at <a href={mailto(PRIVACY_EMAIL)}>{PRIVACY_EMAIL}</a>.</p>
   </>
 );
 
@@ -250,7 +251,7 @@ const RefundPolicy: React.FC = () => (
     <p>If the cloud service experiences significant downtime or degradation that materially affects your use, we may issue credits or refunds at our discretion. The local agent is not affected by cloud service availability and continues to function independently.</p>
 
     <h2>6. How to Request a Refund</h2>
-    <p>To request a refund, contact us at <a href="mailto:support@wicklee.dev">support@wicklee.dev</a> with your account email and the reason for your request. Refunds are processed through Paddle and typically appear within 5-10 business days.</p>
+    <p>To request a refund, contact us at <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a> with your account email and the reason for your request. Refunds are processed through Paddle and typically appear within 5-10 business days.</p>
 
     <h2>7. Enterprise</h2>
     <p>Enterprise contracts have separate terms. Refund policies for Enterprise customers are governed by the individual agreement.</p>
