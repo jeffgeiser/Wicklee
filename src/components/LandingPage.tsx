@@ -119,6 +119,15 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Hero Section */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-16 sm:pb-32 text-center relative z-10">
+        {/* Category eyebrow. The headline is an outcome, which is right — but
+            without this the page never says WHAT Wicklee is above the fold. The
+            only above-fold uses of "observability" were in the contrast line
+            below, where they describe the alternatives rather than us, so a
+            visitor scanning for the category saw the word attached to everyone
+            else. Category here, outcome in the H1. */}
+        <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
+          Hardware-aware observability for local AI fleets
+        </p>
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
           See what your self-hosted AI{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-400">

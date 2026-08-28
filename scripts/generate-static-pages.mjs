@@ -136,6 +136,7 @@ function landingBodyHtml() {
 
   return `
 <main>
+  <p style="font-size:0.8rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#22d3ee;margin:0 0 0.75rem">Hardware-aware observability for local AI fleets</p>
   <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">See what your self-hosted AI actually costs.</h1>
   <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1rem">
     Wicklee measures watts and tokens together on every node — so you get real cost per model,
@@ -204,7 +205,7 @@ const shell = await readFile(join(DIST, 'index.html'), 'utf8');
     name: SITE_NAME,
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'macOS, Linux, Windows',
-    description: 'See what your self-hosted AI actually costs. Watts and tokens measured together on every node — real cost per model, phantom-load detection and thermal early warning for Ollama, vLLM and llama.cpp fleets.',
+    description: 'Hardware-aware observability for local AI fleets. See what your self-hosted AI actually costs: watts and tokens measured together on every node — real cost per model, phantom-load detection and thermal early warning for Ollama, vLLM and llama.cpp.',
     url: ORIGIN,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   };

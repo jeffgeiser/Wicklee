@@ -197,7 +197,9 @@ Features whose primary value is distribution and enterprise awareness, identifie
 3. **Hardware-fit badge** — a tiny generator (SVG badge + link to wicklee.dev/fit/<model_id>) model authors paste into HF model cards / GitHub READMEs; the landing page runs the existing fit-check against the visitor's declared hardware. Every badge is a permanent inbound link on a high-intent page.
 4. **MSP / multi-org console (Business+)** — one login managing many client orgs (Clerk supports multi-org membership; needs an org-switcher rollup view + per-org billing attribution). Five MSP partners ≈ fifty enterprise deployments; this is the partnerships wedge.
 5. **Read-only fleet share links** — expiring, revocable, view-only dashboard URLs (a scoped stream token variant + a viewer route). "Look at our fleet" in a Slack channel is the viral loop.
-6. **FOCUS-format chargeback export** — the chargeback endpoint gains `format=focus` emitting the FinOps Foundation's open billing spec. Cheap (one serializer over the existing report) and it's the credential for FinOps X / OpenCost ecosystem listing.
+6. **★ FOCUS-format chargeback export (PROMOTED — strategic, not cosmetic).** The chargeback endpoint gains `format=focus`, emitting the FinOps Foundation's open billing spec. Cheap — one serializer over the existing report — and it is the credential for a FinOps X / OpenCost ecosystem listing.
+
+   **Why this was promoted (Aug 2026):** the standing objection to the cost positioning is that Wicklee cannot give a CFO a holistic view of AI spend, because it only sees self-hosted inference — not API spend, not coding-assistant licences, not rented GPU. That is true and it is not worth fixing by expansion: Finout, CloudZero and Vantage already own the whole-bill view, and competing there trades a defensible moat (watts AND tokens on the node) for a contested one. FOCUS export is the alternative answer. Rather than building the holistic view, Wicklee becomes the *correctly measured self-hosted line item inside* the tools that already aggregate it — the only source able to price that line from measured watts rather than a vendor TDP guess. It converts the scope limitation from a weakness into a distribution channel, and it is one serializer's worth of work. Treat it as the highest-leverage remaining cost-governance item, ahead of further depth in the reports themselves.
 
 ### ★ GTM Execution Tracker (non-code workstreams — see docs/GTM.md for strategy)
 Trackable checklist for the marketing motions. Check items off as they land; each is durable (stays live once done). Items marked **[draftable]** can be prepared by a coding session (copy, PR text, listing metadata, page builds) with only the final submit needing the founder's accounts.
@@ -233,7 +235,7 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 
 **Rock 6 — Enterprise credibility**
 - [x] Trust page on wicklee.dev (data-flow split, sovereignty story, RBAC/audit/SIEM, honest compliance posture) — **shipped 2026-07-16** (`/trust`, footer-linked, sitemap'd; cross-links design-partner program)
-- [ ] FOCUS-format chargeback export (roadmap item 6 above) + OpenCost/FinOps ecosystem listing
+- [ ] **FOCUS-format chargeback export (roadmap item 6 — promoted)** + OpenCost/FinOps ecosystem listing. This is the answer to "we can't give a CFO the whole AI bill": be the accurate self-hosted line inside the tools that already show the whole bill, rather than trying to out-aggregate them.
 - [ ] Quarterly "State of Local Inference Efficiency" report #1 **[draftable once leaderboard data exists]**
 - [ ] Clerk / Railway / Ollama showcase submissions **[draftable]**
 
