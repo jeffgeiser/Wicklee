@@ -3,6 +3,7 @@ import Logo from './Logo';
 import {
   parseFrontmatter, slugToTitle, stripMarkdown, formatDate,
 } from '../utils/parseFrontmatter';
+import { DEFAULT_TITLE } from '../utils/pageMeta';
 
 interface PostCard {
   slug: string;
@@ -25,7 +26,7 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
 
   useEffect(() => {
     document.title = 'Blog — Wicklee';
-    return () => { document.title = 'Wicklee — Local AI inference, finally observable.'; };
+    return () => { document.title = DEFAULT_TITLE; };
   }, []);
 
   useEffect(() => {

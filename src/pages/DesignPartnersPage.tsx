@@ -1,7 +1,7 @@
 /**
  * DesignPartnersPage — /design-partners — GTM Rock 5.
  *
- * The offer: 3–5 companies running local/on-prem AI get Business free for a
+ * The offer: 3–5 companies running private AI get Enterprise free for a
  * year in exchange for a logo, a case study, and monthly feedback. Case
  * studies are the only advertising enterprises trust; partners also steer
  * the roadmap while the surface is still wet.
@@ -44,10 +44,10 @@ const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) =
             <Handshake className="w-3.5 h-3.5" /> 3–5 companies · applications open
           </div>
           <h1 className="text-3xl font-bold text-white leading-tight">
-            Run self-hosted AI in production?<br />Help us build your fleet's observability — Business tier free for a year.
+            Running private AI in production?<br />Help us build your fleet's observability — Enterprise tier free for a year.
           </h1>
           <p className="text-gray-400 leading-relaxed max-w-2xl">
-            Wicklee is the observability layer for self-hosted AI inference — on-prem, private cloud, or colo: hardware telemetry
+            Wicklee is the observability layer for private AI inference — on-prem, private cloud, or colo: hardware telemetry
             and token throughput in one store, so you can see efficiency, cost, and reliability the way
             you see them for the rest of your infrastructure. We're taking on a small number of design
             partners whose fleets and requirements will steer the roadmap.

@@ -206,7 +206,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
             Pricing
           </h1>
           <p className="text-gray-500 max-w-xl mx-auto text-sm leading-relaxed">
-            Hardware-first observability for self-hosted AI fleets. Every tier includes WES
+            Hardware-first observability for private AI fleets. Every tier includes WES
             diagnostics, real-time telemetry, and the local API — the cloud relay is
             always opt-in.
           </p>
