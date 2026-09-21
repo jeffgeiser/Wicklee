@@ -335,27 +335,13 @@ export interface ObservabilityNavParams {
   centerMs?: number;
 }
 
-/** Unified audit record combining events, traces, and dismissals. */
-export interface AuditLogRecord {
-  ts_ms:       number;
-  timestamp:   string;
-  record_type: 'event' | 'trace' | 'dismissal';
-  node_id:     string;
-  level:       string;
-  event_type?: string;
-  message:     string;
-  model?:      string;
-  latency_ms?: number;
-  ttft_ms?:    number;
-  tpot_ms?:    number;
-}
 
 /**
  * A single MIG (Multi-Instance GPU) slice on an NVIDIA Hopper or Blackwell device.
  * Reported when the device is MIG-partitioned. Each slice surfaces as a virtual
  * sub-row in Fleet Status — independent WES, VRAM, and thermal attribution.
  */
-export interface MIGInstance {
+interface MIGInstance {
   /** MIG profile name, e.g. "3g.40gb" or "1g.10gb" */
   profile:       string;
   vram_used_mb:  number;
@@ -446,13 +432,6 @@ export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
  */
 export type SubscriptionTier = 'community' | 'pro' | 'team' | 'business' | 'enterprise';
 
-/** OpenTelemetry export configuration (Team+ tier). */
-export interface OtelConfig {
-  enabled: boolean;
-  endpoint_url: string;
-  auth_headers: string;  // JSON string: {"Authorization": "Bearer xxx"}
-  export_interval_s: number;
-}
 
 /**
  * Insights capability level derived from SubscriptionTier.
@@ -479,7 +458,7 @@ export interface Tenant {
   name: string;
 }
 
-export type FleetPairingStatus = 'unpaired' | 'pending' | 'connected';
+type FleetPairingStatus = 'unpaired' | 'pending' | 'connected';
 
 /** Ambient status of the live telemetry connection, used to drive logo + status dot animations. */
 export type ConnectionState = 'connected' | 'degraded' | 'idle' | 'disconnected';

@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 
-export interface NodeDuty {
+interface NodeDuty {
   node_id:  string;
   hostname: string;
   duty_pct: number | null;

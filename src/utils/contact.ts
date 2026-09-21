@@ -32,9 +32,6 @@
 /** Commercial, sales, support, and general enquiries. */
 export const CONTACT_EMAIL = 'jeff@wicklee.dev';
 
-/** Vulnerability disclosure. Mirrored in SECURITY.md — keep the two in sync. */
-export const SECURITY_EMAIL = 'security@wicklee.dev';
-
 /** Privacy and data-subject requests. Named in the Privacy Policy. */
 export const PRIVACY_EMAIL = 'privacy@wicklee.dev';
 

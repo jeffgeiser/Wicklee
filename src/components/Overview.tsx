@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint, Clock, HardDrive } from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, Download, Terminal, Plus, ChevronDown, Check, DollarSign, AlertTriangle, ExternalLink, Cpu, Lock, Fingerprint, Clock} from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
 import { getNodePowerW, hasPowerData } from '../utils/power';
 import { pushAndGetSmoothed, pruneBuffers } from '../utils/sharedSmoothing';
-import { CLOUD_URL } from '../utils/cloudUrl';
+
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
 import ModelFitSummaryStrip from './insights/ModelFitSummaryStrip';
@@ -14,7 +14,7 @@ import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { useLocalEvents } from '../hooks/useLocalEvents';
-import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
+import { thermalColour, derivedNvidiaThermal } from '../utils/thermal';
 import EventFeed from './EventFeed';
 import MetricTooltip from './MetricTooltip';
 import RuntimeConfigModal from './RuntimeConfigModal';

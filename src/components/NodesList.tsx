@@ -4,8 +4,7 @@ import {
   Cloud, Lock, CheckSquare, Square,
   Database, Wifi, Cpu, AlertTriangle,
   ExternalLink, CheckCircle, AlertCircle,
-  Radio, Zap, Thermometer, Activity,
-} from 'lucide-react';
+  Radio, Activity} from 'lucide-react';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
@@ -947,7 +946,9 @@ const NodesList: React.FC<NodesListProps> = ({
 
   const toggleSelect = (id: string) =>
     setSelectedNodes(prev => {
-      const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
     });
 
   const toggleSelectAll = (ids: string[]) =>

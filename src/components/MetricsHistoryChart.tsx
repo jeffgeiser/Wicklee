@@ -15,8 +15,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine,
-} from 'recharts';
+  ResponsiveContainer, ReferenceLine} from 'recharts';
 import { Activity, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';

@@ -27,21 +27,19 @@ import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
   TrendingDown, Database, Cpu, Globe, Shield,
   Activity, Layers, CheckCircle, ChevronDown, History, Clock,
-  Copy, Check, Server, Radio, FileText,
-} from 'lucide-react';
+  Copy, Check} from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
 import type { FleetObservation } from '../hooks/useFleetObservations';
 import { useFleetDuty } from '../hooks/useFleetDuty';
 import { useFleetStream } from '../contexts/FleetStreamContext';
-import EventFeed from './EventFeed';
+
 import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
 import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW } from '../utils/power';
 import { buildReportFromLive } from '../utils/benchmarkReport';
 import type { BenchmarkReport } from '../utils/benchmarkReport';
-import { CLOUD_URL } from '../utils/cloudUrl';
 
 import BenchmarkReportModal from './BenchmarkReportModal';
 import { computeModelFitScore } from '../utils/modelFit';
@@ -54,7 +52,7 @@ import MemoryExhaustionCard    from './insights/tier1/MemoryExhaustionCard';
 import PowerAnomalyCard        from './insights/tier1/PowerAnomalyCard';
 
 // Tier 2 cards
-import ModelFitInsightCard from './insights/tier2/ModelFitInsightCard';
+
 import ModelEvictionCard   from './insights/tier2/ModelEvictionCard';
 import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 
@@ -75,13 +73,13 @@ import ChargebackCard from './insights/ChargebackCard';
 import CapacityPlannerCard from './insights/CapacityPlannerCard';
 import MigrationAdvisorCard from './insights/MigrationAdvisorCard';
 import IdleWasteCard from './insights/IdleWasteCard';
-import ObservationCard from './insights/ObservationCard';
+
 import AccordionObservationCard from './insights/AccordionObservationCard';
 import FleetObservationCard from './insights/FleetObservationCard';
-import CompactMonitoringStrip from './insights/CompactMonitoringStrip';
+
 import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
-import InsightsBriefingCard from './insights/InsightsBriefingCard';
+
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { useLocalObservations } from '../hooks/useLocalObservations';
 import type { DetectedInsight } from '../types/observations';
@@ -226,7 +224,7 @@ interface ObsEntry {
 }
 
 /** An entry in the session-scoped Recent Activity log. */
-export interface AlertLogEntry {
+interface AlertLogEntry {
   id:         string;
   title:      string;
   nodeLabel:  string;

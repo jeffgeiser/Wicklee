@@ -13,7 +13,7 @@ import { Users } from 'lucide-react';
 // We lazy-import to avoid breaking agent builds that don't have @clerk/clerk-react.
 let ClerkOrgProfile: React.FC<{ appearance?: object }> | null = null;
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const clerk = require('@clerk/clerk-react');
   ClerkOrgProfile = clerk.OrganizationProfile;
 } catch {

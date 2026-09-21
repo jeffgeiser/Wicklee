@@ -11,7 +11,7 @@
 
 import { bytesPerWeight, OLLAMA_DEFAULT_BYTES_PER_WEIGHT } from './quantSize';
 
-export const QUANT_QUALITY: Record<string, string> = {
+const QUANT_QUALITY: Record<string, string> = {
   'F16':    'Full precision. Original model quality. Largest file.',
   'F32':    'Full 32-bit precision. Reference quality. Usually overkill.',
   'BF16':   'Brain Float 16. Same quality as F16, slightly different range.',
@@ -159,7 +159,7 @@ export function parseParameterCountB(name: string): number | null {
  * so the GQA estimate is the right default. Accepting a slight underestimate
  * for legacy non-GQA models is better than overestimating for the common case.
  */
-export function estimateKvCacheMb(parameterCountB: number, contextLength: number): number {
+function estimateKvCacheMb(parameterCountB: number, contextLength: number): number {
   // KV per 1K context, derived from per-class architecture defaults (f16 KV).
   let kvPer1KMb: number;
   if (parameterCountB < 2) kvPer1KMb = 32;       // 1-1.5B class (Llama 3.2 1B reference)

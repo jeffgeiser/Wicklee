@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Copy, Check, FileCode, FolderTree, Terminal, Cpu, Database, ShieldCheck, Users, Lock, Zap } from 'lucide-react';
+import { Copy, Check, FileCode, Cpu, Database, ShieldCheck, Lock, Zap } from 'lucide-react';
 
 const ScaffoldingView: React.FC = () => {
   const [copied, setCopied] = useState<string | null>(null);

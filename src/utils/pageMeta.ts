@@ -11,11 +11,11 @@
  * sitemap plugin in vite.config.ts.
  */
 
-export const SITE_ORIGIN = 'https://wicklee.dev';
-export const SITE_NAME   = 'Wicklee';
+const SITE_ORIGIN = 'https://wicklee.dev';
+const SITE_NAME   = 'Wicklee';
 
 /** Social/link-preview card (1200×630). Regenerate via scripts/gen-og-image.mjs. */
-export const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
+const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
 
 export const DEFAULT_TITLE       = 'Wicklee — Private AI, finally observable.';
 export const DEFAULT_DESCRIPTION =

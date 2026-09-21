@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, BookOpen, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell } from 'lucide-react';
 import Logo from '../components/Logo';
 
 interface DocsPageProps {

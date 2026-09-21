@@ -25,11 +25,9 @@ import {
   Cpu, Zap, Server, AlertTriangle,
   ClipboardList, XCircle, Timer,
   ChevronDown, ChevronRight, Copy, Check, FileDown,
-  Eye, EyeOff, Wifi,
-} from 'lucide-react';
+  EyeOff, Wifi} from 'lucide-react';
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-} from 'recharts';
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer} from 'recharts';
 import { TrendingUp } from 'lucide-react';
 import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, EventHistoryRecord, SentinelMetrics, SubscriptionTier } from '../types';
 import { CLOUD_URL } from '../utils/cloudUrl';

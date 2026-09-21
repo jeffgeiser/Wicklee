@@ -31,7 +31,7 @@ export type ActionId =
 
 // ── FleetNodeSummary — peer context for cross-node recommendations ─────────────
 
-export interface FleetNodeSummary {
+interface FleetNodeSummary {
   nodeId:              string;
   hostname:            string;
   /** True only when the node had a telemetry frame in the last 90 seconds. */
@@ -47,10 +47,10 @@ export interface FleetNodeSummary {
 
 // ── Output types ───────────────────────────────────────────────────────────────
 
-export type PatternTier = 'community' | 'pro' | 'team';
+type PatternTier = 'community' | 'pro' | 'team';
 export type PatternConfidence = 'building' | 'moderate' | 'high';
 
-export interface PatternAction {
+interface PatternAction {
   /** Short label for the action button (≤ 40 chars). */
   label: string;
   /** Shell command, API endpoint, or instruction to copy. */

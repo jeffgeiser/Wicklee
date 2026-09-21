@@ -1,5 +1,5 @@
 import React from 'react';
-import { User as UserIcon, Mail, Shield, Calendar, MapPin, Globe } from 'lucide-react';
+import { User as UserIcon, Mail, Shield, MapPin, Globe } from 'lucide-react';
 import { User as UserType } from '../types';
 
 interface ProfileViewProps {
