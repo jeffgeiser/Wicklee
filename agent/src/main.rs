@@ -4009,7 +4009,7 @@ fn evaluate_local_observations(
                              background processes, and VRAM allocation.{eta_note}",
                         ),
                         resolution_steps: vec![
-                            format!("Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/metrics | jq .wes_score\""),
+                            "Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/metrics | jq .wes_score\"".into(),
                             "Reduce OLLAMA_NUM_PARALLEL to 1 to slow the WES decline".into(),
                             "Check if background processes (backups, builds) started recently".into(),
                             "If WES drops below 5 within 5 min, treat as Pattern A — enact physical cooling".into(),
@@ -4239,7 +4239,7 @@ fn evaluate_local_observations(
                                                this node. On Linux, set the CPU governor to `performance`. \
                                                On Apple Silicon, ensure AC power with Performance mode enabled.".into(),
                             resolution_steps: vec![
-                                format!("Verify throttle: `curl http://localhost:7700/api/metrics | jq .clock_throttle_pct`"),
+                                "Verify throttle: `curl http://localhost:7700/api/metrics | jq .clock_throttle_pct`".into(),
                                 "Linux CPU governor: `sudo cpupower frequency-set -g performance`".into(),
                                 "NVIDIA: `nvidia-smi -q -d CLOCK | grep -A4 'Clocks Throttle'`".into(),
                                 "Apple Silicon: System Settings → Battery → Options → disable 'Limit CPU speed'".into(),
@@ -4390,7 +4390,7 @@ fn evaluate_local_observations(
                                        Q2_K). If using vLLM, tune --max-num-batched-tokens to the \
                                        GPU-saturating sweet spot.".into(),
                     resolution_steps: vec![
-                        format!("Check GPU util: `curl http://localhost:7700/api/metrics | jq '{{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}}'`"),
+                        "Check GPU util: `curl http://localhost:7700/api/metrics | jq '{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}'`".into(),
                         "Set all layers to GPU: OLLAMA_NUM_GPU=99 ollama serve".into(),
                         "Switch to Q4_K_M: `ollama pull <model>:q4_K_M` — fully GPU-offloads vs Q2_K".into(),
                         "For vLLM: raise --max-num-seqs to create batches that saturate GPU SIMD lanes".into(),
@@ -4501,7 +4501,7 @@ fn evaluate_local_observations(
                                          recover throughput.",
                                     ),
                                     resolution_steps: vec![
-                                        format!("Confirm bottleneck: `curl http://localhost:7700/api/metrics | jq '{{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}}'`"),
+                                        "Confirm bottleneck: `curl http://localhost:7700/api/metrics | jq '{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}'`".into(),
                                         "Switch to lower quantization to halve bandwidth demand: `ollama pull <model>:q4_K_M`".into(),
                                         "If already on Q4, try Q3_K_M or Q2_K — quality trade-off worth the bandwidth recovery".into(),
                                         "Reduce context window size — longer contexts increase KV cache weight streaming".into(),
@@ -5526,7 +5526,7 @@ async fn fetch_hf_gguf(
             variants.push((filename.to_string(), quant, size));
         }
         // Sort variants largest-first (highest quality first)
-        variants.sort_by(|a, b| b.2.cmp(&a.2));
+        variants.sort_by_key(|a| std::cmp::Reverse(a.2));
 
         if !variants.is_empty() {
             results.push((model_id.to_string(), downloads, likes, variants));
@@ -6186,8 +6186,9 @@ async fn handle_mcp(
                                 if hd == 0 { return None; }
                                 let mc = ollama.ollama_context_length.unwrap_or(8_192);
                                 (l, kv, hd, mc, true)
-                            } else if let Some(params) = ollama.ollama_parameter_count {
+                            } else {
                                 // Fallback: estimate from parameter count
+                                let params = ollama.ollama_parameter_count?;
                                 let b = params as f64 / 1e9;
                                 let mc = ollama.ollama_context_length.unwrap_or(8_192);
                                 // [minB, maxB, layers, kv_heads, head_dim]
@@ -6199,8 +6200,6 @@ async fn handle_mcp(
                                     else if b < 80.0 { (80, 8, 128) }
                                     else             { (96, 8, 128) };
                                 (entry.0, entry.1, entry.2, mc, false)
-                            } else {
-                                return None;
                             };
 
                         let headroom_bytes = headroom_gb * 1024.0 * 1024.0 * 1024.0;
