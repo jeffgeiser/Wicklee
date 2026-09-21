@@ -340,7 +340,75 @@ rather than bill reduction — which is a fine position, but it is stronger with
 one credible "do this and your bill drops" recommendation attached. This is that
 recommendation, and it comes from data nobody else is collecting.
 
+### ★ Code Health — structural debt (September 2026 full-codebase review)
+
+The September review measured rather than eyeballed: 67k lines across three
+binaries, clippy on both crates, knip + a project-aware tsc pass on the
+frontend, bundle composition by marker. Hygiene was already good (0
+`console.log`, 4 TODOs, 9 `any`). What it found instead was *structural*: the
+same few shapes repeated until they became load-bearing. Tier 1 (bundle split,
+dead code, lint + clippy gates, CI build step) shipped in one PR. These are the
+items that need a design decision, in the order they should land — each one
+makes the next cheaper.
+
+1. **Cloud auth extractor + ordered `Tier` enum (`cloud/src/main.rs`).** 11,589
+   lines, 72 routes, 116 handlers, 59 structs, one file, **zero** axum extractors.
+   The auth preamble — bearer → `clerk_keys.read()` → `require_user_and_org` →
+   401 → `resolve_tier` → tier gate — is copy-pasted **57 times**. An
+   `AuthedUser` `FromRequestParts` extractor deletes ~600 lines and moves tier
+   gating into the handler signature. Its gate parameter should be an ordered
+   `Tier` enum, because the *second* half of this item is that the internal tier
+   vocabulary is stale in exactly the way the public copy was: `is_pro_or_above`
+   (16 calls) and `is_business_or_above` (11) are named after retired tiers, with
+   48 string comparisons across three helpers and raw `"pro"`/`"business"`
+   literals scattered through. `tier >= Tier::Team` with grandfathered mapping
+   in one `FromStr` replaces all of it, and the compiler starts helping. The
+   extractor is also the natural first cut for splitting the file by domain
+   (auth, nodes, fleet, billing, governance, audit) — the route table already
+   groups them.
+
+2. **`Overview.tsx` decomposition + memoization (frontend).** 3,252 lines, 11
+   components in one file, main component body **1,930 lines** (l.1320–3252);
+   `FleetStatusRow` alone is 615. **0 `useMemo` in the file, 0 `React.memo` in
+   all 119 frontend files.** Fleet-wide derivations (WES leaderboard, l.1763)
+   run inline in render, so every 2s telemetry frame recomputes everything and
+   re-renders the whole tree. Not profiled — fine at 3–10 nodes, will show at
+   50+. The React Compiler lint rules (`set-state-in-effect` 45,
+   `static-components` 26 — components defined *inside* render, remounting per
+   frame — `purity` 25, `refs` 34) were measured and switched **off** in
+   `eslint.config.js` rather than left as 131 permanent warnings; this item is
+   where they get turned back on, file by file. Split the file, memoize derived
+   fleet data, `memo` row components keyed on `node_id`. Related debt from the
+   same review, cheap to fold in: 8 `exhaustive-deps` warnings (two look like
+   real bugs — `AIInsights` l.1098 missing `allNodeMetrics`, `TracesView` l.902
+   missing `fetchTraces`) and 37 unused locals left at warn level.
+
+3. **Agent params structs + Cargo workspace.** `agent/src/main.rs` is 8,120
+   lines with three functions taking **13, 18 and 20 parameters**
+   (`clippy::too_many_arguments` is allowed crate-wide for now, pointing here).
+   Params structs are the mechanical fix. The larger question in the same
+   territory: `scoring.rs` is **triplicated by copy script**
+   (`shared/` → `agent/`, `cloud/`) because Railway's Docker build context is
+   `cloud/` alone. A Cargo workspace with the Dockerfile at repo root removes
+   `sync-scoring.mjs` and its CI check — but it is a deploy-config change, so
+   it belongs with a deliberate Railway session, not a drive-by.
+
+4. **`TeamManagement.tsx` Clerk fallback never resolves (live bug, surfaced by
+   the lint pass).** The file loads `OrganizationProfile` via
+   `require('@clerk/clerk-react')` inside a try/catch so agent builds don't
+   break. In a Vite ESM bundle `require` is undefined in the browser, so the
+   call throws, the catch swallows it, `ClerkOrgProfile` stays `null`, and the
+   `if (!IS_DEMO && ClerkOrgProfile)` branch at l.31 is never taken — **the
+   Clerk org-management UI never renders on wicklee.dev; Team-tier users always
+   see the fallback.** The correct fix is a `React.lazy(() => import(…))`, but
+   `IS_AGENT` is a runtime const rather than a `define` literal, so Rollup
+   cannot prove the import dead and would pull Clerk into the agent bundle.
+   Needs either a `define`-based build flag or a build-target-specific entry.
+   Not fixed in Tier 1 on purpose — it is a behaviour change with a bundle
+   consequence, not a cleanup.
+
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
+
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
 
 1. **Agent task supervision (Pass 2, HIGH — SHIPPED).** Fire-and-forget `tokio::spawn` loops swallowed panics, so a dead subsystem left the agent running but silent. `agent/src/supervisor.rs` provides `supervise(name, factory)` (restart on panic/return, exponential backoff 1s→30s with reset after a 60s healthy run) and `supervise_until(name, factory)` (future returns `ControlFlow`; `Break` = deliberate permanent stop, not restarted). All four critical loops are now supervised: the metrics broadcast loop (`supervise`), and the Ollama / vLLM / llama.cpp harvester main loops + `cloud_push` (`supervise_until`, with their terminal exits — `port_rx.changed()` watch-close and 410-Gone — returning `Break` so shutdown doesn't restart-spin). Each wrap uses a compiler-checked clone-per-restart prelude with the body unchanged. Unit-tested (restart-on-panic, restart-on-return, no-restart-on-Break). Remaining nicety: the harvester *probe* sub-tasks (idle baseline measurement) are non-critical and still unsupervised — low priority.

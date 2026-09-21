@@ -43,10 +43,10 @@ import type { SentinelMetrics } from '../types';
 
 // Context milestones shown in the Context Runway UI.
 // These cover the practical range of local inference use cases.
-export const CTX_MILESTONES = [4_096, 16_384, 32_768, 65_536, 131_072] as const;
-export type CtxMilestone = typeof CTX_MILESTONES[number];
+const CTX_MILESTONES = [4_096, 16_384, 32_768, 65_536, 131_072] as const;
+type CtxMilestone = typeof CTX_MILESTONES[number];
 
-export interface KVArchitecture {
+interface KVArchitecture {
   layers:     number;
   kvHeads:    number;
   headDim:    number;
@@ -55,7 +55,7 @@ export interface KVArchitecture {
   isExact:    boolean;
 }
 
-export interface CtxRunwayPoint {
+interface CtxRunwayPoint {
   tokens:    number;
   kvBytes:   number;
   kvGb:      number;

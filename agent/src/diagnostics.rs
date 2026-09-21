@@ -118,11 +118,11 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
     {
         // NVML — not available in musl builds
         #[cfg(not(target_env = "musl"))]
-        match Nvml::init() {
-            Ok(nvml) => {
+        // No NVIDIA on this machine → Err, and we stay silent.
+        if let Ok(nvml) = Nvml::init() {
                 let count = nvml.device_count().unwrap_or(0);
-                if count > 0 {
-                    if let Ok(dev) = nvml.device_by_index(0) {
+                if count > 0
+                    && let Ok(dev) = nvml.device_by_index(0) {
                         let name = dev.name().unwrap_or_else(|_| "GPU".to_string());
                         let temp = dev.temperature(TemperatureSensor::Gpu)
                             .map(|t| format!("{t}°C"))
@@ -140,23 +140,19 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                             platform_rows.push(row("GPU Pwr", &format!("{:.0}W", mw as f64 / 1000.0)));
                         }
                     }
-                }
-            }
-            Err(_) => {} // no NVIDIA on this machine — silent
         }
 
         // RAPL CPU power (powercap, no sudo needed)
         {
             let found = crate::RAPL_PATHS.iter().find(|(path, _)| crate::read_rapl_uj(path).is_some());
-            if let Some((path, label)) = found {
-                if let Some(e1) = crate::read_rapl_uj(path) {
+            if let Some((path, label)) = found
+                && let Some(e1) = crate::read_rapl_uj(path) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     if let Some(e2) = crate::read_rapl_uj(path) {
                         let power_w = if e2 > e1 { (e2 - e1) as f64 / 500_000.0 } else { 0.0 };
                         platform_rows.push(row("CPU Pwr", &format!("{power_w:.1}W  (RAPL/{label})")));
                     }
                 }
-            }
         }
     }
 

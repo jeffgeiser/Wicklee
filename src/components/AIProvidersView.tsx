@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrainCircuit, Shield, Globe, Server, Key, Zap, Check, AlertCircle, RefreshCw, Terminal, Cpu } from 'lucide-react';
+import { Shield, Globe, Server, Key, Zap, Check, AlertCircle, RefreshCw, Terminal, Cpu } from 'lucide-react';
 
 interface Provider {
   id: string;

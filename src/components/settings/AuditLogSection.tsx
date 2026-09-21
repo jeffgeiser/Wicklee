@@ -109,7 +109,7 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
 
   const fetchPage = useCallback(async (before: number | null, append: boolean) => {
     if (!isBusinessOrAbove || !getToken) return;
-    append ? setLoadingMore(true) : setLoading(true);
+    if (append) setLoadingMore(true); else setLoading(true);
     setError(null);
     try {
       const token = await getToken();
@@ -133,7 +133,7 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
     } catch {
       setError('Failed to load audit log');
     } finally {
-      append ? setLoadingMore(false) : setLoading(false);
+      if (append) setLoadingMore(false); else setLoading(false);
     }
   }, [isBusinessOrAbove, getToken, filter]);
 

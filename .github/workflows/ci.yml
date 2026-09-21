@@ -42,8 +42,21 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # Errors fail the job; warnings are visible in the log but don't block.
+      # The warn-level set (exhaustive-deps, unused locals, …) is triaged in
+      # roadmap "Code Health" — promote rules to error there as they clear.
+      - name: Lint
+        run: npx eslint .
+
       - name: Unit tests
         run: npx vitest run
+
+      # The build was never run in CI — only on the Cloudflare deploy — so a
+      # postbuild failure (generate-static-pages.mjs guards, prerender.js
+      # missing, a meta-swap probe not matching) surfaced only after merge.
+      # ~10s. Also the only place the code-split output is checked.
+      - name: Build (cloud target + prerendered pages)
+        run: npm run build
 
   agent:
     name: Agent · cargo test
@@ -53,6 +66,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -63,6 +78,10 @@ jobs:
       # enough — no need to build the frontend here.
       - name: Stub embedded assets dir
         run: mkdir -p agent/frontend/dist
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: agent
 
       - name: Tests
         run: cargo test
@@ -76,10 +95,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: cloud
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: cloud
 
       - name: Tests
         run: cargo test

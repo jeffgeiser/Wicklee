@@ -20,7 +20,7 @@ import { Cpu, Gauge, Layers, ArrowRight, Server } from 'lucide-react';
 import type { SentinelMetrics } from '../../types';
 import { computeModelFitScore } from '../../utils/modelFit';
 import { computeQuantRecommendation } from '../../utils/quantSweet';
-import { computeContextRunway, fmtCtx, fmtKvSize } from '../../utils/kvCache';
+import { computeContextRunway, fmtCtx} from '../../utils/kvCache';
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE } from '../../utils/perplexity';
 import { pushAndGetSmoothed } from '../../utils/sharedSmoothing';
 import { quantFamily, resolveModelSizeHints } from '../../utils/quantSize';

@@ -1,6 +1,6 @@
 import React, { Suspense, useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog, CreditCard, Boxes } from 'lucide-react';
-import { ConnectionState, DashboardTab, User, UserRole, TIER_BADGE } from '../types';
+import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, CreditCard, Boxes } from 'lucide-react';
+import { ConnectionState, DashboardTab, User, TIER_BADGE } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
 // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).

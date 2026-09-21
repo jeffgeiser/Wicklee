@@ -1,4 +1,12 @@
 #![recursion_limit = "256"]
+// Allowed crate-wide, deliberately:
+//   type_complexity     — sqlx row tuples and handler signatures; a named alias
+//                         per site adds indirection without meaning.
+//   too_many_arguments  — three functions take 13/18/20 parameters. That is a
+//                         real smell, tracked as roadmap "Code Health" item 3
+//                         (params structs), not something to paper over with
+//                         per-site allows. Everything else is -D warnings in CI.
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use axum::{
     body::Body,
@@ -234,7 +242,7 @@ fn parse_quant_from_filename(filename: &str) -> Option<String> {
         if is_quant(seg) {
             // Check if preceded by "UD" (ultra-dense) prefix: "UD-IQ3_S" → "UD-IQ3_S"
             let q = seg.to_ascii_uppercase();
-            if i + 1 < parts.len() && parts[i + 1].to_ascii_uppercase() == "UD" {
+            if i + 1 < parts.len() && parts[i + 1].eq_ignore_ascii_case("UD") {
                 return Some(format!("UD-{q}"));
             }
             return Some(q);
@@ -350,7 +358,7 @@ impl OllamaMetrics {
     /// IDLE-SPD displays continuously while Ollama is loaded and probes are running.
     /// Used exclusively for the IDLE-SPD display state; attribution now uses AtomicBool.
     pub(crate) fn recent_probe_baseline(&self) -> bool {
-        self.last_probe_end.map_or(false, |t| t.elapsed().as_secs() < 30)
+        self.last_probe_end.is_some_and(|t| t.elapsed().as_secs() < 30)
     }
 
     /// Frontend diagnostic field: true while the probe is actively running,
@@ -410,7 +418,7 @@ pub(crate) struct VllmMetrics {
 impl VllmMetrics {
     /// True for 30 s after the probe completes — mirrors OllamaMetrics::recent_probe_baseline().
     pub(crate) fn recent_probe_baseline(&self) -> bool {
-        self.last_probe_end.map_or(false, |t| t.elapsed().as_secs() < 30)
+        self.last_probe_end.is_some_and(|t| t.elapsed().as_secs() < 30)
     }
 }
 
@@ -430,7 +438,7 @@ pub(crate) struct LlamacppMetrics {
 impl LlamacppMetrics {
     /// True for 30 s after the probe completes — mirrors OllamaMetrics::recent_probe_baseline().
     pub(crate) fn recent_probe_baseline(&self) -> bool {
-        self.last_probe_end.map_or(false, |t| t.elapsed().as_secs() < 30)
+        self.last_probe_end.is_some_and(|t| t.elapsed().as_secs() < 30)
     }
 }
 
@@ -993,14 +1001,10 @@ pub(crate) fn parse_pmset_therm(output: &str) -> Option<String> {
         // Intel / older macOS: CPU_Speed_Limit or CPU_Scheduler_Limit = N
         let speed_val = if let Some(rest) = line.strip_prefix("CPU_Speed_Limit") {
             Some(rest)
-        } else if let Some(rest) = line.strip_prefix("CPU_Scheduler_Limit") {
-            Some(rest)
-        } else {
-            None
-        };
+        } else { line.strip_prefix("CPU_Scheduler_Limit") };
         if let Some(rest) = speed_val {
             let val: u32 = rest
-                .trim_start_matches(|c: char| c == ' ' || c == '=')
+                .trim_start_matches([' ', '='])
                 .trim()
                 .parse()
                 .ok()?;
@@ -1032,7 +1036,7 @@ pub(crate) fn parse_pmset_therm(output: &str) -> Option<String> {
         // Apple Silicon alternative: "Thermal Warning Level = N"
         if let Some(rest) = line.strip_prefix("Thermal Warning Level") {
             let val: u32 = rest
-                .trim_start_matches(|c: char| c == ' ' || c == '=')
+                .trim_start_matches([' ', '='])
                 .trim()
                 .parse()
                 .unwrap_or(0);
@@ -1073,7 +1077,7 @@ pub(crate) fn parse_ioreg_gpu(text: &str) -> Option<f32> {
         // Intel / AMD: "Device Utilization %" = N  (integer percent, e.g. 42)
         if let Some(pos) = line.find("\"Device Utilization %\"") {
             let after = &line[pos + "\"Device Utilization %\"".len()..];
-            let after = after.trim_start_matches(|c: char| c == ':' || c == ' ' || c == '=');
+            let after = after.trim_start_matches([':', ' ', '=']);
             let num: String = after
                 .chars()
                 .take_while(|c| c.is_ascii_digit() || *c == '.')
@@ -1088,7 +1092,7 @@ pub(crate) fn parse_ioreg_gpu(text: &str) -> Option<f32> {
         if let Some(pos) = line.find("\"GPU Core Utilization\"") {
             let after = &line[pos + "\"GPU Core Utilization\"".len()..];
             // ioreg formats as: "key" = value  (value may be unquoted float)
-            let after = after.trim_start_matches(|c: char| c == ':' || c == ' ' || c == '=' || c == '"');
+            let after = after.trim_start_matches([':', ' ', '=', '"']);
             let num: String = after
                 .chars()
                 .take_while(|c| c.is_ascii_digit() || *c == '.')
@@ -1144,9 +1148,7 @@ fn read_linux_chip_name() -> Option<String> {
     let from_cpuinfo = (|| -> Option<String> {
         let content = std::fs::read_to_string("/proc/cpuinfo").ok()?;
         let raw = content.lines()
-            .find(|l| l.starts_with("model name"))?
-            .splitn(2, ':')
-            .nth(1)?
+            .find(|l| l.starts_with("model name"))?.split_once(':')?.1
             .trim()
             .to_string();
 
@@ -1163,7 +1165,7 @@ fn read_linux_chip_name() -> Option<String> {
         // Strip trademark noise: (R) (TM) ® ™
         let clean = trimmed
             .replace("(R)", "").replace("(TM)", "")
-            .replace('\u{00ae}', "").replace('\u{2122}', "");
+            .replace(['\u{00ae}', '\u{2122}'], "");
 
         let result = clean.split_whitespace().collect::<Vec<_>>().join(" ");
         if result.is_empty() { None } else { Some(result) }
@@ -1335,8 +1337,8 @@ fn start_swap_harvester() -> SwapMetrics {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 let after  = read_swap_pages_out().await;
 
-                if let (Some((b_pages, b_ps)), Some((a_pages, a_ps))) = (before, after) {
-                    if a_pages >= b_pages {
+                if let (Some((b_pages, b_ps)), Some((a_pages, a_ps))) = (before, after)
+                    && a_pages >= b_pages {
                         let page_size = ((b_ps + a_ps) / 2) as f64;
                         // (delta_pages × page_size_bytes) / 1_000_000 bytes/MB / 2 seconds
                         let mb_s = ((a_pages - b_pages) as f64 * page_size / 1_000_000.0 / 2.0) as f32;
@@ -1344,7 +1346,6 @@ fn start_swap_harvester() -> SwapMetrics {
                             *guard = Some(mb_s);
                         }
                     }
-                }
                 // No additional sleep — the 2 s read gap above is the sampling interval.
             }
         });
@@ -1451,9 +1452,8 @@ fn find_hwmon(target: &str) -> Option<std::path::PathBuf> {
     let dir = std::path::Path::new("/sys/class/hwmon");
     if !dir.exists() { return None; }
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        if let Ok(name) = std::fs::read_to_string(entry.path().join("name")) {
-            if name.trim() == target { return Some(entry.path()); }
-        }
+        if let Ok(name) = std::fs::read_to_string(entry.path().join("name"))
+            && name.trim() == target { return Some(entry.path()); }
     }
     None
 }
@@ -1463,11 +1463,10 @@ fn find_hwmon(target: &str) -> Option<std::path::PathBuf> {
 /// Tries temp2_input (Zen2+ Tdie) then temp1_input (older Zen / Tctl).
 fn read_k10temp_tdie_c(hwmon: &std::path::Path) -> Option<f64> {
     for name in &["temp2_input", "temp1_input"] {
-        if let Ok(raw) = std::fs::read_to_string(hwmon.join(name)) {
-            if let Ok(mc) = raw.trim().parse::<i64>() {
+        if let Ok(raw) = std::fs::read_to_string(hwmon.join(name))
+            && let Ok(mc) = raw.trim().parse::<i64>() {
                 return Some(mc as f64 / 1000.0);
             }
-        }
     }
     None
 }
@@ -1478,11 +1477,9 @@ fn read_k10temp_tdie_c(hwmon: &std::path::Path) -> Option<f64> {
 fn read_cpu_max_freq_khz() -> Option<u64> {
     let base = std::path::Path::new("/sys/devices/system/cpu/cpu0/cpufreq");
     for file in &["cpuinfo_max_freq", "scaling_max_freq"] {
-        if let Ok(raw) = std::fs::read_to_string(base.join(file)) {
-            if let Ok(khz) = raw.trim().parse::<u64>() {
-                if khz > 0 { return Some(khz); }
-            }
-        }
+        if let Ok(raw) = std::fs::read_to_string(base.join(file))
+            && let Ok(khz) = raw.trim().parse::<u64>()
+                && khz > 0 { return Some(khz); }
     }
     None
 }
@@ -1497,16 +1494,14 @@ fn read_avg_cur_freq_khz() -> Option<u64> {
         let fname = entry.file_name();
         let s = fname.to_string_lossy();
         // Match cpu0, cpu1, … cpuN — skip cpufreq, cpuidle, power, etc.
-        if s.starts_with("cpu") && s[3..].parse::<u32>().is_ok() {
-            if let Ok(raw) = std::fs::read_to_string(
+        if s.starts_with("cpu") && s[3..].parse::<u32>().is_ok()
+            && let Ok(raw) = std::fs::read_to_string(
                 entry.path().join("cpufreq/scaling_cur_freq")
-            ) {
-                if let Ok(khz) = raw.trim().parse::<u64>() {
+            )
+                && let Ok(khz) = raw.trim().parse::<u64>() {
                     sum += khz;
                     count += 1;
                 }
-            }
-        }
     }
     if count == 0 { return None; }
     Some(sum / count as u64)
@@ -1558,14 +1553,12 @@ fn read_coretemp_max_c(hwmon: &std::path::Path) -> Option<f64> {
     for entry in std::fs::read_dir(hwmon).ok()?.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with("temp") && name_str.ends_with("_input") {
-            if let Ok(raw) = std::fs::read_to_string(entry.path()) {
-                if let Ok(mc) = raw.trim().parse::<i64>() {
+        if name_str.starts_with("temp") && name_str.ends_with("_input")
+            && let Ok(raw) = std::fs::read_to_string(entry.path())
+                && let Ok(mc) = raw.trim().parse::<i64>() {
                     let c = mc as f64 / 1000.0;
                     max_c = Some(max_c.map_or(c, |p: f64| p.max(c)));
                 }
-            }
-        }
     }
     max_c
 }
@@ -1578,16 +1571,14 @@ fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult
     let coretemp_hwmon = find_hwmon("coretemp");
 
     // ── AMD path: k10temp + clock ratio ──────────────────────────────────────
-    if let Some(hwmon) = &k10temp_hwmon {
-        if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
-            if max_khz > 0 {
+    if let Some(hwmon) = &k10temp_hwmon
+        && let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz())
+            && max_khz > 0 {
                 let ratio  = cur_khz as f64 / max_khz as f64;
                 let tdie_c = read_k10temp_tdie_c(hwmon);
                 return Some(amd_clock_ratio_result(ratio, tdie_c));
             }
-        }
         // k10temp present but cpufreq unavailable — fall through to generic path.
-    }
 
     // ── Intel path: coretemp hwmon + clock ratio ─────────────────────────────
     // coretemp provides direct per-core temperature readings on Intel CPUs.
@@ -1595,15 +1586,14 @@ fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult
     if let Some(hwmon) = &coretemp_hwmon {
         let temp_c = read_coretemp_max_c(hwmon);
         // Try clock ratio first (same approach as AMD)
-        if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
-            if max_khz > 0 {
+        if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz())
+            && max_khz > 0 {
                 let ratio = cur_khz as f64 / max_khz as f64;
                 // Use same clock ratio mapping as AMD, with coretemp as tie-breaker
                 let mut result = amd_clock_ratio_result(ratio, temp_c);
                 result.source = "coretemp";
                 return Some(result);
             }
-        }
         // coretemp present but cpufreq unavailable — use temperature directly
         if let Some(tc) = temp_c {
             let state = match tc {
@@ -1623,16 +1613,14 @@ fn harvest_linux_thermal(max_freq_khz: Option<u64>) -> Option<LinuxThermalResult
 
     // ── Generic Intel/other: clock ratio without dedicated hwmon ─────────────
     // If no k10temp or coretemp hwmon, but cpufreq is available, use clock ratio.
-    if k10temp_hwmon.is_none() && coretemp_hwmon.is_none() {
-        if let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz()) {
-            if max_khz > 0 {
+    if k10temp_hwmon.is_none() && coretemp_hwmon.is_none()
+        && let (Some(max_khz), Some(cur_khz)) = (max_freq_khz, read_avg_cur_freq_khz())
+            && max_khz > 0 {
                 let ratio = cur_khz as f64 / max_khz as f64;
                 let mut result = amd_clock_ratio_result(ratio, None);
                 result.source = "clock_ratio";
                 return Some(result);
             }
-        }
-    }
 
     // ── Generic path: /sys/class/thermal zone max ─────────────────────────────
     let thermal_dir = std::path::Path::new("/sys/class/thermal");
@@ -1896,14 +1884,13 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
     // Synthesize soc_power_w from components if the combined line was absent.
     // This handles macOS versions that omit "Combined Power" but still output
     // individual CPU + GPU + ANE lines.
-    if m.soc_power_w.is_none() {
-        if m.cpu_power_w.is_some() || m.gpu_power_w.is_some() || m.ane_power_w.is_some() {
+    if m.soc_power_w.is_none()
+        && (m.cpu_power_w.is_some() || m.gpu_power_w.is_some() || m.ane_power_w.is_some()) {
             let total = m.cpu_power_w.unwrap_or(0.0)
                 + m.gpu_power_w.unwrap_or(0.0)
                 + m.ane_power_w.unwrap_or(0.0);
             if total > 0.1 { m.soc_power_w = Some(total); }
         }
-    }
 
     // Diagnostic: log the power component breakdown so operators can verify
     // GPU + ANE rails are being captured during active inference.
@@ -2113,26 +2100,22 @@ fn load_or_create_config() -> WickleeConfig {
     let path = config_path();
 
     // ── Load from system-global path ─────────────────────────────────────────
-    if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
+    if path.exists()
+        && let Ok(content) = std::fs::read_to_string(&path)
+            && let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
                 return cfg;
             }
-        }
-    }
 
     // ── One-time migration from legacy ~/.wicklee/config.toml (pre-v0.4.37) ──
     // If the system-global path doesn't exist yet but the user's home config
     // does, copy it over so the node_id and fleet pairing are preserved.
-    if let Some(legacy) = legacy_config_path() {
-        if let Ok(content) = std::fs::read_to_string(&legacy) {
-            if let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
+    if let Some(legacy) = legacy_config_path()
+        && let Ok(content) = std::fs::read_to_string(&legacy)
+            && let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
                 println!("  Migrating config from {} → {}", legacy.display(), path.display());
                 save_config(&cfg);
                 return cfg;
             }
-        }
-    }
 
     // ── First-run: generate a new identity ───────────────────────────────────
     let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None };
@@ -2346,7 +2329,9 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
             enum MemApi {
                 V1,
-                V2(nvml_wrapper_sys::bindings::NvmlLib),
+                // Boxed: NvmlLib is a large table of fn pointers and would
+                // otherwise dominate the enum's size (clippy::large_enum_variant).
+                V2(Box<nvml_wrapper_sys::bindings::NvmlLib>),
                 /// Unified-memory SoC: no discrete VRAM pool in NVML.
                 /// `total_mb` is the system RAM total read once from /proc/meminfo
                 /// (Linux) or GlobalMemoryStatusEx (Windows) — the full pool
@@ -2375,7 +2360,7 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                     // v1 returned N/A or zero: try the v2 struct (Hopper / HBM Blackwell).
                     // If v2 also yields no data the device is a unified-memory SoC → Unified.
                     _ => match load_nvml_lib() {
-                        Some(lib) if nvml_memory_v2(&lib, 0).is_some() => MemApi::V2(lib),
+                        Some(lib) if nvml_memory_v2(&lib, 0).is_some() => MemApi::V2(Box::new(lib)),
                         _ => MemApi::Unified { total_mb: sys_total_mb },
                     },
                 };
@@ -2391,10 +2376,8 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                     Err(_) => continue,
                 };
 
-                let mut m = NvidiaMetrics::default();
-
                 // Static properties — use the cached value, no NVML round-trip.
-                m.nvidia_gpu_name = gpu_name_cached.clone();
+                let mut m = NvidiaMetrics { nvidia_gpu_name: gpu_name_cached.clone(), ..Default::default() };
 
                 m.nvidia_gpu_utilization_percent =
                     device.utilization_rates().ok().map(|u| u.gpu as f32);
@@ -2483,12 +2466,11 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 if let (Ok(cur_mhz), Ok(max_mhz)) = (
                     device.clock_info(Clock::Graphics),
                     device.max_clock_info(Clock::Graphics),
-                ) {
-                    if max_mhz > 0 {
+                )
+                    && max_mhz > 0 {
                         let ratio = cur_mhz as f32 / max_mhz as f32;
                         m.clock_throttle_pct = Some(((1.0 - ratio) * 100.0).clamp(0.0, 100.0));
                     }
-                }
 
                 // ── PCIe link width ───────────────────────────────────────────
                 // current_pcie_link_width() returns the negotiated lane count (1/4/8/16).
@@ -2554,9 +2536,11 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
         loop {
             interval.tick().await;
 
-            let mut m = AppleSiliconMetrics::default();
-            m.gpu_name          = chip_name.clone();
-            m.gpu_wired_limit_mb = wired_limit_mb;
+            let mut m = AppleSiliconMetrics {
+                gpu_name:           chip_name.clone(),
+                gpu_wired_limit_mb: wired_limit_mb,
+                ..Default::default()
+            };
 
             // 1. Thermal: sysctl (Intel) → pmset (M-series)
             m.thermal_state = read_thermal_sysctl();
@@ -2634,7 +2618,7 @@ fn resolve_thermal_state(
     let raw = apple_state.clone()
         .or_else(|| linux_thermal.as_ref().map(|lt| lt.state.clone()));
     let is_clock_ratio = linux_thermal.as_ref()
-        .map_or(false, |lt| lt.source == "clock_ratio");
+        .is_some_and(|lt| lt.source == "clock_ratio");
     if is_clock_ratio && cpu_usage_pct < 15.0 && raw.as_deref() != Some("Normal") {
         Some("Normal".to_string())
     } else {
@@ -2938,13 +2922,12 @@ fn start_metrics_broadcaster(
                     ollama.active_models.as_ref().map(|models| {
                         models.iter().map(|m| {
                             let mut enriched = m.clone();
-                            if let (Some(tps), Some(pw), Some(vram)) = (m.tok_s, total_power, m.vram_mb) {
-                                if total_vram > 0 && pw > 0.1 && tps > 0.0 {
+                            if let (Some(tps), Some(pw), Some(vram)) = (m.tok_s, total_power, m.vram_mb)
+                                && total_vram > 0 && pw > 0.1 && tps > 0.0 {
                                     let share = vram as f32 / total_vram as f32;
                                     let model_watts = pw * share;
                                     enriched.wes = Some(tps / (model_watts * penalty));
                                 }
-                            }
                             enriched
                         }).collect()
                     })
@@ -3044,7 +3027,7 @@ async fn ws_session(mut socket: WebSocket, tx: broadcast::Sender<String>) {
     loop {
         match rx.recv().await {
             Ok(json) => {
-                if socket.send(Message::Text(json.into())).await.is_err() {
+                if socket.send(Message::Text(json)).await.is_err() {
                     break; // client disconnected
                 }
             }
@@ -3060,11 +3043,10 @@ async fn handle_pair_status(
     axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
 ) -> Json<PairingStatusResponse> {
     let mut state = pairing_state.lock().unwrap();
-    if let PairingStatus::Pending { expires_at, .. } = &state.status {
-        if now_ms() > *expires_at {
+    if let PairingStatus::Pending { expires_at, .. } = &state.status
+        && now_ms() > *expires_at {
             state.status = PairingStatus::Unpaired;
         }
-    }
     Json(pairing_response(&state))
 }
 
@@ -3937,8 +3919,8 @@ fn evaluate_local_observations(
 
     // ── Pattern L: PCIe Lane Degradation ─────────────────────────────────
     // Point-in-time: pcie_link_width < pcie_link_max_width (NVIDIA only).
-    if let (Some(cur), Some(max)) = (pcie.link_width, pcie.link_max_width) {
-        if cur < max {
+    if let (Some(cur), Some(max)) = (pcie.link_width, pcie.link_max_width)
+        && cur < max {
             obs.push(LocalObservation {
                 pattern_id:       "pcie_lane_degradation",
                 severity:         if cur <= max / 2 { "critical" } else { "warning" },
@@ -3967,7 +3949,6 @@ fn evaluate_local_observations(
                 hostname:         hostname.into(),
             });
         }
-    }
 
     // ── Pattern C: WES Velocity Drop ─────────────────────────────────────
     // Efficiency score declining before thermal state changes — early warning.
@@ -4028,7 +4009,7 @@ fn evaluate_local_observations(
                              background processes, and VRAM allocation.{eta_note}",
                         ),
                         resolution_steps: vec![
-                            format!("Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/metrics | jq .wes_score\""),
+                            "Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/metrics | jq .wes_score\"".into(),
                             "Reduce OLLAMA_NUM_PARALLEL to 1 to slow the WES decline".into(),
                             "Check if background processes (backups, builds) started recently".into(),
                             "If WES drops below 5 within 5 min, treat as Pattern A — enact physical cooling".into(),
@@ -4258,7 +4239,7 @@ fn evaluate_local_observations(
                                                this node. On Linux, set the CPU governor to `performance`. \
                                                On Apple Silicon, ensure AC power with Performance mode enabled.".into(),
                             resolution_steps: vec![
-                                format!("Verify throttle: `curl http://localhost:7700/api/metrics | jq .clock_throttle_pct`"),
+                                "Verify throttle: `curl http://localhost:7700/api/metrics | jq .clock_throttle_pct`".into(),
                                 "Linux CPU governor: `sudo cpupower frequency-set -g performance`".into(),
                                 "NVIDIA: `nvidia-smi -q -d CLOCK | grep -A4 'Clocks Throttle'`".into(),
                                 "Apple Silicon: System Settings → Battery → Options → disable 'Limit CPU speed'".into(),
@@ -4409,7 +4390,7 @@ fn evaluate_local_observations(
                                        Q2_K). If using vLLM, tune --max-num-batched-tokens to the \
                                        GPU-saturating sweet spot.".into(),
                     resolution_steps: vec![
-                        format!("Check GPU util: `curl http://localhost:7700/api/metrics | jq '{{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}}'`"),
+                        "Check GPU util: `curl http://localhost:7700/api/metrics | jq '{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}'`".into(),
                         "Set all layers to GPU: OLLAMA_NUM_GPU=99 ollama serve".into(),
                         "Switch to Q4_K_M: `ollama pull <model>:q4_K_M` — fully GPU-offloads vs Q2_K".into(),
                         "For vLLM: raise --max-num-seqs to create batches that saturate GPU SIMD lanes".into(),
@@ -4520,7 +4501,7 @@ fn evaluate_local_observations(
                                          recover throughput.",
                                     ),
                                     resolution_steps: vec![
-                                        format!("Confirm bottleneck: `curl http://localhost:7700/api/metrics | jq '{{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}}'`"),
+                                        "Confirm bottleneck: `curl http://localhost:7700/api/metrics | jq '{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}'`".into(),
                                         "Switch to lower quantization to halve bandwidth demand: `ollama pull <model>:q4_K_M`".into(),
                                         "If already on Q4, try Q3_K_M or Q2_K — quality trade-off worth the bandwidth recovery".into(),
                                         "Reduce context window size — longer contexts increase KV cache weight streaming".into(),
@@ -4754,7 +4735,7 @@ fn evaluate_local_observations(
             let fire = (slope_per_min > 5.0 && mean_ttft > 100.0) || tail_mean > 2000.0;
 
             if fire {
-                let ratio = ((ttft_vals.len() as f64 - 10.0) / 50.0).min(1.0).max(0.3);
+                let ratio = ((ttft_vals.len() as f64 - 10.0) / 50.0).clamp(0.3, 1.0);
                 obs.push(LocalObservation {
                     pattern_id:       "ttft_regression",
                     severity:         if is_critical { "critical" } else { "warning" },
@@ -4829,7 +4810,7 @@ fn evaluate_local_observations(
             let fire = spike_ratio >= 1.5 && recent_mean > 500.0;
 
             if fire {
-                let ratio = ((spike_ratio - 1.5) / 1.5).min(1.0).max(0.3);
+                let ratio = ((spike_ratio - 1.5) / 1.5).clamp(0.3, 1.0);
                 obs.push(LocalObservation {
                     pattern_id:       "latency_spike",
                     severity:         if is_critical { "critical" } else { "warning" },
@@ -4897,7 +4878,7 @@ fn evaluate_local_observations(
             let fire = avg_queue >= 3.0 || max_queue >= 8.0;
 
             if fire {
-                let ratio = ((avg_queue - 3.0) / 7.0).min(1.0).max(0.3);
+                let ratio = ((avg_queue - 3.0) / 7.0).clamp(0.3, 1.0);
                 obs.push(LocalObservation {
                     pattern_id:       "vllm_queue_saturation",
                     severity:         if is_critical { "critical" } else { "warning" },
@@ -5545,7 +5526,7 @@ async fn fetch_hf_gguf(
             variants.push((filename.to_string(), quant, size));
         }
         // Sort variants largest-first (highest quality first)
-        variants.sort_by(|a, b| b.2.cmp(&a.2));
+        variants.sort_by_key(|a| std::cmp::Reverse(a.2));
 
         if !variants.is_empty() {
             results.push((model_id.to_string(), downloads, likes, variants));
@@ -6205,8 +6186,9 @@ async fn handle_mcp(
                                 if hd == 0 { return None; }
                                 let mc = ollama.ollama_context_length.unwrap_or(8_192);
                                 (l, kv, hd, mc, true)
-                            } else if let Some(params) = ollama.ollama_parameter_count {
+                            } else {
                                 // Fallback: estimate from parameter count
+                                let params = ollama.ollama_parameter_count?;
                                 let b = params as f64 / 1e9;
                                 let mc = ollama.ollama_context_length.unwrap_or(8_192);
                                 // [minB, maxB, layers, kv_heads, head_dim]
@@ -6218,8 +6200,6 @@ async fn handle_mcp(
                                     else if b < 80.0 { (80, 8, 128) }
                                     else             { (96, 8, 128) };
                                 (entry.0, entry.1, entry.2, mc, false)
-                            } else {
-                                return None;
                             };
 
                         let headroom_bytes = headroom_gb * 1024.0 * 1024.0 * 1024.0;
@@ -6295,7 +6275,7 @@ async fn handle_mcp(
                         let bits: Option<u32> = if q.starts_with('F') || q.starts_with('f') {
                             if q.contains("16") { Some(16) } else if q.contains("32") { Some(32) } else { None }
                         } else {
-                            q.chars().skip_while(|c| !c.is_ascii_digit()).next()
+                            q.chars().find(|c| c.is_ascii_digit())
                                 .and_then(|c| c.to_digit(10))
                         };
 
@@ -6312,7 +6292,7 @@ async fn handle_mcp(
                                     // Enough room — Q8 is fine, note the speed trade-off
                                     ("lossless",
                                      format!("{q} offers minimal quality loss over F16"),
-                                     format!("Memory fits. Note: Q8 is ~40% slower than Q4_K_M on memory-bandwidth-bound hardware. Acceptable if quality is the priority."))
+                                     "Memory fits. Note: Q8 is ~40% slower than Q4_K_M on memory-bandwidth-bound hardware. Acceptable if quality is the priority.".to_string())
                                 }
                             }
                             Some(b) if b <= 3 => {
@@ -6366,15 +6346,14 @@ async fn handle_mcp(
                             "low"                => parts.push(format!("Efficiency is low — {wes_reason}")),
                             _                    => {}
                         }
-                        if let Some(ref r) = ctx_runway {
-                            if let Some(s) = r.get("summary").and_then(|v| v.as_str()) {
+                        if let Some(ref r) = ctx_runway
+                            && let Some(s) = r.get("summary").and_then(|v| v.as_str()) {
                                 parts.push(s.to_string());
                             }
-                        }
                         parts
                     };
                     let summary = if summary_parts.is_empty() {
-                        format!("No model is currently loaded on this node.")
+                        "No model is currently loaded on this node.".to_string()
                     } else {
                         format!("{model_label}: {}", summary_parts.join(" "))
                     };
@@ -6731,13 +6710,12 @@ async fn handle_metrics(
                     ollama.active_models.as_ref().map(|models| {
                         models.iter().map(|m| {
                             let mut enriched = m.clone();
-                            if let (Some(tps), Some(pw), Some(vram)) = (m.tok_s, total_power, m.vram_mb) {
-                                if total_vram > 0 && pw > 0.1 && tps > 0.0 {
+                            if let (Some(tps), Some(pw), Some(vram)) = (m.tok_s, total_power, m.vram_mb)
+                                && total_vram > 0 && pw > 0.1 && tps > 0.0 {
                                     let share = vram as f32 / total_vram as f32;
                                     let model_watts = pw * share;
                                     enriched.wes = Some(tps / (model_watts * penalty));
                                 }
-                            }
                             enriched
                         }).collect()
                     })
@@ -7162,9 +7140,9 @@ async fn main() {
                     // otherwise be invisible. Falls back to no-op if /api/health
                     // is unreachable (e.g. older agent without the endpoint).
                     let health_url = format!("http://127.0.0.1:{port}/api/health");
-                    if let Ok(resp) = reqwest::get(&health_url).await {
-                        if resp.status().is_success() {
-                            if let Ok(v) = resp.json::<serde_json::Value>().await {
+                    if let Ok(resp) = reqwest::get(&health_url).await
+                        && resp.status().is_success()
+                            && let Ok(v) = resp.json::<serde_json::Value>().await {
                                 let healthy = v["store_healthy"].as_bool().unwrap_or(false);
                                 if healthy {
                                     println!("{}", row("Store", "healthy · DuckDB ok"));
@@ -7178,8 +7156,6 @@ async fn main() {
                                     println!("{}", row("",      "history, observations, …"));
                                 }
                             }
-                        }
-                    }
                     println!("{bot}");
                 }
             }
@@ -7673,8 +7649,8 @@ async fn main() {
                                 }
                                 (None, None) => false,
                             };
-                            if changed {
-                                if let Some(ref model_name) = current {
+                            if changed
+                                && let Some(ref model_name) = current {
                                     let st = store_clone.clone();
                                     let nid = node_id_clone.clone();
                                     let mn = model_name.clone();
@@ -7691,7 +7667,6 @@ async fn main() {
                                     }
                                     last_model = current;
                                 }
-                            }
                         }
                     });
                 }
@@ -7759,11 +7734,10 @@ async fn main() {
                                     }
                                 }
                             }).await;
-                            if let Ok(Some(observations)) = result {
-                                if let Ok(mut cache) = obs_cache.lock() {
+                            if let Ok(Some(observations)) = result
+                                && let Ok(mut cache) = obs_cache.lock() {
                                     *cache = observations;
                                 }
-                            }
                         }
                     });
                 }
@@ -7882,7 +7856,7 @@ async fn main() {
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(axum::extract::Extension(probe_active))
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
-         .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target, runtime_overrides: runtime_overrides }))
+         .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target, runtime_overrides }))
          .layer(axum::extract::Extension(Arc::clone(&runtime_config_cache)))
          .layer(cors)
     };

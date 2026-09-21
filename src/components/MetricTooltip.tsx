@@ -5,13 +5,13 @@ import { ArrowRight } from 'lucide-react';
 
 type DotColor = 'blue' | 'emerald' | 'green' | 'amber' | 'yellow' | 'orange' | 'red' | 'gray';
 
-export interface TooltipRange {
+interface TooltipRange {
   threshold: string;
   color: DotColor;
   label: string;
 }
 
-export interface MetricTooltipProps {
+interface MetricTooltipProps {
   /** Matches the `id` attribute on the MetricCard in MetricsPage, used for deep links. */
   metricId: string;
   /** Short display name shown as the tooltip heading. */

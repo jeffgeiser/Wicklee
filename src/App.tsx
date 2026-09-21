@@ -1,32 +1,43 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { version } from '../package.json';
-import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff, RefreshCw } from 'lucide-react';
+import { WifiOff, RefreshCw } from 'lucide-react';
 // NOTE: @clerk/clerk-react is NOT imported here. It's lazy-loaded via
 // CloudApp.tsx to prevent Clerk's module init from running in agent builds.
-import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
+import { DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import { CLOUD_URL } from './utils/cloudUrl';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
-import Overview from './components/Overview';
-import ModelsPage from './components/ModelsPage';
-import NodesList from './components/NodesList';
-import TracesView from './components/TracesView';
-import ScaffoldingView from './components/ScaffoldingView';
-import AIInsights from './components/AIInsights';
-import TeamManagement from './components/TeamManagement';
+// ── Dashboard code-split ─────────────────────────────────────────────────
+// Every component below is only reachable after sign-in (or on localhost),
+// yet they were statically imported, which hoisted the entire dashboard —
+// recharts included — into the same chunk as the landing page. The
+// LazyCloudApp boundary further down never helped: CloudApp is a 19-line
+// Clerk wrapper that receives AppCore as a prop, so the split was defeated
+// before it began. A first-time visitor to / was downloading ~1.6 MB to
+// read marketing copy — and that is what made the prerender block flash.
+//
+// Marketing pages (LandingPage, PricingPage, DocsPage, …) stay static: they
+// ARE the entry. renderContent() is wrapped in Suspense below.
+const Overview = React.lazy(() => import('./components/Overview'));
+const ModelsPage = React.lazy(() => import('./components/ModelsPage'));
+const NodesList = React.lazy(() => import('./components/NodesList'));
+const TracesView = React.lazy(() => import('./components/TracesView'));
+const ScaffoldingView = React.lazy(() => import('./components/ScaffoldingView'));
+const AIInsights = React.lazy(() => import('./components/AIInsights'));
+const TeamManagement = React.lazy(() => import('./components/TeamManagement'));
 import LandingPage from './components/LandingPage';
 // SignInPage/SignUpPage import @clerk/clerk-react — lazy-load to keep Clerk
 // out of the agent bundle.
 const SignInPage = React.lazy(() => import('./components/SignInPage'));
 const SignUpPage = React.lazy(() => import('./components/SignUpPage'));
-import ProfileView from './components/ProfileView';
-import SecurityView from './components/SecurityView';
+const ProfileView = React.lazy(() => import('./components/ProfileView'));
+const SecurityView = React.lazy(() => import('./components/SecurityView'));
 const APIKeysView = React.lazy(() => import('./components/APIKeysView'));
-import PreferencesView from './components/PreferencesView';
-import SettingsView from './components/SettingsView';
+const PreferencesView = React.lazy(() => import('./components/PreferencesView'));
+const SettingsView = React.lazy(() => import('./components/SettingsView'));
 import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
 import MetricsPage from './pages/MetricsPage';
@@ -34,7 +45,7 @@ import DocsPage from './pages/DocsPage';
 import LegalPage from './pages/LegalPage';
 import TrustPage from './pages/TrustPage';
 import DesignPartnersPage from './pages/DesignPartnersPage';
-import AIProvidersView from './components/AIProvidersView';
+const AIProvidersView = React.lazy(() => import('./components/AIProvidersView'));
 import PairingModal from './components/PairingModal';
 const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
 import { usePermissions } from './hooks/usePermissions';
@@ -177,7 +188,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
   // Dark mode only — "Hardware-Centric Dark" design language.
-  const theme: 'dark' = 'dark';
+  const theme = 'dark' as const;
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
 
   const navigate = useCallback((path: string) => {
@@ -833,7 +844,9 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
                 </div>
               </div>
             )}
-            <div key={activeTab}>{renderContent()}</div>
+            <React.Suspense fallback={null}>
+              <div key={activeTab}>{renderContent()}</div>
+            </React.Suspense>
           </div>
         </div>
 

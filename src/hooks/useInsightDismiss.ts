@@ -94,7 +94,7 @@ export function useInsightDismiss(cardId: string, nodeId?: string) {
   // Sync from agent once per page load (fires on first hook instantiation)
   useEffect(() => {
     syncDismissalsFromAgent();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const [dismissed, setDismissed] = useState(() => readDismissed(key));
 

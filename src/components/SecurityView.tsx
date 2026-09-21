@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Shield, Key, Smartphone, LogOut, ChevronRight, Monitor, Laptop, ExternalLink, Lock, CheckCircle2, AlertCircle, Loader2, Eye, EyeOff, BarChart3, Cloud, CloudLightning } from 'lucide-react';
+import { Shield, Key, Smartphone, LogOut, ChevronRight, Monitor, Laptop, ExternalLink, Lock, CheckCircle2, AlertCircle, Loader2, BarChart3, Cloud, CloudLightning } from 'lucide-react';
 import { PairingInfo } from '../types';
 
 interface SecurityViewProps {

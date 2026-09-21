@@ -1,3 +1,13 @@
+// `type_complexity` is allowed crate-wide: the flagged sites are sqlx row
+// tuples and axum handler signatures, where a named alias per call site adds
+// indirection without adding meaning. Every other clippy lint is enforced
+// (-D warnings in CI).
+#![allow(clippy::type_complexity)]
+// `result_large_err`: auth helpers return Err(axum Response) as an early
+// return — the idiom throughout this file. Boxing the Response would ripple
+// into every caller for no benefit on a cold path. (Fires on clippy ≥1.98.)
+#![allow(clippy::result_large_err)]
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -1244,8 +1254,8 @@ async fn resolve_clerk_user(clerk_sub: &str, pool: &sqlx::PgPool) -> Option<Stri
         "SELECT COUNT(*) FROM users WHERE clerk_id IS NULL"
     ).fetch_one(pool).await.unwrap_or(0);
 
-    if unmapped == 1 {
-        if let Ok(id) = sqlx::query_scalar::<_, String>(
+    if unmapped == 1
+        && let Ok(id) = sqlx::query_scalar::<_, String>(
             "SELECT id FROM users WHERE clerk_id IS NULL LIMIT 1"
         ).fetch_one(pool).await {
             let _ = sqlx::query("UPDATE users SET clerk_id = $1 WHERE id = $2")
@@ -1253,7 +1263,6 @@ async fn resolve_clerk_user(clerk_sub: &str, pool: &sqlx::PgPool) -> Option<Stri
                 .execute(pool).await;
             return Some(id);
         }
-    }
 
     // New Clerk user — create a minimal record.
     let new_id = Uuid::new_v4().to_string();
@@ -2177,8 +2186,8 @@ async fn handle_delete_node(
 
     match result {
         Ok(r) if r.rows_affected() == 0 => {
-            return (StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "Node not found" }))).into_response();
+            (StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Node not found" }))).into_response()
         }
         Ok(_) => {
             // Purge stored metrics (tenant_id = org_id for org nodes).
@@ -2619,9 +2628,9 @@ async fn handle_v1_insights_latest(
             }
         }
 
-        if online_count >= 2 {
-            if let (Some(node_tok), Some(fleet_avg)) = (snap.tok_s, fleet_tok_s.map(|t| t / online_count as f32)) {
-                if fleet_avg > 5.0 && node_tok < fleet_avg * 0.40 {
+        if online_count >= 2
+            && let (Some(node_tok), Some(fleet_avg)) = (snap.tok_s, fleet_tok_s.map(|t| t / online_count as f32))
+                && fleet_avg > 5.0 && node_tok < fleet_avg * 0.40 {
                     findings.push(V1InsightFinding {
                         node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
                         severity: "low", pattern: "low_throughput",
@@ -2630,12 +2639,10 @@ async fn handle_v1_insights_latest(
                         value: Some(node_tok), unit: Some("tok/s"),
                     });
                 }
-            }
-        }
 
-        if online_count >= 2 {
-            if let (Some(node_wes), Some(fleet_avg_wes)) = (snap.wes, avg_wes) {
-                if fleet_avg_wes > 1.0 && node_wes < fleet_avg_wes * 0.40 {
+        if online_count >= 2
+            && let (Some(node_wes), Some(fleet_avg_wes)) = (snap.wes, avg_wes)
+                && fleet_avg_wes > 1.0 && node_wes < fleet_avg_wes * 0.40 {
                     findings.push(V1InsightFinding {
                         node_id: snap.node_id.clone(), hostname: snap.hostname.clone(),
                         severity: "low", pattern: "wes_below_baseline",
@@ -2644,8 +2651,6 @@ async fn handle_v1_insights_latest(
                         value: Some(node_wes), unit: Some("WES"),
                     });
                 }
-            }
-        }
     }
 
     let sev_ord = |s: &str| match s { "high" => 0u8, "moderate" => 1, _ => 2 };
@@ -3037,7 +3042,7 @@ async fn handle_event_poll(
     let bearer = headers.get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "));
-    let auth_ok: bool = bearer.map_or(false, |b|
+    let auth_ok: bool = bearer.is_some_and(|b|
         subtle::ConstantTimeEq::ct_eq(b.as_bytes(), expected.as_bytes()).into()
     );
     if !auth_ok {
@@ -3182,24 +3187,22 @@ async fn handle_telemetry(
             // for org-paired nodes and must not be used as a users.id key.
             let tier = resolve_node_tier(&nid, &pool).await;
 
-            if is_pro_or_above(&tier) {
-                if let Some(ref metrics_snapshot) = metrics_snap {
+            if is_pro_or_above(&tier)
+                && let Some(ref metrics_snapshot) = metrics_snap {
                     evaluate_alerts(&owner_id, &nid, metrics_snapshot, &pool).await;
                     // Threshold Webhooks evaluator — runs on every telemetry
                     // push so subscribers get sub-second push notifications
                     // for state transitions and threshold crossings.
                     evaluate_webhooks(&tenant_id, &nid, metrics_snapshot, &pool).await;
                 }
-            }
 
             // Model governance (Enterprise) — checks the node's active model
             // against the tenant allow-list on the frame it appears. No-op when
             // no policies are configured.
-            if is_business_or_above(&tier) {
-                if let Some(ref metrics_snapshot) = metrics_snap {
+            if is_business_or_above(&tier)
+                && let Some(ref metrics_snapshot) = metrics_snap {
                     evaluate_model_policy(&tenant_id, &nid, metrics_snapshot, &events_tx, &pool).await;
                 }
-            }
 
             // ── Phase 7: upsert agent-pushed observations ────────────────────
             if !agent_observations.is_empty() {
@@ -3342,6 +3345,7 @@ async fn handle_fleet_events_history(
 ///   - If an open observation with the same (tenant_id, node_id, alert_type, source='agent')
 ///     already exists, update its detail and context_json.
 ///   - Otherwise, INSERT a new row.
+///
 /// Any previously-open agent observations for this node that are NOT in the current
 /// payload are auto-resolved (the agent no longer sees the condition).
 async fn upsert_agent_observations(
@@ -4276,8 +4280,8 @@ async fn handle_thermal_budget(
             }
             // Track sustainable_tps over Normal blocks ≥ 30 min.
             if cur.len >= 6 {
-                if let Some(t) = tps { if *t > sustained_normal_max_tps { sustained_normal_max_tps = *t; } }
-                if let Some(w) = watts { if *w > sustained_normal_max_watts { sustained_normal_max_watts = *w; } }
+                if let Some(t) = tps && *t > sustained_normal_max_tps { sustained_normal_max_tps = *t; }
+                if let Some(w) = watts && *w > sustained_normal_max_watts { sustained_normal_max_watts = *w; }
             }
         } else {
             // Non-Normal sample. If we were in a Normal block, this is a
@@ -4496,12 +4500,11 @@ async fn handle_model_policy_create(
                 "error": "'*' would allow every model. Remove the entries for this scope instead to stop governing it."
             }))).into_response();
     }
-    if let Some(ref t) = body.tag {
-        if !valid_scope_tag(t) {
+    if let Some(ref t) = body.tag
+        && !valid_scope_tag(t) {
             return (StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
         }
-    }
 
     let id = uuid::Uuid::new_v4().to_string();
     let res = sqlx::query(
@@ -4636,12 +4639,11 @@ async fn handle_webhook_create(
         }
     }
 
-    if let Some(ref t) = body.tag {
-        if !valid_scope_tag(t) {
+    if let Some(ref t) = body.tag
+        && !valid_scope_tag(t) {
             return (StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
         }
-    }
 
     let id = uuid::Uuid::new_v4().to_string();
     // 32-byte HMAC secret, hex-encoded → 64 chars. Returned ONCE on creation.
@@ -5231,7 +5233,7 @@ async fn handle_fleet_stream(
 
     let stream = interval_stream.map(move |_| {
         tick += 1;
-        if tick % 30 == 0 {
+        if tick.is_multiple_of(30) {
             let uid_ref = uid_stream.clone();
             let oid_ref = oid_stream.clone();
             let tv = { let (_, v) = tenant_scope(&uid_ref, &oid_ref); v.to_owned() };
@@ -5670,7 +5672,7 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
     let list_resp = match tokio::task::spawn_blocking(move || {
         let req = ureq::get(list_url);
         let req = if let Some(t) = tok1 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
-        req.call()
+        req.call().map_err(Box::new)
     }).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => { eprintln!("[model-catalog] HF list failed: {e}"); return 0; }
@@ -5706,7 +5708,7 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
             let tree_resp = tokio::task::spawn_blocking(move || {
                 let req = ureq::get(&tree_url);
                 let req = if let Some(t) = tok2 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
-                req.call()
+                req.call().map_err(Box::new)
             }).await.ok()?.ok()?;
             let tree_body  = tree_resp.into_string().ok()?;
             let files: Vec<serde_json::Value> = serde_json::from_str(&tree_body).ok()?;
@@ -5953,15 +5955,12 @@ fn normalize_quant_key(quant: &str) -> String {
 fn lookup_kld(model_id: &str, quant: &str) -> Option<f64> {
     let baseline = PERPLEXITY_BASELINE.as_ref()?;
     let q = normalize_quant_key(quant);
-    if let Some(family) = normalize_model_family(model_id) {
-        if let Some(fam) = baseline.families.get(&family) {
-            if let Some(e) = fam.quants.get(&q) { return Some(e.kld); }
-        }
-    }
+    if let Some(family) = normalize_model_family(model_id)
+        && let Some(fam) = baseline.families.get(&family)
+            && let Some(e) = fam.quants.get(&q) { return Some(e.kld); }
     // Default family fallback.
-    if let Some(def) = baseline.families.get("default") {
-        if let Some(e) = def.quants.get(&q) { return Some(e.kld); }
-    }
+    if let Some(def) = baseline.families.get("default")
+        && let Some(e) = def.quants.get(&q) { return Some(e.kld); }
     None
 }
 
@@ -6019,7 +6018,7 @@ fn parse_gguf_quant(filename: &str) -> String {
     for (i, seg) in parts.iter().enumerate() {
         if is_quant(seg) {
             let q = seg.to_ascii_uppercase();
-            if i + 1 < parts.len() && parts[i + 1].to_ascii_uppercase() == "UD" {
+            if i + 1 < parts.len() && parts[i + 1].eq_ignore_ascii_case("UD") {
                 return format!("UD-{q}");
             }
             return q;
@@ -6096,8 +6095,8 @@ async fn handle_fleet_model_candidates(
         entry.2.push((filename.clone(), quant.clone(), *file_size as u64));
     }
     // Sort each model's variants by file size descending (largest first = highest quality first)
-    for (_, (_, _, variants)) in model_map.iter_mut() {
-        variants.sort_by(|a, b| b.2.cmp(&a.2));
+    for (_, _, variants) in model_map.values_mut() {
+        variants.sort_by_key(|a| std::cmp::Reverse(a.2));
     }
 
     let hf_reachable = !model_map.is_empty();
@@ -6113,7 +6112,7 @@ async fn handle_fleet_model_candidates(
         .into_iter()
         .map(|(id, (dl, likes, vars))| (id, dl, likes, vars))
         .collect();
-    hf_models.sort_by(|a, b| b.1.cmp(&a.1));
+    hf_models.sort_by_key(|a| std::cmp::Reverse(a.1));
     hf_models.truncate(limit as usize);
 
     // Snapshot online fleet node hardware
@@ -6210,7 +6209,7 @@ async fn handle_fleet_model_candidates(
                 .unwrap_or(0)
         };
         models.retain(|m| node_score(m) > 0);
-        models.sort_by(|a, b| node_score(b).cmp(&node_score(a)));
+        models.sort_by_key(|m| std::cmp::Reverse(node_score(m)));
     } else if online_count > 1 {
         // Intersection: all online nodes must have score >= 60 (Good or better).
         // Lower scores indicate "fits but tight" — don't show those in the trending list
@@ -6383,9 +6382,7 @@ async fn handle_v1_models_discover(
     let rows: Vec<(String, String, String, i64, i64, i64)> = if let Some(ref s) = search {
         sqlx::query_as(&sql).bind(limit).bind(s).fetch_all(&state.pool).await.unwrap_or_default()
     } else {
-        let sql_no_search = format!(
-            "SELECT model_id, filename, quant_level, file_size, downloads, likes FROM model_catalog ORDER BY downloads DESC LIMIT $1"
-        );
+        let sql_no_search = "SELECT model_id, filename, quant_level, file_size, downloads, likes FROM model_catalog ORDER BY downloads DESC LIMIT $1".to_string();
         sqlx::query_as(&sql_no_search).bind(limit).fetch_all(&state.pool).await.unwrap_or_default()
     };
 
@@ -6826,7 +6823,7 @@ fn model_matches(pattern: &str, model: &str) -> bool {
         // A bare "*" would allow everything, which defeats the point of an
         // allow-list — treat it as matching nothing rather than silently
         // disabling governance for the scope.
-        Some(prefix) if prefix.is_empty() => false,
+        Some("") => false,
         Some(prefix) => m.starts_with(prefix),
         None => p == m,
     }
@@ -6850,7 +6847,7 @@ fn model_policy_violation(
             None => true,
             Some(t) => {
                 let t = t.trim().to_lowercase().replace(' ', "");
-                tags.iter().any(|nt| *nt == t)
+                tags.contains(&t)
             }
         })
         .collect();
@@ -7015,14 +7012,13 @@ async fn evaluate_webhooks(
         let (prev_value, prev_value_num, last_fired_ms) = prev.unwrap_or((None, None, None));
 
         // Cooldown check — same condition won't refire within cooldown_s.
-        if let Some(lf) = last_fired_ms {
-            if now.saturating_sub(lf) < (cooldown_s as i64) * 1_000 {
+        if let Some(lf) = last_fired_ms
+            && now.saturating_sub(lf) < (cooldown_s as i64) * 1_000 {
                 // Still update prev_value so we don't miss an actual crossing
                 // when cooldown ends, but skip the fire.
                 let _ = update_webhook_state_no_fire(&sub_id, node_id, &event_type, &cur_thermal, &cur_inference, cur_wes, pool).await;
                 continue;
             }
-        }
 
         // Detect the firing condition per event type.
         let (fired, payload) = match event_type.as_str() {
@@ -7265,9 +7261,8 @@ async fn evaluate_alerts(
         };
 
         if firing {
-            if let Some((_, Some(quiet_until))) = &open_event {
-                if now < *quiet_until as u64 { continue; }
-            }
+            if let Some((_, Some(quiet_until))) = &open_event
+                && now < *quiet_until as u64 { continue; }
             if open_event.is_some() { continue; }
 
             if debounce_ms > 0 {
@@ -7275,9 +7270,8 @@ async fn evaluate_alerts(
                     "SELECT MAX(resolved_at) FROM alert_events
                      WHERE rule_id = $1 AND node_id = $2 AND resolved_at IS NOT NULL"
                 ).bind(rule_id).bind(node_id).fetch_one(pool).await.ok().flatten();
-                if let Some(last_res) = last_resolved_at {
-                    if now < (last_res as u64).saturating_add(debounce_ms) { continue; }
-                }
+                if let Some(last_res) = last_resolved_at
+                    && now < (last_res as u64).saturating_add(debounce_ms) { continue; }
             }
 
             let detail = match event_type.as_str() {
@@ -7866,7 +7860,7 @@ async fn fleet_alert_evaluator_task(state: AppState) {
             // 3. OOM Warning
             {
                 let alert_type = "oom_warning";
-                let oom_ticks = ring.consecutive_ticks(|e| e.3.map_or(false, |p| p > 95.0));
+                let oom_ticks = ring.consecutive_ticks(|e| e.3.is_some_and(|p| p > 95.0));
                 let is_firing = oom_ticks >= 2; // require sustained pressure, not single-tick spike
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
                 if is_firing && !is_open {
@@ -8597,12 +8591,11 @@ async fn handle_create_rule(
             Json(serde_json::json!({ "error": "Alerting requires Team tier or channel not found" }))).into_response();
     }
 
-    if let Some(ref t) = body.tag {
-        if !valid_scope_tag(t) {
+    if let Some(ref t) = body.tag
+        && !valid_scope_tag(t) {
             return (StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
         }
-    }
 
     let id      = Uuid::new_v4().to_string();
     let urgency = body.urgency.as_deref().unwrap_or("immediate").to_string();
@@ -8748,18 +8741,16 @@ async fn handle_create_silence(
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "duration_min must be 1..43200 (30 days)" }))).into_response();
     }
-    if let Some(ref t) = body.tag {
-        if !valid_scope_tag(t) {
+    if let Some(ref t) = body.tag
+        && !valid_scope_tag(t) {
             return (StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
         }
-    }
-    if let Some(ref et) = body.event_type {
-        if !SILENCEABLE_EVENTS.contains(&et.as_str()) {
+    if let Some(ref et) = body.event_type
+        && !SILENCEABLE_EVENTS.contains(&et.as_str()) {
             return (StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": format!("event_type must be one of: {}", SILENCEABLE_EVENTS.join(", ")) }))).into_response();
         }
-    }
     let now = now_ms() as i64;
     let starts_at = body.starts_at.unwrap_or(now).max(now - 60_000); // small clock-skew grace
     if starts_at > now + 90 * 24 * 3_600_000 {
@@ -9318,13 +9309,12 @@ async fn handle_fleet_capacity(
         let hostname = cache.get(node_id)
             .and_then(|e| e.metrics.as_ref())
             .and_then(|m| m.hostname.clone());
-        if let (Some(t), Some(w)) = (tok_s, watts) {
-            if *t > 0.0 && *w > 0.0 {
+        if let (Some(t), Some(w)) = (tok_s, watts)
+            && *t > 0.0 && *w > 0.0 {
                 sustained_tok_s += t;
                 total_watts += w;
                 eff_by_class.entry(class).or_default().push(t / w);
             }
-        }
         nodes.push(serde_json::json!({
             "node_id": node_id, "hostname": hostname, "class": class,
             "avg_tok_s": tok_s, "avg_watts": watts,
@@ -9702,12 +9692,11 @@ async fn handle_create_slo(
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "target_pct must be 50..99.99" }))).into_response();
     }
-    if let Some(ref t) = body.tag {
-        if !valid_scope_tag(t) {
+    if let Some(ref t) = body.tag
+        && !valid_scope_tag(t) {
             return (StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "tag must be 1-64 chars: letters, digits, : - _ ." }))).into_response();
         }
-    }
 
     let (_tcol, tval) = tenant_scope(&user_id, &org_id);
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM slo_definitions WHERE tenant_id = $1")
@@ -10017,6 +10006,7 @@ impl PaddlePrices {
 ///     a tier that is no longer sold and that fails `is_team_or_above`, locking
 ///     them out of chargeback, idle-waste, capacity planning and SLOs: exactly
 ///     what they had paid for. Silently, with nothing logged.
+///
 /// Granting nothing is recoverable (the customer says so, and the log names the
 /// price); granting the wrong entitlements quietly is not.
 fn tier_for_price_id(price_id: &str, prices: &PaddlePrices) -> Option<&'static str> {
@@ -10606,12 +10596,10 @@ async fn handle_cloud_mcp(
                         let e = match map.get(nid) { Some(e) => e, None => continue };
                         if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { continue; }
                         let m = match e.metrics.as_ref() { Some(m) => m, None => continue };
-                        if let Some(t) = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second } {
-                            if bt.as_ref().map_or(true, |(_, b)| t > *b) { bt = Some((nid.clone(), t)); }
-                        }
-                        if let Some(w) = wes_for_payload(m) {
-                            if bw.as_ref().map_or(true, |(_, b)| w > *b) { bw = Some((nid.clone(), w)); }
-                        }
+                        if let Some(t) = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second }
+                            && bt.as_ref().is_none_or(|(_, b)| t > *b) { bt = Some((nid.clone(), t)); }
+                        if let Some(w) = wes_for_payload(m)
+                            && bw.as_ref().is_none_or(|(_, b)| w > *b) { bw = Some((nid.clone(), w)); }
                     }
                     mcp_tool(&req_id, serde_json::json!({
                         "latency": bt.map(|(n, t)| serde_json::json!({ "node": n, "tok_s": t })),
@@ -10772,7 +10760,7 @@ async fn handle_cloud_mcp(
                         let bits: Option<u32> = if quant.starts_with('F') || quant.starts_with('f') {
                             if quant.contains("16") { Some(16) } else if quant.contains("32") { Some(32) } else { None }
                         } else {
-                            quant.chars().skip_while(|c| !c.is_ascii_digit()).next().and_then(|c| c.to_digit(10))
+                            quant.chars().find(|c| c.is_ascii_digit()).and_then(|c| c.to_digit(10))
                         };
                         let quant_kind = match bits {
                             Some(b) if b >= 8 => if pool_avail_gb < model_gb.unwrap_or(0.0) * 0.25 { "downgrade" } else { "lossless" },
@@ -10897,8 +10885,8 @@ async fn handle_prometheus_metrics(
     for (name, help, _unit) in &gauges {
         output.push_str(&format!("# HELP {name} {help}\n# TYPE {name} gauge\n"));
         for nid in &node_ids {
-            if let Some(entry) = cache.get(nid) {
-                if let Some(m) = &entry.metrics {
+            if let Some(entry) = cache.get(nid)
+                && let Some(m) = &entry.metrics {
                     let hostname = m.hostname.as_deref().unwrap_or("");
                     let val = match *name {
                         "wicklee_gpu_utilization" => m.gpu_utilization_percent.map(|v| v as f64)
@@ -10922,7 +10910,6 @@ async fn handle_prometheus_metrics(
                         output.push_str(&format!("{name}{{node_id=\"{nid}\",hostname=\"{hostname}\"}} {v}\n"));
                     }
                 }
-            }
         }
     }
 

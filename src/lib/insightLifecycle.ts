@@ -26,12 +26,6 @@ import type { ActionId, PatternConfidence } from '../types/observations';
 // ── Alert-fatigue constants ───────────────────────────────────────────────────
 
 /**
- * Pattern must be continuously absent for this long before pattern_resolved fires.
- * Mirrors the OBS_HOLD_MS constant in AIInsights.tsx — keep in sync.
- */
-export const OBS_HOLD_MS = 10 * 60 * 1000;   // 10 min
-
-/**
  * Minimum elapsed time before a pattern_onset may re-fire for the same
  * patternId + nodeId pair. Intentionally longer than OBS_HOLD_MS to create
  * a 5-minute quiet gap after resolution.
@@ -101,7 +95,7 @@ const MAX_EVENTS = 500;
  * Read all recent events from localStorage, pruning any older than TTL_MS.
  * Returns newest-first. Safe to call on every render — cheap JSON parse + filter.
  */
-export function readRecentEvents(): InsightRecentEvent[] {
+function readRecentEvents(): InsightRecentEvent[] {
   try {
     const raw = localStorage.getItem(EVENTS_KEY);
     if (!raw) return [];
@@ -132,49 +126,3 @@ export function appendRecentEvent(event: InsightRecentEvent): void {
 
 // ── Morning Briefing helpers ──────────────────────────────────────────────────
 
-/**
- * Dedup helper for InsightsBriefingCard: returns only the most recent 'onset'
- * per patternId + nodeId pair within the 24h window.
- *
- * Rationale: if a thermal drain fired 3 times overnight, the operator needs to
- * know it happened — not see 3 identical rows. A "×N in 24h" count badge is
- * added by the card for repeated patterns.
- */
-export function deduplicateOnsets(events: InsightRecentEvent[]): {
-  event: InsightRecentEvent;
-  count: number;
-}[] {
-  const seen   = new Map<string, { event: InsightRecentEvent; count: number }>();
-  const onsets = events.filter(e => e.eventType === 'onset');
-
-  for (const e of onsets) {
-    const key = `${e.patternId}:${e.nodeId}`;
-    const existing = seen.get(key);
-    if (!existing) {
-      seen.set(key, { event: e, count: 1 });
-    } else {
-      // Already have a newer entry (onsets are newest-first) — just increment count
-      existing.count++;
-    }
-  }
-
-  return [...seen.values()];
-}
-
-/** Format a duration (ms) as a human-readable string like "14m" or "2h 7m". */
-export function fmtDuration(ms: number): string {
-  const totalMin = Math.round(ms / 60_000);
-  if (totalMin < 60) return `${totalMin}m`;
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
-}
-
-/** Format a timestamp as a relative age like "just now", "14m ago", "3h ago". */
-export function fmtEventAge(ts: number): string {
-  const elapsed = Date.now() - ts;
-  const m = Math.round(elapsed / 60_000);
-  if (m < 1)  return 'just now';
-  if (m < 60) return `${m}m ago`;
-  return `${Math.floor(m / 60)}h ago`;
-}

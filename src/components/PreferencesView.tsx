@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, Moon, Bell, Globe, Layout, Cpu, Sun } from 'lucide-react';
+import { Moon, Bell, Layout, Cpu} from 'lucide-react';
 import { Tenant } from '../types';
 
 interface PreferencesViewProps {

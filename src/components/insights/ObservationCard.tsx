@@ -12,13 +12,12 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, X, CheckCircle, Lightbulb, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves, ListChecks, HardDrive } from 'lucide-react';
+import { Copy, Check, Thermometer, Zap, Server, TrendingDown, MemoryStick, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves, HardDrive } from 'lucide-react';
 import type { DetectedInsight, ActionId } from '../../types/observations';
-import { appendRecentEvent } from '../../lib/insightLifecycle';
 
 // ── Dismiss helpers ───────────────────────────────────────────────────────────
 
-export const DISMISS_RESURFACE_MS = 60 * 60 * 1000;   // resurface after 1h
+const DISMISS_RESURFACE_MS = 60 * 60 * 1000;   // resurface after 1h
 
 function dismissKey(patternId: string, nodeId: string): string {
   return `obs-dismissed:${patternId}:${nodeId}`;
@@ -52,7 +51,7 @@ interface ActionBadgeConfig {
   cls:   string;
 }
 
-export function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
+function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
   switch (actionId) {
     // 'rebalance_workload' removed — routing not yet actionable
     case 'evict_idle_models':
@@ -181,164 +180,3 @@ export function ConfidenceBar({ insight }: { insight: DetectedInsight }) {
 }
 
 // ── ObservationCard ───────────────────────────────────────────────────────────
-
-interface ObservationCardProps {
-  insight:        DetectedInsight;
-  showNodeHeader: boolean;
-  /** If set, the pattern has stopped firing; card shows a resolved badge. */
-  resolvedMs?:    number | null;
-  /**
-   * Called after the card is dismissed (after localStorage write + buffer append).
-   * AIInsights uses this to emit a 'pattern_dismissed' FleetEvent so the Live
-   * Activity Feed shows the acknowledgement.
-   */
-  onDismiss?:     () => void;
-}
-
-function fmtResolvedAge(resolvedMs: number): string {
-  const elapsed = Date.now() - resolvedMs;
-  const m = Math.round(elapsed / 60_000);
-  if (m < 1)  return 'just now';
-  if (m < 60) return `${m}m ago`;
-  return `${Math.floor(m / 60)}h ago`;
-}
-
-const ObservationCard: React.FC<ObservationCardProps> = ({ insight, showNodeHeader, resolvedMs, onDismiss }) => {
-  // Initialise from localStorage so dismiss state survives hot-reloads
-  const [dismissed, setDismissed] = useState(
-    () => readDismissed(insight.patternId, insight.nodeId),
-  );
-
-  const handleDismiss = useCallback(() => {
-    writeDismissed(insight.patternId, insight.nodeId);
-    setDismissed(true);
-    // Write a 'dismissed' record to the 24h recent-events buffer so the
-    // Morning Briefing Card can surface operator acknowledgements.
-    appendRecentEvent({
-      id:             crypto.randomUUID(),
-      ts:             Date.now(),
-      eventType:      'dismissed',
-      nodeId:         insight.nodeId,
-      hostname:       insight.hostname,
-      patternId:      insight.patternId,
-      title:          insight.title,
-      action_id:      insight.action_id,
-      hook:           insight.hook,
-      recommendation: insight.recommendation,
-    });
-    // Notify parent so it can emit the pattern_dismissed FleetEvent.
-    onDismiss?.();
-  }, [insight, onDismiss]);
-
-  if (dismissed) return null;
-
-  const isBuilding = insight.confidence === 'building';
-  const isResolved = resolvedMs != null;
-
-  return (
-    <div className={`border rounded-2xl p-4 space-y-3 transition-opacity ${
-      isResolved
-        ? 'bg-gray-800/30 border-gray-700/50 opacity-70'
-        : 'bg-gray-800/60 border-gray-700'
-    }`}>
-
-      {/* Header row */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          {patternIcon(insight.patternId)}
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-              Observation
-              {isBuilding && !isResolved && (
-                <span className="ml-2 text-indigo-400/70 normal-case tracking-normal">
-                  · Building
-                </span>
-              )}
-              {isResolved && (
-                <span className="ml-2 text-green-400/80 normal-case tracking-normal flex-inline items-center gap-1">
-                  · <CheckCircle className="w-2.5 h-2.5 inline -mt-px" /> Resolved {fmtResolvedAge(resolvedMs)}
-                </span>
-              )}
-            </p>
-            <p className="text-sm font-semibold text-white truncate">{insight.title}</p>
-          </div>
-        </div>
-
-        {/* Right side: hook + dismiss */}
-        <div className="shrink-0 flex items-start gap-2">
-          <div className="text-right">
-            <p className={`text-base font-bold font-mono ${isResolved ? 'text-gray-500' : hookColor(insight.patternId)}`}>
-              {insight.hook}
-            </p>
-            {showNodeHeader && (
-              <p className="text-[10px] text-gray-500 mt-0.5">{insight.hostname}</p>
-            )}
-          </div>
-          <button
-            onClick={handleDismiss}
-            title="Dismiss for 1 hour"
-            className="mt-0.5 p-1 rounded-lg text-gray-600 hover:text-gray-400
-                       hover:bg-gray-700 transition-colors"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Body */}
-      <p className="text-xs text-gray-400 leading-relaxed">{insight.body}</p>
-
-      {/* Recommendation row — prescriptive 1–2 sentence operator action */}
-      {insight.recommendation && !isResolved && (
-        <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
-          <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
-          <div className="min-w-0 space-y-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400/70">
-              Recommended Action
-            </p>
-            <p className="text-xs text-gray-300 leading-relaxed">{insight.recommendation}</p>
-            <ActionIdBadge actionId={insight.action_id} />
-          </div>
-        </div>
-      )}
-
-      {/* Resolution steps — numbered step-by-step playbook, collapsed if resolved */}
-      {insight.resolution_steps && insight.resolution_steps.length > 0 && !isResolved && (
-        <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
-          <ListChecks className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />
-          <div className="min-w-0 space-y-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-              Resolution Steps
-            </p>
-            <ol className="space-y-1 list-none">
-              {insight.resolution_steps.map((step, idx) => (
-                <li key={idx} className="flex gap-2 text-xs text-gray-400 leading-relaxed">
-                  <span className="shrink-0 font-mono text-gray-600 w-3 text-right">{idx + 1}.</span>
-                  <span>{step}</span>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </div>
-      )}
-
-      {/* Action copy buttons — hidden when resolved (condition is gone) */}
-      {insight.actions.length > 0 && !isResolved && (
-        <div className="flex flex-wrap gap-2">
-          {insight.actions.map(action => (
-            <CopyButton
-              key={action.copyText}
-              text={action.copyText}
-              label={action.label}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Confidence bar — only shown while building and not resolved */}
-      {isBuilding && !isResolved && <ConfidenceBar insight={insight} />}
-    </div>
-  );
-};
-
-export default ObservationCard;

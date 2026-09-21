@@ -11,8 +11,7 @@ import SLOSection from './settings/SLOSection';
 import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
-  type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
-} from '../hooks/useSettings';
+  type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings} from '../hooks/useSettings';
 import { CLOUD_URL } from '../utils/cloudUrl';
 
 // ── Alert types ────────────────────────────────────────────────────────────────
