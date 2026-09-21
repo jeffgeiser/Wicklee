@@ -7,7 +7,7 @@ sdk: static
 app_file: index.html
 pinned: false
 license: mit
-short_description: Live demo of Wicklee — hardware-first observability for local AI fleets
+short_description: Live demo of Wicklee — hardware-aware observability for private AI fleets
 tags:
   - observability
   - local-llm
