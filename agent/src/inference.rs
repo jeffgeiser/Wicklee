@@ -116,10 +116,10 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     // every idle-node probe blipped LIVE and was pushed to the cloud via the
     // state-transition bypass. Concurrent user traffic still counts (≥2).
     let probe_inflight = u32::from(s.probe_active);
-    if s.vllm_requests.map_or(false, |r| r > probe_inflight) {
+    if s.vllm_requests.is_some_and(|r| r > probe_inflight) {
         return InferenceState::Live;
     }
-    if s.llamacpp_requests.map_or(false, |r| r > probe_inflight) {
+    if s.llamacpp_requests.is_some_and(|r| r > probe_inflight) {
         return InferenceState::Live;
     }
 
@@ -127,7 +127,7 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     // last_user_request_ts is set by /api/ps harvester only when the expires_at
     // change is NOT from our own probe (snapshot-based filter), so this timestamp
     // is guaranteed to represent a real user request.
-    if s.last_user_request_ts.map_or(false, |t| t.elapsed().as_secs() < 15) {
+    if s.last_user_request_ts.is_some_and(|t| t.elapsed().as_secs() < 15) {
         return InferenceState::Live;
     }
 
@@ -142,22 +142,22 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     // High-confidence override: the synthetic probe never drives GPU above ~60%.
     // If residency is ≥ 75% during the recent_probe window it can only be real
     // user inference — skip the recent_probe gate.
-    let saturated_gpu = s.apple_gpu_pct.map_or(false,  |g| g >= 75.0)
-                     || s.nvidia_gpu_pct.map_or(false, |g| g >= 75.0);
+    let saturated_gpu = s.apple_gpu_pct.is_some_and(|g| g >= 75.0)
+                     || s.nvidia_gpu_pct.is_some_and(|g| g >= 75.0);
 
     if !s.probe_active && (!s.recent_probe || saturated_gpu) && s.ai_model_loaded {
-        let ai_specific = s.ane_power_w.map_or(false, |p| p > 0.5);
+        let ai_specific = s.ane_power_w.is_some_and(|p| p > 0.5);
         let physics =
             // SoC power gate (M1 Pro/Max/Ultra, M2/M3 Pro/Max — larger GPU arrays)
-            s.soc_power_w.map_or(false, |p| p > 8.0)
+            s.soc_power_w.is_some_and(|p| p > 8.0)
             // "Power Blindness" override: M2/M3 base GPU reports near-zero power
             // (~88 mW) even at 40%+ residency. Use GPU residency directly.
             // 20% sits above system-idle flicker (3–5%) and below inference load (40%+).
-            || s.apple_gpu_pct.map_or(false, |g| g > 20.0)
+            || s.apple_gpu_pct.is_some_and(|g| g > 20.0)
             // NVIDIA checks
-            || (s.nvidia_gpu_pct.map_or(false, |g| g > 30.0)
-                && s.nvidia_vram_mb.map_or(false, |v| v > 0))
-            || s.nvidia_power_w.map_or(false, |p| p > 40.0);
+            || (s.nvidia_gpu_pct.is_some_and(|g| g > 30.0)
+                && s.nvidia_vram_mb.is_some_and(|v| v > 0))
+            || s.nvidia_power_w.is_some_and(|p| p > 40.0);
 
         if ai_specific || physics {
             return InferenceState::Live;
@@ -172,8 +172,8 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     }
 
     // ── BUSY: hardware loaded, no AI runtime ─────────────────────────────────
-    let any_load = s.nvidia_gpu_pct.map_or(false, |g| g > 20.0)
-                || s.soc_power_w.map_or(false,    |p| p > 10.0);
+    let any_load = s.nvidia_gpu_pct.is_some_and(|g| g > 20.0)
+                || s.soc_power_w.is_some_and(|p| p > 10.0);
     if any_load && !s.ai_runtime_loaded {
         return InferenceState::Busy;
     }
