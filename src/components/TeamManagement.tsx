@@ -1,5 +1,6 @@
 import React from 'react';
 import { Users } from 'lucide-react';
+import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
 
 /**
  * TeamManagement — Clerk Organization management for shared fleet access.
@@ -9,26 +10,37 @@ import { Users } from 'lucide-react';
  * On the agent/localhost build, this renders a static message (Clerk not available).
  */
 
-// Dynamic import: OrganizationProfile is only available in cloud builds with Clerk.
-// We lazy-import to avoid breaking agent builds that don't have @clerk/clerk-react.
-let ClerkOrgProfile: React.FC<{ appearance?: object }> | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const clerk = require('@clerk/clerk-react');
-  ClerkOrgProfile = clerk.OrganizationProfile;
-} catch {
-  // Clerk not available (agent build) — will render fallback below
-}
+// Clerk is loaded with a dynamic import(), never a static one, so its module
+// init never runs in agent builds — the same rule App.tsx follows for
+// CloudApp / SignInPage.
+//
+// This used to be a `require('@clerk/clerk-react')` inside try/catch. In a
+// Vite ESM bundle `require` is not defined in the browser, so the call threw,
+// the catch swallowed it, ClerkOrgProfile stayed null, and the cloud branch
+// below was never taken: the org-management UI never rendered on wicklee.dev
+// and Team-tier users always saw the "available on the cloud dashboard"
+// fallback — on the cloud dashboard. Surfaced by the September lint pass
+// (no-require-imports).
+//
+// Shape matters for bundle size. IS_AGENT / IS_DEMO fold to literals at build
+// time, so the ternary folds too and the import() is gone from those bundles.
+// A bare `const X = React.lazy(() => import(...))` is NOT enough: Rollup keeps
+// the call as a possible side effect even when X is unreferenced, and
+// OrganizationProfile's ~22 kB landed in the agent chunk that already carries
+// @clerk/clerk-react for the sign-in pages. Measured both ways.
+const ClerkOrgProfile = (IS_AGENT || IS_DEMO)
+  ? null
+  : React.lazy(() =>
+      import('@clerk/clerk-react').then(m => ({ default: m.OrganizationProfile })),
+    );
 
 interface TeamManagementProps {
   tenantId: string;
   currentUser: { id: string; email: string; fullName: string; role: string };
 }
 
-const IS_DEMO = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
-
 const TeamManagement: React.FC<TeamManagementProps> = () => {
-  if (!IS_DEMO && ClerkOrgProfile) {
+  if (ClerkOrgProfile) {
     return (
       <div className="space-y-4">
         <div>
@@ -38,17 +50,19 @@ const TeamManagement: React.FC<TeamManagementProps> = () => {
           </p>
         </div>
         <div className="rounded-2xl overflow-hidden border border-gray-700 bg-gray-800">
-          <ClerkOrgProfile
-            appearance={{
-              baseTheme: undefined,
-              elements: {
-                rootBox: 'w-full',
-                cardBox: 'shadow-none border-0 bg-transparent',
-                navbar: 'bg-gray-900',
-                pageScrollBox: 'bg-gray-800',
-              },
-            }}
-          />
+          <React.Suspense fallback={null}>
+            <ClerkOrgProfile
+              appearance={{
+                baseTheme: undefined,
+                elements: {
+                  rootBox: 'w-full',
+                  cardBox: 'shadow-none border-0 bg-transparent',
+                  navbar: 'bg-gray-900',
+                  pageScrollBox: 'bg-gray-800',
+                },
+              }}
+            />
+          </React.Suspense>
         </div>
       </div>
     );
