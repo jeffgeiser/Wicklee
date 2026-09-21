@@ -3,6 +3,10 @@
 // indirection without adding meaning. Every other clippy lint is enforced
 // (-D warnings in CI).
 #![allow(clippy::type_complexity)]
+// `result_large_err`: auth helpers return Err(axum Response) as an early
+// return — the idiom throughout this file. Boxing the Response would ripple
+// into every caller for no benefit on a cold path. (Fires on clippy ≥1.98.)
+#![allow(clippy::result_large_err)]
 
 use axum::{
     body::Body,
@@ -6091,8 +6095,8 @@ async fn handle_fleet_model_candidates(
         entry.2.push((filename.clone(), quant.clone(), *file_size as u64));
     }
     // Sort each model's variants by file size descending (largest first = highest quality first)
-    for (_, (_, _, variants)) in model_map.iter_mut() {
-        variants.sort_by(|a, b| b.2.cmp(&a.2));
+    for (_, _, variants) in model_map.values_mut() {
+        variants.sort_by_key(|a| std::cmp::Reverse(a.2));
     }
 
     let hf_reachable = !model_map.is_empty();
@@ -6108,7 +6112,7 @@ async fn handle_fleet_model_candidates(
         .into_iter()
         .map(|(id, (dl, likes, vars))| (id, dl, likes, vars))
         .collect();
-    hf_models.sort_by(|a, b| b.1.cmp(&a.1));
+    hf_models.sort_by_key(|a| std::cmp::Reverse(a.1));
     hf_models.truncate(limit as usize);
 
     // Snapshot online fleet node hardware
