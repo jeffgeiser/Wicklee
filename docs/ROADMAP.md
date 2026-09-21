@@ -393,19 +393,19 @@ makes the next cheaper.
    `sync-scoring.mjs` and its CI check — but it is a deploy-config change, so
    it belongs with a deliberate Railway session, not a drive-by.
 
-4. **`TeamManagement.tsx` Clerk fallback never resolves (live bug, surfaced by
-   the lint pass).** The file loads `OrganizationProfile` via
-   `require('@clerk/clerk-react')` inside a try/catch so agent builds don't
-   break. In a Vite ESM bundle `require` is undefined in the browser, so the
-   call throws, the catch swallows it, `ClerkOrgProfile` stays `null`, and the
-   `if (!IS_DEMO && ClerkOrgProfile)` branch at l.31 is never taken — **the
-   Clerk org-management UI never renders on wicklee.dev; Team-tier users always
-   see the fallback.** The correct fix is a `React.lazy(() => import(…))`, but
-   `IS_AGENT` is a runtime const rather than a `define` literal, so Rollup
-   cannot prove the import dead and would pull Clerk into the agent bundle.
-   Needs either a `define`-based build flag or a build-target-specific entry.
-   Not fixed in Tier 1 on purpose — it is a behaviour change with a bundle
-   consequence, not a cleanup.
+4. **`TeamManagement.tsx` Clerk fallback never resolves (live bug — SHIPPED).**
+   The file loaded `OrganizationProfile` via `require('@clerk/clerk-react')`
+   inside a try/catch so agent builds would not break. In a Vite ESM bundle
+   `require` is undefined in the browser, so the call threw, the catch
+   swallowed it, `ClerkOrgProfile` stayed `null`, and the cloud branch was never
+   taken — the Clerk org-management UI never rendered on wicklee.dev and
+   Team-tier users always saw the fallback. Fixed with a dynamic `import()`
+   behind a build-time ternary on `IS_AGENT || IS_DEMO`; the ternary folds, so
+   the import is eliminated from the agent and demo bundles (measured: the
+   agent's shared Clerk chunk stays at its 87 kB baseline — a bare
+   `React.lazy(() => import(…))` had grown it to 109 kB because Rollup keeps
+   the call as a possible side effect). **Remaining:** end-to-end check against
+   a live Clerk org — the environment that shipped this has no publishable key.
 
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
 
