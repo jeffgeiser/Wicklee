@@ -2017,7 +2017,7 @@ curl https://wicklee.dev/api/v1/fleet \\
             </div>
 
             <NoteBox>
-              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team ($200/mo), the org unlocks unlimited nodes in the fleet view, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
+              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team (from $99/mo), the org unlocks the plan's node cap — 10 or 25 nodes — in the fleet view, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
             </NoteBox>
 
             <NoteBox>
