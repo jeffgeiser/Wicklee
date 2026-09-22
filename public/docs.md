@@ -1164,9 +1164,9 @@ Wicklee is sovereign by default:
 
 | | Community | Team | Enterprise |
 |---|---|---|---|
-| Price | Free | $200/mo ($2,000/yr) | Custom |
+| Price | Free | $99/mo (10 nodes) · $200/mo (25 nodes) | Custom |
 | Local nodes | Unlimited | Unlimited | Unlimited |
-| Nodes in cloud fleet view | 3 | Unlimited | Unlimited |
+| Nodes in cloud fleet view | 3 | 10 or 25 | Unlimited |
 | History | 24h | 90 days | 12 months |
 | Patterns | 9 | 18 | 18 |
 | Local API + MCP | ✅ | ✅ | ✅ |
