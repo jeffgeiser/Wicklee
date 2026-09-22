@@ -93,6 +93,20 @@ function applyMeta(shell, { title, description, path, ogType }) {
   return html;
 }
 
+/**
+ * Preload the lazily-imported page chunk a generated route will need. The
+ * marketing pages became separate chunks (App.tsx React.lazy) to keep the
+ * entry small; a prerendered route knows which one it is, so the fetch can
+ * start with the HTML instead of after the entry executes. Best-effort.
+ */
+let pageChunks = null;
+async function preloadPageChunk(html, prefix) {
+  pageChunks ??= (await readdir(join(DIST, 'assets'))).filter(f => f.endsWith('.js'));
+  const hits = pageChunks.filter(f => f.startsWith(prefix + '-'));
+  if (hits.length !== 1) return html;
+  return html.replace('</head>', `<link rel="modulepreload" crossorigin href="/assets/${hits[0]}">\n</head>`);
+}
+
 /** Inject JSON-LD + content into the shell's #root. */
 function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
   if (jsonLd) {
@@ -245,6 +259,17 @@ let shell = await readFile(join(DIST, 'index.html'), 'utf8');
   }
   if (clerkVendor.length === 1) preload.unshift(clerkVendor[0]);
   else console.warn(`[static-pages] expected one Clerk vendor chunk, found ${clerkVendor.length} — skipping its preload`);
+  // A preloaded chunk's own static imports are only discovered once the
+  // browser has parsed it — one more serial round-trip per level (measured:
+  // a 1 kB use-sync-external-store shim fetched ~160 ms after the entry
+  // executed). Pull in one level of them here; they are small.
+  for (const f of [...preload]) {
+    const src = await readFile(join(assetsDir, f), 'utf8');
+    for (const m of src.matchAll(/from\s*"\.\/([^"]+\.js)"|import\s*"\.\/([^"]+\.js)"/g)) {
+      const dep = m[1] ?? m[2];
+      if (dep && dep !== entry && !preload.includes(dep)) preload.push(dep);
+    }
+  }
   if (preload.length) {
     const links = preload.map(f => `<link rel="modulepreload" crossorigin href="/assets/${f}">`).join('\n');
     shell = shell.replace('</head>', `${links}\n</head>`);
@@ -305,6 +330,7 @@ for (const file of postFiles) {
   // the rendered article doesn't already start with it.
   const heading = /^\s*<h1/.test(article) ? '' : `<h1>${esc(title)}</h1>\n`;
   html = injectContent(html, { jsonLd, bodyHtml: `<article>${heading}${article}</article>` });
+  html = await preloadPageChunk(html, 'BlogPost');
   await emit(`/blog/${slug}`, html);
 }
 
@@ -321,6 +347,7 @@ for (const file of postFiles) {
     path: '/blog',
   });
   html = injectContent(html, { bodyHtml: `<h1>Wicklee Blog</h1>\n<ul>\n${list}\n</ul>` });
+  html = await preloadPageChunk(html, 'BlogListing');
   await emit('/blog', html);
 }
 
@@ -351,6 +378,7 @@ for (const page of [
     },
     bodyHtml: `<article>${body}</article>`,
   });
+  html = await preloadPageChunk(html, 'DocsPage');
   await emit(page.path, html);
 }
 
