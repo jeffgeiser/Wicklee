@@ -2453,8 +2453,8 @@ sudo systemctl restart wicklee`}
                       <Td>Local API + MCP, Ollama proxy</Td>
                     </tr>
                     <tr>
-                      <Td><span className="text-blue-400 font-medium">Team ($200/mo)</span></Td>
-                      <Td>Unlimited</Td>
+                      <Td><span className="text-blue-400 font-medium">Team ($99/mo · $200/mo)</span></Td>
+                      <Td>10 · 25</Td>
                       <Td>18</Td>
                       <Td>90 day</Td>
                       <Td>Slack + Email + PagerDuty</Td>

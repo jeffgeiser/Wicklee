@@ -1061,10 +1061,41 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
 // ── Tier constants ────────────────────────────────────────────────────────────
 
 /// Maximum nodes per tier.
+///
+/// Team is sold in two sizes since Sept 2026 — `team_10` ($99, up to 10 nodes)
+/// and `team` ($200, up to 25). Same features, different cap: the upgrade is
+/// "more GPUs", never a feature unlock. `pro` and `business` are retired but
+/// still resolve for grandfathered subscriptions.
 const MAX_FREE_NODES:     usize = 3;
 const MAX_PRO_NODES:      usize = 10;
+const MAX_TEAM10_NODES:   usize = 10;
 const MAX_TEAM_NODES:     usize = 25;
 const MAX_BUSINESS_NODES: usize = 100;
+
+/// The node cap for a tier string. Was copy-pasted as a four-way ladder at
+/// three call sites (pairing, node listing, fleet stream); `team_10` would
+/// have needed a fourth edit each time. `legacy_is_pro` is the old
+/// `users.is_pro` flag / dev-account bypass that only the pairing path honours.
+fn node_limit_for_tier(tier: &str, legacy_is_pro: bool) -> usize {
+    if tier == "enterprise" { usize::MAX }
+    else if is_business_or_above(tier) { MAX_BUSINESS_NODES }
+    else if tier == "team_10" { MAX_TEAM10_NODES }
+    else if is_team_or_above(tier) { MAX_TEAM_NODES }
+    else if legacy_is_pro || is_pro_or_above(tier) { MAX_PRO_NODES }
+    else { MAX_FREE_NODES }
+}
+
+/// Customer-facing plan name for a tier string (402 messages, logs).
+fn plan_name_for_tier(tier: &str) -> &'static str {
+    match tier {
+        "enterprise" => "Enterprise",
+        "business"   => "Business",
+        "team"       => "Team (25 nodes)",
+        "team_10"    => "Team (10 nodes)",
+        "pro"        => "Pro",
+        _            => "Community",
+    }
+}
 
 /// Agent API v1 rate limits (requests per 60-second sliding window).
 const API_RATE_COMMUNITY: usize = 60;
@@ -1074,12 +1105,13 @@ const API_RATE_TEAM:      usize = 600;
 const ALERT_QUIET_PERIOD_MS: u64 = 300_000; // 5 minutes
 
 /// Returns true if the account has Team or Enterprise tier (alerting unlocked).
+/// Both Team sizes qualify — the size changes the node cap, not the features.
 fn is_team_or_above(tier: &str) -> bool {
-    matches!(tier, "team" | "business" | "enterprise")
+    matches!(tier, "team_10" | "team" | "business" | "enterprise")
 }
 
 fn is_pro_or_above(tier: &str) -> bool {
-    matches!(tier, "pro" | "team" | "business" | "enterprise")
+    matches!(tier, "pro" | "team_10" | "team" | "business" | "enterprise")
 }
 
 fn is_business_or_above(tier: &str) -> bool {
@@ -1115,9 +1147,6 @@ fn allowed_patterns_for_tier(tier: &str) -> Vec<String> {
     }
     allowed
 }
-
-/// Number of nodes available for free on the Community tier.
-const FREE_NODE_LIMIT: usize = 3;
 
 /// Nodes not seen within this window are considered offline.
 const ONLINE_THRESHOLD_MS: u64 = 30_000;
@@ -3242,11 +3271,7 @@ async fn handle_fleet(
         &format!("SELECT wk_id, fleet_url, paired_at FROM nodes WHERE {} = $1 ORDER BY paired_at ASC", tcol)
     ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
 
-    let tier_limit = if tier == "enterprise" { usize::MAX }
-        else if is_business_or_above(&tier) { MAX_BUSINESS_NODES }
-        else if is_team_or_above(&tier) { MAX_TEAM_NODES }
-        else if is_pro_or_above(&tier) { MAX_PRO_NODES }
-        else { FREE_NODE_LIMIT };
+    let tier_limit = node_limit_for_tier(&tier, false);
     let restricted: HashSet<String> = persisted.iter()
         .skip(tier_limit)
         .map(|(id, _, _)| id.clone())
@@ -4044,11 +4069,11 @@ async fn handle_wes_history(
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
-    let allowed = match tier.as_str() {
-        "team" | "enterprise" => true,
-        "pro" => !matches!(range.as_str(), "30d" | "90d"),
-        _ => matches!(range.as_str(), "1h" | "24h"),
-    };
+    // Was `match tier { "team" | "enterprise" => true, .. }`, which left
+    // Business out of 30d/90d and would have left team_10 out too.
+    let allowed = if is_team_or_above(&tier) { true }
+        else if tier == "pro" { !matches!(range.as_str(), "30d" | "90d") }
+        else { matches!(range.as_str(), "1h" | "24h") };
     if !allowed {
         return (StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
@@ -4855,11 +4880,11 @@ async fn handle_metrics_history(
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
-    let allowed = match tier.as_str() {
-        "team" | "enterprise" => true,
-        "pro" => !matches!(range.as_str(), "30d" | "90d"),
-        _ => matches!(range.as_str(), "1h" | "24h"),
-    };
+    // Was `match tier { "team" | "enterprise" => true, .. }`, which left
+    // Business out of 30d/90d and would have left team_10 out too.
+    let allowed = if is_team_or_above(&tier) { true }
+        else if tier == "pro" { !matches!(range.as_str(), "30d" | "90d") }
+        else { matches!(range.as_str(), "1h" | "24h") };
     if !allowed {
         return (StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": format!("Range '{}' requires a higher subscription tier", range) }))).into_response();
@@ -5099,23 +5124,26 @@ async fn handle_activate(
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
     // Enforce per-tier node limits.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
-    let node_limit = if tier == "enterprise" { usize::MAX }
-        else if is_business_or_above(&tier) { MAX_BUSINESS_NODES }
-        else if is_team_or_above(&tier) { MAX_TEAM_NODES }
-        else if is_pro || is_pro_or_above(&tier) { MAX_PRO_NODES }
-        else { MAX_FREE_NODES };
+    let node_limit = node_limit_for_tier(&tier, is_pro);
     {
         let (tcol, tval) = tenant_scope(&user_id, &org_id);
         let count: i64 = sqlx::query_scalar::<_, i64>(
             &format!("SELECT COUNT(*) FROM nodes WHERE {} = $1", tcol)
         ).bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
         if count as usize >= node_limit {
-            let tier_name = if node_limit == MAX_FREE_NODES { "Community" }
-                else if node_limit == MAX_PRO_NODES { "Pro" }
-                else { "Team" };
+            // Reverse-mapping the cap to a name broke once team_10 and pro
+            // shared a cap of 10; name the plan from the tier string instead.
+            let plan = plan_name_for_tier(&tier);
+            let next = match tier.as_str() {
+                "team_10" => "Move to Team (25 nodes) to add more.",
+                "team"    => "Above 25 nodes, talk to us about Enterprise.",
+                _         => "Team plans cover 10 or 25 nodes — see Pricing.",
+            };
             return (StatusCode::PAYMENT_REQUIRED,
                 Json(serde_json::json!({
-                    "error": format!("{tier_name} tier limit reached ({node_limit} nodes). Upgrade to add more.")
+                    "error": format!("{plan} limit reached ({node_limit} nodes). {next}"),
+                    "tier": tier,
+                    "node_limit": node_limit,
                 }))).into_response();
         }
     }
@@ -5266,11 +5294,7 @@ async fn handle_fleet_stream(
             });
         }
 
-        let stream_limit = if tier == "enterprise" { usize::MAX }
-            else if is_business_or_above(&tier) { MAX_BUSINESS_NODES }
-            else if is_team_or_above(&tier) { MAX_TEAM_NODES }
-            else if is_pro_or_above(&tier) { MAX_PRO_NODES }
-            else { FREE_NODE_LIMIT };
+        let stream_limit = node_limit_for_tier(&tier, false);
         let restricted_ids: HashSet<&str> = ordered_nodes.iter()
             .skip(stream_limit).map(|s| s.as_str()).collect();
 
@@ -9961,20 +9985,24 @@ async fn handle_test_channel(
 /// ($2,000/yr) is advertised on /pricing, and without its own price ID an
 /// annual subscription would arrive as an unrecognized price.
 struct PaddlePrices {
-    pro:          String,
-    team_monthly: String,
-    team_annual:  String,
-    business:     String,
+    pro:            String,
+    team10_monthly: String,
+    team10_annual:  String,
+    team_monthly:   String,
+    team_annual:    String,
+    business:       String,
 }
 
 impl PaddlePrices {
     fn from_env() -> Self {
         let get = |k: &str| std::env::var(k).unwrap_or_default();
         Self {
-            pro:          get("PADDLE_PRO_PRICE_ID"),
-            team_monthly: get("PADDLE_TEAM_PRICE_ID"),
-            team_annual:  get("PADDLE_TEAM_ANNUAL_PRICE_ID"),
-            business:     get("PADDLE_BUSINESS_PRICE_ID"),
+            pro:            get("PADDLE_PRO_PRICE_ID"),
+            team10_monthly: get("PADDLE_TEAM10_PRICE_ID"),
+            team10_annual:  get("PADDLE_TEAM10_ANNUAL_PRICE_ID"),
+            team_monthly:   get("PADDLE_TEAM_PRICE_ID"),
+            team_annual:    get("PADDLE_TEAM_ANNUAL_PRICE_ID"),
+            business:       get("PADDLE_BUSINESS_PRICE_ID"),
         }
     }
 
@@ -9988,7 +10016,8 @@ impl PaddlePrices {
     /// closed until this holds, or the overlay would bill an unset/placeholder
     /// price.
     fn team_configured(&self) -> bool {
-        Self::is_real(&self.team_monthly) || Self::is_real(&self.team_annual)
+        [&self.team10_monthly, &self.team10_annual, &self.team_monthly, &self.team_annual]
+            .iter().any(|id| Self::is_real(id))
     }
 }
 
@@ -10017,7 +10046,9 @@ fn tier_for_price_id(price_id: &str, prices: &PaddlePrices) -> Option<&'static s
     // string) can never match anything.
     let matches = |configured: &str| PaddlePrices::is_real(configured) && configured == price_id;
 
-    if matches(&prices.team_monthly) || matches(&prices.team_annual) {
+    if matches(&prices.team10_monthly) || matches(&prices.team10_annual) {
+        Some("team_10")
+    } else if matches(&prices.team_monthly) || matches(&prices.team_annual) {
         Some("team")
     } else if matches(&prices.business) {
         Some("business")
@@ -10078,8 +10109,10 @@ async fn handle_billing_config(
         // existing subscriptions on those prices keep working through the
         // webhook, but nothing may start a new one.
         "prices": {
-            "team":        prices.team_monthly,
-            "team_annual": prices.team_annual,
+            "team_10":        prices.team10_monthly,
+            "team_10_annual": prices.team10_annual,
+            "team":           prices.team_monthly,
+            "team_annual":    prices.team_annual,
         },
         "custom_data": { "user_id": user_id },
         "customer_email": email,
@@ -10272,7 +10305,7 @@ async fn handle_get_otel_config(
     };
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
-    if tier != "team" && tier != "enterprise" {
+    if !is_team_or_above(&tier) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Team tier required"}))).into_response();
     }
     let row: Option<(bool, String, String, i32)> = sqlx::query_as(
@@ -10303,7 +10336,7 @@ async fn handle_put_otel_config(
     if !role.can_mutate() { return role_forbidden("member"); }
     // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
-    if tier != "team" && tier != "enterprise" {
+    if !is_team_or_above(&tier) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Team tier required"}))).into_response();
     }
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
@@ -11310,16 +11343,20 @@ mod paddle_price_tests {
 
     fn prices() -> PaddlePrices {
         PaddlePrices {
-            pro:          "pri_pro_29".into(),
-            team_monthly: "pri_team_200".into(),
-            team_annual:  "pri_team_2000".into(),
-            business:     "pri_business_499".into(),
+            pro:            "pri_pro_29".into(),
+            team10_monthly: "pri_team10_99".into(),
+            team10_annual:  "pri_team10_990".into(),
+            team_monthly:   "pri_team_200".into(),
+            team_annual:    "pri_team_2000".into(),
+            business:       "pri_business_499".into(),
         }
     }
 
     #[test]
     fn maps_each_configured_price_to_its_tier() {
         let p = prices();
+        assert_eq!(tier_for_price_id("pri_team10_99",    &p), Some("team_10"));
+        assert_eq!(tier_for_price_id("pri_team10_990",   &p), Some("team_10"));
         assert_eq!(tier_for_price_id("pri_team_200",     &p), Some("team"));
         assert_eq!(tier_for_price_id("pri_team_2000",    &p), Some("team"));
         assert_eq!(tier_for_price_id("pri_business_499", &p), Some("business"));
@@ -11339,8 +11376,8 @@ mod paddle_price_tests {
         // Both sides empty must NOT compare equal — with the env vars unset this
         // was how every subscription became Pro.
         let unset = PaddlePrices {
-            pro: String::new(), team_monthly: String::new(),
-            team_annual: String::new(), business: String::new(),
+            pro: String::new(), team10_monthly: String::new(), team10_annual: String::new(),
+            team_monthly: String::new(), team_annual: String::new(), business: String::new(),
         };
         assert_eq!(tier_for_price_id("", &unset), None);
         assert_eq!(tier_for_price_id("pri_team_200", &unset), None);
@@ -11351,6 +11388,8 @@ mod paddle_price_tests {
     fn placeholder_price_ids_are_not_real() {
         let placeholders = PaddlePrices {
             pro: "pri_placeholder_pro".into(),
+            team10_monthly: String::new(),
+            team10_annual: String::new(),
             team_monthly: "pri_placeholder_team".into(),
             team_annual: String::new(),
             business: "pri_placeholder_business".into(),
@@ -11368,10 +11407,47 @@ mod paddle_price_tests {
         assert!(p.team_configured(), "monthly alone is enough");
 
         p.team_monthly = String::new();
+        assert!(p.team_configured(), "the 10-node prices still count as Team");
+
+        p.team10_monthly = String::new();
+        p.team10_annual  = String::new();
         assert!(!p.team_configured(), "no team price at all");
 
         p.team_annual = "pri_team_2000".into();
         assert!(p.team_configured(), "annual alone is enough");
+    }
+
+    #[test]
+    fn both_team_sizes_are_team_for_feature_gates() {
+        // The size changes the node cap, never the feature set.
+        for t in ["team_10", "team"] {
+            assert!(is_team_or_above(t), "{t} must pass Team gates");
+            assert!(is_pro_or_above(t),  "{t} must pass Pro gates");
+            assert!(!is_business_or_above(t), "{t} is not Business");
+        }
+    }
+
+    #[test]
+    fn node_limit_ladder() {
+        assert_eq!(node_limit_for_tier("community",  false), 3);
+        assert_eq!(node_limit_for_tier("pro",        false), 10);
+        assert_eq!(node_limit_for_tier("team_10",    false), 10);
+        assert_eq!(node_limit_for_tier("team",       false), 25);
+        assert_eq!(node_limit_for_tier("business",   false), 100);
+        assert_eq!(node_limit_for_tier("enterprise", false), usize::MAX);
+        // Legacy users.is_pro / dev-account bypass lifts Community to the Pro cap
+        // and never lowers a paid tier.
+        assert_eq!(node_limit_for_tier("community", true), 10);
+        assert_eq!(node_limit_for_tier("team",      true), 25);
+        // Unknown strings fail closed to the free cap.
+        assert_eq!(node_limit_for_tier("gold", false), 3);
+    }
+
+    #[test]
+    fn plan_names_distinguish_the_two_team_sizes() {
+        assert_eq!(plan_name_for_tier("team_10"), "Team (10 nodes)");
+        assert_eq!(plan_name_for_tier("team"),    "Team (25 nodes)");
+        assert_eq!(plan_name_for_tier("nope"),    "Community");
     }
 
     #[test]

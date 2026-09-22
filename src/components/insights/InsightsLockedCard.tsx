@@ -13,6 +13,7 @@
  * Spec: docs/INSIGHTS.md § Locked Card Pattern
  */
 
+import { tierLabel } from '../../utils/tier';
 import React from 'react';
 import { Lock } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
@@ -25,16 +26,6 @@ const TIER_STYLE: Record<string, string> = {
   Enterprise: 'text-amber-400 bg-amber-500/10 border-amber-500/25',
 };
 
-function tierLabel(t: SubscriptionTier): string {
-  const map: Record<SubscriptionTier, string> = {
-    community:  'Community',
-    pro:        'Pro',
-    team:       'Team',
-    business:   'Business',
-    enterprise: 'Enterprise',
-  };
-  return map[t];
-}
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 

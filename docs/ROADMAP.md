@@ -56,6 +56,23 @@ Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Business: 100 no
 ### Five-Tier Pricing
 Community (Free) → Pro ($29/mo) → Team ($49/seat/mo) → Business ($499/mo) → Enterprise (Contact Sales). Business adds 365-day history, unlimited seats, SSO/SAML, and audit logging. Paddle billing with webhook-driven tier sync.
 
+### Team Plan Sizes — 10 / 25 nodes (September 2026)
+Three tiers stayed (Community / Team / Enterprise) but Team now comes in two
+sizes priced by the value metric — nodes under management — rather than by
+seat or by feature: `team_10` ($99/mo, up to 10 nodes) and `team` ($200/mo, up
+to 25). Identical feature set; the upgrade is more GPUs. Above 25 is the
+Enterprise conversation. First-principles reasoning recorded in the PR: the
+retired $29 Pro served hobbyists (low WTP, high support), while the $0→$200
+cliff was losing the 5–8-GPU startup that grows into Team — so the cliff was
+lowered rather than a feature-stripped tier re-added. Shipped with:
+`node_limit_for_tier()` replacing three copy-pasted cap ladders (the roadmap's
+"thrice-copied tier-limit ladder"), a fix for two backend history gates and two
+Team-only gates that omitted `business`, the frontend `utils/tier.ts` replacing
+six hand-rolled `=== 'team'` chains, and the pricing-page correction from
+"Unlimited nodes" to the real 25-node cap. **Follow-up:** self-serve 10→25
+upgrade via Paddle `PATCH /subscriptions` (`/api/billing/upgrade`), once the
+first 10-node customer exists.
+
 ### Server-Side Pattern Evaluation (Phase 7)
 Migrated all 18 observation patterns from client-side TypeScript to server-side Rust. Agent evaluates 17 patterns against 10-min DuckDB buffer every 10s, pushes to cloud via telemetry. Cloud evaluates `fleet_load_imbalance`. Deleted `patternEngine.ts` (2,254 lines) and `useMetricHistory.ts` (284 lines).
 

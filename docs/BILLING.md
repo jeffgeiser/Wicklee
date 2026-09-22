@@ -1,8 +1,18 @@
 # Billing (Paddle)
 
-Wicklee sells one self-serve tier — **Team, $200/mo or $2,000/yr**. Community is
-free and Enterprise is a conversation (`mailto:` CTAs on `/pricing`), so Paddle
-only ever needs to hold Team products.
+Wicklee sells one self-serve plan in two sizes — **Team**, priced by the number
+of nodes in the cloud fleet view:
+
+| Size | Tier string | Nodes | Monthly | Annual |
+|---|---|---|---|---|
+| Team (10 nodes) | `team_10` | up to 10 | $99 | $990 |
+| Team (25 nodes) | `team` | up to 25 | $200 | $2,000 |
+
+Same features at both sizes — chargeback, idle-waste, capacity planner, SLOs,
+the Fleet API. The size is a node cap, never a feature unlock; the reason to
+move up is more GPUs. Above 25 nodes is an Enterprise conversation, not a
+bigger checkout. Community is free and Enterprise is `mailto:` CTAs on
+`/pricing`, so Paddle only ever needs to hold the four Team prices.
 
 ## Current state
 
@@ -30,8 +40,10 @@ asserting that Paddle now matches the published prices.
 | `PADDLE_CLIENT_TOKEN` | Client-side token for the Paddle.js overlay |
 | `PADDLE_WEBHOOK_SECRET` | HMAC-SHA256 verification. **Unset ⇒ webhooks are rejected.** |
 | `PADDLE_CHECKOUT_ENABLED` | `true` turns on self-serve checkout. Default off. |
-| `PADDLE_TEAM_PRICE_ID` | Team monthly ($200) |
-| `PADDLE_TEAM_ANNUAL_PRICE_ID` | Team annual ($2,000) |
+| `PADDLE_TEAM10_PRICE_ID` | Team 10-node monthly ($99) → tier `team_10` |
+| `PADDLE_TEAM10_ANNUAL_PRICE_ID` | Team 10-node annual ($990) → tier `team_10` |
+| `PADDLE_TEAM_PRICE_ID` | Team 25-node monthly ($200) → tier `team` |
+| `PADDLE_TEAM_ANNUAL_PRICE_ID` | Team 25-node annual ($2,000) → tier `team` |
 | `PADDLE_PRO_PRICE_ID` | **Retired — keep set.** Grandfathers existing Pro subscribers. |
 | `PADDLE_BUSINESS_PRICE_ID` | **Retired — keep set.** Grandfathers existing Business subscribers. |
 
@@ -47,8 +59,16 @@ maps to nothing — and the handler fails closed, so they lose their tier.
 
 In Paddle:
 
-1. Create a **Team monthly** price at **$200/mo** → set `PADDLE_TEAM_PRICE_ID`.
-2. Create a **Team annual** price at **$2,000/yr** → set `PADDLE_TEAM_ANNUAL_PRICE_ID`.
+1. One product, **Wicklee Team**, with four prices:
+   - **Team 10 monthly, $99/mo** → `PADDLE_TEAM10_PRICE_ID`
+   - **Team 10 annual, $990/yr** → `PADDLE_TEAM10_ANNUAL_PRICE_ID`
+   - **Team 25 monthly, $200/mo** → `PADDLE_TEAM_PRICE_ID`
+   - **Team 25 annual, $2,000/yr** → `PADDLE_TEAM_ANNUAL_PRICE_ID`
+   Name them by node count in Paddle so the invoice line reads
+   "Wicklee Team — up to 10 nodes"; the customer should never see `team_10`.
+2. Checkout is enabled once **any one** of the four is a real price ID
+   (`team_configured()`); wire all four before flipping step 7 so both sizes
+   are purchasable.
 3. **Archive** the retired prices — Pro $29, Team $49/seat, Business $499 — so
    nothing new can subscribe to them. Archiving does not cancel existing
    subscriptions, which is what you want.
@@ -65,8 +85,19 @@ Then, in the deployment env:
 6. `PADDLE_ENV=production`, `PADDLE_CLIENT_TOKEN=<live token>`.
 7. `PADDLE_CHECKOUT_ENABLED=true` — last, once 1–6 are verified.
 
-Verify with a sandbox purchase before flipping step 7 in production: the log
-line `[billing] paddle: <user> → team (sub=…)` confirms the mapping resolved.
+Verify with a sandbox purchase of **each size** before flipping step 7 in
+production: the log line `[billing] paddle: <user> → team_10 (sub=…)` or
+`→ team (sub=…)` confirms the mapping resolved.
+
+### Moving a customer from 10 to 25 nodes
+
+Paddle plan changes go through its API (`PATCH /subscriptions/{id}` with the new
+price and `proration_billing_mode: prorated_immediately`), not through a second
+checkout — a new checkout would open a second subscription. There is no
+self-serve upgrade button yet: the 402 the customer sees at the 11th node says
+to move to the 25-node plan, and today that means an email and the PATCH done
+by hand (or the SQL below plus a Paddle dashboard change). A `/api/billing/upgrade`
+endpoint is the follow-up once the first 10-node customer exists.
 
 ## Manual (invoiced) sales
 
@@ -78,6 +109,7 @@ so the update matches no row and no-ops silently.
 To fix a subscription up by hand, set both:
 
 ```sql
+-- 'team_10' for the 10-node plan, 'team' for 25 nodes
 UPDATE users SET subscription_tier = 'team' WHERE id = '<user_id>';
 -- and, if they own an org (shared fleet):
 UPDATE organizations SET subscription_tier = 'team' WHERE created_by = '<user_id>';

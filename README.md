@@ -114,8 +114,8 @@ For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates 
 
 | | Community | Team | Enterprise |
 |---|---|---|---|
-| Price | Free | $200/mo | Custom |
-| Nodes in fleet view | 3 | Unlimited | Unlimited |
+| Price | Free | $99/mo (10 nodes) · $200/mo (25 nodes) | Custom |
+| Nodes in fleet view | 3 | 10 or 25 | Unlimited |
 | History | 24 hours | 90 days | 12 months |
 | Patterns | 9 | 18 | 18 |
 | Alerts | — | Slack, Email, PagerDuty | Slack, Email, PagerDuty |

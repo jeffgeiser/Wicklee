@@ -1,10 +1,12 @@
 import { User, UserRole, SubscriptionTier, InsightsTier } from '../types';
+import { isTeamOrAbove, isBusinessOrAbove } from '../utils/tier';
 
 // ── Tier mappings ──────────────────────────────────────────────────────────────
 
 const SUBSCRIPTION_TO_INSIGHTS: Record<SubscriptionTier, InsightsTier> = {
   community:  'live_session',
   pro:        'persistent',
+  team_10:    'trend',
   team:       'trend',
   business:   'trend',
   enterprise: 'predictive',
@@ -79,7 +81,7 @@ export const usePermissions = (user: User | null) => {
 
     // ── History depth ─────────────────────────────────────────────────────
     historyDays: (
-      { community: 1, pro: 7, team: 90, business: 365, enterprise: Infinity } as Record<SubscriptionTier, number>
+      { community: 1, pro: 7, team_10: 90, team: 90, business: 365, enterprise: Infinity } as Record<SubscriptionTier, number>
     )[subscriptionTier],
 
     // ── Enterprise capabilities ───────────────────────────────────────────
@@ -92,8 +94,8 @@ export const usePermissions = (user: User | null) => {
 
     // ── Convenience booleans ──────────────────────────────────────────────
     isPro:        subscriptionTier !== 'community',
-    isTeamOrAbove:  subscriptionTier === 'team' || subscriptionTier === 'business' || subscriptionTier === 'enterprise',
-    isBusinessOrAbove: subscriptionTier === 'business' || subscriptionTier === 'enterprise',
+    isTeamOrAbove:  isTeamOrAbove(subscriptionTier),
+    isBusinessOrAbove: isBusinessOrAbove(subscriptionTier),
     isEnterprise: subscriptionTier === 'enterprise',
   };
 };

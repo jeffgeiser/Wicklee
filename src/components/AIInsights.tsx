@@ -22,6 +22,7 @@
  *   Mission Control        — FleetStreamContext allNodeMetrics, multi-node
  */
 
+import { isProOrAbove as tierIsProOrAbove } from '../utils/tier';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
@@ -1074,7 +1075,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
-  const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isProOrAbove = tierIsProOrAbove(subscriptionTier);
 
   // Seed obsCacheRef from server observations on mount (Pro+ persistent cards)
   const serverSeededRef = useRef(false);

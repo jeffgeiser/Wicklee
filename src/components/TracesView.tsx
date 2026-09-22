@@ -1898,6 +1898,7 @@ const FLEET_CHART_CONFIG: { key: keyof FleetMetricPoint; label: string; unit: st
 const RANGE_LIMITS: Record<SubscriptionTier, FleetMetricRange[]> = {
   community:  ['1h', '24h'],
   pro:        ['1h', '24h', '7d'],
+  team_10:    ['1h', '24h', '7d', '30d'],
   team:       ['1h', '24h', '7d', '30d'],
   business:   ['1h', '24h', '7d', '30d'],
   enterprise: ['1h', '24h', '7d', '30d'],

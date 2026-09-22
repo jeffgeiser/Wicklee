@@ -72,7 +72,7 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
           <div className="space-y-2">
             <h2 className="text-2xl font-bold text-white">Unlock Wicklee Team</h2>
             <p className="text-gray-400 text-sm">
-              Upgrade to Wicklee Team to connect unlimited nodes and unlock the full
+              Upgrade to Wicklee Team — 10 or 25 nodes in the cloud fleet view, the full
               pattern engine, cost reporting, and Fleet API across your entire fleet.
             </p>
           </div>
@@ -363,6 +363,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   // rather than billing the wrong amount or failing silently.
   const openTeamCheckout = useCallback(async (
     cycle: 'monthly' | 'annual' = 'monthly',
+    plan: 'team_10' | 'team' = 'team',
   ): Promise<boolean> => {
     try {
       const token = await getToken();
@@ -374,16 +375,18 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         environment: 'sandbox' | 'production';
         client_token: string;
         checkout_enabled?: boolean;
-        prices: { team?: string; team_annual?: string };
+        prices: { team_10?: string; team_10_annual?: string; team?: string; team_annual?: string };
         custom_data: { user_id: string };
         customer_email: string | null;
       };
 
       if (!config.checkout_enabled) return false;
 
-      const priceId = cycle === 'annual' ? config.prices.team_annual : config.prices.team;
+      const priceId = plan === 'team_10'
+        ? (cycle === 'annual' ? config.prices.team_10_annual : config.prices.team_10)
+        : (cycle === 'annual' ? config.prices.team_annual    : config.prices.team);
       if (!priceId) {
-        console.warn(`[billing] no Paddle price configured for Team ${cycle}`);
+        console.warn(`[billing] no Paddle price configured for ${plan} ${cycle}`);
         return false;
       }
 
@@ -398,8 +401,9 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       Paddle.Environment.set(config.environment);
       Paddle.Initialize({ token: config.client_token });
 
-      // quantity 1: Team is a flat $200/mo, not the old $49/seat with a
-      // 3-seat minimum.
+      // quantity 1: both Team sizes are flat prices ($99 / $200), not the old
+      // $49/seat with a 3-seat minimum. The size is a different price ID, not
+      // a quantity.
       Paddle.Checkout.open({
         items: [{ priceId, quantity: 1 }],
         customData: config.custom_data,
