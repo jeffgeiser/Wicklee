@@ -32,7 +32,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://clerk.wicklee.dev">
 <link rel="dns-prefetch" href="https://cdn.paddle.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<!-- The font stylesheet is added by /fonts.js (async, same-origin — CSP has no
+     'unsafe-inline' so the usual onload="this.media='all'" trick is blocked).
+     Text paints in the system stack and swaps to Inter when it arrives, instead
+     of the whole page waiting on fonts.googleapis.com. -->
+<script src="/fonts.js" async></script>
+<noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"></noscript>
     <style>
       body {
         font-family: 'Inter', sans-serif;

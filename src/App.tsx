@@ -41,17 +41,40 @@ const PreferencesView = React.lazy(() => import('./components/PreferencesView'))
 const SettingsView = React.lazy(() => import('./components/SettingsView'));
 import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
-import MetricsPage from './pages/MetricsPage';
-import DocsPage from './pages/DocsPage';
-import LegalPage from './pages/LegalPage';
-import TrustPage from './pages/TrustPage';
-import DesignPartnersPage from './pages/DesignPartnersPage';
+// ── Marketing-route code split ───────────────────────────────────────────
+// Measured on a simulated slow-4G phone: the entry chunk took 1.3 s to
+// download and ~1 s to parse before /pricing could paint, and 55% of it was
+// pages the visitor was not on — DocsPage alone was 28% (181 kB raw), with
+// marked + DOMPurify (64 kB) that only the docs and blog use. Each of these
+// is now its own chunk, fetched on first visit.
+//
+// LandingPage and PricingPage stay in the entry on purpose: they are the two
+// most-visited pages (62 kB raw together), so they pay no extra round-trip —
+// and on / the prerendered block is replaced the moment React mounts, so a
+// lazy LandingPage would reintroduce a blank gap there.
+const MetricsPage        = React.lazy(() => import('./pages/MetricsPage'));
+const DocsPage           = React.lazy(() => import('./pages/DocsPage'));
+const LegalPage          = React.lazy(() => import('./pages/LegalPage'));
+const TrustPage          = React.lazy(() => import('./pages/TrustPage'));
+const DesignPartnersPage = React.lazy(() => import('./pages/DesignPartnersPage'));
 const AIProvidersView = React.lazy(() => import('./components/AIProvidersView'));
 import PairingModal from './components/PairingModal';
 const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
 import { usePermissions } from './hooks/usePermissions';
-import BlogListing from './components/BlogListing';
-import BlogPost from './components/BlogPost';
+const BlogListing        = React.lazy(() => import('./components/BlogListing'));
+const BlogPost           = React.lazy(() => import('./components/BlogPost'));
+
+/** Shown while a lazy marketing page's chunk is in flight. Deliberately not
+ *  null: on the prerendered routes React has already cleared the static
+ *  block by the time this renders, and a blank page reads as broken. */
+const PageFallback: React.FC = () => (
+  <div className="min-h-screen bg-gray-900 flex items-center justify-center" aria-busy="true" aria-live="polite">
+    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+  </div>
+);
+const lazyPage = (el: React.ReactElement) => (
+  <React.Suspense fallback={<PageFallback />}>{el}</React.Suspense>
+);
 import { X, Sparkles, Zap, Shield, Globe } from 'lucide-react';
 import { STATIC_PAGE_META, setPageMeta, normalizePath } from './utils/pageMeta';
 
@@ -211,11 +234,14 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     if (meta) setPageMeta(meta);
   }, [currentPath]);
 
-  // Warm the Perplexity Tax baseline cache on app startup.  Failure is
-  // non-fatal — tiles fall back to the existing heuristic copy.
+  // Warm the Perplexity Tax baseline cache for the dashboard. Failure is
+  // non-fatal — tiles fall back to the existing heuristic copy. Skipped on
+  // the marketing routes: it was two extra requests on every visit to
+  // /pricing for data only the fleet tiles read.
   useEffect(() => {
+    if (!isSignedIn && !isLocalHost) return;
     void import('./utils/perplexity').then(m => m.loadPerplexityBaseline());
-  }, []);
+  }, [isSignedIn]);
 
 
   // Called after a node is successfully paired via AddNodeModal; fetch updated fleet list.
@@ -459,31 +485,31 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     currentPath === '/metrics-reference' || currentPath === '/metrics-reference/' ||
     currentPath === '/metrics' || currentPath === '/metrics/'
   ) {
-    return <MetricsPage onNavigate={navigate} />;
+    return lazyPage(<MetricsPage onNavigate={navigate} />);
   }
 
   // Documentation route — public, no auth required (trailing slash tolerant)
   if (currentPath === '/docs' || currentPath === '/docs/') {
-    return <DocsPage onNavigate={navigate} />;
+    return lazyPage(<DocsPage onNavigate={navigate} />);
   }
 
   // Trust & design-partner routes — public, no auth required
   if (currentPath === '/trust' || currentPath === '/trust/') {
-    return <TrustPage onNavigate={navigate} />;
+    return lazyPage(<TrustPage onNavigate={navigate} />);
   }
   if (currentPath === '/design-partners' || currentPath === '/design-partners/') {
-    return <DesignPartnersPage onNavigate={navigate} />;
+    return lazyPage(<DesignPartnersPage onNavigate={navigate} />);
   }
 
   // Legal routes — public, no auth required
   if (currentPath === '/terms' || currentPath === '/terms/') {
-    return <LegalPage onNavigate={navigate} initialTab="terms" />;
+    return lazyPage(<LegalPage onNavigate={navigate} initialTab="terms" />);
   }
   if (currentPath === '/privacy' || currentPath === '/privacy/') {
-    return <LegalPage onNavigate={navigate} initialTab="privacy" />;
+    return lazyPage(<LegalPage onNavigate={navigate} initialTab="privacy" />);
   }
   if (currentPath === '/refund' || currentPath === '/refund/') {
-    return <LegalPage onNavigate={navigate} initialTab="refund" />;
+    return lazyPage(<LegalPage onNavigate={navigate} initialTab="refund" />);
   }
 
   // Pricing route — public, accessible logged in or out
@@ -501,25 +527,25 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   // Blog routes — public, no auth required
   if (currentPath === '/blog' || currentPath === '/blog/') {
-    return (
+    return lazyPage(
       <BlogListing
         onNavigate={navigate}
         onSignIn={() => navigate('/sign-in')}
         onSignUp={() => navigate('/sign-up')}
-      />
+      />,
     );
   }
   // Trailing-slash tolerant — the prerendered static pages live at
   // /blog/{slug}/index.html, so links may carry a trailing slash.
   const blogPostMatch = currentPath.match(/^\/blog\/([^/]+?)\/?$/);
   if (blogPostMatch) {
-    return (
+    return lazyPage(
       <BlogPost
         slug={blogPostMatch[1]}
         onNavigate={navigate}
         onSignIn={() => navigate('/sign-in')}
         onSignUp={() => navigate('/sign-up')}
-      />
+      />,
     );
   }
 
