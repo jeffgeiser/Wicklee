@@ -430,7 +430,10 @@ export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
  * in every tier-rank table, or those accounts silently lose access (see the
  * tierRank map in MetricsHistoryChart for the bug this caused).
  */
-export type SubscriptionTier = 'community' | 'pro' | 'team' | 'business' | 'enterprise';
+// `team_10` and `team` are the two sizes of one plan (10 / 25 nodes) — same
+// features, different node cap. `pro` and `business` are retired but still
+// identify grandfathered subscriptions.
+export type SubscriptionTier = 'community' | 'pro' | 'team_10' | 'team' | 'business' | 'enterprise';
 
 
 /**
@@ -602,6 +605,7 @@ export interface HistoryResponse {
 export const TIER_BADGE: Record<SubscriptionTier, { label: string; color: string }> = {
   community:  { label: 'Community',  color: 'text-gray-400  bg-gray-500/10  border-gray-500/20'  },
   pro:        { label: 'Pro',        color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' },
+  team_10:    { label: 'Team · 10',  color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
   team:       { label: 'Team',       color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
   business:   { label: 'Business',  color: 'text-teal-400  bg-teal-500/10  border-teal-500/20'  },
   enterprise: { label: 'Enterprise', color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },

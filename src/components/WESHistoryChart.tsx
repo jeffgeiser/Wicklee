@@ -1,3 +1,4 @@
+import { tierLabel } from '../utils/tier';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -57,8 +58,7 @@ function buildChartPoints(points: WESPoint[], fmtTs: (ms: number) => string): Ch
 }
 
 function tierUpgradeLabel(minTier: SubscriptionTier): string {
-  return minTier === 'pro'  ? 'Pro' :
-         minTier === 'team' ? 'Team' : '';
+  return minTier === 'community' ? '' : tierLabel(minTier);
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────

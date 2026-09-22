@@ -12,6 +12,7 @@
  *   Team      — + 30D / 90D
  */
 
+import { tierRank, tierLabel } from '../utils/tier';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -155,7 +156,7 @@ const RANGE_CONFIG: Record<TimeRange, {
 const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d'];
 
 function tierUpgradeLabel(minTier: SubscriptionTier): string {
-  return minTier === 'pro' ? 'Pro' : minTier === 'team' ? 'Team' : '';
+  return minTier === 'community' ? '' : tierLabel(minTier);
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -287,12 +288,10 @@ const MetricsHistoryChart: React.FC<Props> = ({
   // (community) for unknown keys, so an omitted tier silently loses access to
   // ranges it pays for. 'business' was missing, which locked Business accounts
   // out of 7D/30D/90D — less history than the cheaper Team tier.
-  const tierRank: Record<SubscriptionTier, number> =
-    { community: 0, pro: 1, team: 2, business: 3, enterprise: 4 };
-  const userRank = tierRank[subscriptionTier] ?? 0;
+  const userRank = tierRank(subscriptionTier);
   const isRangeLocked = (r: TimeRange): boolean => {
     const rc = RANGE_CONFIG[r];
-    const requiredRank = tierRank[rc.minTier] ?? 0;
+    const requiredRank = tierRank(rc.minTier) ?? 0;
     return userRank < requiredRank;
   };
 

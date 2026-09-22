@@ -108,7 +108,7 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
   '/pricing': {
     title:       'Pricing — Wicklee',
     description: 'Community free forever — unlimited local nodes, 3 in the cloud fleet view. ' +
-                 'Team $200/mo adds unlimited fleet nodes, 90-day history, the Fleet API, ' +
+                 'Team from $99/mo (10 nodes) or $200/mo (25 nodes) adds 90-day history, the Fleet API, ' +
                  'chargeback and capacity planning. Enterprise is self-hosted, with SSO and audit export.',
     path:        '/pricing',
   },

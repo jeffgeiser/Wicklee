@@ -24,13 +24,21 @@ interface PricingPageProps {
 
 // ── Tier data ────────────────────────────────────────────────────────────────
 //
-// Three tiers: Community (free), Team ($200/mo), Enterprise (custom).
+// Three tiers: Community (free), Team, Enterprise (custom). Team comes in two
+// sizes — up to 10 nodes ($99/mo) and up to 25 ($200/mo) — with an identical
+// feature set. The size is a node cap, never a feature unlock: the reason to
+// move up is more GPUs, which a customer can't fake and doesn't resent. Above
+// 25 nodes is an Enterprise conversation, not a bigger checkout.
 //
 // Billing is NOT wired to these cards. Every paid CTA is a mailto — there is
-// deliberately no checkout flow here. (Paddle plumbing still exists behind the
+// deliberately no checkout flow here. (Paddle plumbing exists behind the
 // in-app upgrade modal; it is not reachable from this page.)
 //
 // Claims on this page are kept to what actually ships:
+//   - "Up to 25 nodes" is the real cap (MAX_TEAM_NODES in cloud/src/main.rs).
+//     This card said "Unlimited nodes" for a month while the backend returned
+//     402 at the 26th — the copy moved, the enforcement didn't. Node caps on
+//     this page must match node_limit_for_tier().
 //   - "90-day metric history" is the range-selector limit for Team
 //     (MetricsHistoryChart RANGE_CONFIG minTier), not a storage guarantee.
 //   - "12-month metric history" matches the real nightly prune in
@@ -42,6 +50,13 @@ interface PricingPageProps {
 //   - Sovereign Mode is deliberately absent: today it is only a UI label for an
 //     unpaired node, with no sovereign.lock and no binary-level enforcement.
 //     It goes on this page when it is actually built.
+
+/** The two Team sizes. Order is display order. */
+const TEAM_SIZES = [
+  { tier: 'team_10' as const, nodes: 10, price: '$99',  annual: '$990/yr',   annualNote: 'save 2 months' },
+  { tier: 'team'    as const, nodes: 25, price: '$200', annual: '$2,000/yr', annualNote: 'save 2 months' },
+];
+type TeamSize = typeof TEAM_SIZES[number];
 
 interface TierDef {
   id: SubscriptionTier;
@@ -87,17 +102,18 @@ const TIERS: TierDef[] = [
   {
     id: 'team',
     name: 'Team',
+    // price / subPrice are overridden per selected size at render time.
     price: '$200',
     period: '/mo',
     subPrice: '$2,000/yr — save 2 months',
-    tagline: 'For teams running production inference. Fleet visibility, history, and API access.',
+    tagline: 'For teams running production inference. Fleet visibility, history, and API access. Pick the size that fits your fleet — the features are the same.',
     accent: 'border-blue-500/50',
     accentBg: 'bg-blue-500/5',
     accentText: 'text-blue-400',
     badge: 'Recommended',
     features: [
       'Everything in Community',
-      'Unlimited nodes in cloud fleet view',
+      'Up to 25 nodes in cloud fleet view',
       '90-day metric history',
       'Fleet API access (/api/v1/*)',
       'Cost & chargeback reports — $/1M tokens by node, model and tag',
@@ -144,6 +160,11 @@ const PricingPage: React.FC<PricingPageProps> = ({
   onSignUp,
   embedded = false,
 }) => {
+  // Preselect the size the visitor is already on; default to the larger one,
+  // which is the recommended plan for a production fleet.
+  const [teamSize, setTeamSize] = React.useState<TeamSize>(
+    TEAM_SIZES.find(sz => sz.tier === currentTier) ?? TEAM_SIZES[1],
+  );
 
   return (
     <div className="min-h-screen bg-gray-900">
@@ -206,7 +227,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
             Pricing
           </h1>
           <p className="text-gray-500 max-w-xl mx-auto text-sm leading-relaxed">
-            Hardware-first observability for private AI fleets. Every tier includes WES
+            Hardware-aware observability for private AI fleets. Every tier includes WES
             diagnostics, real-time telemetry, and the local API — the cloud relay is
             always opt-in.
           </p>
@@ -214,8 +235,24 @@ const PricingPage: React.FC<PricingPageProps> = ({
 
         {/* ── Tier cards ─────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
-          {TIERS.map(tier => {
-            const isCurrent = isLoggedIn && tier.id === currentTier;
+          {TIERS.map(tierDef => {
+            // The Team card is one card with two sizes; both team tiers land on it.
+            const isTeamCard = tierDef.id === 'team';
+            const tier: TierDef = isTeamCard
+              ? {
+                  ...tierDef,
+                  price:    teamSize.price,
+                  subPrice: `${teamSize.annual} — ${teamSize.annualNote}`,
+                  features: tierDef.features.map(f =>
+                    f.startsWith('Up to ') && f.endsWith('nodes in cloud fleet view')
+                      ? `Up to ${teamSize.nodes} nodes in cloud fleet view`
+                      : f),
+                  cta: { label: 'Contact us', href: mailto(CONTACT_EMAIL, `Wicklee Team (${teamSize.nodes} nodes)`) },
+                }
+              : tierDef;
+            const isCurrent = isLoggedIn && (
+              isTeamCard ? (currentTier === 'team' || currentTier === 'team_10') : tier.id === currentTier
+            );
 
             return (
               <div
@@ -254,6 +291,33 @@ const PricingPage: React.FC<PricingPageProps> = ({
                   )}
                   <p className="text-xs text-gray-500 leading-relaxed pt-1">{tier.tagline}</p>
                 </div>
+
+                {isTeamCard && (
+                  <div className="mb-5">
+                    <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-gray-800/80 border border-gray-700" role="tablist" aria-label="Team plan size">
+                      {TEAM_SIZES.map(sz => {
+                        const active = sz.tier === teamSize.tier;
+                        return (
+                          <button
+                            key={sz.tier}
+                            role="tab"
+                            aria-selected={active}
+                            onClick={() => setTeamSize(sz)}
+                            className={`py-2 rounded-lg text-xs font-semibold transition-colors ${
+                              active ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'
+                            }`}
+                          >
+                            Up to {sz.nodes} nodes
+                            <span className={`block text-[10px] font-normal ${active ? 'text-blue-100' : 'text-gray-500'}`}>{sz.price}/mo</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-2 leading-relaxed">
+                      More than 25 nodes? <a href={mailto(CONTACT_EMAIL, 'Wicklee — more than 25 nodes')} className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Talk to us</a> — same-day quote.
+                    </p>
+                  </div>
+                )}
 
                 {/* Feature list */}
                 <div className="flex-1 space-y-2.5 mb-6">

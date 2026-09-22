@@ -1,3 +1,4 @@
+import { isProOrAbove as tierIsProOrAbove, isTeamOrAbove as tierIsTeamOrAbove } from '../utils/tier';
 import React, { useState, useEffect, useCallback } from 'react';
 import { version as pkgVersion } from '../../package.json';
 import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock, Key, ChevronRight, Globe } from 'lucide-react';
@@ -275,7 +276,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const pueDirty = pueDraft !== settings.fleet.pue.toString();
 
   // Save display name to cloud backend (Pro+ only)
-  const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isProOrAbove = tierIsProOrAbove(subscriptionTier);
   const saveDisplayNameToCloud = React.useCallback(async (nodeId: string, name: string) => {
     if (!isProOrAbove || !isCloudMode || !getToken) return;
     try {
@@ -763,7 +764,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       )}
 
       {/* ── ④¾ OPENTELEMETRY EXPORT ───────────────────────────────────── */}
-      {isCloudMode && (subscriptionTier === 'team' || subscriptionTier === 'enterprise') && (
+      {isCloudMode && tierIsTeamOrAbove(subscriptionTier) && (
         <OtelExportSection getToken={getToken} />
       )}
 
@@ -944,8 +945,8 @@ const AlertsSection: React.FC<{
   // pairingInfo.status tracks whether a local node is paired — irrelevant here.
   // On wicklee.dev the user is already in the fleet regardless of local pairing state.
   const isCloudMode    = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
-  const isProOrAbove   = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
-  const isTeam         = subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isProOrAbove   = tierIsProOrAbove(subscriptionTier);
+  const isTeam         = tierIsTeamOrAbove(subscriptionTier);
   const { channels, rules, silences, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule, createSilence, deleteSilence } =
     useAlerts(getToken, isCloudMode && isProOrAbove);
 
@@ -1111,7 +1112,7 @@ const AlertsSection: React.FC<{
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Team — $200/mo
+            Upgrade to Team — from $99/mo
           </button>
         </div>
       </Section>
