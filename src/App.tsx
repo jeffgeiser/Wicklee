@@ -7,6 +7,7 @@ import { DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserTy
 import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import { CLOUD_URL } from './utils/cloudUrl';
+import { hasClerkSessionHint } from './utils/clerkHint';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -522,8 +523,17 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     );
   }
 
-  // Wait for Clerk to determine auth state (prevents flash)
-  if (!isLocalHost && !isLoaded) return null;
+  // Wait for Clerk before choosing landing-vs-dashboard — but only when there
+  // is evidence of a session to protect. This gate exists so a signed-in user
+  // never sees the landing page flash before the dashboard. It also made every
+  // signed-OUT visitor to / wait for ClerkJS to download from clerk.wicklee.dev
+  // and round-trip to Clerk's API to learn there is no session — a blank
+  // screen for the length of that on a phone, since React mounting has
+  // already replaced the prerendered block. Clerk leaves cookies on the app
+  // domain when a session exists; with none present, render the landing page
+  // now. If the hint is ever wrong, the failure mode is the old brief flash,
+  // not a broken page. See utils/clerkHint.ts.
+  if (!isLocalHost && !isLoaded && hasClerkSessionHint(document.cookie)) return null;
 
   if (!isLoggedIn) {
     return (

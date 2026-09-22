@@ -216,7 +216,41 @@ async function emit(routePath, html) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-const shell = await readFile(join(DIST, 'index.html'), 'utf8');
+let shell = await readFile(join(DIST, 'index.html'), 'utf8');
+
+// ── Cold-load waterfall ───────────────────────────────────────────────────────
+// On the cloud build, index.tsx awaits import('@clerk/clerk-react') before its
+// first render, and App then lazy-loads CloudApp. Vite only preloads a dynamic
+// import's dependencies at the moment the import() runs, so on a cold load
+// those two chunks are fetched one after another, AFTER the entry has
+// downloaded and executed: three serial round-trips before /pricing can paint.
+// Preloading them from the HTML lets all three download in parallel.
+//
+// Chunk names are hashed, so they are discovered here rather than authored:
+// the Clerk vendor chunk is the non-entry index-*.js that carries
+// ClerkProvider. Best-effort — if the shape changes, log and skip rather than
+// fail the build over an optimisation.
+{
+  const assetsDir = join(DIST, 'assets');
+  const entry = (shell.match(/assets\/(index-[\w-]+\.js)/) ?? [])[1];
+  const files = (await readdir(assetsDir)).filter(f => f.endsWith('.js'));
+  const preload = [];
+  const clerkVendor = [];
+  for (const f of files) {
+    if (f.startsWith('index-') && f !== entry) {
+      const src = await readFile(join(assetsDir, f), 'utf8');
+      if (src.includes('ClerkProvider')) clerkVendor.push(f);
+    }
+    if (f.startsWith('CloudApp-')) preload.push(f);
+  }
+  if (clerkVendor.length === 1) preload.unshift(clerkVendor[0]);
+  else console.warn(`[static-pages] expected one Clerk vendor chunk, found ${clerkVendor.length} — skipping its preload`);
+  if (preload.length) {
+    const links = preload.map(f => `<link rel="modulepreload" crossorigin href="/assets/${f}">`).join('\n');
+    shell = shell.replace('</head>', `${links}\n</head>`);
+    console.log(`[static-pages] modulepreload: ${preload.join(', ')}`);
+  }
+}
 
 // 1. Landing page: add SoftwareApplication JSON-LD in place.
 {
