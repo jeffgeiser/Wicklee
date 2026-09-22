@@ -26,6 +26,12 @@
     <meta property="og:site_name" content="Wicklee" />
     <meta property="og:url" content="https://wicklee.dev/" />
     <link rel="canonical" href="https://wicklee.dev/" />
+<!-- Warm the origins on the cold-load critical path so DNS + TLS overlap the
+     HTML download instead of following it. Order matches first use. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://clerk.wicklee.dev">
+<link rel="dns-prefetch" href="https://cdn.paddle.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <style>
       body {
@@ -81,7 +87,10 @@
 </head>
   <body>
     <div id="root" role="application" aria-label="Wicklee dashboard"></div>
-  <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+  <!-- defer: Paddle.js is only touched when a checkout opens, long after load.
+       As a synchronous script it blocked HTML parsing on every page — including
+       /pricing on a phone — until cdn.paddle.com answered. -->
+  <script src="https://cdn.paddle.com/paddle/v2/paddle.js" defer></script>
   <script type="module" src="/src/index.tsx"></script>
 </body>
 </html>
