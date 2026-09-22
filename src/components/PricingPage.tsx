@@ -160,10 +160,11 @@ const PricingPage: React.FC<PricingPageProps> = ({
   onSignUp,
   embedded = false,
 }) => {
-  // Preselect the size the visitor is already on; default to the larger one,
-  // which is the recommended plan for a production fleet.
+  // Preselect the size the visitor is already on. Otherwise default to the
+  // 10-node size: the entry price is the first number a new visitor should
+  // see, and the 25-node size is one click away in the selector.
   const [teamSize, setTeamSize] = React.useState<TeamSize>(
-    TEAM_SIZES.find(sz => sz.tier === currentTier) ?? TEAM_SIZES[1],
+    TEAM_SIZES.find(sz => sz.tier === currentTier) ?? TEAM_SIZES[0],
   );
 
   return (
