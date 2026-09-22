@@ -30,6 +30,7 @@
   if (!el) return;
 
   el.style.display = 'none';
+  try { performance.mark('wk:prerender-hidden'); } catch (e) { /* no User Timing */ }
 
   // If the app hasn't replaced #root by now, the bundle is slow or broken —
   // show the readable content rather than leaving a blank page.

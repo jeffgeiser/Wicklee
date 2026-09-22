@@ -8,6 +8,7 @@ import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import { CLOUD_URL } from './utils/cloudUrl';
 import { hasClerkSessionHint } from './utils/clerkHint';
+import { perfMark } from './utils/perfMark';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -175,6 +176,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
+  // First commit of the app tree — React is on screen from here.
+  useEffect(() => { perfMark('wk:app-mounted'); }, []);
   const [observabilityNav, setObservabilityNav] = useState<ObservabilityNavParams | undefined>(undefined);
   /**
    * Deep-link target for cross-tab navigation into Insights.
@@ -692,12 +695,13 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   );
 };
 
-// Lazy-loaded Clerk bridge — keeps @clerk/clerk-react out of the agent bundle.
-const LazyCloudApp = React.lazy(() => import('./components/CloudApp'));
-
 // Exported root component.
 // Agent builds: skip Clerk hooks entirely and render with local-mode defaults.
-// Cloud builds: delegate to CloudApp which calls hooks within ClerkProvider.
+// Cloud builds: index.tsx imports CloudApp (the Clerk-hooks bridge) alongside
+// @clerk/clerk-react and passes it in, so this file never references the Clerk
+// package and the agent bundle stays free of it. It is passed as a prop rather
+// than React.lazy'd here because a lazy boundary commits a null fallback and
+// React then throttles the reveal by ~300 ms on every cold load (see index.tsx).
 // Demo build: signed-in Team-tier user, no Clerk anywhere. The object only
 // needs the fields AppCore reads off the Clerk user (id, publicMetadata.tier,
 // primaryEmailAddress, fullName).
@@ -708,12 +712,20 @@ const DEMO_USER = {
   fullName: 'Demo Operator',
 };
 
-const App: React.FC = () =>
-  IS_DEMO
-    ? <AppCore isSignedIn={true} isLoaded={true} getToken={() => Promise.resolve('demo')} user={DEMO_USER} orgId={null} />
-    : IS_AGENT
-    ? <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />
-    : <React.Suspense fallback={null}><LazyCloudApp AppCore={AppCore} /></React.Suspense>;
+interface AppProps {
+  /** Cloud builds only: the Clerk-hooks bridge from components/CloudApp. */
+  cloudApp?: React.FC<{ AppCore: React.FC<AppCoreProps> }>;
+}
+
+const App: React.FC<AppProps> = ({ cloudApp: CloudApp }) => {
+  if (IS_DEMO) {
+    return <AppCore isSignedIn={true} isLoaded={true} getToken={() => Promise.resolve('demo')} user={DEMO_USER} orgId={null} />;
+  }
+  if (IS_AGENT || !CloudApp) {
+    return <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />;
+  }
+  return <CloudApp AppCore={AppCore} />;
+};
 
 // ── DashboardShell ────────────────────────────────────────────────────────────
 // Inner component that lives inside FleetStreamProvider so it can call useFleetStream().

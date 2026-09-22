@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Server, Search, Webhook, Bell } from 'lucide-react';
 import Logo from './Logo';
+import { perfMark } from '../utils/perfMark';
 
 interface LandingPageProps {
   onSignIn: () => void;
@@ -57,6 +58,7 @@ const allPatterns: ObsTile[] = [
 ];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
+  React.useEffect(() => { perfMark('wk:page-landing'); }, []);
   // H4 — Use React state for copy-button feedback instead of direct DOM
   // mutation via btn.innerHTML.  The old pattern bypassed React's virtual DOM,
   // caused unnecessary re-renders of sibling nodes, and created a surface for

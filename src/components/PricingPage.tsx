@@ -5,6 +5,7 @@ import {
 import type { SubscriptionTier } from '../types';
 import Logo from './Logo';
 import { CONTACT_EMAIL, mailto } from '../utils/contact';
+import { perfMark } from '../utils/perfMark';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -160,6 +161,7 @@ const PricingPage: React.FC<PricingPageProps> = ({
   onSignUp,
   embedded = false,
 }) => {
+  React.useEffect(() => { perfMark('wk:page-pricing'); }, []);
   // Preselect the size the visitor is already on. Otherwise default to the
   // 10-node size: the entry price is the first number a new visitor should
   // see, and the 25-node size is one click away in the selector.
