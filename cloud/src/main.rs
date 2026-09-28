@@ -10477,6 +10477,41 @@ fn tier_for_price_id(price_id: &str, prices: &PaddlePrices) -> Option<&'static s
     }
 }
 
+/// Self-serve checkout is OFF unless explicitly switched on AND a real Team
+/// price exists AND Paddle.js can initialise.
+///
+/// The kill switch is deliberate rather than inferred: a configured price ID
+/// looks identical whether it points at the current $200 Team plan or the
+/// retired $49 one, so the server cannot tell "correct" from "stale" on its
+/// own. PADDLE_CHECKOUT_ENABLED=true is the operator asserting that Paddle
+/// now holds products matching the published prices. Until then the frontend
+/// shows the contact CTAs on /pricing instead of billing someone the wrong
+/// amount.
+///
+/// Shared by /api/billing/config and the public /api/billing/status so the
+/// two can never disagree. `flag` is the raw PADDLE_CHECKOUT_ENABLED value.
+fn paddle_checkout_enabled(flag: &str, prices: &PaddlePrices, client_token: &str) -> bool {
+    flag.eq_ignore_ascii_case("true")
+        && prices.team_configured()
+        && !client_token.is_empty()
+}
+
+/// GET /api/billing/status — PUBLIC, unauthenticated.
+///
+/// Lets /pricing decide, for signed-out visitors too, whether the Team card
+/// shows a checkout button or the contact CTA. Returns only the boolean:
+/// no client token, no price IDs, nothing user-specific. The overlay itself
+/// still needs the authenticated /api/billing/config.
+async fn handle_billing_status() -> impl IntoResponse {
+    let client_token = std::env::var("PADDLE_CLIENT_TOKEN").unwrap_or_default();
+    let enabled = paddle_checkout_enabled(
+        &std::env::var("PADDLE_CHECKOUT_ENABLED").unwrap_or_default(),
+        &PaddlePrices::from_env(),
+        &client_token,
+    );
+    Json(serde_json::json!({ "checkout_enabled": enabled }))
+}
+
 /// GET /api/billing/config — returns Paddle client-side config for Paddle.js overlay
 async fn handle_billing_config(
     State(state): State<AppState>,
@@ -10503,21 +10538,11 @@ async fn handle_billing_config(
     let paddle_client_token = std::env::var("PADDLE_CLIENT_TOKEN").unwrap_or_else(|_| "".to_string());
     let prices = PaddlePrices::from_env();
 
-    // Self-serve checkout is OFF unless explicitly switched on AND a real Team
-    // price exists AND Paddle.js can initialise.
-    //
-    // The kill switch is deliberate rather than inferred: a configured price ID
-    // looks identical whether it points at the current $200 Team plan or the
-    // retired $49 one, so the server cannot tell "correct" from "stale" on its
-    // own. PADDLE_CHECKOUT_ENABLED=true is the operator asserting that Paddle
-    // now holds products matching the published prices. Until then the frontend
-    // routes upgrade intent to /pricing (contact CTAs) instead of billing
-    // someone the wrong amount.
-    let checkout_enabled = std::env::var("PADDLE_CHECKOUT_ENABLED")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-        && prices.team_configured()
-        && !paddle_client_token.is_empty();
+    let checkout_enabled = paddle_checkout_enabled(
+        &std::env::var("PADDLE_CHECKOUT_ENABLED").unwrap_or_default(),
+        &prices,
+        &paddle_client_token,
+    );
 
     Json(serde_json::json!({
         "environment": paddle_env,
@@ -11663,6 +11688,7 @@ async fn main() {
         .route("/api/slo/:id",                  delete(handle_delete_slo))
         .route("/api/nodes/:node_id",    patch(handle_update_node))
         .route("/api/billing/config",    get(handle_billing_config))
+        .route("/api/billing/status",    get(handle_billing_status)) // public — no auth
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
         .route("/api/otel/config",       get(handle_get_otel_config).put(handle_put_otel_config))
         .route("/api/audit-log",         get(handle_audit_log))
@@ -11943,6 +11969,23 @@ mod paddle_price_tests {
 
         p.team_annual = "pri_team_2000".into();
         assert!(p.team_configured(), "annual alone is enough");
+    }
+
+    #[test]
+    fn checkout_needs_flag_team_price_and_client_token() {
+        let p = prices();
+        assert!(paddle_checkout_enabled("true", &p, "tok"));
+        assert!(paddle_checkout_enabled("TRUE", &p, "tok"), "flag is case-insensitive");
+        assert!(!paddle_checkout_enabled("", &p, "tok"), "flag unset");
+        assert!(!paddle_checkout_enabled("1", &p, "tok"), "only \"true\" enables");
+        assert!(!paddle_checkout_enabled("true", &p, ""), "no client token");
+
+        let none = PaddlePrices {
+            pro: "pri_pro_29".into(), team10_monthly: String::new(), team10_annual: String::new(),
+            team_monthly: "pri_placeholder_team".into(), team_annual: String::new(),
+            business: "pri_business_499".into(),
+        };
+        assert!(!paddle_checkout_enabled("true", &none, "tok"), "no real Team price");
     }
 
     #[test]

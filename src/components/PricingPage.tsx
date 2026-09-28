@@ -6,6 +6,7 @@ import type { SubscriptionTier } from '../types';
 import Logo from './Logo';
 import { CONTACT_EMAIL, mailto } from '../utils/contact';
 import { perfMark } from '../utils/perfMark';
+import { CLOUD_URL } from '../utils/cloudUrl';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,13 @@ interface PricingPageProps {
   onSignUp?: () => void;
   /** When true, hides the standalone nav (rendered inside dashboard layout). */
   embedded?: boolean;
+  /**
+   * Opens Paddle checkout for the chosen Team size + billing period (App's
+   * openTeamCheckout). Resolves false when checkout can't run. Omitted in
+   * builds with no self-serve billing (agent, demo) — the Team card then
+   * shows the contact CTA only.
+   */
+  onTeamCheckout?: (cycle: BillingCycle, plan: TeamPlan) => Promise<boolean>;
 }
 
 // ── Tier data ────────────────────────────────────────────────────────────────
@@ -31,9 +39,12 @@ interface PricingPageProps {
 // move up is more GPUs, which a customer can't fake and doesn't resent. Above
 // 25 nodes is an Enterprise conversation, not a bigger checkout.
 //
-// Billing is NOT wired to these cards. Every paid CTA is a mailto — there is
-// deliberately no checkout flow here. (Paddle plumbing exists behind the
-// in-app upgrade modal; it is not reachable from this page.)
+// Billing: the Team card is the only self-serve checkout. Whether it shows a
+// checkout button is decided by the server — GET /api/billing/status (public,
+// no auth) returns checkout_enabled, the same check /api/billing/config makes.
+// While that is false, unknown, or errors, the card keeps its mailto CTA, and
+// a checkout that fails to open falls back to the same mailto. Enterprise is
+// always a mailto.
 //
 // Claims on this page are kept to what actually ships:
 //   - "Up to 25 nodes" is the real cap (MAX_TEAM_NODES in cloud/src/main.rs).
@@ -52,18 +63,38 @@ interface PricingPageProps {
 //     unpaired node, with no sovereign.lock and no binary-level enforcement.
 //     It goes on this page when it is actually built.
 
-/** The two Team sizes. Order is display order. */
+/** The two Team sizes. Order is display order. Prices in whole USD and must
+ *  match the Paddle prices (docs/BILLING.md): annual is 10× monthly. */
 const TEAM_SIZES = [
-  { tier: 'team_10' as const, nodes: 10, price: '$99',  annual: '$990/yr',   annualNote: 'save 2 months' },
-  { tier: 'team'    as const, nodes: 25, price: '$200', annual: '$2,000/yr', annualNote: 'save 2 months' },
+  { tier: 'team_10' as const, nodes: 10, monthly: 99,  annual: 990 },
+  { tier: 'team'    as const, nodes: 25, monthly: 200, annual: 2000 },
 ];
 type TeamSize = typeof TEAM_SIZES[number];
+type TeamPlan = TeamSize['tier'];
+type BillingCycle = 'monthly' | 'annual';
+
+const usd = (n: number) => `$${n.toLocaleString('en-US')}`;
+
+/** Checkout availability from GET /api/billing/status. 'unknown' (in flight)
+ *  renders exactly like 'off' — the contact CTA — so there is never a gap. */
+type CheckoutStatus = 'unknown' | 'on' | 'off';
+
+/** Selection carried through sign-up: /pricing?plan=team_10&cycle=annual&checkout=1 */
+function readSelectionFromUrl(): { plan: TeamPlan | null; cycle: BillingCycle | null; checkout: boolean } {
+  const q = new URLSearchParams(window.location.search);
+  const plan = TEAM_SIZES.find(sz => sz.tier === q.get('plan'))?.tier ?? null;
+  const c = q.get('cycle');
+  const cycle = c === 'annual' || c === 'monthly' ? c : null;
+  return { plan, cycle, checkout: q.get('checkout') === '1' };
+}
 
 interface TierDef {
   id: SubscriptionTier;
   name: string;
   price: string;
   period: string;
+  /** Billing line (e.g. "Billed monthly"), rendered under the price. */
+  billing?: string;
   /** Secondary price line (annual deal), rendered under the price. */
   subPrice?: string;
   tagline: string;
@@ -103,10 +134,10 @@ const TIERS: TierDef[] = [
   {
     id: 'team',
     name: 'Team',
-    // price / subPrice are overridden per selected size at render time.
-    price: '$200',
+    // price / period / billing / subPrice are overridden per selected size
+    // and billing period at render time.
+    price: '$99',
     period: '/mo',
-    subPrice: '$2,000/yr — save 2 months',
     tagline: 'For teams running production inference. Fleet visibility, history, and API access. Pick the size that fits your fleet — the features are the same.',
     accent: 'border-blue-500/50',
     accentBg: 'bg-blue-500/5',
@@ -160,14 +191,77 @@ const PricingPage: React.FC<PricingPageProps> = ({
   onSignIn,
   onSignUp,
   embedded = false,
+  onTeamCheckout,
 }) => {
   React.useEffect(() => { perfMark('wk:page-pricing'); }, []);
+  // A selection carried back from sign-up (?plan=&cycle=&checkout=1) wins on
+  // the standalone page; the embedded dashboard copy ignores the URL.
+  const [fromUrl] = React.useState(() =>
+    embedded ? { plan: null, cycle: null, checkout: false } : readSelectionFromUrl());
   // Preselect the size the visitor is already on. Otherwise default to the
   // 10-node size: the entry price is the first number a new visitor should
   // see, and the 25-node size is one click away in the selector.
   const [teamSize, setTeamSize] = React.useState<TeamSize>(
-    TEAM_SIZES.find(sz => sz.tier === currentTier) ?? TEAM_SIZES[0],
+    TEAM_SIZES.find(sz => sz.tier === fromUrl.plan)
+      ?? TEAM_SIZES.find(sz => sz.tier === currentTier)
+      ?? TEAM_SIZES[0],
   );
+  const [cycle, setCycle] = React.useState<BillingCycle>(fromUrl.cycle ?? 'monthly');
+
+  // ── Self-serve checkout ──────────────────────────────────────────────────
+  const checkoutWired = !!onTeamCheckout;
+  const [checkoutStatus, setCheckoutStatus] = React.useState<CheckoutStatus>('unknown');
+  const [checkoutBusy, setCheckoutBusy] = React.useState(false);
+  const [checkoutFailed, setCheckoutFailed] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!checkoutWired) return;
+    let cancelled = false;
+    fetch(`${CLOUD_URL}/api/billing/status`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { checkout_enabled?: boolean } | null) => {
+        if (!cancelled) setCheckoutStatus(d?.checkout_enabled === true ? 'on' : 'off');
+      })
+      .catch(() => { if (!cancelled) setCheckoutStatus('off'); });
+    return () => { cancelled = true; };
+  }, [checkoutWired]);
+
+  const onTeamPlan = isLoggedIn && (currentTier === 'team' || currentTier === 'team_10');
+  // Existing Team subscribers never get a second checkout (Paddle would open a
+  // second subscription); plan changes stay a conversation — see BILLING.md.
+  const selfServe = checkoutWired && checkoutStatus === 'on' && !onTeamPlan;
+
+  const startTeamCheckout = React.useCallback(async (plan: TeamPlan, billing: BillingCycle) => {
+    setCheckoutFailed(false);
+    if (!isLoggedIn) {
+      // Sign up (or in — Clerk links the two) and come back here with the
+      // selection preserved; checkout=1 reopens checkout once signed in.
+      const back = `/pricing?plan=${plan}&cycle=${billing}&checkout=1`;
+      const to = `/sign-up?redirect_url=${encodeURIComponent(back)}`;
+      if (onNavigate) onNavigate(to); else window.location.assign(to);
+      return;
+    }
+    if (!onTeamCheckout) return;
+    setCheckoutBusy(true);
+    const ok = await onTeamCheckout(billing, plan);
+    setCheckoutBusy(false);
+    if (!ok) setCheckoutFailed(true);
+  }, [isLoggedIn, onNavigate, onTeamCheckout]);
+
+  // Back from sign-up with ?checkout=1: open checkout once, as soon as the
+  // session and the checkout status are both known. checkout=1 is dropped from
+  // the URL first so a reload or Back doesn't reopen the overlay; plan/cycle
+  // stay so the selection survives. Signed-out (abandoned sign-up) or checkout
+  // off → nothing opens, the selection is just preselected.
+  const autoOpenPending = React.useRef(fromUrl.checkout);
+  React.useEffect(() => {
+    if (!autoOpenPending.current || !isLoggedIn || checkoutStatus === 'unknown') return;
+    autoOpenPending.current = false;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('checkout');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    if (selfServe) void startTeamCheckout(teamSize.tier, cycle);
+  }, [isLoggedIn, checkoutStatus, selfServe, startTeamCheckout, teamSize.tier, cycle]);
 
   return (
     <div className="min-h-screen bg-gray-900">
@@ -241,21 +335,34 @@ const PricingPage: React.FC<PricingPageProps> = ({
           {TIERS.map(tierDef => {
             // The Team card is one card with two sizes; both team tiers land on it.
             const isTeamCard = tierDef.id === 'team';
+            // Annual is 10× monthly; the saving is the real dollar figure.
+            const annualSaving = teamSize.monthly * 12 - teamSize.annual;
             const tier: TierDef = isTeamCard
               ? {
                   ...tierDef,
-                  price:    teamSize.price,
-                  subPrice: `${teamSize.annual} — ${teamSize.annualNote}`,
+                  price:    usd(cycle === 'annual' ? teamSize.annual : teamSize.monthly),
+                  period:   cycle === 'annual' ? '/yr' : '/mo',
+                  billing:  cycle === 'annual'
+                    ? `Billed annually — ${usd(teamSize.annual)} per year`
+                    : `Billed monthly — ${usd(teamSize.monthly)} per month`,
+                  subPrice: cycle === 'annual'
+                    ? `Save ${usd(annualSaving)} vs. ${usd(teamSize.monthly * 12)} paid monthly — 2 months free`
+                    : `Or ${usd(teamSize.annual)}/yr billed annually — save ${usd(annualSaving)}`,
                   features: tierDef.features.map(f =>
                     f.startsWith('Up to ') && f.endsWith('nodes in cloud fleet view')
                       ? `Up to ${teamSize.nodes} nodes in cloud fleet view`
                       : f),
-                  cta: { label: 'Contact us', href: mailto(CONTACT_EMAIL, `Wicklee Team (${teamSize.nodes} nodes)`) },
+                  cta: { label: 'Contact us', href: mailto(CONTACT_EMAIL, `Wicklee Team (${teamSize.nodes} nodes, ${cycle})`) },
                 }
               : tierDef;
-            const isCurrent = isLoggedIn && (
-              isTeamCard ? (currentTier === 'team' || currentTier === 'team_10') : tier.id === currentTier
-            );
+            const isCurrent = isTeamCard ? onTeamPlan : isLoggedIn && tier.id === currentTier;
+            const ctaCls = `mt-auto w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
+              tier.highlight
+                ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20'
+                : tier.id === 'enterprise'
+                  ? 'bg-purple-600/90 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/20'
+                  : 'bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700'
+            }`;
 
             return (
               <div
@@ -289,6 +396,9 @@ const PricingPage: React.FC<PricingPageProps> = ({
                     <span className="text-3xl font-bold text-white">{tier.price}</span>
                     {tier.period && <span className="text-gray-600 text-sm">{tier.period}</span>}
                   </div>
+                  {tier.billing && (
+                    <p className="text-xs text-gray-400">{tier.billing}</p>
+                  )}
                   {tier.subPrice && (
                     <p className="text-xs text-blue-400/80 font-medium">{tier.subPrice}</p>
                   )}
@@ -297,6 +407,27 @@ const PricingPage: React.FC<PricingPageProps> = ({
 
                 {isTeamCard && (
                   <div className="mb-5">
+                    <div className="grid grid-cols-2 gap-1 p-1 mb-2 rounded-xl bg-gray-800/80 border border-gray-700" role="tablist" aria-label="Billing period">
+                      {(['monthly', 'annual'] as const).map(c => {
+                        const active = c === cycle;
+                        return (
+                          <button
+                            key={c}
+                            role="tab"
+                            aria-selected={active}
+                            onClick={() => { setCycle(c); setCheckoutFailed(false); }}
+                            className={`py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                              active ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'
+                            }`}
+                          >
+                            {c === 'monthly' ? 'Monthly' : 'Annual'}
+                            {c === 'annual' && (
+                              <span className={`text-[9px] font-bold uppercase tracking-wider ${active ? 'text-blue-100' : 'text-emerald-400'}`}>2 mo free</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-gray-800/80 border border-gray-700" role="tablist" aria-label="Team plan size">
                       {TEAM_SIZES.map(sz => {
                         const active = sz.tier === teamSize.tier;
@@ -305,13 +436,15 @@ const PricingPage: React.FC<PricingPageProps> = ({
                             key={sz.tier}
                             role="tab"
                             aria-selected={active}
-                            onClick={() => setTeamSize(sz)}
+                            onClick={() => { setTeamSize(sz); setCheckoutFailed(false); }}
                             className={`py-2 rounded-lg text-xs font-semibold transition-colors ${
                               active ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'
                             }`}
                           >
                             Up to {sz.nodes} nodes
-                            <span className={`block text-[10px] font-normal ${active ? 'text-blue-100' : 'text-gray-500'}`}>{sz.price}/mo</span>
+                            <span className={`block text-[10px] font-normal ${active ? 'text-blue-100' : 'text-gray-500'}`}>
+                              {cycle === 'annual' ? `${usd(sz.annual)}/yr` : `${usd(sz.monthly)}/mo`}
+                            </span>
                           </button>
                         );
                       })}
@@ -334,20 +467,36 @@ const PricingPage: React.FC<PricingPageProps> = ({
                   ))}
                 </div>
 
-                {/* CTA — mt-auto pushes to bottom so buttons align across cards */}
-                <a
-                  href={tier.cta.href}
-                  className={`mt-auto w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
-                    tier.highlight
-                      ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20'
-                      : tier.id === 'enterprise'
-                        ? 'bg-purple-600/90 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/20'
-                        : 'bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700'
-                  }`}
-                >
-                  {tier.cta.label}
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </a>
+                {/* CTA — mt-auto pushes to bottom so buttons align across cards.
+                    Team gets a checkout button only while self-serve is on;
+                    otherwise (off / unknown / error) it keeps the mailto. */}
+                {isTeamCard && selfServe ? (
+                  <div className="mt-auto space-y-2">
+                    <button
+                      onClick={() => void startTeamCheckout(teamSize.tier, cycle)}
+                      disabled={checkoutBusy}
+                      aria-busy={checkoutBusy}
+                      className={`${ctaCls} disabled:opacity-70 disabled:cursor-wait`}
+                    >
+                      {checkoutBusy
+                        ? 'Opening checkout…'
+                        : `Subscribe — ${usd(cycle === 'annual' ? teamSize.annual : teamSize.monthly)}${cycle === 'annual' ? '/yr' : '/mo'}`}
+                      {!checkoutBusy && <ArrowRight className="w-3.5 h-3.5" />}
+                    </button>
+                    {checkoutFailed ? (
+                      <p className="text-[11px] text-amber-400/90 text-center leading-relaxed" role="alert">
+                        Checkout couldn't open. <a href={tier.cta.href} className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Contact us</a> and we'll set you up.
+                      </p>
+                    ) : !isLoggedIn ? (
+                      <p className="text-[11px] text-gray-500 text-center">You'll create an account (or sign in) first.</p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <a href={tier.cta.href} className={ctaCls}>
+                    {tier.cta.label}
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </a>
+                )}
               </div>
             );
           })}
