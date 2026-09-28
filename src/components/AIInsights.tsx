@@ -540,6 +540,8 @@ interface AIInsightsProps {
   /** Navigate to the Models tab — used by model-placement cards (e.g. the
    *  Migration Advisor's "view what's loaded" handoff). */
   onNavigateToModels?: () => void;
+  /** Open /pricing — every Team/Pro upgrade CTA on this page routes there. */
+  onNavigateToPricing?: () => void;
 }
 
 // ── InferenceProfiler — correlated multi-signal timeline (localhost) ────────────
@@ -993,6 +995,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   deepLink,
   onDeepLinkConsumed,
   onNavigateToModels,
+  onNavigateToPricing,
 }) => {
 
   // ── Hooks — all unconditional ──────────────────────────────────────────────
@@ -2311,6 +2314,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Silicon Fit Audit"
                   icon={<Cpu className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2357,20 +2361,21 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 <ChargebackCard
                   getToken={getToken}
                   subscriptionTier={subscriptionTier}
+                  onNavigateToPricing={onNavigateToPricing}
                 />
               )}
 
               {/* Capacity Planner + Migration Advisor (Team+, cloud only — measured-WES fleet planning) */}
               {!isLocalHost && getToken && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} />
-                  <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} onViewModels={onNavigateToModels} />
+                  <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
+                  <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} onViewModels={onNavigateToModels} />
                 </div>
               )}
 
               {/* Idle Waste & right-sizing (Team+, cloud only — phantom-load cost + weekly digest) */}
               {!isLocalHost && getToken && (
-                <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} />
+                <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
               )}
 
               {/* Performance History — Tok/s · Power · GPU% · Mem% (cloud only) */}
@@ -2460,6 +2465,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </div>
                 ) : (
                   <InsightsLiteCard
+                    onUpgradeClick={onNavigateToPricing}
                     title="WES Leaderboard"
                     icon={<BarChart2 className="w-3.5 h-3.5" />}
                     tierRequired="pro"
@@ -2503,6 +2509,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Efficiency Regression"
                   icon={<TrendingDown className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2539,6 +2546,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Memory Forecast"
                   icon={<Database className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2586,6 +2594,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Hardware Cold Start"
                   icon={<Activity className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2625,6 +2634,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Fleet Thermal Diversity"
                   icon={<Globe className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2667,6 +2677,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Inference Density (Historical) — Team locked */}
               <InsightsLockedCard
+                onUpgradeClick={onNavigateToPricing}
                 title="Inference Density (Historical)"
                 icon={<Layers className="w-3.5 h-3.5" />}
                 description="Historical playback of the inference density hive plot. Unlock peak-hour analysis and utilisation trends."
@@ -2675,6 +2686,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Sovereignty Audit — Enterprise locked */}
               <InsightsLockedCard
+                onUpgradeClick={onNavigateToPricing}
                 title="Sovereignty Audit"
                 icon={<Shield className="w-3.5 h-3.5" />}
                 description="Cryptographically signed compliance PDF. Audit trail of every telemetry destination, pairing event, and outbound connection."
