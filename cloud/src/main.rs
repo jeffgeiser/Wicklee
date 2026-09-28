@@ -461,6 +461,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         .execute(pool).await.ok();
     sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS paddle_subscription_id TEXT")
         .execute(pool).await.ok();
+    // `occurred_at` of the last Paddle event applied to this user — webhooks
+    // can arrive out of order, and an older event must not undo a newer one.
+    sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS paddle_event_at TIMESTAMPTZ")
+        .execute(pool).await.ok();
 
     sqlx::query("
         CREATE TABLE IF NOT EXISTS sessions (
@@ -1278,20 +1282,12 @@ async fn resolve_clerk_user(clerk_sub: &str, pool: &sqlx::PgPool) -> Option<Stri
         return Some(row);
     }
 
-    // Exactly one unmapped user — link them (handles DIY→Clerk migration).
-    let unmapped: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE clerk_id IS NULL"
-    ).fetch_one(pool).await.unwrap_or(0);
-
-    if unmapped == 1
-        && let Ok(id) = sqlx::query_scalar::<_, String>(
-            "SELECT id FROM users WHERE clerk_id IS NULL LIMIT 1"
-        ).fetch_one(pool).await {
-            let _ = sqlx::query("UPDATE users SET clerk_id = $1 WHERE id = $2")
-                .bind(clerk_sub).bind(&id)
-                .execute(pool).await;
-            return Some(id);
-        }
+    // No "link the sole unmapped user" fallback. That DIY→Clerk migration
+    // shortcut attached the next NEW Clerk identity to whichever account had
+    // `clerk_id IS NULL` — and the public legacy signup route created exactly
+    // such accounts, so anyone could register a password account and capture
+    // the next stranger's Clerk sign-in (nodes, keys, billing). Migrating a
+    // legacy account now means setting `users.clerk_id` by hand.
 
     // New Clerk user — create a minimal record.
     let new_id = Uuid::new_v4().to_string();
@@ -1467,6 +1463,24 @@ fn is_self_hosted() -> bool {
     *FLAG.get_or_init(|| {
         matches!(std::env::var("SELF_HOSTED").as_deref(), Ok("true") | Ok("1"))
     })
+}
+
+/// Legacy email/password auth (`/api/auth/signup`, `/api/auth/login`) is the
+/// DIY path for self-hosted installs without a Clerk app. When Clerk is
+/// configured it is disabled: the frontend never uses it, and password
+/// accounts beside Clerk identities are pure attack surface (unverified
+/// emails, e.g. registering `DEV_ACCOUNT_EMAIL`).
+fn legacy_auth_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("CLERK_JWKS_URL").map(|v| v.trim().is_empty()).unwrap_or(true)
+    })
+}
+
+fn legacy_auth_disabled() -> axum::response::Response {
+    (StatusCode::NOT_FOUND, Json(serde_json::json!({
+        "error": "Password sign-in is disabled on this deployment. Sign in with Clerk."
+    }))).into_response()
 }
 
 /// Resolve subscription tier — checks organizations table for org users,
@@ -1996,13 +2010,34 @@ fn check_auth_rate_limit(
     true
 }
 
-/// Extract client IP from X-Forwarded-For (Railway/nginx) or fall back to peer addr.
+/// Client IP for rate limiting, from X-Forwarded-For.
+///
+/// Read from the RIGHT: each proxy appends the address it saw, so the
+/// rightmost entries are written by our own infrastructure while everything
+/// to their left is whatever the client sent. The old first-entry read let a
+/// client pick a fresh "IP" per request and walk straight past the auth rate
+/// limiter. `TRUSTED_PROXY_HOPS` (default 1) is how many of our proxies
+/// append to the header; the client address is the entry that many from the
+/// right.
 fn client_ip(headers: &HeaderMap) -> String {
-    headers.get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+    static HOPS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let hops = *HOPS.get_or_init(|| {
+        std::env::var("TRUSTED_PROXY_HOPS").ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(1)
+    });
+    client_ip_from_xff(headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()), hops)
+}
+
+fn client_ip_from_xff(xff: Option<&str>, hops: usize) -> String {
+    let entries: Vec<&str> = xff.unwrap_or("")
+        .split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if entries.is_empty() {
+        return "unknown".to_string();
+    }
+    // Fewer entries than hops: the leftmost is still proxy-written.
+    entries[entries.len().saturating_sub(hops)].to_string()
 }
 
 fn extract_api_key(headers: &HeaderMap) -> Option<String> {
@@ -2755,6 +2790,7 @@ async fn handle_signup(
     headers: HeaderMap,
     Json(body): Json<SignupRequest>,
 ) -> impl IntoResponse {
+    if !legacy_auth_enabled() { return legacy_auth_disabled(); }
     let ip = client_ip(&headers);
     if !check_auth_rate_limit(&ip, &state.auth_rate_limits) {
         return (StatusCode::TOO_MANY_REQUESTS,
@@ -2827,6 +2863,7 @@ async fn handle_login(
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    if !legacy_auth_enabled() { return legacy_auth_disabled(); }
     let ip = client_ip(&headers);
     if !check_auth_rate_limit(&ip, &state.auth_rate_limits) {
         return (StatusCode::TOO_MANY_REQUESTS,
@@ -2938,6 +2975,23 @@ async fn handle_claim(
     if matches!(existing_owner, Some(Some(_))) {
         return (StatusCode::CONFLICT, Json(serde_json::json!({
             "error": "This node is already paired to an account. Remove it from that fleet before re-pairing."
+        }))).into_response();
+    }
+
+    // A code may be live on only one node. Codes are agent-chosen, so
+    // without this a second claimant could plant a victim's live code on its
+    // own node and race the victim's activation (activate takes the newest
+    // claim). A legit collision is ~1 in 1M per live code; the agent just
+    // re-pairs with a fresh one.
+    let fresh_after = now_ms().saturating_sub(PAIR_CODE_TTL_MS) as i64;
+    let code_taken: bool = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM nodes
+         WHERE code = $1 AND user_id IS NULL AND paired_at >= $2 AND wk_id <> $3)"
+    ).bind(&body.code).bind(fresh_after).bind(&body.node_id)
+    .fetch_one(&state.pool).await.unwrap_or(true);
+    if code_taken {
+        return (StatusCode::CONFLICT, Json(serde_json::json!({
+            "error": "Pairing code collision. Restart pairing to get a new code."
         }))).into_response();
     }
 
@@ -5121,15 +5175,43 @@ async fn handle_activate(
     // RBAC: pairing a node into the fleet is a mutation — viewers cannot.
     if !role.can_mutate() { return role_forbidden("member"); }
 
+    // Per-account limit on top of the per-IP one: the IP limit alone can be
+    // spread across addresses, and this is the only brake on sweeping the
+    // 1M code space from one account.
+    if !check_auth_rate_limit(&format!("activate:{user_id}"), &state.auth_rate_limits) {
+        return (StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Too many attempts. Try again in a minute." }))).into_response();
+    }
+
     let is_pro = is_pro_db != 0 || is_dev_account(&email);
     // Enforce per-tier node limits.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     let node_limit = node_limit_for_tier(&tier, is_pro);
+    let internal = || (StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "Internal error" }))).into_response();
+
+    // The node-limit check and the claim run in ONE transaction under a
+    // per-tenant advisory lock. Checked separately, two concurrent
+    // activations could both see count = limit-1 and both claim, landing the
+    // tenant above its plan.
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
+    let mut tx = match state.pool.begin().await {
+        Ok(t) => t,
+        Err(_) => return internal(),
+    };
+    if sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(format!("activate:{tcol}:{tval}"))
+        .execute(&mut *tx).await.is_err()
     {
-        let (tcol, tval) = tenant_scope(&user_id, &org_id);
-        let count: i64 = sqlx::query_scalar::<_, i64>(
+        return internal();
+    }
+    {
+        let count: i64 = match sqlx::query_scalar::<_, i64>(
             &format!("SELECT COUNT(*) FROM nodes WHERE {} = $1", tcol)
-        ).bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
+        ).bind(tval).fetch_one(&mut *tx).await {
+            Ok(c) => c,
+            Err(_) => return internal(),
+        };
         if count as usize >= node_limit {
             // Reverse-mapping the cap to a name broke once team_10 and pro
             // shared a cap of 10; name the plan from the tier string instead.
@@ -5155,15 +5237,30 @@ async fn handle_activate(
     //     of staying redeemable in the DB forever.
     //   - `paired_at >= cutoff`: codes expire cloud-side (the agent already
     //     shows a 5-min countdown; previously the cloud never expired them).
-    // One UPDATE..RETURNING (not SELECT-then-UPDATE) so two concurrent
+    //   - exactly ONE row: codes are agent-chosen and not unique, so a bare
+    //     `WHERE code = $3` could claim several nodes in one call (and past
+    //     the node limit). The subquery picks the newest live claim.
+    // UPDATE..RETURNING (not SELECT-then-UPDATE) so two concurrent
     // submissions of the same code can't both succeed.
     let fresh_after = now_ms().saturating_sub(PAIR_CODE_TTL_MS) as i64;
-    let row = sqlx::query_as::<_, (String, String)>(
+    let row = match sqlx::query_as::<_, (String, String)>(
         "UPDATE nodes SET user_id = $1, org_id = $2, code = NULL
-         WHERE code = $3 AND user_id IS NULL AND paired_at >= $4
+         WHERE wk_id = (
+             SELECT wk_id FROM nodes
+             WHERE code = $3 AND user_id IS NULL AND paired_at >= $4
+             ORDER BY paired_at DESC
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED
+         ) AND user_id IS NULL
          RETURNING wk_id, fleet_url"
     ).bind(&user_id).bind(&org_id).bind(&body.code).bind(fresh_after)
-    .fetch_optional(&state.pool).await.ok().flatten();
+    .fetch_optional(&mut *tx).await {
+        Ok(r) => r,
+        Err(_) => return internal(),
+    };
+    if row.is_some() && tx.commit().await.is_err() {
+        return internal();
+    }
 
     match row {
         None => (StatusCode::NOT_FOUND,
@@ -10143,35 +10240,106 @@ fn sync_tier_to_clerk(clerk_id: String, tier: String) {
     });
 }
 
+/// Reject Paddle webhooks whose signed timestamp is further than this from
+/// now. Paddle's own SDKs use 5 s; this leaves room for clock skew and slow
+/// delivery while still bounding how long a captured event can be replayed.
+const PADDLE_SIG_TOLERANCE_S: i64 = 300;
+
+/// Verify a `Paddle-Signature` header (`ts=<unix>;h1=<hex>[;h1=<hex>...]`).
+///
+/// - The HMAC covers `ts:` + the RAW body bytes, as Paddle signs them (not a
+///   lossy UTF-8 re-encoding).
+/// - `ts` must be within `PADDLE_SIG_TOLERANCE_S` of `now_s`; the timestamp is
+///   inside the MAC, so this is what stops a captured event from being
+///   replayed later (e.g. an old `activated` after a cancel).
+/// - Any `h1` may match: Paddle sends one per active secret during rotation.
+fn verify_paddle_signature(secret: &str, header: &str, body: &[u8], now_s: i64) -> bool {
+    use hmac::{Hmac, Mac};
+    let mut ts: Option<&str> = None;
+    let mut sigs: Vec<&str> = Vec::new();
+    for part in header.split(';').map(str::trim) {
+        if let Some(v) = part.strip_prefix("ts=") { ts = Some(v); }
+        else if let Some(v) = part.strip_prefix("h1=") { sigs.push(v); }
+    }
+    let Some(ts) = ts else { return false };
+    let Ok(ts_num) = ts.parse::<i64>() else { return false };
+    if (now_s - ts_num).abs() > PADDLE_SIG_TOLERANCE_S || sigs.is_empty() {
+        return false;
+    }
+    let Ok(mut mac) = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()) else { return false };
+    mac.update(ts.as_bytes());
+    mac.update(b":");
+    mac.update(body);
+    let computed = hex::encode(mac.finalize().into_bytes());
+    let mut ok = subtle::Choice::from(0u8);
+    for sig in sigs {
+        ok |= subtle::ConstantTimeEq::ct_eq(computed.as_bytes(), sig.as_bytes());
+    }
+    ok.into()
+}
+
+/// What a subscription event does to the user's entitlement.
+#[derive(Debug, PartialEq)]
+enum PaddleAction {
+    /// Active or trialing on a recognized price.
+    Grant(&'static str),
+    /// Active on a price this deployment doesn't know. Link the subscription
+    /// for manual repair, never guess a tier (see `tier_for_price_id`).
+    LinkOnly,
+    /// Paused or canceled — back to community.
+    Revoke,
+    /// No entitlement change (past_due: Paddle is retrying the payment and
+    /// sends `canceled` or `paused` if dunning gives up).
+    Keep,
+}
+
+fn paddle_action(status: &str, tier: Option<&'static str>) -> PaddleAction {
+    match status {
+        "active" | "trialing" => tier.map_or(PaddleAction::LinkOnly, PaddleAction::Grant),
+        "paused" | "canceled" => PaddleAction::Revoke,
+        _ => PaddleAction::Keep,
+    }
+}
+
+/// Subscription status for an event: `data.status` when present, else implied
+/// by the event name.
+fn paddle_status<'a>(event_type: &str, data: &'a serde_json::Value) -> &'a str {
+    data["status"].as_str().unwrap_or(match event_type {
+        "subscription.canceled" => "canceled",
+        "subscription.past_due" => "past_due",
+        "subscription.paused"   => "paused",
+        _                       => "active",
+    })
+}
+
+/// Tier for a subscription: the first item whose price this deployment maps.
+fn paddle_tier(data: &serde_json::Value, prices: &PaddlePrices) -> Option<&'static str> {
+    data["items"].as_array()?.iter()
+        .filter_map(|item| item["price"]["id"].as_str())
+        .find_map(|id| tier_for_price_id(id, prices))
+}
+
 /// POST /api/webhooks/paddle — handles Paddle subscription lifecycle events.
-/// Signature verification uses HMAC-SHA256 with PADDLE_WEBHOOK_SECRET.
+/// Signature verification uses HMAC-SHA256 with PADDLE_WEBHOOK_SECRET and
+/// fails closed when the secret is unset.
 async fn handle_paddle_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    if let Ok(secret) = std::env::var("PADDLE_WEBHOOK_SECRET") {
-        let sig_header = headers.get("paddle-signature")
-            .and_then(|v| v.to_str().ok()).unwrap_or("");
-        let ts = sig_header.split(';').find(|p| p.starts_with("ts="))
-            .and_then(|p| p.strip_prefix("ts=")).unwrap_or("");
-        let expected = sig_header.split(';').find(|p| p.starts_with("h1="))
-            .and_then(|p| p.strip_prefix("h1=")).unwrap_or("");
-        let payload = format!("{}:{}", ts, String::from_utf8_lossy(&body));
-        use hmac::{Hmac, Mac};
-        type HmacSha256 = Hmac<sha2::Sha256>;
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC key");
-        mac.update(payload.as_bytes());
-        let computed = hex::encode(mac.finalize().into_bytes());
-        let sig_ok: bool = subtle::ConstantTimeEq::ct_eq(computed.as_bytes(), expected.as_bytes()).into();
-        if !sig_ok {
-            return (StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid signature" }))).into_response();
+    let secret = match std::env::var("PADDLE_WEBHOOK_SECRET") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            eprintln!("[billing] PADDLE_WEBHOOK_SECRET not set \u{2014} rejecting webhook");
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Webhook verification not configured" }))).into_response();
         }
-    } else {
-        eprintln!("[billing] PADDLE_WEBHOOK_SECRET not set \u{2014} rejecting webhook");
-        return (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Webhook verification not configured" }))).into_response();
+    };
+    let sig_header = headers.get("paddle-signature")
+        .and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !verify_paddle_signature(&secret, sig_header, &body, (now_ms() / 1000) as i64) {
+        return (StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid signature" }))).into_response();
     }
 
     let event: serde_json::Value = match serde_json::from_slice(&body) {
@@ -10182,95 +10350,10 @@ async fn handle_paddle_webhook(
     };
 
     let event_type = event["event_type"].as_str().unwrap_or("");
-    let data = &event["data"];
     match event_type {
-        "subscription.activated" | "subscription.updated" => {
-            let customer_id     = data["customer_id"].as_str().unwrap_or("").to_string();
-            let subscription_id = data["id"].as_str().unwrap_or("").to_string();
-            let user_id = data["custom_data"]["user_id"].as_str().unwrap_or("").to_string();
-
-            // Determine tier from price — check items[0].price.id
-            let price_id = data["items"].as_array()
-                .and_then(|items| items.first())
-                .and_then(|item| item["price"]["id"].as_str())
-                .unwrap_or("");
-            let prices = PaddlePrices::from_env();
-            let tier = match tier_for_price_id(price_id, &prices) {
-                Some(t) => t,
-                None => {
-                    // Fail closed: link the subscription so it can be repaired by
-                    // hand, but never guess an entitlement. See tier_for_price_id.
-                    eprintln!(
-                        "[billing] paddle: UNRECOGNIZED price_id={price_id:?} on \
-                         {event_type} (user_id={user_id:?}, sub={subscription_id}) — \
-                         tier NOT changed. Wire this price to PADDLE_TEAM_PRICE_ID / \
-                         PADDLE_TEAM_ANNUAL_PRICE_ID and re-send the event, or set \
-                         the tier manually."
-                    );
-                    if !user_id.is_empty() {
-                        let _ = sqlx::query(
-                            "UPDATE users SET paddle_customer_id = $1, paddle_subscription_id = $2 WHERE id = $3"
-                        ).bind(&customer_id).bind(&subscription_id).bind(&user_id)
-                        .execute(&state.pool).await;
-                    }
-                    return StatusCode::OK.into_response();
-                }
-            };
-
-            let status = data["status"].as_str().unwrap_or("active");
-            if status == "active" || status == "trialing" {
-                let _ = sqlx::query(
-                    "UPDATE users SET subscription_tier = $1, paddle_customer_id = $2, paddle_subscription_id = $3 WHERE id = $4"
-                ).bind(tier).bind(&customer_id).bind(&subscription_id).bind(&user_id)
-                .execute(&state.pool).await;
-                // Sync tier to organization if user owns one (shared fleet access).
-                let _ = sqlx::query(
-                    "UPDATE organizations SET subscription_tier = $1 WHERE created_by = $2"
-                ).bind(tier).bind(&user_id).execute(&state.pool).await;
-                println!("[billing] paddle: {user_id} \u{2192} {tier} (sub={subscription_id})");
-                // Sync tier to Clerk so the frontend sees the change immediately.
-                let clerk_id: Option<String> = sqlx::query_scalar(
-                    "SELECT clerk_id FROM users WHERE id = $1"
-                ).bind(&user_id).fetch_optional(&state.pool).await.ok().flatten();
-                if let Some(cid) = clerk_id {
-                    sync_tier_to_clerk(cid, tier.to_string());
-                } else {
-                    eprintln!("[billing] no clerk_id found for user_id={user_id} — cannot sync tier to Clerk");
-                }
-                forward_to_taarn("subscription_activated", serde_json::json!({
-                    "user_id": &user_id, "tier": tier,
-                    "subscription_id": &subscription_id, "customer_id": &customer_id,
-                }));
-            }
-        }
-        "subscription.canceled" | "subscription.past_due" => {
-            let customer_id = data["customer_id"].as_str().unwrap_or("").to_string();
-            // Downgrade user and any org they own.
-            let downgraded_user: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM users WHERE paddle_customer_id = $1"
-            ).bind(&customer_id).fetch_optional(&state.pool).await.ok().flatten();
-            let _ = sqlx::query(
-                "UPDATE users SET subscription_tier = 'community', paddle_subscription_id = NULL WHERE paddle_customer_id = $1"
-            ).bind(&customer_id).execute(&state.pool).await;
-            if let Some(ref uid) = downgraded_user {
-                let _ = sqlx::query(
-                    "UPDATE organizations SET subscription_tier = 'community' WHERE created_by = $1"
-                ).bind(uid).execute(&state.pool).await;
-            }
-            println!("[billing] paddle: downgraded customer={customer_id} \u{2192} community");
-            // Sync downgrade to Clerk.
-            if let Some(ref uid) = downgraded_user {
-                let clerk_id: Option<String> = sqlx::query_scalar(
-                    "SELECT clerk_id FROM users WHERE id = $1"
-                ).bind(uid).fetch_optional(&state.pool).await.ok().flatten();
-                if let Some(cid) = clerk_id {
-                    sync_tier_to_clerk(cid, "community".to_string());
-                }
-            }
-            forward_to_taarn("subscription_canceled", serde_json::json!({
-                "customer_id": &customer_id,
-                "user_id": downgraded_user.as_deref().unwrap_or("unknown"),
-            }));
+        "subscription.activated" | "subscription.updated" | "subscription.resumed"
+        | "subscription.canceled" | "subscription.past_due" | "subscription.paused" => {
+            apply_paddle_subscription_event(&state.pool, event_type, &event).await;
         }
         _ => {
             println!("[billing] paddle: unhandled event_type={event_type}");
@@ -10278,6 +10361,115 @@ async fn handle_paddle_webhook(
     }
 
     StatusCode::OK.into_response()
+}
+
+async fn apply_paddle_subscription_event(
+    pool: &sqlx::PgPool,
+    event_type: &str,
+    event: &serde_json::Value,
+) {
+    let data            = &event["data"];
+    let occurred_at     = event["occurred_at"].as_str();
+    let customer_id     = data["customer_id"].as_str().unwrap_or("");
+    let subscription_id = data["id"].as_str().unwrap_or("");
+    let status          = paddle_status(event_type, data);
+    let tier            = paddle_tier(data, &PaddlePrices::from_env());
+    let action          = paddle_action(status, tier);
+
+    // Whose subscription: `custom_data.user_id` (set at checkout) when it
+    // names a real user, else whoever this subscription or customer is
+    // already linked to.
+    let custom_uid = data["custom_data"]["user_id"].as_str().unwrap_or("");
+    let user_id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM (
+             SELECT id, 1 AS pref FROM users WHERE id = $1
+             UNION ALL
+             SELECT id, 2 FROM users WHERE $2 <> '' AND paddle_subscription_id = $2
+             UNION ALL
+             SELECT id, 3 FROM users WHERE $3 <> '' AND paddle_customer_id = $3
+         ) c ORDER BY pref LIMIT 1"
+    ).bind(custom_uid).bind(subscription_id).bind(customer_id)
+    .fetch_optional(pool).await.ok().flatten();
+    let Some(user_id) = user_id else {
+        eprintln!("[billing] paddle: {event_type} status={status} for unknown user \
+                   (custom user_id={custom_uid:?}, customer={customer_id}, sub={subscription_id}) — ignored");
+        return;
+    };
+
+    // Every write below is conditional on this event not being older than
+    // the last one applied (`paddle_event_at`). A missing `occurred_at`
+    // applies unconditionally, as before.
+    const NOT_STALE: &str =
+        "($1::timestamptz IS NULL OR paddle_event_at IS NULL OR paddle_event_at <= $1::timestamptz)";
+    let applied_tier: Option<&str> = match action {
+        PaddleAction::Keep => {
+            println!("[billing] paddle: {user_id} {event_type} status={status} \u{2014} entitlement unchanged");
+            return;
+        }
+        PaddleAction::LinkOnly => {
+            eprintln!(
+                "[billing] paddle: UNRECOGNIZED price on {event_type} (user_id={user_id}, \
+                 sub={subscription_id}) — tier NOT changed. Wire the price to a \
+                 PADDLE_TEAM*_PRICE_ID variable and re-send the event, or set the tier manually."
+            );
+            let _ = sqlx::query(&format!(
+                "UPDATE users SET paddle_customer_id = $2, paddle_subscription_id = $3
+                 WHERE id = $4 AND {NOT_STALE}"
+            )).bind(occurred_at).bind(customer_id).bind(subscription_id).bind(&user_id)
+            .execute(pool).await;
+            return;
+        }
+        PaddleAction::Grant(tier) => {
+            let r = sqlx::query(&format!(
+                "UPDATE users SET subscription_tier = $5, paddle_customer_id = $2,
+                        paddle_subscription_id = $3,
+                        paddle_event_at = COALESCE($1::timestamptz, paddle_event_at)
+                 WHERE id = $4 AND {NOT_STALE}"
+            )).bind(occurred_at).bind(customer_id).bind(subscription_id).bind(&user_id).bind(tier)
+            .execute(pool).await;
+            matches!(r, Ok(ref d) if d.rows_affected() > 0).then_some(tier)
+        }
+        PaddleAction::Revoke => {
+            // Only the subscription the user is currently on can revoke: a
+            // late cancel for a replaced subscription must not wipe the new one.
+            let r = sqlx::query(&format!(
+                "UPDATE users SET subscription_tier = 'community', paddle_subscription_id = NULL,
+                        paddle_event_at = COALESCE($1::timestamptz, paddle_event_at)
+                 WHERE id = $2 AND (paddle_subscription_id IS NULL OR paddle_subscription_id = $3)
+                   AND {NOT_STALE}"
+            )).bind(occurred_at).bind(&user_id).bind(subscription_id)
+            .execute(pool).await;
+            matches!(r, Ok(ref d) if d.rows_affected() > 0).then_some("community")
+        }
+    };
+    let Some(tier) = applied_tier else {
+        println!("[billing] paddle: {user_id} {event_type} occurred_at={occurred_at:?} \
+                  is stale or for a replaced subscription \u{2014} skipped");
+        return;
+    };
+
+    // Org the user owns shares the entitlement (shared fleet access).
+    let _ = sqlx::query("UPDATE organizations SET subscription_tier = $1 WHERE created_by = $2")
+        .bind(tier).bind(&user_id).execute(pool).await;
+    println!("[billing] paddle: {user_id} \u{2192} {tier} ({event_type}, status={status}, sub={subscription_id})");
+
+    // Sync tier to Clerk so the frontend sees the change immediately.
+    let clerk_id: Option<String> = sqlx::query_scalar("SELECT clerk_id FROM users WHERE id = $1")
+        .bind(&user_id).fetch_optional(pool).await.ok().flatten();
+    match clerk_id {
+        Some(cid) => sync_tier_to_clerk(cid, tier.to_string()),
+        None => eprintln!("[billing] no clerk_id found for user_id={user_id} — cannot sync tier to Clerk"),
+    }
+    if tier == "community" {
+        forward_to_taarn("subscription_canceled", serde_json::json!({
+            "customer_id": customer_id, "user_id": &user_id,
+        }));
+    } else {
+        forward_to_taarn("subscription_activated", serde_json::json!({
+            "user_id": &user_id, "tier": tier,
+            "subscription_id": subscription_id, "customer_id": customer_id,
+        }));
+    }
 }
 
 // ── OpenTelemetry Export (Team+ tier) ─────────────────────────────────────────
@@ -11648,5 +11840,106 @@ mod tenancy_tests {
         let (col, val) = tenant_scope("user_1", &evil);
         assert_eq!(col, "org_id"); // literal, regardless of value
         assert_eq!(val, "org_x'; DROP TABLE nodes;--"); // safely bound as $1
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    fn sign(secret: &str, ts: i64, body: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(format!("{ts}:").as_bytes());
+        mac.update(body);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    #[test]
+    fn paddle_signature_accepts_fresh_valid_and_rotated() {
+        let body = br#"{"event_type":"subscription.activated"}"#;
+        let now = 1_700_000_000;
+        let good = sign("sec", now, body);
+        assert!(verify_paddle_signature("sec", &format!("ts={now};h1={good}"), body, now));
+        // Rotation: any h1 may match.
+        let hdr = format!("ts={now};h1={};h1={good}", "0".repeat(64));
+        assert!(verify_paddle_signature("sec", &hdr, body, now + 10));
+    }
+
+    #[test]
+    fn paddle_signature_rejects_replay_tamper_and_malformed() {
+        let body = br#"{"a":1}"#;
+        let ts = 1_700_000_000;
+        let sig = sign("sec", ts, body);
+        let hdr = format!("ts={ts};h1={sig}");
+        // Replayed outside the tolerance window, either direction.
+        assert!(!verify_paddle_signature("sec", &hdr, body, ts + PADDLE_SIG_TOLERANCE_S + 1));
+        assert!(!verify_paddle_signature("sec", &hdr, body, ts - PADDLE_SIG_TOLERANCE_S - 1));
+        // Tampered body, wrong secret, missing parts, non-numeric ts.
+        assert!(!verify_paddle_signature("sec", &hdr, br#"{"a":2}"#, ts));
+        assert!(!verify_paddle_signature("other", &hdr, body, ts));
+        assert!(!verify_paddle_signature("sec", &format!("h1={sig}"), body, ts));
+        assert!(!verify_paddle_signature("sec", &format!("ts={ts}"), body, ts));
+        assert!(!verify_paddle_signature("sec", &format!("ts=abc;h1={sig}"), body, ts));
+        assert!(!verify_paddle_signature("sec", "", body, ts));
+    }
+
+    #[test]
+    fn paddle_signature_covers_raw_non_utf8_bytes() {
+        // A lossy UTF-8 re-encode would change these bytes and break the MAC.
+        let body = b"{\"x\":\"\xff\xfe\"}";
+        let ts = 1_700_000_000;
+        let sig = sign("sec", ts, body);
+        assert!(verify_paddle_signature("sec", &format!("ts={ts};h1={sig}"), body, ts));
+    }
+
+    #[test]
+    fn paddle_action_by_status() {
+        assert_eq!(paddle_action("active", Some("team_10")), PaddleAction::Grant("team_10"));
+        assert_eq!(paddle_action("trialing", Some("team")), PaddleAction::Grant("team"));
+        assert_eq!(paddle_action("active", None), PaddleAction::LinkOnly);
+        assert_eq!(paddle_action("past_due", Some("team")), PaddleAction::Keep);
+        assert_eq!(paddle_action("paused", Some("team")), PaddleAction::Revoke);
+        assert_eq!(paddle_action("canceled", None), PaddleAction::Revoke);
+        assert_eq!(paddle_action("something_new", Some("team")), PaddleAction::Keep);
+    }
+
+    #[test]
+    fn paddle_status_falls_back_to_event_name() {
+        let empty = serde_json::json!({});
+        assert_eq!(paddle_status("subscription.canceled", &empty), "canceled");
+        assert_eq!(paddle_status("subscription.paused", &empty), "paused");
+        assert_eq!(paddle_status("subscription.past_due", &empty), "past_due");
+        assert_eq!(paddle_status("subscription.activated", &empty), "active");
+        // data.status wins: an `updated` event can carry past_due or canceled.
+        let d = serde_json::json!({ "status": "canceled" });
+        assert_eq!(paddle_status("subscription.updated", &d), "canceled");
+    }
+
+    #[test]
+    fn paddle_tier_uses_first_recognized_item() {
+        let prices = PaddlePrices {
+            pro: String::new(), team10_monthly: "pri_t10".into(), team10_annual: String::new(),
+            team_monthly: "pri_t25".into(), team_annual: String::new(), business: String::new(),
+        };
+        let d = serde_json::json!({ "items": [
+            { "price": { "id": "pri_addon_unknown" } },
+            { "price": { "id": "pri_t25" } },
+        ]});
+        assert_eq!(paddle_tier(&d, &prices), Some("team"));
+        assert_eq!(paddle_tier(&serde_json::json!({ "items": [] }), &prices), None);
+        assert_eq!(paddle_tier(&serde_json::json!({}), &prices), None);
+    }
+
+    #[test]
+    fn client_ip_reads_proxy_appended_entry_not_client_supplied() {
+        // Client spoofs "1.1.1.1"; our proxy appended the real peer last.
+        assert_eq!(client_ip_from_xff(Some("1.1.1.1, 203.0.113.9"), 1), "203.0.113.9");
+        // Two trusted hops: client is second from the right.
+        assert_eq!(client_ip_from_xff(Some("1.1.1.1, 203.0.113.9, 10.0.0.2"), 2), "203.0.113.9");
+        assert_eq!(client_ip_from_xff(Some("203.0.113.9"), 1), "203.0.113.9");
+        assert_eq!(client_ip_from_xff(Some("203.0.113.9"), 3), "203.0.113.9");
+        assert_eq!(client_ip_from_xff(Some(" , "), 1), "unknown");
+        assert_eq!(client_ip_from_xff(None, 1), "unknown");
     }
 }

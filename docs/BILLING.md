@@ -75,7 +75,21 @@ In Paddle:
 4. Point the webhook at `POST /api/webhooks/paddle` and set
    `PADDLE_WEBHOOK_SECRET` to its signing secret. Subscribe to
    `subscription.activated`, `subscription.updated`, `subscription.canceled`,
-   `subscription.past_due`.
+   `subscription.past_due`, `subscription.paused`, `subscription.resumed`.
+   How the webhook treats them:
+   - The signature must verify and its `ts` must be within 5 minutes of the
+     server clock, so a captured event can't be replayed later. The server
+     needs a correct clock (NTP), and a secret rotation works because any
+     `h1` in the header may match.
+   - Tier follows `data.status`: `active`/`trialing` grants the price's tier,
+     `paused`/`canceled` revokes to community, and `past_due` changes nothing
+     (Paddle is retrying the card; if dunning gives up it sends `canceled` or
+     `paused`).
+   - Events older than the last one applied to that user (`occurred_at`) are
+     skipped, and a cancel only revokes the subscription the user is currently
+     on, so out-of-order or late events can't undo newer state.
+   - The user is `custom_data.user_id`, falling back to the user already
+     linked to that subscription or customer.
 5. Check whether any live subscriptions exist on the retired prices. If none,
    step 3's grandfathering caveat is moot and both retired variables can be left
    empty.
@@ -86,8 +100,8 @@ Then, in the deployment env:
 7. `PADDLE_CHECKOUT_ENABLED=true` — last, once 1–6 are verified.
 
 Verify with a sandbox purchase of **each size** before flipping step 7 in
-production: the log line `[billing] paddle: <user> → team_10 (sub=…)` or
-`→ team (sub=…)` confirms the mapping resolved.
+production: the log line `[billing] paddle: <user> → team_10 (subscription.activated, …)`
+or `→ team (…)` confirms the mapping resolved.
 
 ### Moving a customer from 10 to 25 nodes
 
@@ -104,7 +118,8 @@ endpoint is the follow-up once the first 10-node customer exists.
 Until checkout is on, a Team sale closed over email needs the tier set by hand —
 a Paddle payment link created in the dashboard will **not** grant it. The
 webhook reads `data.custom_data.user_id`, which a hand-made link doesn't carry,
-so the update matches no row and no-ops silently.
+so unless the subscription or customer is already linked to a user, the event
+matches no one and is ignored (logged as `for unknown user`).
 
 To fix a subscription up by hand, set both:
 

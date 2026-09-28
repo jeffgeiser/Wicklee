@@ -2,7 +2,7 @@
 
 *A running log of what shipped, what was learned, and what's next. Most recent entry first.*
 
-> **Canonical references:** `docs/ROADMAP.md` (product roadmap, phases, tier structure) · `docs/progress.md` (this file — engineering journal, most-recent-first)
+> **Canonical references:** `docs/ROADMAP.md` (product roadmap, phases, tier structure) · `docs/progress.md` (this file — engineering journal, most-recent-first) · `docs/NEXT_STEPS.md` (founder checklist — open items that need a human)
 
 ---
 

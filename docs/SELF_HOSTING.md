@@ -48,7 +48,9 @@ configured in *your* Clerk dashboard.
 session path (`POST /api/auth/signup`, `POST /api/auth/login`) that needs no
 external service. It predates Clerk Organizations, so it has **no org/RBAC/SSO
 support and no sign-in UI** — it exists for headless/API-driven deployments and
-air-gapped evaluation. For a team-facing dashboard, use Clerk.
+air-gapped evaluation. For a team-facing dashboard, use Clerk. The two paths are exclusive: the password routes return 404 whenever
+`CLERK_JWKS_URL` is set, and a legacy account is never auto-linked to a Clerk
+identity (set `users.clerk_id` by hand to migrate one).
 
 ## Pairing agents to your control plane
 
