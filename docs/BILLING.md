@@ -73,6 +73,10 @@ In Paddle:
    - **Team 25 annual, $2,000/yr** → `PADDLE_TEAM_ANNUAL_PRICE_ID`
    Name them by node count in Paddle so the invoice line reads
    "Wicklee Team — up to 10 nodes"; the customer should never see `team_10`.
+   Prices are **tax-exclusive**: Paddle (merchant of record) adds sales tax /
+   VAT at checkout by buyer location, e.g. $99 + $8.79 NY sales tax = $107.79;
+   EU/UK businesses with a VAT ID are reverse-charged. The Team card says
+   "plus tax where applicable" under the price.
 2. Checkout is enabled once **any one** of the four is a real price ID
    (`team_configured()`); wire all four before flipping step 7 so both sizes
    are purchasable.
