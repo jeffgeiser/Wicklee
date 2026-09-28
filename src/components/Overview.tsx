@@ -14,6 +14,7 @@ import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { useLocalEvents } from '../hooks/useLocalEvents';
+import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 import { thermalColour, derivedNvidiaThermal } from '../utils/thermal';
 import EventFeed from './EventFeed';
 import MetricTooltip from './MetricTooltip';
@@ -1332,8 +1333,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   // v0.9.0: Runtime Config modal — null when closed, otherwise the model name to inspect.
   const [runtimeConfigModel, setRuntimeConfigModel] = useState<string | null>(null);
-  const [localConnected, setLocalConnected] = useState(false);
-  const [localTransport, setLocalTransport] = useState<'ws' | 'sse' | null>(null);
+  // Shared local-agent stream (WS primary, SSE fallback) — see useLocalMetricsStream.
+  // handleMetrics is declared below; it is only called from stream callbacks.
+  const { connected: localConnected, transport: localTransport } =
+    useLocalMetricsStream(data => handleMetrics(data));
 
   type MetricKey = 'gpu' | 'cpu' | 'mem' | 'power' | 'tps';
   interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; tps: number | null; }
@@ -1364,10 +1367,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     fetchCost();
     const id = setInterval(fetchCost, 60_000); // refresh every 60s
     return () => clearInterval(id);
-  }, [isLocalMode]);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  }, []);
 
   // Local peak tok/s tracker — mirrors FleetStreamContext's peakTpsRef but for the
   // local WS node, which never passes through the fleet SSE loop.
@@ -1432,7 +1432,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   const handleMetrics = useCallback((data: SentinelMetrics) => {
     setSentinel(data);
-    setLocalConnected(true);
     pushHistoryPoint(data);
 
     // Update local peak tok/s so DiagnosticRail estimateTps can apply the GPU boost.
@@ -1447,83 +1446,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     }
   }, [pushHistoryPoint]);
 
-  // Local WS/SSE connection — only active on localhost.
-  useEffect(() => {
-    if (!isLocalHost) return;
-
-    let retryWs:  ReturnType<typeof setTimeout>;
-    let retrySse: ReturnType<typeof setTimeout>;
-    let wsFailed = false;
-    // Set by cleanup. close() fires onclose/onerror asynchronously — after
-    // cleanup has run — so without this guard every unmount (tab switch)
-    // scheduled a fresh reconnect and leaked a socket calling setState on a
-    // dead component.
-    let cancelled = false;
-
-    const connectSSE = () => {
-      if (cancelled) return;
-      if (wsRef.current?.readyState === WebSocket.OPEN) return;
-      const es = new EventSource('/api/metrics');
-      esRef.current = es;
-      es.onopen    = () => setLocalTransport('sse');
-      es.onmessage = (ev) => {
-        try { handleMetrics(JSON.parse(ev.data) as SentinelMetrics); setLocalTransport('sse'); }
-        catch { /* malformed frame */ }
-      };
-      es.onerror = () => {
-        es.close();
-        if (esRef.current === es) esRef.current = null;
-        if (cancelled) return;
-        setLocalConnected(false);
-        retrySse = setTimeout(connectSSE, 3000);
-      };
-    };
-
-    const connectWS = () => {
-      if (cancelled) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-      wsRef.current = ws;
-      ws.onmessage = (ev) => {
-        try {
-          handleMetrics(JSON.parse(ev.data as string) as SentinelMetrics);
-          setLocalTransport('ws');
-          if (esRef.current) { esRef.current.close(); esRef.current = null; }
-        } catch { /* malformed frame */ }
-      };
-      ws.onerror = () => { wsFailed = true; };
-      ws.onclose = () => {
-        if (wsRef.current === ws) wsRef.current = null;
-        if (cancelled) return;
-        setLocalConnected(false);
-        if (wsFailed) { connectSSE(); }
-        else {
-          if (!esRef.current) connectSSE();
-          retryWs = setTimeout(() => { wsFailed = false; connectWS(); }, 3000);
-        }
-      };
-    };
-
-    connectWS();
-
-    return () => {
-      cancelled = true;
-      clearTimeout(retryWs);
-      clearTimeout(retrySse);
-      const ws = wsRef.current;
-      if (ws) {
-        ws.onmessage = ws.onerror = ws.onclose = null;
-        ws.close();
-        wsRef.current = null;
-      }
-      const es = esRef.current;
-      if (es) {
-        es.onopen = es.onmessage = es.onerror = null;
-        es.close();
-        esRef.current = null;
-      }
-    };
-  }, [handleMetrics]);
 
   // Feed cloud metrics into the history buffer for the System Performance chart.
   // Fleet-wide aggregation: average CPU/GPU/mem across all reporting nodes, sum power.

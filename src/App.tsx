@@ -9,6 +9,7 @@ import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamConte
 import { CLOUD_URL } from './utils/cloudUrl';
 import { hasClerkSessionHint } from './utils/clerkHint';
 import { perfMark } from './utils/perfMark';
+import { loadPaddle } from './utils/loadPaddle';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -333,24 +334,33 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         restricted: false,
       }];
     });
-  }, [isLocalHost, pairingInfo?.node_id]);
+  }, [pairingInfo?.node_id]);
 
   // Callback for FleetStreamProvider — patches node hostnames and restricted flag when real metrics arrive.
+  // Runs on every SSE frame, so it returns `prev` itself when nothing changed —
+  // a fresh array each frame re-rendered AppCore and every tab that takes `nodes`.
   const handleNodesSnapshot = useCallback((snapshot: FleetNode[]) => {
-    setNodes(prev => prev.map(node => {
-      const match = snapshot.find(n => n.node_id === node.id);
-      if (!match) return node;
-      const updates: Partial<typeof node> = {};
-      // Prefer display_name (Pro+ custom name) > metrics.hostname > node_id
-      const resolvedHostname = match.display_name ?? match.metrics?.hostname ?? node.id;
-      if (resolvedHostname !== node.hostname) {
-        updates.hostname = resolvedHostname;
-      }
-      if (match.restricted !== undefined && match.restricted !== node.restricted) {
-        updates.restricted = match.restricted;
-      }
-      return Object.keys(updates).length > 0 ? { ...node, ...updates } : node;
-    }));
+    setNodes(prev => {
+      const byId = new Map(snapshot.map(n => [n.node_id, n]));
+      let changed = false;
+      const next = prev.map(node => {
+        const match = byId.get(node.id);
+        if (!match) return node;
+        const updates: Partial<typeof node> = {};
+        // Prefer display_name (Pro+ custom name) > metrics.hostname > node_id
+        const resolvedHostname = match.display_name ?? match.metrics?.hostname ?? node.id;
+        if (resolvedHostname !== node.hostname) {
+          updates.hostname = resolvedHostname;
+        }
+        if (match.restricted !== undefined && match.restricted !== node.restricted) {
+          updates.restricted = match.restricted;
+        }
+        if (Object.keys(updates).length === 0) return node;
+        changed = true;
+        return { ...node, ...updates };
+      });
+      return changed ? next : prev;
+    });
   }, []);
 
   const permissions = usePermissions(currentUser);
@@ -441,9 +451,12 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         return false;
       }
 
-      const Paddle = window.Paddle;
-      if (!Paddle) {
-        console.error('[billing] Paddle.js not loaded');
+      // Paddle.js is injected on first checkout rather than on every page.
+      let Paddle: PaddleInstance;
+      try {
+        Paddle = await loadPaddle();
+      } catch (e) {
+        console.error('[billing] Paddle.js not loaded:', e);
         return false;
       }
 
