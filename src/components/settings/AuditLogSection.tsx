@@ -120,8 +120,8 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) {
-        setError(res.status === 403
-          ? 'Audit logging requires Business tier or above.'
+        setError(res.status === 402 || res.status === 403
+          ? 'Audit logging requires Enterprise tier.'
           : `Server returned ${res.status}`);
         return;
       }
