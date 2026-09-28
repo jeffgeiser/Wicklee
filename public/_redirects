@@ -10,17 +10,24 @@
 # so this file is inert on the Railway deployment and only matters wherever
 # Cloudflare Pages serves the site. Harmless to have in both.
 #
-# Routes are listed EXPLICITLY rather than using a blanket `/* /index.html 200`:
+# Routes are listed EXPLICITLY rather than using a blanket `/* / 200`:
 # a catch-all would also swallow /api/*, /mcp and /metrics, which must reach the
 # backend rather than return the SPA shell. Add a line here when you add a route
 # to App.tsx that isn't prerendered.
+#
+# The rewrite target is `/`, NOT `/index.html`. Pages canonicalises HTML paths
+# ("pretty URLs": /about/index.html → /about/), so a 200 rewrite to /index.html
+# hits that canonicalisation and comes back to the browser as a 308 with
+# `Location: /`, i.e. every direct hit on /pricing, /terms, … landed on the
+# homepage. Rewriting to `/` serves the same root index.html with a 200 and
+# leaves the URL alone, so App.tsx sees the real path.
 
-/pricing            /index.html   200
-/trust              /index.html   200
-/design-partners    /index.html   200
-/metrics-reference  /index.html   200
-/terms              /index.html   200
-/privacy            /index.html   200
-/refund             /index.html   200
-/sign-in            /index.html   200
-/sign-up            /index.html   200
+/pricing            /   200
+/trust              /   200
+/design-partners    /   200
+/metrics-reference  /   200
+/terms              /   200
+/privacy            /   200
+/refund             /   200
+/sign-in            /   200
+/sign-up            /   200

@@ -92,7 +92,7 @@ const TermsOfService: React.FC = () => (
     <p>Pricing is subject to change with 30 days notice to existing subscribers.</p>
 
     <h2>4. Billing</h2>
-    <p>Paid subscriptions are billed monthly through our payment processor, Paddle. By subscribing, you authorize recurring charges. Subscriptions renew automatically unless cancelled before the next billing cycle.</p>
+    <p>Paid subscriptions are billed monthly or annually through our payment processor, Paddle. By subscribing, you authorize recurring charges. Subscriptions renew automatically unless cancelled before the next billing cycle.</p>
 
     <h2>5. Data and Sovereignty</h2>
     <p>The Wicklee agent is designed to be sovereign by default:</p>
@@ -233,7 +233,7 @@ const RefundPolicy: React.FC = () => (
     <h2>1. Free Tier</h2>
     <p>The Community tier is free and requires no payment. No refund applies.</p>
 
-    <h2>2. Pro and Team Subscriptions</h2>
+    <h2>2. Team Subscriptions</h2>
 
     <h3>14-Day Money-Back Guarantee</h3>
     <p>If you are not satisfied with your paid subscription, you may request a full refund within 14 days of your initial purchase. No questions asked.</p>
@@ -242,10 +242,10 @@ const RefundPolicy: React.FC = () => (
     <p>After the 14-day window, subscriptions are non-refundable for the current billing period. You may cancel at any time, and your access will continue until the end of your current billing cycle.</p>
 
     <h2>3. Annual Subscriptions</h2>
-    <p>If annual billing is offered, the 14-day money-back guarantee applies from the date of purchase. After 14 days, a prorated refund may be issued at our discretion for the unused portion of the annual term.</p>
+    <p>For annual plans, the 14-day money-back guarantee applies from the date of purchase. After 14 days, a prorated refund may be issued at our discretion for the unused portion of the annual term.</p>
 
     <h2>4. Downgrades</h2>
-    <p>If you downgrade from a higher tier to a lower tier (e.g., Team to Pro, or Pro to Community), the change takes effect at the end of your current billing cycle. No prorated refund is issued for downgrades.</p>
+    <p>If you downgrade from a higher tier to a lower tier (e.g., Team to Community), the change takes effect at the end of your current billing cycle. No prorated refund is issued for downgrades.</p>
 
     <h2>5. Service Issues</h2>
     <p>If the cloud service experiences significant downtime or degradation that materially affects your use, we may issue credits or refunds at our discretion. The local agent is not affected by cloud service availability and continues to function independently.</p>
