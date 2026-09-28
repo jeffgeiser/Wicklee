@@ -67,4 +67,5 @@ opt-level     = "z"   # Optimise for size over speed
 lto           = true  # Cross-crate dead-code elimination
 codegen-units = 1     # Single unit allows the most aggressive inlining + DCE
 strip         = true  # Strip debug symbols from the final ELF/Mach-O
-panic         = "abort" # Remove stack-unwinding machinery (~20 KB savings)
+# NOTE: no `panic = "abort"` — supervisor.rs recovers crashed background
+# loops via JoinError::is_panic, which requires unwinding.

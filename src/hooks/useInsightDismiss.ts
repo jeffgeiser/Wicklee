@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
+import { IS_LOCAL_HOST } from '../utils/buildTarget';
 
 /**
  * Per-session dismiss state for Insight cards.
  *
  * Primary store: localStorage (works offline, survives reload, zero-latency).
- * Secondary store: agent DuckDB via POST localhost:7700/api/insights/dismiss
+ * Secondary store: agent DuckDB via POST /api/insights/dismiss (local agent only)
  *   — best-effort, fire-and-forget. Persists across browser clears + syncs
  *   across tabs/devices that share the same local agent.
  *
@@ -17,9 +18,10 @@ import { useState, useEffect } from 'react';
  */
 
 const PERSIST_MS   = 24 * 60 * 60 * 1_000; // 24 hours (default TTL)
-const AGENT_BASE   = 'http://localhost:7700';
-const DISMISS_URL  = `${AGENT_BASE}/api/insights/dismiss`;
-const DISMISSED_URL = `${AGENT_BASE}/api/insights/dismissed`;
+// Relative: same-origin when served by the agent, Vite-proxied in dev. Only
+// used when talking to a local agent — in cloud mode these paths don't exist.
+const DISMISS_URL   = '/api/insights/dismiss';
+const DISMISSED_URL = '/api/insights/dismissed';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -59,7 +61,7 @@ function writeDismissed(key: string, expiresAt: number): void {
 let agentSyncDone = false;
 
 function syncDismissalsFromAgent(): void {
-  if (agentSyncDone) return;
+  if (agentSyncDone || !IS_LOCAL_HOST) return;
   agentSyncDone = true;
 
   fetch(DISMISSED_URL, { signal: AbortSignal.timeout?.(3_000) ?? undefined })
@@ -113,7 +115,9 @@ export function useInsightDismiss(cardId: string, nodeId?: string) {
     writeDismissed(key, expiresAt);
     setDismissed(true);
 
-    // 2. Persist to agent — best-effort, fire-and-forget.
+    // 2. Persist to agent — best-effort, fire-and-forget. Cloud mode has no
+    //    agent endpoint; localStorage alone is authoritative there.
+    if (!IS_LOCAL_HOST) return;
     fetch(DISMISS_URL, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },

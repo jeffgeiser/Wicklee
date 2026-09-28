@@ -50,7 +50,8 @@ function useProxyStatus() {
   useEffect(() => {
     if (!isLocalHost) return;
     let cancelled = false;
-    fetch('/api/metrics')
+    // One-shot JSON read — /api/metrics is an SSE stream that never ends.
+    fetch('/api/metrics/snapshot')
       .then(r => r.json())
       .then((data: SentinelMetrics) => {
         if (cancelled) return;
@@ -667,7 +668,8 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     // Also hit the SSE endpoint to verify the agent's live stream and get metrics.
     const sseProbe = async () => {
       try {
-        const r = await fetch('/api/metrics');
+        // One-shot JSON read — /api/metrics itself is an SSE stream that never ends.
+        const r = await fetch('/api/metrics/snapshot');
         if (r.ok) {
           const data: SentinelMetrics = await r.json();
           setLocalAgentOk(true);

@@ -16,6 +16,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle } from 'lucide-react';
 import { ELECTRICITY_RATE_USD_PER_KWH } from '../../utils/efficiency';
+import { CLOUD_URL } from '../../utils/cloudUrl';
 import {
   quantQualityHint,
   recommendedQuant,
@@ -635,7 +636,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
       const params = new URLSearchParams({ limit: '200' });
       if (query)  params.set('search', query);
       if (nodeId) params.set('node_id', nodeId);
-      const resp = await fetch(`/api/fleet/model-candidates?${params}`, {
+      const resp = await fetch(`${CLOUD_URL}/api/fleet/model-candidates?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!resp.ok) throw new Error(`${resp.status}`);

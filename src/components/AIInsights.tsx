@@ -1237,7 +1237,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     localIdlePreseededRef.current = true;
 
     const from = Date.now() - 60 * 60 * 1_000;
-    fetch(`http://localhost:7700/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&resolution=1min`)
+    fetch(`/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&resolution=1min`)
       .then(r => r.ok ? r.json() : null)
       .then((data: { samples?: Array<{ ts_ms: number; tps?: number | null }> } | null) => {
         if (!data?.samples?.length) return;

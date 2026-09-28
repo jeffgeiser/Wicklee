@@ -286,7 +286,7 @@ export function useLocalEvents(
   useEffect(() => {
     if (!connected) return;
 
-    fetch('http://localhost:7700/api/events/recent')
+    fetch('/api/events/recent')
       .then(r => r.ok ? r.json() : [])
       .then((acts: LiveActivityEvent[]) => {
         if (!acts.length) return;
