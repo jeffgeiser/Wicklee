@@ -1,7 +1,7 @@
 # Wicklee
 
 [![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/License-FSL--1.1--Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![Build](https://img.shields.io/github/actions/workflow/status/jeffgeiser/Wicklee/release.yml?label=nightly)](https://github.com/jeffgeiser/Wicklee/actions)
 
 **Sovereign-first GPU fleet monitor for local AI inference.**
@@ -53,7 +53,7 @@ Dashboard opens at **http://localhost:7700**.
 | Tok/s, TTFT, queue depth | ✅ | ✅ |
 | WES (tokens per watt) | ✅ | ✅ |
 
-**Runtimes detected:** Ollama and vLLM — auto-discovered, no configuration needed.
+**Runtimes detected:** Ollama, vLLM, and llama.cpp / llama-box — auto-discovered, no configuration needed.
 
 ---
 
@@ -67,14 +67,15 @@ When thermals degrade, WES penalizes the score — surfacing efficiency loss bef
 
 ## Observation Patterns
 
-18 hardware-aware patterns continuously evaluated against live telemetry:
+20 hardware-aware patterns continuously evaluated against live telemetry (18 on the node, 2 in the fleet cloud):
 
 - **Thermal:** Thermal Drain, NVIDIA Thermal Ceiling
 - **Power:** Phantom Load, Power-GPU Decoupling, Power Jitter
 - **Memory:** Swap Pressure, Memory Pressure Trajectory, VRAM Overcommit
 - **Inference:** TTFT Regression, Latency Spike, vLLM Queue Saturation, KV Cache Saturation
-- **Hardware:** Bandwidth Saturation, Clock Drift, PCIe Lane Degradation *(NVIDIA only, no root required)*
-- **Fleet:** WES Velocity Drop, Fleet Load Imbalance, Efficiency Penalty Drag
+- **Hardware:** Bandwidth Saturation, Bandwidth Ceiling Reached, Clock Drift, PCIe Lane Degradation *(NVIDIA only, no root required)*
+- **Efficiency:** WES Velocity Drop, Efficiency Penalty Drag
+- **Fleet (cloud-evaluated):** Fleet Load Imbalance, WES Long-Term Drift
 
 Each pattern produces actionable observations with severity, evidence, and routing hints (`steer_away` / `reduce_batch` / `monitor`).
 
@@ -117,7 +118,7 @@ For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates 
 | Price | Free | $99/mo (10 nodes) · $200/mo (25 nodes) | Custom |
 | Nodes in fleet view | 3 | 10 or 25 | Unlimited |
 | History | 24 hours | 90 days | 12 months |
-| Patterns | 9 | 18 | 18 |
+| Patterns | 9 | 20 | 20 |
 | Alerts | — | Slack, Email, PagerDuty | Slack, Email, PagerDuty |
 | Local API + MCP | ✅ | ✅ | ✅ |
 | Fleet API (`/api/v1/*`) | — | ✅ | ✅ |
@@ -145,7 +146,7 @@ Wicklee exposes structured telemetry for AI agents via MCP, REST, and standard d
 - **`GET /.well-known/mcp.json`** — MCP server manifest
 - **`/llms.txt`** — Lightweight discovery file
 - **`/openapi.json`** — OpenAPI 3.0 spec
-- **REST API** — Fleet state, WES scores, best-route inference, observations
+- **REST API** — Fleet state, WES scores, best-route inference, observations. On the agent, `GET /api/metrics` is an SSE stream; `GET /api/metrics/snapshot` returns the latest frame as JSON for scripts.
 
 ### Local MCP Tools (localhost:7700, all tiers)
 
@@ -182,7 +183,7 @@ Point your agent at **wicklee.dev/llms.txt** for full capability discovery.
 ### Enterprise Bridge (Team tier)
 
 - **OpenTelemetry Export** — OTLP metrics to Datadog, Grafana Cloud, New Relic
-- **Prometheus Endpoint** — `GET /metrics` with API key authentication
+- **Prometheus Endpoint** — `GET https://wicklee.dev/metrics` on the cloud (not the agent) with API key authentication — see [docs/GRAFANA.md](docs/GRAFANA.md)
 - **Cloud MCP** — Fleet-aggregated MCP for remote AI agents
 
 ---
@@ -205,7 +206,7 @@ wicklee (single binary)
 │   └── Windows: WMI thermal, sysinfo
 ├── Runtime harvester (Ollama + vLLM auto-discovery)
 ├── Inference state machine (4-state, pure function)
-├── DuckDB local history (1-hour observation buffer)
+├── DuckDB local history (24h raw · 30d 1-min · 90d 1-hour)
 └── Optional: transparent proxy (port 11434)
 ```
 
@@ -215,21 +216,20 @@ wicklee (single binary)
 
 ## Build from Source
 
-**Prerequisites:** Rust 1.75+, Node.js 18+
+**Prerequisites:** Rust 1.85+ (edition 2024), Node.js 20+
 
 ```bash
 git clone https://github.com/jeffgeiser/Wicklee.git
-cd wicklee
+cd Wicklee
 
-# Build frontend (agent mode — no Clerk)
+# Build frontend (agent mode — no Clerk); Vite writes straight into agent/frontend/dist
 npm ci && npm run build:agent
 
-# Copy to agent embed directory
-cp -r dist/ agent/frontend/dist/
-
-# Build agent
+# Build agent → agent/target/release/wicklee-agent
 cd agent && cargo build --release
 ```
+
+`make` runs both steps; `make install` also copies the binary to `/usr/local/bin/wicklee`.
 
 ---
 

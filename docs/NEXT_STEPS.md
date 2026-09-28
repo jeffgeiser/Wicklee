@@ -22,8 +22,9 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
   - Wicklee Team, up to 25 nodes — $2,000 annual
 - [ ] Copy the four `pri_…` IDs.
 - [ ] Developer Tools → Notifications: destination `<cloud host>/api/webhooks/paddle`, subscribed to
-      `subscription.activated`, `subscription.updated`, `subscription.canceled`, `subscription.past_due`.
-      Copy its signing secret.
+      `subscription.activated`, `subscription.updated`, `subscription.canceled`, `subscription.past_due`,
+      `subscription.paused`, `subscription.resumed`. Copy its signing secret. (Events must arrive within
+      5 minutes of their timestamp, so the cloud host's clock has to be right.)
 - [ ] Developer Tools → Authentication: copy the client-side token.
 - [ ] Railway, cloud service variables, then redeploy:
   ```
@@ -85,11 +86,11 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
 - [ ] Dashboard → Team tab: Clerk organization panel renders.
 - [ ] `/pricing` signed out: selector defaults to $99 / 10 nodes.
 - [ ] **Decide on SSO.** Clerk Enterprise SSO is a paid add-on billed per connection. Options: self-serve
-      SAML for Business customers, or hand-configure each connection when a deal closes
+      SAML for Enterprise customers, or hand-configure each connection when a deal closes
       (fine until the first request arrives). See `docs/SSO.md`.
 
 ## Engineering follow-ups
-- [x] Security items S1–S9 from `docs/CODE_REVIEW.md` fixed. Bugs B1–B10 fixed. Remaining: performance and cleanup (Priority 3–4).
+- [x] Security items S1–S9 from `docs/CODE_REVIEW.md` fixed. Bugs B1–B10 fixed. Performance (Priority 3) fixed. Remaining: cleanup (Priority 4).
 - [ ] After the next agent release, confirm the release page lists a `SHA256SUMS` file (agents refuse to auto-update without it).
 
 ## From earlier GTM notes (still open)

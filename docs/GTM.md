@@ -67,14 +67,14 @@ A single founder can't do outbound sales; partners have the sales teams.
    partners shipping DGX/Spark, TinyBox/Lambda/System76-class vendors,
    Apple-focused MSPs. "Every box you sell ships paired to a fleet dashboard"
    is a value-add for *their* sale; their customers become Wicklee's enterprise
-   logos. Offer margin on Team/Business.
+   logos. Offer margin on Team/Enterprise.
 2. **MSPs & consultancies deploying on-prem AI for regulated clients**: they
    need monitoring for every fleet they hand over. Build the **multi-org MSP
    console** (added to roadmap) so one MSP manages many client orgs — five MSP
    partners ≈ fifty enterprise deployments.
 3. **FinOps Foundation / OpenCost**: export chargeback in the **FOCUS** format
    (the FinOps open billing standard — added to roadmap) and show up at FinOps X.
-   Finance leaders are the Business-tier buyer, and "local AI cost governance"
+   Finance leaders are the Enterprise buyer, and "local AI cost governance"
    is an empty booth at that fair.
 4. **Runtime/platform vendors' showcases**: Clerk, Railway, Ollama — vendors
    actively look for case studies of their own products; being one is free
@@ -85,7 +85,7 @@ A single founder can't do outbound sales; partners have the sales teams.
 - **Trust page** on wicklee.dev: data-flow diagram, what leaves the node
   (hardware telemetry) vs what never does (prompts/templates), RBAC + audit +
   SIEM story. The June security-review write-ups are already 80% of the copy.
-- **Design-partner program**: 3–5 named companies get Business free for a year
+- **Design-partner program**: 3–5 named companies get Enterprise free for a year
   in exchange for a logo, a case study, and monthly feedback. Case studies are
   the only advertising enterprises trust; they also drive the roadmap.
 - SOC 2 only when a real deal demands it (Vanta-class tooling makes it a

@@ -6,7 +6,9 @@ colorTo: gray
 sdk: static
 app_file: index.html
 pinned: false
-license: mit
+license: other
+license_name: fsl-1.1-apache-2.0
+license_link: https://github.com/jeffgeiser/Wicklee/blob/main/LICENSE
 short_description: Live demo of Wicklee — hardware-aware observability for private AI fleets
 tags:
   - observability
