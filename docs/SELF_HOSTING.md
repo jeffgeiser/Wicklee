@@ -71,6 +71,10 @@ Sovereignty inventory for network policy:
   deployment). Block it and the version banner simply goes stale.
 - Anything you configure yourself: Slack/PagerDuty/webhook alert channels,
   OTel exporters, Prometheus scrapes, SIEM audit drains.
+  Self-hosted mode may deliver these to private addresses (your SIEM on
+  `10.x`, an in-cluster collector). The hosted service refuses private,
+  loopback and link-local targets; `OUTBOUND_ALLOW_PRIVATE=true` lifts that
+  outside self-hosted mode. Redirects from these receivers are never followed.
 
 ## Database
 
