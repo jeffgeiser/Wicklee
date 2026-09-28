@@ -89,7 +89,7 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                 .timeout(Duration::from_secs(2))
                 .build().ok()?;
             let resp = client
-                .get(format!("http://127.0.0.1:{port}/api/metrics"))
+                .get(format!("http://127.0.0.1:{port}/api/metrics/snapshot"))
                 .send().await.ok()?;
             let json: serde_json::Value = resp.json().await.ok()?;
             // apple_soc_power_w is populated only when powermetrics succeeds

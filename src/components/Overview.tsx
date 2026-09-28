@@ -1354,7 +1354,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     if (!isLocalMode) return;
     const fetchCost = async () => {
       try {
-        const res = await fetch(`http://localhost:7700/api/cost-by-model?hours=24`);
+        const res = await fetch('/api/cost-by-model?hours=24');
         if (!res.ok) return;
         const data = await res.json();
         setCostByModel(data.models ?? []);
@@ -1454,8 +1454,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     let retryWs:  ReturnType<typeof setTimeout>;
     let retrySse: ReturnType<typeof setTimeout>;
     let wsFailed = false;
+    // Set by cleanup. close() fires onclose/onerror asynchronously — after
+    // cleanup has run — so without this guard every unmount (tab switch)
+    // scheduled a fresh reconnect and leaked a socket calling setState on a
+    // dead component.
+    let cancelled = false;
 
     const connectSSE = () => {
+      if (cancelled) return;
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
       const es = new EventSource('/api/metrics');
       esRef.current = es;
@@ -1465,14 +1471,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
         catch { /* malformed frame */ }
       };
       es.onerror = () => {
-        setLocalConnected(false);
         es.close();
-        esRef.current = null;
+        if (esRef.current === es) esRef.current = null;
+        if (cancelled) return;
+        setLocalConnected(false);
         retrySse = setTimeout(connectSSE, 3000);
       };
     };
 
     const connectWS = () => {
+      if (cancelled) return;
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
       wsRef.current = ws;
@@ -1485,7 +1493,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       };
       ws.onerror = () => { wsFailed = true; };
       ws.onclose = () => {
-        wsRef.current = null;
+        if (wsRef.current === ws) wsRef.current = null;
+        if (cancelled) return;
         setLocalConnected(false);
         if (wsFailed) { connectSSE(); }
         else {
@@ -1498,10 +1507,21 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     connectWS();
 
     return () => {
+      cancelled = true;
       clearTimeout(retryWs);
       clearTimeout(retrySse);
-      wsRef.current?.close();
-      esRef.current?.close();
+      const ws = wsRef.current;
+      if (ws) {
+        ws.onmessage = ws.onerror = ws.onclose = null;
+        ws.close();
+        wsRef.current = null;
+      }
+      const es = esRef.current;
+      if (es) {
+        es.onopen = es.onmessage = es.onerror = null;
+        es.close();
+        esRef.current = null;
+      }
     };
   }, [handleMetrics]);
 

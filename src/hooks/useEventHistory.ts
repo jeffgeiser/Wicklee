@@ -69,7 +69,9 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       if (opts.eventType)  params.set('event_type', opts.eventType);
       if (opts.nodeId)     params.set('node_id', opts.nodeId);
 
-      const baseUrl = isFleet ? CLOUD_URL : 'http://localhost:7700';
+      // Local agent paths are relative: same-origin when served by the agent,
+      // Vite-proxied to :7700 in dev.
+      const baseUrl = isFleet ? CLOUD_URL : '';
       const path    = isFleet ? '/api/fleet/events/history' : '/api/events/history';
       const headers: Record<string, string> = {};
       if (isFleet && tokenRef.current) {

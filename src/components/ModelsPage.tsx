@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Boxes, ChevronRight, ChevronDown } from 'lucide-react';
 import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
 import { wesColorClass } from '../utils/wes';
+import { CLOUD_URL } from '../utils/cloudUrl';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
 import FleetModelDiscovery from './insights/FleetModelDiscovery';
 
@@ -91,7 +92,7 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
     if (!isLocalHost) return;
     let es: EventSource | null = null;
     try {
-      es = new EventSource('http://localhost:7700/api/metrics');
+      es = new EventSource('/api/metrics');
       es.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data) as SentinelMetrics;
@@ -115,7 +116,7 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       try {
         const token = await getToken();
         if (!token || cancelled) return;
-        const res = await fetch('/api/fleet', {
+        const res = await fetch(`${CLOUD_URL}/api/fleet`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (!res.ok || cancelled) return;
@@ -318,8 +319,8 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
     const fetchData = async () => {
       try {
         const url = isLocalHost
-          ? 'http://localhost:7700/api/model-comparison?hours=168'
-          : '/api/v1/fleet/model-comparison?hours=168';
+          ? '/api/model-comparison?hours=168'
+          : `${CLOUD_URL}/api/v1/fleet/model-comparison?hours=168`;
         const headers: Record<string, string> = {};
         if (!isLocalHost && getToken) {
           const token = await getToken();
@@ -433,8 +434,8 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
     const fetchData = async () => {
       try {
         const url = isLocalHost
-          ? 'http://localhost:7700/api/model-switches?hours=24'
-          : '/api/v1/fleet/model-switches?hours=24';
+          ? '/api/model-switches?hours=24'
+          : `${CLOUD_URL}/api/v1/fleet/model-switches?hours=24`;
         const headers: Record<string, string> = {};
         if (!isLocalHost && getToken) {
           const token = await getToken();

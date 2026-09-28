@@ -2815,6 +2815,47 @@ fn start_wes_sampler(
 /// Tuple: (baseline_tps, baseline_wes, sample_count).
 type ModelBaselineCache = Arc<Mutex<Option<(f32, f32, u32)>>>;
 
+/// Latest JSON frame published by the metrics broadcaster. Backs the one-shot
+/// `GET /api/metrics/snapshot` (`/api/metrics` itself is an SSE stream, so
+/// `curl | jq` against it never terminates).
+#[derive(Clone, Default)]
+struct LatestFrame(Arc<std::sync::RwLock<Option<String>>>);
+
+/// Subscribe to the broadcaster and keep only the most recent frame.
+fn track_latest_frame(tx: &broadcast::Sender<String>) -> LatestFrame {
+    use tokio::sync::broadcast::error::RecvError;
+    let latest = LatestFrame::default();
+    let slot = latest.clone();
+    let mut rx = tx.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(json) => {
+                    if let Ok(mut g) = slot.0.write() { *g = Some(json); }
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed)    => break,
+            }
+        }
+    });
+    latest
+}
+
+async fn handle_metrics_snapshot(
+    axum::extract::Extension(latest): axum::extract::Extension<LatestFrame>,
+) -> axum::response::Response {
+    match latest.0.read().ok().and_then(|g| g.clone()) {
+        Some(json) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            json,
+        ).into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "no metrics frame yet — retry in a second" })),
+        ).into_response(),
+    }
+}
+
 fn start_metrics_broadcaster(
     apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
     nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
@@ -4057,7 +4098,7 @@ fn evaluate_local_observations(
                              background processes, and VRAM allocation.{eta_note}",
                         ),
                         resolution_steps: vec![
-                            "Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/metrics | jq .wes_score\"".into(),
+                            "Monitor WES: watch -n 30 \"curl -s http://localhost:7700/api/metrics/snapshot | jq '[.active_models[]? | {model, wes}]'\"".into(),
                             "Reduce OLLAMA_NUM_PARALLEL to 1 to slow the WES decline".into(),
                             "Check if background processes (backups, builds) started recently".into(),
                             "If WES drops below 5 within 5 min, treat as Pattern A — enact physical cooling".into(),
@@ -4120,7 +4161,7 @@ fn evaluate_local_observations(
                                 "Check loaded models: `ollama ps` — note memory footprint of each".into(),
                                 "Unload the largest model: `ollama stop <model-name>`".into(),
                                 "Close memory-heavy background processes: browsers, IDEs, Docker".into(),
-                                "Verify pressure decreasing: `curl http://localhost:7700/api/metrics | jq .memory_pressure_percent`".into(),
+                                "Verify pressure decreasing: `curl http://localhost:7700/api/metrics/snapshot | jq .memory_pressure_percent`".into(),
                                 "Prevent recurrence: set OLLAMA_MAX_LOADED_MODELS=1".into(),
                             ],
                             action_id:        "evict_idle_models",
@@ -4287,7 +4328,7 @@ fn evaluate_local_observations(
                                                this node. On Linux, set the CPU governor to `performance`. \
                                                On Apple Silicon, ensure AC power with Performance mode enabled.".into(),
                             resolution_steps: vec![
-                                "Verify throttle: `curl http://localhost:7700/api/metrics | jq .clock_throttle_pct`".into(),
+                                "Verify throttle: `curl http://localhost:7700/api/metrics/snapshot | jq .clock_throttle_pct`".into(),
                                 "Linux CPU governor: `sudo cpupower frequency-set -g performance`".into(),
                                 "NVIDIA: `nvidia-smi -q -d CLOCK | grep -A4 'Clocks Throttle'`".into(),
                                 "Apple Silicon: System Settings → Battery → Options → disable 'Limit CPU speed'".into(),
@@ -4438,7 +4479,7 @@ fn evaluate_local_observations(
                                        Q2_K). If using vLLM, tune --max-num-batched-tokens to the \
                                        GPU-saturating sweet spot.".into(),
                     resolution_steps: vec![
-                        "Check GPU util: `curl http://localhost:7700/api/metrics | jq '{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}'`".into(),
+                        "Check GPU util: `curl http://localhost:7700/api/metrics/snapshot | jq '{gpu_util:.nvidia_gpu_utilization_percent,cpu_w:.cpu_power_w,tok_s:.ollama_tokens_per_second}'`".into(),
                         "Set all layers to GPU: OLLAMA_NUM_GPU=99 ollama serve".into(),
                         "Switch to Q4_K_M: `ollama pull <model>:q4_K_M` — fully GPU-offloads vs Q2_K".into(),
                         "For vLLM: raise --max-num-seqs to create batches that saturate GPU SIMD lanes".into(),
@@ -4549,7 +4590,7 @@ fn evaluate_local_observations(
                                          recover throughput.",
                                     ),
                                     resolution_steps: vec![
-                                        "Confirm bottleneck: `curl http://localhost:7700/api/metrics | jq '{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}'`".into(),
+                                        "Confirm bottleneck: `curl http://localhost:7700/api/metrics/snapshot | jq '{gpu_util:.nvidia_gpu_utilization_percent,vram_used:.nvidia_vram_used_mb,vram_total:.nvidia_vram_total_mb}'`".into(),
                                         "Switch to lower quantization to halve bandwidth demand: `ollama pull <model>:q4_K_M`".into(),
                                         "If already on Q4, try Q3_K_M or Q2_K — quality trade-off worth the bandwidth recovery".into(),
                                         "Reduce context window size — longer contexts increase KV cache weight streaming".into(),
@@ -4658,7 +4699,7 @@ fn evaluate_local_observations(
                                                    If using a MoE model (e.g. Mixtral), ensure all experts \
                                                    are VRAM-resident.".into(),
                                 resolution_steps: vec![
-                                    "Check penalty: `curl http://localhost:7700/api/metrics | jq .penalty_avg` — confirm consistently > 1.30".into(),
+                                    "Check penalty: `curl http://localhost:7700/api/metrics/snapshot | jq .penalty_avg` — confirm consistently > 1.30".into(),
                                     "Reduce context window: lower max_tokens or num_ctx to 2048–4096 in your application".into(),
                                     "Increase batch slightly: OLLAMA_NUM_PARALLEL=2 (more concurrent reqs fill GPU pipeline bubbles)".into(),
                                     "MoE models (Mixtral, Qwen-MoE): verify all expert weights are VRAM-resident with `ollama ps`".into(),
@@ -4723,11 +4764,11 @@ fn evaluate_local_observations(
                                        If demand is sustained, scale horizontally or switch \
                                        to a smaller model/quantization.".into(),
                     resolution_steps: vec![
-                        "Check KV cache: `curl http://localhost:7700/api/metrics | jq .vllm_cache_usage_perc`".into(),
+                        "Check KV cache: `curl http://localhost:7700/api/metrics/snapshot | jq .vllm_cache_usage_perc`".into(),
                         "Reduce concurrent sequences: restart vLLM with --max-num-seqs 4 (default is often 256)".into(),
                         "Lower batched tokens: --max-num-batched-tokens 2048 reduces per-batch KV footprint".into(),
                         "Long contexts: --max-model-len to cap per-sequence KV allocation".into(),
-                        "Monitor: `watch -n 5 \"curl -s http://localhost:7700/api/metrics | jq .vllm_cache_usage_perc\"`".into(),
+                        "Monitor: `watch -n 5 \"curl -s http://localhost:7700/api/metrics/snapshot | jq .vllm_cache_usage_perc\"`".into(),
                     ],
                     action_id:        "reduce_batch_size",
                     confidence:       obs_confidence(ratio),
@@ -4818,7 +4859,7 @@ fn evaluate_local_observations(
                         "vLLM queue: `curl http://localhost:18010/metrics | grep vllm:num_requests_waiting`".into(),
                         "vLLM KV cache: `curl http://localhost:18010/metrics | grep vllm:gpu_cache_usage_perc`".into(),
                         "Reduce concurrent load: lower `--max-num-seqs` in vLLM launch args".into(),
-                        "Check memory pressure: `curl http://localhost:7700/api/metrics | jq .memory_pressure_percent`".into(),
+                        "Check memory pressure: `curl http://localhost:7700/api/metrics/snapshot | jq .memory_pressure_percent`".into(),
                     ],
                     action_id:        "check_inference_latency",
                     confidence:       obs_confidence(ratio),
@@ -4888,8 +4929,8 @@ fn evaluate_local_observations(
                          caused this latency increase. Monitor over the next few minutes for recovery.".into()
                     },
                     resolution_steps: vec![
-                        "Check thermal state: `curl http://localhost:7700/api/metrics | jq .thermal_state`".into(),
-                        "Check swap: `curl http://localhost:7700/api/metrics | jq .swap_write_mb_s`".into(),
+                        "Check thermal state: `curl http://localhost:7700/api/metrics/snapshot | jq .thermal_state`".into(),
+                        "Check swap: `curl http://localhost:7700/api/metrics/snapshot | jq .swap_write_mb_s`".into(),
                         "vLLM preemption metric: `curl http://localhost:18010/metrics | grep vllm:num_preemptions`".into(),
                         "Ollama running requests: `curl http://localhost:11434/api/ps`".into(),
                     ],
@@ -5136,33 +5177,24 @@ fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<&str>) -> O
     None
 }
 
-/// Approximate bytes-per-weight for a given quant string.
-/// Mirrors `quant_quality_factor` in the cloud — strips "UD-" prefix,
-/// handles GGUF (Q*/IQ*) and full-precision tags (FP8/FP16/BF16/F32).
+/// Approximate bytes-per-weight for a given quant string. Strips the "UD-"
+/// prefix, then defers to `scoring::bytes_per_param_for_quant` — the single
+/// source for GGUF (Q*/IQ*) and F16/BF16/F32 sizes, calibrated against real
+/// files and mirrored by src/utils/quantSize.ts. Only tags that table doesn't
+/// cover (1-bit GGUF, FP8/INT8, vLLM/HF quant tags) are handled here.
 #[cfg(not(target_env = "musl"))]
 fn bytes_per_weight(quant: &str) -> f32 {
     let q = quant.to_lowercase();
     let q = q.strip_prefix("ud-").unwrap_or(&q);
+    if let Some(bpp) = scoring::bytes_per_param_for_quant(q) { return bpp; }
     if q.starts_with("iq1") || q == "q1_k" || q == "q1" { return 0.25; }
-    // IQ2 variants are genuinely 2–2.7 bit; Q2_K is mixed-precision and lands
-    // at ~3.2 bits in practice (Llama 3.1 8B Q2_K = 3.18 GB / 8.03B = 0.40 B/W).
-    if q.starts_with("iq2")                             { return 0.34; }
-    if q.starts_with("q2")                              { return 0.39; }
-    if q.starts_with("iq3") || q.starts_with("q3")      { return 0.45; }
-    // IQ4_XS/IQ4_NL sit at ~4.25–4.5 bits; the modal GGUF quant Q4_K_M is
-    // ~4.85 bits (Llama 3.1 8B Q4_K_M = 4.92 GB / 8.03B params = 0.61 B/W).
-    if q.starts_with("iq4")                             { return 0.56; }
-    if q.starts_with("q4")                              { return 0.60; }
-    if q.starts_with("q5")  { return 0.69; }
-    if q.starts_with("q6")  { return 0.82; }
-    if q.starts_with("q8") || q == "fp8" || q == "int8" { return 1.0; }
-    if q.starts_with("f16") || q == "bf16" || q.starts_with("fp16") { return 2.0; }
+    if q == "fp8" || q == "int8" { return 1.0; }
+    if q.starts_with("f16") || q.starts_with("fp16") { return 2.0; }
     if q.starts_with("f32") || q.starts_with("fp32") { return 4.0; }
     // Production vLLM/HF quant tags — mirror src/utils/quantSize.ts.
-    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights + group scales ≈ 0.56 B/W
-    // (closer to Q4_0/IQ4 than the heavier mixed-precision Q4_K_M).
-    // GPTQ-int8 / BNB-8bit: 8-bit weights ≈ 1.0 B/W like Q8_0/FP8.
-    // AQLM / HQQ-2bit: 2-bit aggressive quants ≈ 0.34 B/W like Q2_K.
+    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights + group scales ≈ 0.56 B/W.
+    // GPTQ-int8 / BNB-8bit: 8-bit weights ≈ 1.0 B/W like FP8.
+    // AQLM / HQQ-2bit: 2-bit aggressive quants ≈ 0.34 B/W.
     if q == "awq" || q.starts_with("awq-int4") || q == "awq-4bit"     { return 0.56; }
     if q == "gptq" || q.starts_with("gptq-int4") || q == "gptq-4bit"  { return 0.56; }
     if q == "gptq-int8" || q == "gptq-8bit"                            { return 1.0; }
@@ -7326,8 +7358,13 @@ async fn main() {
                 let ps = Arc::new(ProxyState {
                     ollama_port:      proxy_cfg.ollama_port,
                     bypass_if_down:   proxy_cfg.bypass_if_proxy_down,
+                    // No total `.timeout()` — it would cap the whole response
+                    // and kill long streaming generations. read_timeout resets
+                    // on every chunk (generous enough for a cold model load
+                    // before the first byte); CHUNK_TIMEOUT covers stalls.
                     client:           reqwest::Client::builder()
-                                        .timeout(Duration::from_secs(300))
+                                        .connect_timeout(Duration::from_secs(10))
+                                        .read_timeout(Duration::from_secs(300))
                                         .build()
                                         .unwrap_or_default(),
                     in_flight:        std::sync::atomic::AtomicU32::new(0),
@@ -7475,6 +7512,10 @@ async fn main() {
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
+    // Runtime-config pollers below read the same discovery channels (which
+    // honour `[runtime_ports]` overrides) rather than rescanning processes.
+    let vllm_cfg_port_rx     = vllm_port_rx.clone();
+    let llamacpp_cfg_port_rx = llamacpp_port_rx.clone();
     let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active));
     let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active));
 
@@ -7493,10 +7534,7 @@ async fn main() {
             let mut interval = tokio::time::interval(Duration::from_secs(300));
             loop {
                 interval.tick().await;
-                let port = process_discovery::scan_runtimes()
-                    .get("vllm")
-                    .copied();
-                let Some(port) = port else { continue; };
+                let Some(port) = *vllm_cfg_port_rx.borrow() else { continue; };
                 let base = format!("http://127.0.0.1:{port}");
                 match runtime_config::fetch_vllm_config(&client, &base).await {
                     Ok(config) => {
@@ -7524,11 +7562,7 @@ async fn main() {
             let mut interval = tokio::time::interval(Duration::from_secs(300));
             loop {
                 interval.tick().await;
-                let runtimes = process_discovery::scan_runtimes();
-                let port = runtimes.get("llamacpp")
-                    .or_else(|| runtimes.get("llama-box"))
-                    .copied();
-                let Some(port) = port else { continue; };
+                let Some(port) = *llamacpp_cfg_port_rx.borrow() else { continue; };
                 let base = format!("http://127.0.0.1:{port}");
                 match runtime_config::fetch_llamacpp_config(&client, &base).await {
                     Ok(config) => {
@@ -7878,6 +7912,7 @@ async fn main() {
             .route("/api/tags",           get(move || handle_tags(tags_port_rx.clone())))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
+            .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
             .route("/ws",                 get(handle_ws))             // WebSocket primary (10 Hz)
             .route("/api/pair/status",    get(handle_pair_status))
             .route("/api/pair/generate",  post(handle_pair_generate))
@@ -7930,6 +7965,7 @@ async fn main() {
          .layer(axum::extract::Extension(wes_metrics))
          .layer(axum::extract::Extension(swap_metrics))
          .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
+         .layer(axum::extract::Extension(track_latest_frame(&broadcast_tx)))
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(axum::extract::Extension(probe_active))
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
@@ -8048,6 +8084,60 @@ mod bandwidth_tests {
         assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M3 Ultra")), Some(819.0));
         assert_eq!(hardware_bandwidth_gbps(None, Some("Apple M2 Pro")), Some(200.0));
         assert_eq!(hardware_bandwidth_gbps(Some("AMD Radeon RX 7900 XTX"), None), None);
+    }
+}
+
+#[cfg(all(test, not(target_env = "musl")))]
+mod bytes_per_weight_tests {
+    use super::*;
+
+    #[test]
+    fn gguf_quants_come_from_scoring_table() {
+        for q in ["Q4_K_M", "q4_k_m", "UD-Q4_K_XL", "IQ4_XS", "Q8_0", "Q2_K", "Q6_K", "F16", "BF16", "F32"] {
+            let stripped = q.to_lowercase();
+            let stripped = stripped.strip_prefix("ud-").unwrap_or(&stripped).to_string();
+            assert_eq!(Some(bytes_per_weight(q)), scoring::bytes_per_param_for_quant(&stripped), "{q}");
+        }
+        // Calibrated values, matching src/utils/quantSize.ts.
+        assert_eq!(bytes_per_weight("Q4_K_M"), 0.60);
+        assert_eq!(bytes_per_weight("Q8_0"), 1.0);
+        assert_eq!(bytes_per_weight("IQ2_XS"), 0.34);
+        assert_eq!(bytes_per_weight("Q2_K"), 0.39);
+    }
+
+    #[test]
+    fn non_gguf_tags_keep_local_fallbacks() {
+        assert_eq!(bytes_per_weight("fp8"), 1.0);
+        assert_eq!(bytes_per_weight("fp16"), 2.0);
+        assert_eq!(bytes_per_weight("awq"), 0.56);
+        assert_eq!(bytes_per_weight("IQ1_S"), 0.25);
+        assert_eq!(bytes_per_weight("mystery"), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod metrics_snapshot_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn snapshot_returns_latest_broadcast_frame() {
+        let (tx, _) = broadcast::channel::<String>(4);
+        let latest = track_latest_frame(&tx);
+
+        let resp = handle_metrics_snapshot(axum::extract::Extension(latest.clone())).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        tx.send(r#"{"n":1}"#.into()).unwrap();
+        tx.send(r#"{"n":2}"#.into()).unwrap();
+        for _ in 0..100 {
+            if latest.0.read().unwrap().as_deref() == Some(r#"{"n":2}"#) { break; }
+            tokio::task::yield_now().await;
+        }
+        let resp = handle_metrics_snapshot(axum::extract::Extension(latest)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers()[axum::http::header::CONTENT_TYPE], "application/json");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], br#"{"n":2}"#);
     }
 }
 

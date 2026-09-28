@@ -96,9 +96,46 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
    *  more than once per 15 minutes for the same node. Key = "nodeId:eventType". */
   const eventSuppressionRef = useRef<Record<string, number>>({});
 
+  /** Guards the one-shot DuckDB history seed (reset on fleet scope change). */
+  const seededRef      = useRef(false);
+  /** Bumped on every fleet scope change so in-flight async work from the
+   *  previous org/session can tell it is stale and drop its result. */
+  const scopeGenRef    = useRef(0);
+
   // Stable ref for the snapshot callback so the SSE effect doesn't re-run.
   const onNodesSnapshotRef = useRef(onNodesSnapshot);
   onNodesSnapshotRef.current = onNodesSnapshot;
+
+  // ── Reset on fleet scope change ────────────────────────────────────────────
+  // Switching orgs or signing out changes which fleet we're looking at. Every
+  // frame merges into existing state, so without a reset the previous org's
+  // nodes, metrics and events stayed on screen after the switch. Declared
+  // before the SSE effect so the reset lands before the new stream opens.
+  const scopeKey = `${isSignedIn ? 1 : 0}:${orgId ?? ''}`;
+  const prevScopeKeyRef = useRef(scopeKey);
+  useEffect(() => {
+    if (prevScopeKeyRef.current === scopeKey) return;
+    prevScopeKeyRef.current = scopeKey;
+    scopeGenRef.current += 1;
+
+    setAllNodeMetrics({});
+    setLastSeenMsMap({});
+    setFleetEvents([]);
+    setConnected(false);
+    setTransport(null);
+    setLastTelemetryMs(null);
+    setRestrictedNodeIds(new Set());
+
+    prevLiveRef.current         = {};
+    prevThermalRef.current      = {};
+    prevModelRef.current        = {};
+    prevPowerRef.current        = {};
+    pendingRef.current          = {};
+    peakTpsRef.current          = {};
+    peakModelRef.current        = {};
+    eventSuppressionRef.current = {};
+    seededRef.current           = false;
+  }, [scopeKey]);
 
   // ── SSE Effect ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -410,13 +447,35 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             prevLiveRef.current[nodeId] = isNowLive;
           }
 
-          // ── Batch state updates ─────────────────────────────────────────
-          setLastSeenMsMap(prev => ({ ...prev, ...updatedLastSeen }));
-
-          if (Object.keys(updatedMetrics).length > 0) {
-            setAllNodeMetrics(prev => ({ ...prev, ...updatedMetrics }));
-            setLastTelemetryMs(now);
+          // ── Prune nodes no longer in the snapshot ───────────────────────
+          // Each frame is the full fleet, so anything absent was removed —
+          // drop its per-node refs so they don't accumulate or resurrect.
+          const present = new Set(fleet.nodes.map(n => n.node_id));
+          for (const ref of [prevLiveRef, prevThermalRef, prevModelRef, prevPowerRef, pendingRef, peakTpsRef, peakModelRef]) {
+            for (const id of Object.keys(ref.current)) {
+              if (!present.has(id)) delete ref.current[id];
+            }
           }
+          for (const key of Object.keys(suppression)) {
+            if (!present.has(key.slice(0, key.lastIndexOf(':')))) delete suppression[key];
+          }
+          const prunePrev = <T,>(prev: Record<string, T>): Record<string, T> => {
+            if (Object.keys(prev).every(id => present.has(id))) return prev;
+            const out: Record<string, T> = {};
+            for (const [id, v] of Object.entries(prev)) if (present.has(id)) out[id] = v;
+            return out;
+          };
+
+          // ── Batch state updates ─────────────────────────────────────────
+          setLastSeenMsMap(updatedLastSeen);
+
+          // Non-live nodes keep their last-known metrics; removed nodes don't.
+          setAllNodeMetrics(prev => {
+            const kept = prunePrev(prev);
+            if (kept === prev && Object.keys(updatedMetrics).length === 0) return prev;
+            return { ...kept, ...updatedMetrics };
+          });
+          if (Object.keys(updatedMetrics).length > 0) setLastTelemetryMs(now);
 
           if (newEvents.length > 0) {
             setFleetEvents(prev => [...newEvents, ...prev].slice(0, MAX_EVENTS));
@@ -452,11 +511,10 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   }, [isSignedIn, getToken, orgId]);
 
   // ── Seed fleet events from DuckDB history on initial connect ──────────────
-  const seededRef = useRef(false);
-
   useEffect(() => {
     if ((!IS_DEMO && isLocalHost) || !connected || seededRef.current) return;
     seededRef.current = true;
+    const gen = scopeGenRef.current;
 
     (async () => {
       try {
@@ -475,7 +533,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             message:    string;
           }>;
         };
-        if (!data.events?.length) return;
+        if (!data.events?.length || gen !== scopeGenRef.current) return;
 
         // Map DB event_type → FleetEvent type. Only seed events we have
         // explicit display support for — unrecognized types (startup, update,

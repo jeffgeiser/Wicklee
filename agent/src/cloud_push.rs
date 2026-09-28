@@ -9,7 +9,8 @@ pub(crate) const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.
 /// Spawn a background task that forwards live telemetry to the cloud every 2 s.
 /// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
 /// throttles pushes to 1 per 2 s so we don't hammer Railway.
-/// Stops automatically when the session_token is cleared (on disconnect).
+/// Idles (skips pushes) while no session_token is set, e.g. after disconnect
+/// or a 410-Gone, and resumes on its own once the node is re-paired.
 ///
 /// On non-musl targets, embeds the latest evaluated observations from the shared
 /// ObservationCache into each push so the fleet dashboard gets pattern data
@@ -45,9 +46,9 @@ fn start_cloud_push_inner(
     use tokio::sync::broadcast::error::RecvError;
     use std::ops::ControlFlow;
 
-    // Supervised so a panic restarts the push loop, but its deliberate exits
-    // (broadcast channel closed; 410-Gone after the node is removed from the
-    // fleet) return ControlFlow::Break and are NOT restarted.
+    // Supervised so a panic restarts the push loop, but its deliberate exit
+    // (broadcast channel closed) returns ControlFlow::Break and is NOT
+    // restarted. A 410-Gone only clears the token; the loop keeps idling.
     crate::supervisor::supervise_until("cloud-push", move || {
         let pairing_state = pairing_state.clone();
         let broadcast_tx  = broadcast_tx.clone();
@@ -146,13 +147,21 @@ fn start_cloud_push_inner(
                 .await;
             match resp {
                 Ok(r) if r.status().as_u16() == 410 => {
-                    // 410 Gone — node was removed from fleet. Clear pairing state.
+                    // 410 Gone — node was removed from fleet. Clear pairing state
+                    // (memory + config.toml) but keep looping: with no token the
+                    // loop idles, and pushes resume as soon as the user re-pairs.
                     eprintln!("[cloud_push] 410 Gone — node removed from fleet. Clearing pairing state.");
-                    if let Ok(mut ps) = pairing_state.lock() {
-                        ps.cloud_session_token = None;
-                        ps.status = crate::PairingStatus::Unpaired;
-                    }
-                    return ControlFlow::Break(()); // node removed — stop permanently
+                    if let Ok(mut ps) = pairing_state.lock()
+                        // Don't clobber a fresh token from a re-pair that raced this push.
+                        && ps.cloud_session_token.as_deref() == Some(session_token.as_str()) {
+                            ps.cloud_session_token = None;
+                            ps.status = crate::PairingStatus::Unpaired;
+                            crate::update_config(|cfg| {
+                                cfg.fleet_url = None;
+                                cfg.session_token = None;
+                            });
+                        }
+                    continue;
                 }
                 Ok(r) if r.status().is_success() => {
                     last_pushed_state = curr_state;

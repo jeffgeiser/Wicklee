@@ -89,7 +89,7 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
       (fine until the first request arrives). See `docs/SSO.md`.
 
 ## Engineering follow-ups
-- [x] Security items S1–S9 from `docs/CODE_REVIEW.md` fixed. Remaining: bugs B2–B10, performance, cleanup.
+- [x] Security items S1–S9 from `docs/CODE_REVIEW.md` fixed. Bugs B1–B10 fixed. Remaining: performance and cleanup (Priority 3–4).
 - [ ] After the next agent release, confirm the release page lists a `SHA256SUMS` file (agents refuse to auto-update without it).
 
 ## From earlier GTM notes (still open)

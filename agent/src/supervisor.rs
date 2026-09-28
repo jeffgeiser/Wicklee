@@ -50,7 +50,7 @@ where
 
 /// Like [`supervise`], but the task returns [`ControlFlow`]: `Break(())` means
 /// "this was a deliberate, permanent stop — do NOT restart" (e.g. `cloud_push`
-/// breaking on a 410-Gone when the node is removed from the fleet), while
+/// breaking when the broadcast channel closes at shutdown), while
 /// `Continue(())` is treated as an unexpected exit and restarted with backoff.
 /// A panic is always restarted.
 pub(crate) fn supervise_until<F, Fut>(name: &'static str, make: F)

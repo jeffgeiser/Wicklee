@@ -22,6 +22,8 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Priority 2 — Correctness bugs
 
+**Status:** B1 fixed in PR #61; B2–B10 fixed in the follow-up bug-fix PR.
+
 | # | Where | Issue | Effort |
 |---|---|---|---|
 | B1 | cloud Paddle state machine (~10183) | `subscription.paused` is unhandled. `updated` with status past_due, paused or canceled keeps the paid tier. There is no protection against out-of-order events. past_due downgrades before dunning finishes. Only `items[0]` is read. There is no `paddle_customer_id` fallback. | M |

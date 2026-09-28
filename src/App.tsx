@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { version } from '../package.json';
 import { WifiOff, RefreshCw } from 'lucide-react';
 // NOTE: @clerk/clerk-react is NOT imported here. It's lazy-loaded via
@@ -247,10 +247,20 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   }, [isSignedIn]);
 
 
+  // Latest getToken without making it a dependency: the demo build passes an
+  // inline arrow (new identity every render), which would re-run the fetch
+  // effect below on every render.
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+  // Each fetch takes a sequence number; only the newest may write, so a slow
+  // response for the previous org can't overwrite the new org's list.
+  const fleetFetchSeqRef = useRef(0);
+
   // Called after a node is successfully paired via AddNodeModal; fetch updated fleet list.
   const handleNodeAdded = useCallback(async () => {
+    const seq = ++fleetFetchSeqRef.current;
     try {
-      const token = isLocalHost ? null : await getToken();
+      const token = isLocalHost ? null : await getTokenRef.current();
       const r = await fetch(`${CLOUD_URL}/api/fleet`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -272,20 +282,31 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           sentinelActive: false,
           restricted: n.restricted ?? false,
         }));
-        setNodes(mappedNodes);
+        if (seq === fleetFetchSeqRef.current) setNodes(mappedNodes);
       }
     } catch {
       // Fetch failed — still mark loading done so empty state can render if truly zero nodes.
     } finally {
-      setNodesLoading(false);
+      if (seq === fleetFetchSeqRef.current) setNodesLoading(false);
     }
   }, []);
 
-  // Fetch paired nodes from cloud on sign-in (hosted only).
+  // Fetch paired nodes from cloud on sign-in and on org switch (hosted only).
+  // The previous fleet's list is cleared first so it never shows under the
+  // new org (or after sign-out) while the fetch is in flight.
+  const prevFleetScopeRef = useRef(`${isSignedIn}:${orgId}`);
   useEffect(() => {
-    if (isLocalHost || !isSignedIn) return;
+    if (isLocalHost) return;
+    const scope = `${isSignedIn}:${orgId}`;
+    if (prevFleetScopeRef.current !== scope) {
+      prevFleetScopeRef.current = scope;
+      fleetFetchSeqRef.current++; // invalidate any in-flight fetch for the old scope
+      setNodes([]);
+      setNodesLoading(isSignedIn);
+    }
+    if (!isSignedIn) return;
     handleNodeAdded();
-  }, [isSignedIn, handleNodeAdded]);
+  }, [isSignedIn, orgId, handleNodeAdded]);
 
   // Bootstrap local node on localhost — pairingInfo provides the node_id, and
   // /api/metrics provides hostname + hardware data.  Without this, nodes[] stays
@@ -777,7 +798,8 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
   const [localAgentVersionDirect, setLocalAgentVersionDirect] = useState<string | undefined>();
   useEffect(() => {
     if (!isLocalHost) return;
-    fetch('/api/metrics')
+    // /api/metrics is an SSE stream; the snapshot is its latest frame as JSON.
+    fetch('/api/metrics/snapshot')
       .then(r => r.ok ? r.json() : null)
       .then((d: Record<string, unknown> | null) => {
         if (d && typeof d.agent_version === 'string') {
