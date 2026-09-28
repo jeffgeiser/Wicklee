@@ -1,33 +1,11 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Terminal, Zap, Settings, Cpu, Globe, Copy, Check, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell } from 'lucide-react';
+import React from 'react';
+import { ArrowLeft, Terminal, Zap, Settings, Cpu, Globe, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell } from 'lucide-react';
 import Logo from '../components/Logo';
+import { CopyButton } from '../components/shared/CopyButton';
 
 interface DocsPageProps {
   onNavigate?: (path: string) => void;
 }
-
-// ── Copy button ───────────────────────────────────────────────────────────────
-
-const CopyButton: React.FC<{ text: string }> = ({ text }) => {
-  const [copied, setCopied] = useState(false);
-  const handle = () => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-  return (
-    <button
-      onClick={handle}
-      className="shrink-0 text-gray-600 hover:text-gray-300 transition-colors"
-      aria-label="Copy"
-    >
-      {copied
-        ? <Check className="w-3.5 h-3.5 text-green-400" />
-        : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-};
 
 // ── Code block ────────────────────────────────────────────────────────────────
 
@@ -39,7 +17,7 @@ const Code: React.FC<{ children: string; lang?: string }> = ({ children, lang })
       </span>
     )}
     <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
-      <CopyButton text={children} />
+      <CopyButton text={children} className="shrink-0 text-gray-600 hover:text-gray-300" />
     </div>
     <pre className={`text-sm font-mono text-gray-300 overflow-x-auto px-5 py-4 ${lang ? 'pt-8' : ''}`}>
       {children}

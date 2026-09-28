@@ -70,7 +70,6 @@ export const usePermissions = (user: User | null) => {
     isCollaborator:   user?.role === 'Collaborator',
     isViewer:         user?.role === 'Viewer',
     canManageFleet:   hasRole(['Owner', 'Collaborator']),
-    canViewScaffolding: hasRole(['Owner', 'Collaborator']),
     canRunAIAnalysis: hasRole(['Owner', 'Collaborator']),
     canManageTeam:    hasRole(['Owner']),
 

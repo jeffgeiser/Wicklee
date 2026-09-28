@@ -4,7 +4,7 @@ import { WifiOff, RefreshCw } from 'lucide-react';
 // NOTE: @clerk/clerk-react is NOT imported here. It's lazy-loaded via
 // CloudApp.tsx to prevent Clerk's module init from running in agent builds.
 import { DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
-import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
+import { NODE_REACHABLE_MS, fmtAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import { CLOUD_URL } from './utils/cloudUrl';
 import { hasClerkSessionHint } from './utils/clerkHint';
@@ -28,7 +28,6 @@ const Overview = React.lazy(() => import('./components/Overview'));
 const ModelsPage = React.lazy(() => import('./components/ModelsPage'));
 const NodesList = React.lazy(() => import('./components/NodesList'));
 const TracesView = React.lazy(() => import('./components/TracesView'));
-const ScaffoldingView = React.lazy(() => import('./components/ScaffoldingView'));
 const AIInsights = React.lazy(() => import('./components/AIInsights'));
 const TeamManagement = React.lazy(() => import('./components/TeamManagement'));
 import LandingPage from './components/LandingPage';
@@ -36,10 +35,7 @@ import LandingPage from './components/LandingPage';
 // out of the agent bundle.
 const SignInPage = React.lazy(() => import('./components/SignInPage'));
 const SignUpPage = React.lazy(() => import('./components/SignUpPage'));
-const ProfileView = React.lazy(() => import('./components/ProfileView'));
-const SecurityView = React.lazy(() => import('./components/SecurityView'));
 const APIKeysView = React.lazy(() => import('./components/APIKeysView'));
-const PreferencesView = React.lazy(() => import('./components/PreferencesView'));
 const SettingsView = React.lazy(() => import('./components/SettingsView'));
 import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
@@ -59,7 +55,6 @@ const DocsPage           = React.lazy(() => import('./pages/DocsPage'));
 const LegalPage          = React.lazy(() => import('./pages/LegalPage'));
 const TrustPage          = React.lazy(() => import('./pages/TrustPage'));
 const DesignPartnersPage = React.lazy(() => import('./pages/DesignPartnersPage'));
-const AIProvidersView = React.lazy(() => import('./components/AIProvidersView'));
 import PairingModal from './components/PairingModal';
 const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
 import { usePermissions } from './hooks/usePermissions';
@@ -209,8 +204,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         isPro: clerkTier !== 'community',
         tier: clerkTier,
       };
-  const [byokMode, setByokMode] = useState(false);
-  const [userApiKey, setUserApiKey] = useState('');
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
@@ -367,11 +360,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   }, []);
 
   const permissions = usePermissions(currentUser);
-  // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
-  // This is the sole source of truth for Cockpit vs Mission Control mode — never derived
-  // from runtime auth state or pairing status.
-  const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-
   const fetchPairingStatus = useCallback(async () => {
     // /api/pair/status only exists on the agent (localhost:7700).
     // On wicklee.dev this endpoint 404s — skip entirely.
@@ -501,12 +489,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     navigate('/pricing');
   }, [navigate]);
 
-  const handleToggleSentinel = (nodeId: string) => {
-    setNodes(prev => prev.map(node => 
-      node.id === nodeId ? { ...node, sentinelActive: !node.sentinelActive } : node
-    ));
-  };
-
   const handleTabChange = (tab: DashboardTab) => {
     setActiveTab(tab);
   };
@@ -621,15 +603,13 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} getToken={isLocalHost ? undefined : getToken} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
       case DashboardTab.MODELS:
         return <ModelsPage isLocalHost={isLocalHost} getToken={isLocalHost ? undefined : getToken} nodes={nodes} onNavigateToInsightsPerformance={permissions.canRunAIAnalysis ? () => { setInsightsDeepLink({ tab: 'performance' }); setActiveTab(DashboardTab.AI_INSIGHTS); } : undefined} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} cloudUrl={isLocalHost ? undefined : CLOUD_URL} onNodesRemoved={handleNodeAdded} />;
       case DashboardTab.TRACES:
         return <TracesView nodes={nodes} tenantId={currentTenant.id} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} subscriptionTier={permissions.subscriptionTier} getNodeSettings={getNodeSettings} navParams={observabilityNav} onNavConsumed={() => setObservabilityNav(undefined)} />;
-      case DashboardTab.SCAFFOLDING:
-        return permissions.canViewScaffolding ? <ScaffoldingView /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.AI_INSIGHTS:
         return permissions.canRunAIAnalysis ? (
           <AIInsights
@@ -652,7 +632,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
         );
       case DashboardTab.TEAM:
-        return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
+        return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} orgId={orgId} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.SETTINGS:
         return <SettingsView
           nodes={nodes}
@@ -663,8 +643,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           setNodeOverride={setNodeOverride}
           clearAllOverridesForField={clearAllOverridesForField}
           clearAllNodeOverrides={clearAllNodeOverrides}
-          theme={theme}
-          onThemeChange={() => {}} // Dark mode only
           onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
           onNavigateToApiKeys={() => setActiveTab(DashboardTab.API_KEYS)}
           onNavigateToPricing={() => navigate('/pricing')}
@@ -673,18 +651,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           subscriptionTier={clerkTier}
           isLocalHost={isLocalHost}
         />;
-      case DashboardTab.PROFILE:
-        return <ProfileView currentUser={currentUser} />;
-      case DashboardTab.SECURITY:
-        return <SecurityView byokMode={byokMode} setByokMode={setByokMode} userApiKey={userApiKey} setUserApiKey={setUserApiKey} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onGenerateCode={generatePairingCode} onDisconnect={disconnectFleet} />;
       case DashboardTab.API_KEYS:
         return <React.Suspense fallback={null}><APIKeysView /></React.Suspense>;
-      case DashboardTab.PREFERENCES:
-        return <PreferencesView currentTenant={currentTenant} theme={theme} />;
       case DashboardTab.PRICING:
         return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
-      case DashboardTab.AI_PROVIDERS:
-        return <AIProvidersView />;
       case DashboardTab.BILLING:
         return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       default:
@@ -709,7 +679,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         setCurrentTenant={setCurrentTenant}
         theme={theme}
         toggleTheme={toggleTheme}
-        isLocalMode={isLocalMode}
         pairingInfo={pairingInfo}
         permissions={permissions}
         settings={settings}
@@ -719,10 +688,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         setNodeOverride={setNodeOverride}
         clearAllOverridesForField={clearAllOverridesForField}
         clearAllNodeOverrides={clearAllNodeOverrides}
-        byokMode={byokMode}
-        setByokMode={setByokMode}
-        userApiKey={userApiKey}
-        setUserApiKey={setUserApiKey}
         isUpgradeModalOpen={isUpgradeModalOpen}
         setIsUpgradeModalOpen={setIsUpgradeModalOpen}
         handleUpgrade={handleUpgrade}
@@ -786,7 +751,6 @@ interface DashboardShellProps {
   setCurrentTenant: (t: Tenant) => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
-  isLocalMode: boolean;
   pairingInfo: PairingInfo | null;
   permissions: ReturnType<typeof usePermissions>;
   settings: ReturnType<typeof useSettings>['settings'];
@@ -796,10 +760,6 @@ interface DashboardShellProps {
   setNodeOverride: ReturnType<typeof useSettings>['setNodeOverride'];
   clearAllOverridesForField: ReturnType<typeof useSettings>['clearAllOverridesForField'];
   clearAllNodeOverrides: ReturnType<typeof useSettings>['clearAllNodeOverrides'];
-  byokMode: boolean;
-  setByokMode: (v: boolean) => void;
-  userApiKey: string;
-  setUserApiKey: (v: string) => void;
   isUpgradeModalOpen: boolean;
   setIsUpgradeModalOpen: (v: boolean) => void;
   handleUpgrade: () => void;
@@ -844,7 +804,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
   const {
     nodes, activeTab, handleTabChange, setActiveTab,
     currentUser, currentTenant, setCurrentTenant,
-    theme, toggleTheme, isLocalMode, pairingInfo,
+    theme, toggleTheme, pairingInfo,
     isUpgradeModalOpen, setIsUpgradeModalOpen, handleUpgrade,
     isPairingModalOpen, setIsPairingModalOpen,
     isAddNodeModalOpen, setIsAddNodeModalOpen, handleNodeAdded,
@@ -880,7 +840,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
         onUserChange={() => {}}
         connectionState={connectionState}
         theme={theme}
-        isLocalMode={isLocalMode}
         isLocalHost={isLocalHost}
         pairingInfo={pairingInfo}
         onOpenPairing={() => setIsPairingModalOpen(true)}
@@ -975,7 +934,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
                   const ls = lastSeenMsMap[n.id];
                   const alive = ls != null && ftNow - ls <= NODE_REACHABLE_MS;
                   const label = ls != null
-                    ? alive ? '● online' : `● offline · last seen ${fmtNodeAgo(ls)}`
+                    ? alive ? '● online' : `● offline · last seen ${fmtAgo(ls)}`
                     : '● pending';
                   return `${n.hostname !== n.id ? n.hostname : n.id}  ${label}`;
                 }).join('\n');

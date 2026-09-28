@@ -1,4 +1,4 @@
-import { tierLabel } from '../utils/tier';
+import { RANGE_CONFIG, RANGES, tierUpgradeLabel, type TimeRange } from '../utils/historyRange';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -10,8 +10,6 @@ import { CLOUD_URL } from '../utils/cloudUrl';
 // benchmarkReport imports removed — CSV export replaces modal
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-type TimeRange = '1h' | '24h' | '7d' | '30d' | '90d';
 
 interface WESPoint {
   ts_ms: number;
@@ -34,31 +32,12 @@ interface ChartPoint {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const RANGE_CONFIG: Record<TimeRange, {
-  label:      string;
-  minTier:    SubscriptionTier;
-  historyMin: number;    // historyDays required
-  fmtTs:      (ms: number) => string;
-}> = {
-  '1h':  { label: '1H',  minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-  '24h': { label: '24H', minTier: 'community',  historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-  '7d':  { label: '7D',  minTier: 'pro',        historyMin: 7,  fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
-  '30d': { label: '30D', minTier: 'team',       historyMin: 30, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
-  '90d': { label: '90D', minTier: 'team',       historyMin: 90, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) },
-};
-
-const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d'];
-
 function buildChartPoints(points: WESPoint[], fmtTs: (ms: number) => string): ChartPoint[] {
   return points.map(p => ({
     label:         fmtTs(p.ts_ms),
     penalized_wes: p.penalized_wes != null ? parseFloat(p.penalized_wes.toFixed(3)) : null,
     raw_wes:       p.raw_wes       != null ? parseFloat(p.raw_wes.toFixed(3))       : null,
   }));
-}
-
-function tierUpgradeLabel(minTier: SubscriptionTier): string {
-  return minTier === 'community' ? '' : tierLabel(minTier);
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────

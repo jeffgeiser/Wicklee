@@ -29,22 +29,6 @@ export type ActionId =
   | 'switch_quantization'  // reduce model precision to lower memory bandwidth demand
   | 'check_power_limits';  // lift BIOS/driver/OS power cap constraining clock speed
 
-// ── FleetNodeSummary — peer context for cross-node recommendations ─────────────
-
-interface FleetNodeSummary {
-  nodeId:              string;
-  hostname:            string;
-  /** True only when the node had a telemetry frame in the last 90 seconds. */
-  isOnline:            boolean;
-  currentThermalState: string | null;
-  currentWes:          number | null;
-  currentTokS:         number | null;
-  /** (vram_total - vram_used) / vram_total × 100 — null on non-GPU / unknown. */
-  vramHeadroomPct:     number | null;
-  /** WES tier from SentinelMetrics.wes_tier — used to gate tier-aware copy. */
-  wesTier:             'workstation' | 'server' | 'accelerator' | null;
-}
-
 // ── Output types ───────────────────────────────────────────────────────────────
 
 type PatternTier = 'community' | 'pro' | 'team';

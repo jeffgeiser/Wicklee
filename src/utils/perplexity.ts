@@ -189,11 +189,6 @@ export async function loadPerplexityBaseline(): Promise<PerplexityBaseline | nul
   return _loadingPromise;
 }
 
-/** Synchronous accessor — returns null until loadPerplexityBaseline() resolves. */
-export function getCachedPerplexityBaseline(): PerplexityBaseline | null {
-  return _cache;
-}
-
 // ── Lookup ─────────────────────────────────────────────────────────────────
 
 /**
@@ -249,22 +244,4 @@ export function lookupPerplexity(
   }
 
   return null;
-}
-
-/**
- * Quality multiplier for use in fit-score calculations.  Replaces
- * `quant_quality_factor()` cloud-side and any equivalent client logic.
- *
- * Maps KLD → [0, 1]:
- *   KLD = 0     → 1.0   (no penalty)
- *   KLD = 0.15  → 0.0   (unusable)
- *   linear in between, clamped.
- *
- * Returns 1.0 when no perplexity data is available — never penalises a
- * model just because we lack benchmarks.
- */
-export function qualityMultiplier(modelName: string | null, quant: string | null): number {
-  const cost = lookupPerplexity(modelName, quant);
-  if (!cost) return 1.0;
-  return Math.max(0.0, Math.min(1.0, 1.0 - cost.kld / 0.15));
 }

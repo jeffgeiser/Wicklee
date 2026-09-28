@@ -1,17 +1,11 @@
 import React from 'react';
 import { Terminal, Wifi, WifiOff, Thermometer, Zap, RefreshCw, AlertCircle, Check, Clock, Flame, Target, Activity, TrendingDown, Gauge, MemoryStick, AlertTriangle } from 'lucide-react';
 import { FleetEvent } from '../types';
+import { fmtAgo } from '../utils/time';
 
 interface EventFeedProps {
   events: FleetEvent[];
 }
-
-const fmtAgo = (ts: number): string => {
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60)   return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
-};
 
 interface EventMeta {
   icon: React.ReactElement;
@@ -226,7 +220,7 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
                       )}
                     </div>
                     <p className="text-[10px] text-gray-400 font-telin mt-0.5">
-                      {count > 1 ? `${fmtAgo(firstTs)} – ${fmtAgo(ev.ts)}` : fmtAgo(ev.ts)}
+                      {count > 1 ? `${fmtAgo(firstTs, { seconds: true })} – ${fmtAgo(ev.ts, { seconds: true })}` : fmtAgo(ev.ts, { seconds: true })}
                     </p>
                   </div>
                 </div>

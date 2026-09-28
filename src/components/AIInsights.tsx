@@ -28,7 +28,7 @@ import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
   TrendingDown, Database, Cpu, Globe, Shield,
   Activity, Layers, CheckCircle, ChevronDown, History, Clock,
-  Copy, Check} from 'lucide-react';
+  Check} from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
@@ -116,68 +116,6 @@ function fmtVram(m: SentinelMetrics): string | null {
   if (used == null || total <= 0) return null;
   return `${((used / total) * 100).toFixed(0)}%`;
 }
-
-// ── InlineCopyButton — used by Top Finding curl snippet ───────────────────────
-
-const InlineCopyButton: React.FC<{ text: string }> = ({ text }) => {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }).catch(() => {});
-    } else {
-      try {
-        const el = document.createElement('textarea');
-        el.value = text;
-        document.body.appendChild(el);
-        el.select();
-        document.execCommand('copy');
-        document.body.removeChild(el);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch {}
-    }
-  }, [text]);
-  return (
-    <button
-      onClick={handleCopy}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700 border border-gray-700 text-[10px] font-medium text-gray-400 hover:text-gray-200 transition-colors shrink-0"
-    >
-      {copied
-        ? <><Check className="w-3 h-3 text-green-400" />Copied</>
-        : <><Copy  className="w-3 h-3" />Copy</>}
-    </button>
-  );
-};
-
-// ── InlineCopyAction — used by Top Finding action buttons ─────────────────────
-
-const InlineCopyAction: React.FC<{ text: string; label: string }> = ({ text, label }) => {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
-  }, [text]);
-  return (
-    <button
-      onClick={handleCopy}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700
-                 border border-gray-700 hover:border-gray-600 transition-colors group"
-    >
-      <code className="text-[10px] font-mono text-gray-300 group-hover:text-white truncate max-w-[180px]">
-        {label}
-      </code>
-      {copied
-        ? <Check className="w-3 h-3 text-green-400 shrink-0" />
-        : <Copy  className="w-3 h-3 text-gray-500 group-hover:text-gray-300 shrink-0" />
-      }
-    </button>
-  );
-};
 
 // ── Alert statefulness — types & constants ────────────────────────────────────
 
@@ -350,33 +288,6 @@ const SectionHeader: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-4">
     {children}
   </p>
-);
-
-/** Single dormant monitoring row shown when an alert condition is NOT firing. */
-const AlertDormantRow: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  reading: string | null;
-  isFirst?: boolean;
-  isLast?: boolean;
-}> = ({ icon, label, reading, isFirst, isLast }) => (
-  <div
-    className={`
-      flex items-center gap-3 px-4 h-10 bg-gray-800 border-x border-gray-700
-      ${isFirst ? 'border-t rounded-t-2xl' : ''}
-      ${isLast  ? 'border-b rounded-b-2xl' : 'border-b border-gray-700/60'}
-    `}
-  >
-    <span className="text-gray-600 shrink-0">{icon}</span>
-    <span className="text-xs text-gray-600 flex-1">{label}</span>
-    <div className="flex items-center gap-2">
-      <div className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse" />
-      <span className="font-telin text-[10px] text-gray-600 uppercase tracking-widest">Monitoring</span>
-      {reading && (
-        <span className="font-telin text-xs text-gray-500 ml-1">· {reading}</span>
-      )}
-    </div>
-  </div>
 );
 
 /** Compact nominal bar for Section 2 Pro cards when condition is not active. */
@@ -1042,8 +953,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const localInferenceStateRef  = useRef<string | null>(null);
   const localIdlePreseededRef   = useRef(false);
   const firstMessageTsRef       = useRef<number | null>(null);
-  const hadActivityRef          = useRef<boolean>(false);
-  const [hadAnyActivity, setHadAnyActivity] = useState(false);
 
   // ── Alert log (session-scoped, Recent Activity panel) ─────────────────────
   const [alertLog, setAlertLog] = useState<AlertLogEntry[]>(() => {
@@ -1076,7 +985,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     });
   }, []);
 
-  const { allNodeMetrics, lastSeenMsMap, addFleetEvent, fleetEvents } = useFleetStream();
+  const { allNodeMetrics, lastSeenMsMap, addFleetEvent } = useFleetStream();
 
   // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
@@ -1174,7 +1083,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const { getNodeSettings } = useSettings();
 
   // ── Server-side observations (agent + cloud) ────────────────────────────────
-  const [observations, setObservations]             = useState<DetectedInsight[]>([]);
   const lastObsEvalRef                              = useRef<number>(0);
 
   // Tick every 10s to keep elapsed times fresh in the status rail
@@ -1205,10 +1113,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     const prev  = localInferenceStateRef.current;
     if (state === 'live') {
       setLocalIdleStartMs(null); // actively inferring — reset idle clock
-      if (!hadActivityRef.current) {
-        hadActivityRef.current = true;
-        setHadAnyActivity(true);
-      }
     } else if (prev === 'live' || (prev === null && localIdlePreseededRef.current)) {
       // Transitioned from live → idle (or first non-live frame after preseed)
       setLocalIdleStartMs(ts => ts ?? Date.now());
@@ -1426,7 +1330,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       return b.firstFiredMs - a.firstFiredMs;
     });
     setObsEntries(sorted);
-    setObservations(allObservations);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localAgentObs, serverObservations]);
 
@@ -1783,22 +1686,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   }, [fitModelKey]);
 
   // ── RENDER ────────────────────────────────────────────────────────────────
-
-  // ── Benchmark report export ───────────────────────────────────────────────
-
-  const handleExportBenchmark = () => {
-    // Pick the node with the best (highest) penalized WES from live data, or localSentinel
-    const source = isLocalHost
-      ? localSentinel
-      : effectiveNodes.reduce<SentinelMetrics | null>((best, n) => {
-          const wes = computeNodeWes(n);
-          if (wes == null) return best;
-          if (best == null) return n;
-          return wes > (computeNodeWes(best) ?? 0) ? n : best;
-        }, null);
-    if (!source) return;
-    setBenchmarkReport(buildReportFromLive(source));
-  };
 
   return (
     <>
@@ -2382,7 +2269,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               {!isLocalHost && getToken && (
                 <MetricsHistoryChart
                   getToken={getToken}
-                  historyDays={historyDays}
                   subscriptionTier={subscriptionTier}
                   selectedNodeId={perfNodeId}
                   onNodeSelect={setPerfNodeId}

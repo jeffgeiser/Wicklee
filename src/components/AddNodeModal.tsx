@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, CloudLightning, AlertCircle, CheckCircle2, Copy, Check, ArrowRight, Terminal } from 'lucide-react';
+import { X, CloudLightning, AlertCircle, CheckCircle2, ArrowRight, Terminal } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
+import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
+import { CopyButton } from './shared/CopyButton';
 
 interface AddNodeModalProps {
   isOpen: boolean;
@@ -9,31 +11,6 @@ interface AddNodeModalProps {
   cloudUrl: string;
 }
 
-// Build-time flag — AddNodeModal is cloud-only; agent builds never need it.
-const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
-
-// ── Inline copy button ────────────────────────────────────────────────────────
-const CopyBtn: React.FC<{ text: string }> = ({ text }) => {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-      className="p-1.5 text-gray-600 hover:text-white transition-colors shrink-0"
-      title="Copy"
-    >
-      {copied
-        ? <Check className="w-3.5 h-3.5 text-green-400" />
-        : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-};
-
 // ── Code row: comment + copyable command ──────────────────────────────────────
 const CmdRow: React.FC<{ cmd: string; comment?: string }> = ({ cmd, comment }) => (
   <div className="flex items-start justify-between gap-2">
@@ -41,7 +18,7 @@ const CmdRow: React.FC<{ cmd: string; comment?: string }> = ({ cmd, comment }) =
       {comment && <p className="text-[10px] text-gray-600 font-mono mb-0.5">{comment}</p>}
       <p className="text-sm font-mono text-gray-100 break-all leading-snug">{cmd}</p>
     </div>
-    <CopyBtn text={cmd} />
+    <CopyButton text={cmd} className="p-1.5 text-gray-600 hover:text-white shrink-0" />
   </div>
 );
 
