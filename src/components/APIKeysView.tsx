@@ -3,6 +3,8 @@ import { Key, Plus, Trash2, Copy, Check, X, Terminal, ChevronRight } from 'lucid
 import { useAuth } from '@clerk/clerk-react';
 import type { ApiKey, CreateApiKeyResponse } from '../types';
 import { CLOUD_URL } from '../utils/cloudUrl';
+import { CopyButton } from './shared/CopyButton';
+import { IS_DEMO } from '../utils/buildTarget';
 
 // For display in the Quick Reference — always the public URL.
 const DISPLAY_URL = 'https://wicklee.dev';
@@ -25,22 +27,6 @@ function fmtRelative(ms: number | null): string {
 }
 
 // ── Subcomponents ─────────────────────────────────────────────────────────────
-
-const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, className = '' }) => {
-  const [done, setDone] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(text);
-    setDone(true);
-    setTimeout(() => setDone(false), 2000);
-  };
-  return (
-    <button onClick={copy} className={`transition-colors ${className}`} title="Copy">
-      {done
-        ? <Check className="w-3.5 h-3.5 text-green-400" />
-        : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-};
 
 // ── One-time key reveal modal ─────────────────────────────────────────────────
 
@@ -191,7 +177,6 @@ const CreateKeyModal: React.FC<{
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-const IS_DEMO = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 // Demo builds have no ClerkProvider — a build-time-constant branch keeps the
 // hook order stable while supplying stub auth (the fetch shim serves the data).
 const useAuthMaybe = () =>

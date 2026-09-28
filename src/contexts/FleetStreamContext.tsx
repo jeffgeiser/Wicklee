@@ -2,10 +2,10 @@ import React, { createContext, useContext, useState, useEffect, useRef, useMemo 
 import type { SentinelMetrics, FleetEvent, FleetNode, FleetStreamState, ConnectionState } from '../types';
 import { getNodePowerW } from '../utils/power';
 import { CLOUD_URL } from '../utils/cloudUrl';
+import { IS_DEMO } from '../utils/buildTarget';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const IS_DEMO = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 const isLocalHost =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 

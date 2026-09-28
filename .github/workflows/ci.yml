@@ -73,11 +73,8 @@ jobs:
         with:
           workspaces: agent
 
-      # RustEmbed's #[folder = "frontend/dist"] requires the directory to
-      # exist at compile time. Tests don't serve assets, so an empty dir is
-      # enough — no need to build the frontend here.
-      - name: Stub embedded assets dir
-        run: mkdir -p agent/frontend/dist
+      # RustEmbed's #[folder = "frontend/dist"] must exist at compile time;
+      # agent/build.rs creates it (empty) when missing, so no stub step needed.
 
       - name: Clippy (-D warnings)
         run: cargo clippy --all-targets -- -D warnings

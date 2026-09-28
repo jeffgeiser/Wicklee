@@ -63,7 +63,7 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Priority 4 — Dead code and cleanup
 
-**Status:** open.
+**Status:** fixed in the Priority 4 PR (cloud and agent `main.rs` split into modules, consistent 402 tier gates, dead code and duplicated helpers removed). Not done: an `AuthCtx` axum extractor, standardizing cloud HTTP on reqwest (ureq still used for blocking calls), and dropping dead DB columns (`stripe_*`, `is_pro`).
 
 - **Frontend:** unreachable tabs (Scaffolding, AIProviders, Team, Profile, Security, Preferences, Pricing views plus their App cases, about 980 LOC). About 40 unused locals and components flagged by lint. Unused props (Overview `isPro`/`getToken`/`onUpgrade`, etc.). Unused exports `getCachedPerplexityBaseline` and `qualityMultiplier`. Duplicated helpers: 5× `CopyButton`, 4× `fmtAgo` (inconsistent output), the discovery-card helpers, `RANGE_CONFIG`, `TIER_STYLE`, 5× `IS_DEMO`/`IS_AGENT` despite `buildTarget.ts`.
 - **Cloud:** the unused deps `tower-http` and `futures-util`. The `ureq` + `reqwest` overlap (standardize on reqwest). `once_cell` → `LazyLock`. Retired Pro and Business price IDs still wired (keep them for grandfathered subscribers but document an end date). "requires Pro tier" 403s where other gates return 402. Dead `stripe_*` columns, `ObsSeverity`, `ppl_delta_pct`, and `is_pro`. Obsolete DuckDB and cmake lines in `cloud/Dockerfile`.

@@ -14,6 +14,7 @@ import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
   type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings} from '../hooks/useSettings';
 import { CLOUD_URL } from '../utils/cloudUrl';
+import { IS_AGENT } from '../utils/buildTarget';
 
 // ── Alert types ────────────────────────────────────────────────────────────────
 
@@ -171,8 +172,6 @@ interface SettingsViewProps {
   setNodeOverride: (nodeId: string, patch: Partial<NodeOverride>) => void;
   clearAllOverridesForField: (field: 'kwhRate' | 'currency' | 'pue') => void;
   clearAllNodeOverrides: () => void;
-  theme: 'light' | 'dark';
-  onThemeChange: (t: 'dark' | 'light' | 'system') => void;
   onNavigateToManagement: () => void;
   onNavigateToApiKeys?: () => void;
   onNavigateToPricing?: () => void;
@@ -252,8 +251,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   setNodeOverride,
   clearAllOverridesForField,
   clearAllNodeOverrides,
-  theme,
-  onThemeChange,
   onNavigateToManagement,
   onNavigateToApiKeys,
   onNavigateToPricing,
@@ -262,7 +259,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   subscriptionTier = 'community',
   isLocalHost = false,
 }) => {
-  const isCloudMode = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
+  const isCloudMode = !IS_AGENT;
   const { allNodeMetrics } = useFleetStream();
 
   // ── Fleet defaults drafts (numbers need validation before commit) ───────────
@@ -404,10 +401,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     a.click();
     URL.revokeObjectURL(url);
   };
-
-  // ── Theme preference ───────────────────────────────────────────────────────
-  // settings.fleet.themePreference is the stored value; fall back to current effective theme
-  const themePreference: string = settings.fleet.themePreference ?? theme;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
@@ -944,7 +937,7 @@ const AlertsSection: React.FC<{
   // Cloud mode = any build that isn't the embedded agent binary (localhost:7700).
   // pairingInfo.status tracks whether a local node is paired — irrelevant here.
   // On wicklee.dev the user is already in the fleet regardless of local pairing state.
-  const isCloudMode    = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
+  const isCloudMode    = !IS_AGENT;
   const isProOrAbove   = tierIsProOrAbove(subscriptionTier);
   const isTeam         = tierIsTeamOrAbove(subscriptionTier);
   const { channels, rules, silences, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule, createSilence, deleteSilence } =

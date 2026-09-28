@@ -83,14 +83,14 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
 - [ ] Paste both outputs into a Claude session → landing-page proof strip + CFO-report blog post.
 
 ## 5. Quick checks and one decision
-- [ ] Dashboard → Team tab: Clerk organization panel renders.
+- [ ] Dashboard → Team Management tab (Owners; was hidden until the Priority 4 PR): Clerk organization panel renders, or Create organization if none is active.
 - [ ] `/pricing` signed out: selector defaults to $99 / 10 nodes.
 - [ ] **Decide on SSO.** Clerk Enterprise SSO is a paid add-on billed per connection. Options: self-serve
       SAML for Enterprise customers, or hand-configure each connection when a deal closes
       (fine until the first request arrives). See `docs/SSO.md`.
 
 ## Engineering follow-ups
-- [x] Security items S1–S9 from `docs/CODE_REVIEW.md` fixed. Bugs B1–B10 fixed. Performance (Priority 3) fixed. Remaining: cleanup (Priority 4).
+- [x] Security items S1–S9 from `docs/CODE_REVIEW.md` fixed. Bugs B1–B10 fixed. Performance (Priority 3) and cleanup (Priority 4) fixed.
 - [ ] After the next agent release, confirm the release page lists a `SHA256SUMS` file (agents refuse to auto-update without it).
 
 ## From earlier GTM notes (still open)

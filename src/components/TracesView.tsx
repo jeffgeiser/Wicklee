@@ -13,8 +13,6 @@
  *      connection health, local store write-path availability.
  *   5. Event History — localhost only. Phase 3B: persisted Live Activity events
  *      from agent local store (node_events table). 7-day retention, paginated.
- *   6. Dismissal Log — localhost only. Sprint 6: all active accepted_states
- *      rows from agent local store. Audit trail for dismissed pattern insights.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -23,7 +21,6 @@ import {
   Shield, Lock, Globe, Radio,
   ArrowUpRight, CheckCircle,
   Cpu, Zap, Server, AlertTriangle,
-  ClipboardList, XCircle, Timer,
   ChevronDown, ChevronRight, Copy, Check, FileDown,
   EyeOff, Wifi} from 'lucide-react';
 import {
@@ -33,8 +30,9 @@ import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, Ev
 import { CLOUD_URL } from '../utils/cloudUrl';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useEventHistory } from '../hooks/useEventHistory';
+import { fmtAgo } from '../utils/time';
 
-import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
+import { IS_LOCAL_HOST as isLocalHost, IS_AGENT } from '../utils/buildTarget';
 
 // ── Proxy status hook — one-shot fetch from /api/metrics ─────────────────────
 // Proxy config is immutable at runtime (set at agent startup), so a single
@@ -638,7 +636,7 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 // Available in Cockpit mode (isLocalHost) only.
 
 const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
-  const isLocalHost = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+  const isLocalHost = IS_AGENT;
 
   // On localhost, probe the local agent directly instead of using the fleet SSE
   // (FleetStreamContext connects to the cloud SSE, which is disconnected on localhost).
@@ -1053,247 +1051,6 @@ const TraceTable: React.FC<{
   );
 };
 
-// ── Dismissal Log Panel — Sprint 6 ────────────────────────────────────────────
-// Renders all active (non-expired) accepted_states rows from the agent local store.
-// Source: GET /api/insights/dismissed (proxied to localhost:7700 in dev;
-//         served directly by the embedded frontend in production).
-// Available in Cockpit mode (isLocalHost) only — same gate as Agent Health.
-//
-// Columns: Pattern (human label + id), Scope (Fleet-wide / node_id),
-//          Dismissed At, Expires (relative), Note (operator-supplied).
-
-interface Dismissal {
-  pattern_id:      string;
-  node_id:         string;
-  dismissed_at_ms: number;
-  expires_at_ms:   number;
-  note?:           string | null;
-}
-
-const PATTERN_LABELS: Record<string, string> = {
-  thermal_drain:         'Thermal Drain',
-  phantom_load:          'Phantom Load',
-  wes_velocity_drop:     'WES Velocity Drop',
-  power_gpu_decoupling:  'Power-GPU Decoupling',
-  fleet_load_imbalance:  'Fleet Load Imbalance',
-  memory_trajectory:     'Memory Trajectory',
-  bandwidth_saturation:  'Bandwidth Saturation',
-  power_jitter:          'Power Jitter',
-  efficiency_drag:       'Efficiency Drag',
-  swap_io_pressure:      'Swap I/O Pressure',
-  clock_drift:           'Clock Drift',
-  pcie_lane_degradation: 'PCIe Lane Degradation',
-};
-
-const FIVE_YEARS_MS = 5 * 365 * 24 * 60 * 60 * 1_000;
-
-function fmtExpiry(expiresAtMs: number): string {
-  const diff = expiresAtMs - Date.now();
-  if (diff <= 0)               return 'Expired';
-  if (diff > FIVE_YEARS_MS)    return 'Permanent';
-  const s = Math.floor(diff / 1_000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const d = Math.floor(h / 24);
-  if (d > 0)  return `in ${d}d ${h % 24}h`;
-  if (h > 0)  return `in ${h}h ${m % 60}m`;
-  return `in ${m}m`;
-}
-
-function fmtDismissedAt(ms: number): string {
-  return new Date(ms).toLocaleString([], {
-    month:  'short',
-    day:    'numeric',
-    hour:   '2-digit',
-    minute: '2-digit',
-  });
-}
-
-const DismissalLogPanel: React.FC = () => {
-  const [rows,    setRows]    = useState<Dismissal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
-  const [, forceUpdate]       = useState(0); // ticks relative-time labels
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const r = await fetch('/api/insights/dismissed', {
-        signal: (AbortSignal as { timeout?: (ms: number) => AbortSignal }).timeout?.(4_000) ?? undefined,
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data: { dismissals: Dismissal[] } = await r.json();
-      setRows(data.dismissals ?? []);
-    } catch {
-      setError('Dismissal log unavailable — agent may be offline or out of date.');
-      setRows([]);
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-    const poll = setInterval(load, 30_000);
-    return () => clearInterval(poll);
-  }, [load]);
-
-  // Re-render every 30s so relative-time labels stay fresh without a re-fetch.
-  useEffect(() => {
-    const tick = setInterval(() => forceUpdate(n => n + 1), 30_000);
-    return () => clearInterval(tick);
-  }, []);
-
-  return (
-    <div className="space-y-4">
-
-      {/* ── Section header ──────────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-center shrink-0">
-            <ClipboardList className="w-4 h-4 text-amber-400" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-white">Dismissal Log</h2>
-            <p className="text-xs text-gray-500">
-              Accepted states · agent-persisted · local store
-              {rows.length > 0 && (
-                <span className="ml-2 font-mono text-[9px] text-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                  {rows.length} active
-                </span>
-              )}
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="p-1.5 text-gray-600 hover:text-gray-400 transition-colors disabled:opacity-40"
-          title="Refresh"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-
-      {/* ── Error state ─────────────────────────────────────────────────────── */}
-      {error && (
-        <div className="flex items-center gap-3 p-4 bg-amber-500/8 border border-amber-500/20 rounded-xl">
-          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-          <p className="text-xs text-amber-400/80">{error}</p>
-        </div>
-      )}
-
-      {/* ── Table ───────────────────────────────────────────────────────────── */}
-      {!error && (
-        <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
-          {rows.length > 0 ? (
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-gray-900/50 text-[10px] text-gray-500 uppercase tracking-widest font-bold border-b border-gray-700">
-                  <th className="px-5 py-3">Pattern</th>
-                  <th className="px-5 py-3">Scope</th>
-                  <th className="px-5 py-3">Dismissed</th>
-                  <th className="px-5 py-3">Expires</th>
-                  <th className="px-5 py-3">Note</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-800/60 text-xs">
-                {rows.map(row => {
-                  const now         = Date.now();
-                  const isPermanent = (row.expires_at_ms - now) > FIVE_YEARS_MS;
-                  const isExpired   = row.expires_at_ms <= now;
-                  return (
-                    <tr
-                      key={`${row.pattern_id}::${row.node_id}`}
-                      className="hover:bg-gray-700/30 transition-colors"
-                    >
-                      {/* Pattern */}
-                      <td className="px-5 py-3">
-                        <div className="flex flex-col gap-0.5">
-                          <span className="font-semibold text-gray-200">
-                            {PATTERN_LABELS[row.pattern_id] ?? row.pattern_id}
-                          </span>
-                          <span className="font-mono text-[10px] text-gray-600">
-                            {row.pattern_id}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Scope */}
-                      <td className="px-5 py-3">
-                        {row.node_id === '' ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                            Fleet-wide
-                          </span>
-                        ) : (
-                          <span className="font-mono text-[11px] text-gray-400">
-                            {row.node_id}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Dismissed At */}
-                      <td className="px-5 py-3 text-gray-500 font-mono text-[11px] whitespace-nowrap">
-                        {fmtDismissedAt(row.dismissed_at_ms)}
-                      </td>
-
-                      {/* Expires */}
-                      <td className="px-5 py-3 whitespace-nowrap">
-                        <span className={`inline-flex items-center gap-1 text-[11px] font-mono font-semibold ${
-                          isExpired   ? 'text-red-400'     :
-                          isPermanent ? 'text-gray-500'    :
-                                        'text-amber-400/80'
-                        }`}>
-                          {isPermanent ? (
-                            <><XCircle className="w-3 h-3 shrink-0" /> Permanent</>
-                          ) : isExpired ? (
-                            'Expired'
-                          ) : (
-                            <><Timer className="w-3 h-3 shrink-0" /> {fmtExpiry(row.expires_at_ms)}</>
-                          )}
-                        </span>
-                      </td>
-
-                      {/* Note */}
-                      <td className="px-5 py-3 text-gray-600 text-[11px] max-w-[14rem] truncate">
-                        {row.note ?? '—'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : loading ? (
-            <div className="flex items-center justify-center py-10 gap-2 text-gray-700">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              <span className="text-xs">Loading dismissals…</span>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center px-6">
-              <ClipboardList className="w-6 h-6 text-gray-700 mb-2" />
-              <p className="text-xs text-gray-600 font-semibold mb-1">No active dismissals</p>
-              <p className="text-[11px] text-gray-700 max-w-xs leading-relaxed">
-                Dismissed insights appear here and persist across browser reloads. They expire
-                after 1 hour by default, or indefinitely when permanently accepted.
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Footer hint ─────────────────────────────────────────────────────── */}
-      {!error && rows.length > 0 && (
-        <p className="text-[11px] text-gray-700 leading-relaxed">
-          Stored in <span className="font-mono text-gray-600">accepted_states</span> table ·{' '}
-          agent-local <span className="font-mono text-gray-600">metrics.db</span> · expired rows
-          pruned automatically. Re-dismiss an insight to extend its expiry window.
-        </p>
-      )}
-
-    </div>
-  );
-};
-
 // ── Event History Panel ──────────────────────────────────────────────────────
 // Persisted Live Activity events from the agent's local store (node_events table).
 // 7-day retention. Cockpit-only — same gate as Agent Health and Metric History.
@@ -1311,14 +1068,6 @@ const LEVEL_DOT: Record<string, string> = {
   warn:  'bg-amber-400',
   error: 'bg-red-400',
 };
-
-function relativeTime(tsMs: number): string {
-  const delta = Date.now() - tsMs;
-  if (delta < 60_000) return 'just now';
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
-  return `${Math.floor(delta / 86_400_000)}d ago`;
-}
 
 const EventHistoryPanel: React.FC = () => {
   const { events, loading, error, hasMore, loadMore, refresh } = useEventHistory({ limit: 30 });
@@ -1412,7 +1161,7 @@ const EventHistoryPanel: React.FC = () => {
                     )}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[10px] text-gray-600 font-mono">{relativeTime(ev.ts_ms)}</span>
+                    <span className="text-[10px] text-gray-600 font-mono">{fmtAgo(ev.ts_ms)}</span>
                     {ev.event_type && (
                       <span className={`text-[10px] font-mono ${EVENT_TYPE_COLORS[ev.event_type] ?? 'text-gray-500'}`}>
                         {ev.event_type}

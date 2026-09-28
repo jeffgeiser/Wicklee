@@ -3,10 +3,10 @@ FROM rust:1.88-slim AS builder
 
 WORKDIR /app
 
-# DuckDB bundled feature compiles DuckDB from C++ source.
-# build-essential provides g++/gcc/make; cmake drives the DuckDB configure step.
+# build-essential provides the C toolchain the `cc` crate needs to compile
+# ring (rustls crypto backend, pulled in via sqlx/reqwest/ureq).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential cmake \
+ && apt-get install -y --no-install-recommends build-essential \
  && rm -rf /var/lib/apt/lists/*
 
 # Cache dependency compilation separately from source changes.

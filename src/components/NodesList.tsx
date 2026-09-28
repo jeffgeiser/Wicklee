@@ -7,7 +7,7 @@ import {
   Radio, Activity} from 'lucide-react';
 import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
-import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
+import { NODE_REACHABLE_MS, fmtAgo } from '../utils/time';
 import { calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle } from '../utils/efficiency';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useFleetCounts } from '../hooks/useFleetCounts';
@@ -26,14 +26,6 @@ import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 const MGMT_GRID_CLS = 'grid gap-x-4 items-center [grid-template-columns:40px_140px_1fr_80px_130px_110px_90px_80px_100px]';
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-
-const fmtAgo = (ms: number): string => {
-  const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60)    return `${s}s ago`;
-  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-};
 
 type NodeOS = 'macOS' | 'Linux' | 'Windows' | 'Unknown';
 
@@ -213,7 +205,7 @@ const DetailBand: React.FC<{
         </div>
         <div>
           <DL label="Last Telemetry" />
-          <DV>{lastSeenMs ? fmtAgo(lastSeenMs) : isOnline ? 'live' : '—'}</DV>
+          <DV>{lastSeenMs ? fmtAgo(lastSeenMs, { seconds: true }) : isOnline ? 'live' : '—'}</DV>
         </div>
         <div>
           <DL label="Node ID" />
@@ -470,7 +462,7 @@ const MgmtRow: React.FC<{
     'bg-gray-500';
   const dotTooltip =
     dotState === 'online'  ? 'Online · last seen just now' :
-    dotState === 'offline' ? `Unreachable · last seen ${fmtNodeAgo(lastSeenMs!)}` :
+    dotState === 'offline' ? `Unreachable · last seen ${fmtAgo(lastSeenMs!)}` :
     'Pending · waiting for first report';
 
   // Condensed tooltip for Identity cell — surfaces columns hidden at narrow widths

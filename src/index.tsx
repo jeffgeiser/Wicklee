@@ -4,16 +4,13 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 import { perfMark } from './utils/perfMark';
+// Build-time flags (.env.agent / .env.demo) — Rollup folds them to constants
+// and eliminates the dead branches below.
+import { IS_AGENT, IS_DEMO } from './utils/buildTarget';
 
 // First line of app code to run — everything before this mark is HTML parse,
 // entry-chunk download and module evaluation.
 perfMark('wk:entry-start');
-
-// Build-time flag injected by Vite when `vite build --mode agent` is used.
-// The value is baked into the bundle at compile time via .env.agent, not read
-// at runtime. Rollup treats it as a constant and eliminates dead branches.
-const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Could not find root element to mount to');

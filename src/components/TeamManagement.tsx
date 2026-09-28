@@ -33,13 +33,51 @@ const ClerkOrgProfile = (IS_AGENT || IS_DEMO)
   : React.lazy(() =>
       import('@clerk/clerk-react').then(m => ({ default: m.OrganizationProfile })),
     );
+// OrganizationProfile renders nothing without an active organization, so a
+// user who hasn't created one yet gets Clerk's CreateOrganization instead.
+// Same dynamic-import shape as above so agent/demo bundles stay Clerk-free.
+const ClerkCreateOrg = (IS_AGENT || IS_DEMO)
+  ? null
+  : React.lazy(() =>
+      import('@clerk/clerk-react').then(m => ({ default: m.CreateOrganization })),
+    );
 
 interface TeamManagementProps {
   tenantId: string;
   currentUser: { id: string; email: string; fullName: string; role: string };
+  /** Active Clerk organization id (null = personal workspace). */
+  orgId?: string | null;
 }
 
-const TeamManagement: React.FC<TeamManagementProps> = () => {
+const clerkAppearance = {
+  baseTheme: undefined,
+  elements: {
+    rootBox: 'w-full',
+    cardBox: 'shadow-none border-0 bg-transparent',
+    navbar: 'bg-gray-900',
+    pageScrollBox: 'bg-gray-800',
+  },
+};
+
+const TeamManagement: React.FC<TeamManagementProps> = ({ orgId }) => {
+  if (ClerkCreateOrg && !orgId) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-xl font-bold text-white">Team Management</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Create an organization to invite teammates. Nodes you pair while the organization is active belong to it, and every member shares the same fleet dashboard.
+          </p>
+        </div>
+        <div className="rounded-2xl overflow-hidden border border-gray-700 bg-gray-800 p-2">
+          <React.Suspense fallback={null}>
+            <ClerkCreateOrg appearance={clerkAppearance} />
+          </React.Suspense>
+        </div>
+      </div>
+    );
+  }
+
   if (ClerkOrgProfile) {
     return (
       <div className="space-y-4">
@@ -51,17 +89,7 @@ const TeamManagement: React.FC<TeamManagementProps> = () => {
         </div>
         <div className="rounded-2xl overflow-hidden border border-gray-700 bg-gray-800">
           <React.Suspense fallback={null}>
-            <ClerkOrgProfile
-              appearance={{
-                baseTheme: undefined,
-                elements: {
-                  rootBox: 'w-full',
-                  cardBox: 'shadow-none border-0 bg-transparent',
-                  navbar: 'bg-gray-900',
-                  pageScrollBox: 'bg-gray-800',
-                },
-              }}
-            />
+            <ClerkOrgProfile appearance={clerkAppearance} />
           </React.Suspense>
         </div>
       </div>
