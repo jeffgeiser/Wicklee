@@ -20,7 +20,6 @@ use axum::{
 use sha2::{Sha256, Digest};
 use std::convert::Infallible;
 use std::time::Duration;
-use tokio_stream::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -338,6 +337,9 @@ struct ClaimResponse {
 struct MetricsEntry {
     last_seen_ms: u64,
     metrics:      Option<MetricsPayload>,
+    /// When this snapshot was last written to `nodes.last_telemetry_json`
+    /// (0 = never). Ingest throttles that JSONB write to SNAPSHOT_PERSIST_MS.
+    snapshot_saved_ms: u64,
 }
 
 /// One row of derived telemetry ready for Postgres ingest.
@@ -417,7 +419,9 @@ struct AppState {
     /// In-memory telemetry cache keyed by node_id.
     metrics:          Arc<RwLock<HashMap<String, MetricsEntry>>>,
     /// Cached Clerk public keys for JWT verification.  Refreshed every 6 h.
-    clerk_keys:       Arc<RwLock<Vec<JwkKey>>>,
+    /// Inner Arc: handlers snapshot the set per request with a refcount bump
+    /// instead of deep-cloning every key; the refresher swaps the whole Arc.
+    clerk_keys:       Arc<RwLock<Arc<Vec<JwkKey>>>>,
     /// Sliding-window rate-limit timestamps keyed by api_key key_id.
     api_rate_limits:  Arc<Mutex<HashMap<String, Vec<u64>>>>,
     /// IP-based rate-limit for auth endpoints (login/signup). 10 requests per 60s.
@@ -469,6 +473,11 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     // end at their next refresh (stream tokens are only checked at connect).
     sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS streams_revoked_ms BIGINT")
         .execute(pool).await.ok();
+    // Paddle webhooks resolve the user by subscription id, then customer id.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_paddle_customer ON users(paddle_customer_id)")
+        .execute(pool).await.ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_paddle_subscription ON users(paddle_subscription_id)")
+        .execute(pool).await.ok();
 
     sqlx::query("
         CREATE TABLE IF NOT EXISTS sessions (
@@ -510,6 +519,11 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     sqlx::query("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS org_id TEXT")
         .execute(pool).await.ok();
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_nodes_org ON nodes(org_id)")
+        .execute(pool).await.ok();
+    // Pairing-code lookups (claim collision check, activate). Partial: codes
+    // are NULLed on redemption, so only pending claims are indexed. NOT
+    // unique — codes are agent-chosen and stale duplicates may exist.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_nodes_code ON nodes(code) WHERE code IS NOT NULL")
         .execute(pool).await.ok();
 
     sqlx::query("
@@ -949,6 +963,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
         )
     ").execute(pool).await.expect("organizations migration failed");
 
+    // Paddle tier sync updates every org a paying user created.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_organizations_created_by ON organizations(created_by)")
+        .execute(pool).await.ok();
+
     // ── Audit log (Business+ tier) ──────────────────────────────────────────
     // Append-only: no UPDATE/DELETE paths exist anywhere in the codebase.
     sqlx::query("
@@ -1213,9 +1231,21 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
 
 // ── Clerk JWT helpers ─────────────────────────────────────────────────────────
 
+/// Shared blocking HTTP agent for FIXED first-party endpoints (Clerk, Resend,
+/// PagerDuty, Taarn, GitHub, Hugging Face). Bare `ureq::get/post` has no
+/// timeouts, so one stalled upstream pinned a blocking-pool thread forever.
+/// Customer-supplied URLs must NOT use this — they go through the SSRF-pinned
+/// agents (pinned_ureq_agent / pinned_reqwest_client).
+static HTTP_AGENT: once_cell::sync::Lazy<ureq::Agent> = once_cell::sync::Lazy::new(|| {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
+        .build()
+});
+
 /// Fetch JWKS from Clerk. Synchronous — call from spawn_blocking.
 fn fetch_jwks(url: &str) -> Vec<JwkKey> {
-    match ureq::get(url).call() {
+    match HTTP_AGENT.get(url).call() {
         Ok(resp) => resp.into_json::<JwksResponse>()
             .map(|j| j.keys)
             .unwrap_or_default(),
@@ -1286,7 +1316,6 @@ fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String, Option<St
                     let (o_id, o_rol) = c.o.map(|o| (o.id, o.rol)).unwrap_or((None, None));
                     let org_id   = c.org_id.or(o_id);
                     let org_role = c.org_role.or(o_rol);
-                    eprintln!("[auth] JWT valid (org_id={org_id:?} role={org_role:?})");
                     return Some((c.sub, org_id, org_role));
                 }
                 Err(e) => { eprintln!("[auth] JWT decode failed for kid={}: {e}", jwk.kid); }
@@ -2049,6 +2078,51 @@ fn check_auth_rate_limit(
     }
     calls.push(now);
     true
+}
+
+/// Every sliding-window limiter (auth, API key, MCP) uses a 60 s window.
+const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
+
+/// Drop rate-limit keys with no call inside the window. The limiters only
+/// trim a key's timestamps when that key is hit again, so every distinct IP,
+/// API key, or user that ever called kept an entry forever.
+fn prune_rate_limits(map: &mut HashMap<String, Vec<u64>>, now: u64) {
+    let window_start = now.saturating_sub(RATE_LIMIT_WINDOW_MS);
+    map.retain(|_, calls| {
+        calls.retain(|&t| t >= window_start);
+        !calls.is_empty()
+    });
+}
+
+/// Unowned claims older than this can never be activated (activate requires
+/// `paired_at >= now - PAIR_CODE_TTL_MS`), so they are deleted. The margin
+/// keeps the sweep clear of a claim that is mid-activation at the boundary.
+const UNOWNED_NODE_TTL_MS: u64 = PAIR_CODE_TTL_MS + 10 * 60_000;
+
+/// Periodic sweep of in-memory maps that otherwise only grow, plus the
+/// unowned `nodes` rows behind them. `/api/pair/claim` is unauthenticated, so
+/// abandoned or spammed claims left a DB row and a metrics-map entry each,
+/// forever. Deleting one is harmless for a still-running agent: its next
+/// push gets 410 and it drops back to unpaired (its code expired anyway), and
+/// a re-claim recreates the row.
+async fn sweep_memory_and_claims(state: &AppState) {
+    let now = now_ms();
+    prune_rate_limits(&mut state.auth_rate_limits.lock().unwrap(), now);
+    prune_rate_limits(&mut state.api_rate_limits.lock().unwrap(), now);
+
+    let cutoff = now.saturating_sub(UNOWNED_NODE_TTL_MS) as i64;
+    let removed: Vec<String> = match sqlx::query_scalar(
+        "DELETE FROM nodes WHERE user_id IS NULL AND paired_at < $1 RETURNING wk_id"
+    ).bind(cutoff).fetch_all(&state.pool).await {
+        Ok(ids) => ids,
+        Err(e) => { eprintln!("[cleanup] unowned node sweep failed: {e}"); return; }
+    };
+    if !removed.is_empty() {
+        let mut map = state.metrics.write().unwrap();
+        for id in &removed { map.remove(id); }
+        drop(map);
+        println!("[cleanup] removed {} abandoned unowned node claim(s)", removed.len());
+    }
 }
 
 /// Client IP for rate limiting, from X-Forwarded-For.
@@ -3066,7 +3140,7 @@ async fn handle_claim(
 
     state.metrics.write().unwrap()
         .entry(node_id.clone())
-        .or_insert(MetricsEntry { last_seen_ms: now_ms(), metrics: None });
+        .or_insert(MetricsEntry { last_seen_ms: now_ms(), metrics: None, snapshot_saved_ms: 0 });
 
     forward_to_taarn("node_paired", serde_json::json!({
         "node_id": &node_id, "fleet_url": &body.fleet_url, "ts": ts,
@@ -3093,7 +3167,7 @@ fn forward_to_taarn(event_type: &str, payload: serde_json::Value) {
 
     // Spawn a blocking task so we don't hold up the response.
     tokio::task::spawn_blocking(move || {
-        let result = ureq::post(&url)
+        let result = HTTP_AGENT.post(&url)
             .set("Authorization", &format!("Bearer {secret}"))
             .set("Content-Type", "application/json")
             .send_string(&body.to_string());
@@ -3222,6 +3296,15 @@ async fn handle_event_poll(
     })).into_response()
 }
 
+/// Minimum spacing between `nodes.last_telemetry_json` writes per node.
+const SNAPSHOT_PERSIST_MS: u64 = 60_000;
+
+/// True when a node's persisted snapshot is due for a refresh. `saved_ms` 0
+/// means never written this process lifetime, so the first push writes.
+fn snapshot_persist_due(saved_ms: u64, now: u64) -> bool {
+    saved_ms == 0 || now.saturating_sub(saved_ms) >= SNAPSHOT_PERSIST_MS
+}
+
 /// POST /api/telemetry
 async fn handle_telemetry(
     State(state): State<AppState>,
@@ -3241,14 +3324,25 @@ async fn handle_telemetry(
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    // Combined existence + auth + fleet-config check (single indexed query).
-    let node_row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT session_token, desired_profile FROM nodes WHERE wk_id = $1"
+    // Combined existence + auth + fleet-config + tenant + tier lookup: one
+    // indexed query (PK joins) instead of the old token / tenant / tier
+    // round-trips on every push. The tier expression mirrors
+    // resolve_node_tier(): org subscription when org-paired, else the owner's.
+    // tenant/owner are NULL while the node is still an unowned claim.
+    type NodeRow = (String, Option<String>, Option<String>, Option<String>, String);
+    let node_row: Option<NodeRow> = sqlx::query_as(
+        "SELECT n.session_token, n.desired_profile,
+                COALESCE(n.org_id, n.user_id), n.user_id,
+                COALESCE(o.subscription_tier, u.subscription_tier, 'community')
+         FROM nodes n
+         LEFT JOIN users u         ON u.id = n.user_id
+         LEFT JOIN organizations o ON o.org_id = n.org_id
+         WHERE n.wk_id = $1"
     ).bind(&node_id).fetch_optional(&state.pool).await.unwrap_or(None);
 
-    let desired_profile: Option<String> = match node_row {
+    let (desired_profile, tenant, tier) = match node_row {
         None => return StatusCode::GONE.into_response(), // 410 — node deleted from fleet
-        Some((stored, dp)) => match node_token_check(&stored, &bearer) {
+        Some((stored, dp, tenant_id, owner_id, tier)) => match node_token_check(&stored, &bearer) {
             None => return StatusCode::UNAUTHORIZED.into_response(),
             Some(needs_rehash) => {
                 if needs_rehash {
@@ -3257,7 +3351,8 @@ async fn handle_telemetry(
                     ).bind(hash_node_token(&bearer)).bind(&node_id).bind(&stored)
                     .execute(&state.pool).await;
                 }
-                dp
+                let tier = if is_self_hosted() { "enterprise".to_string() } else { tier };
+                (dp, tenant_id.zip(owner_id), tier)
             }
         },
     };
@@ -3267,48 +3362,52 @@ async fn handle_telemetry(
     let agent_observations = payload.observations.clone();
     let metrics_snap: Option<MetricsPayload> = Some(payload.clone());
 
-    // Serialize payload as JSON for last_telemetry_json column.
-    let payload_json = serde_json::to_value(&payload).ok();
-
-    // Update in-memory snapshot.
-    {
+    // Update in-memory snapshot, and decide whether this push also refreshes
+    // the persisted copy (last_telemetry_json, read only to seed this map on
+    // restart). Rewriting that JSONB every 2 s per node was the bulk of the
+    // ingest write volume; it's throttled to one write per
+    // SNAPSHOT_PERSIST_MS while last_seen/hostname still update every push.
+    let persist_snapshot = {
         let mut map = state.metrics.write().unwrap();
-        if let Some(entry) = map.get_mut(&node_id) {
-            entry.last_seen_ms = ts;
-            entry.metrics      = Some(payload);
-        } else {
-            map.insert(node_id.clone(), MetricsEntry { last_seen_ms: ts, metrics: Some(payload) });
-        }
-    }
+        let entry = map.entry(node_id.clone()).or_insert(MetricsEntry {
+            last_seen_ms: ts, metrics: None, snapshot_saved_ms: 0,
+        });
+        entry.last_seen_ms = ts;
+        entry.metrics      = Some(payload);
+        let due = snapshot_persist_due(entry.snapshot_saved_ms, ts);
+        if due { entry.snapshot_saved_ms = ts; }
+        due
+    };
+    // Serialized outside the lock, and only when it will be written.
+    let payload_json: Option<serde_json::Value> = if persist_snapshot {
+        metrics_snap.as_ref().and_then(|m| serde_json::to_value(m).ok())
+    } else {
+        None
+    };
 
-    // Persist last_seen, hostname, last_telemetry_json to nodes table,
-    // then look up tenant_id and enqueue the metrics row.
+    // Persist last_seen/hostname (and the throttled snapshot) to the nodes
+    // table, then enqueue the metrics row under the node's tenant.
     let pool       = state.pool.clone();
     let metrics_tx = state.metrics_tx.clone();
     let events_tx  = state.events_tx.clone();
     let nid        = node_id.clone();
 
     tokio::spawn(async move {
-        // Update nodes table.
-        if let Some(ref h) = node_hostname {
-            let _ = sqlx::query(
-                "UPDATE nodes SET last_seen = $1, hostname = $2, last_telemetry_json = $3 WHERE wk_id = $4"
-            ).bind(ts as i64).bind(h).bind(&payload_json).bind(&nid)
-            .execute(&pool).await;
-        } else {
-            let _ = sqlx::query(
-                "UPDATE nodes SET last_seen = $1, last_telemetry_json = $2 WHERE wk_id = $3"
-            ).bind(ts as i64).bind(&payload_json).bind(&nid)
-            .execute(&pool).await;
-        }
+        // NULL binds keep the stored value (no hostname in this frame, or the
+        // snapshot write isn't due yet).
+        let _ = sqlx::query(
+            "UPDATE nodes SET last_seen = $1,
+                    hostname = COALESCE($2, hostname),
+                    last_telemetry_json = COALESCE($3, last_telemetry_json)
+             WHERE wk_id = $4"
+        ).bind(ts as i64).bind(&node_hostname).bind(&payload_json).bind(&nid)
+        .execute(&pool).await;
 
-        // Resolve tenant_id (org_id for shared fleets, user_id for solo) and
-        // the owning user. They key different stores: telemetry rows, events,
-        // and webhook subscriptions are per-TENANT; alert rules are created
+        // tenant_id (org_id for shared fleets, user_id for solo) and the
+        // owning user key different stores: telemetry rows, events, and
+        // webhook subscriptions are per-TENANT; alert rules are created
         // per-USER, so the owner's rules are what fire for this node.
-        if let Ok((tenant_id, owner_id)) = sqlx::query_as::<_, (String, String)>(
-            "SELECT COALESCE(org_id, user_id), user_id FROM nodes WHERE wk_id = $1 AND user_id IS NOT NULL"
-        ).bind(&nid).fetch_one(&pool).await {
+        if let Some((tenant_id, owner_id)) = tenant {
             let row = MetricsRow { tenant_id: tenant_id.clone(), ..duck_row };
             if let Err(e) = metrics_tx.try_send(row) {
                 eprintln!("[telemetry] metrics_tx send failed for {nid}: {e}");
@@ -3325,11 +3424,10 @@ async fn handle_telemetry(
                 });
             }
 
-            // Evaluate alert rules if the node's tenant is Pro+ tier. Resolved
-            // from the node (org tier for org fleets) — tenant_id is an org id
-            // for org-paired nodes and must not be used as a users.id key.
-            let tier = resolve_node_tier(&nid, &pool).await;
-
+            // Evaluate alert rules if the node's tenant is Pro+ tier. `tier`
+            // was resolved from the node (org tier for org fleets) in the auth
+            // query — tenant_id is an org id for org-paired nodes and must not
+            // be used as a users.id key.
             if is_pro_or_above(&tier)
                 && let Some(ref metrics_snapshot) = metrics_snap {
                     evaluate_alerts(&owner_id, &nid, metrics_snapshot, &pool).await;
@@ -5504,142 +5602,126 @@ async fn handle_fleet_stream(
             Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
 
-    // Load initial node set and tier (tenant-scoped).
-    let pool = state.pool.clone();
-    let uid2 = user_id.clone();
-    let oid2 = org_id.clone();
-    let (tcol, tval_owned) = { let (c, v) = tenant_scope(&uid2, &oid2); (c, v.to_owned()) };
-    let tval2 = tval_owned.clone();
-    let tc = tcol;
-    let initial_nodes: HashSet<String> = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            sqlx::query_scalar::<_, String>(
-                &format!("SELECT wk_id FROM nodes WHERE {} = $1", tc)
-            ).bind(&tval2).fetch_all(&pool).await.unwrap_or_default().into_iter().collect()
-        })
-    });
-    let tval3 = tval_owned.clone();
-    let initial_ordered: Vec<String> = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            sqlx::query_scalar::<_, String>(
-                &format!("SELECT wk_id FROM nodes WHERE {} = $1 ORDER BY paired_at ASC", tc)
-            ).bind(&tval3).fetch_all(&pool).await.unwrap_or_default()
-        })
-    });
-    let initial_tier: String = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            resolve_tier(&uid2, &oid2, &pool).await
-        })
-    });
+    // Frames are produced by a per-connection task feeding a small channel.
+    // The old stream closure ran its DB refreshes through block_in_place +
+    // block_on, parking a runtime worker for every refresh of every open
+    // dashboard. When the client disconnects the receiver drops, the next
+    // send fails, and the task exits.
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(4);
+    tokio::spawn(fleet_stream_task(state, user_id, org_id, tx));
 
-    let interval_stream = tokio_stream::wrappers::IntervalStream::new(
-        tokio::time::interval(Duration::from_secs(2)),
-    );
+    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::default()).into_response()
+}
 
-    let uid_stream = user_id.clone();
-    let oid_stream = org_id.clone();
-    let mut nodes          = initial_nodes;
-    let mut ordered_nodes  = initial_ordered;
-    let mut tier           = initial_tier;
-    let tval4 = tval_owned.clone();
-    // Node metadata cache: node_id → (display_name, tags). Both ride the
-    // stream frame so the dashboard can label and tag-filter without extra
-    // fetches; refreshed every 30 ticks alongside the node set.
-    let mut node_meta: HashMap<String, (Option<String>, Option<String>)> = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-                &format!("SELECT wk_id, display_name, tags FROM nodes WHERE {} = $1 AND (display_name IS NOT NULL OR tags IS NOT NULL)", tc)
-            ).bind(&tval4).fetch_all(&pool).await.unwrap_or_default()
-                .into_iter().map(|(id, dn, tg)| (id, (dn, tg))).collect()
+/// One tenant node as the fleet stream sees it, in `paired_at` order.
+struct FleetStreamNode {
+    id:           String,
+    display_name: Option<String>,
+    tags:         Option<String>,
+}
+
+/// Fleet stream refresh cadence, in 2 s frames (= 60 s).
+const FLEET_STREAM_REFRESH_TICKS: u32 = 30;
+
+/// The tenant's nodes (ids + label metadata) oldest-paired first, in ONE
+/// query — this replaces separate node-set, ordered-set, and metadata
+/// queries. `tcol` comes from tenant_scope() (a fixed literal, never caller
+/// data). None on DB error so the caller can keep its last good set.
+async fn load_fleet_stream_nodes(
+    tcol: &str,
+    tval: &str,
+    pool: &sqlx::PgPool,
+) -> Option<Vec<FleetStreamNode>> {
+    sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+        &format!("SELECT wk_id, display_name, tags FROM nodes WHERE {tcol} = $1 ORDER BY paired_at ASC")
+    ).bind(tval).fetch_all(pool).await.ok().map(|rows| {
+        rows.into_iter()
+            .map(|(id, display_name, tags)| FleetStreamNode { id, display_name, tags })
+            .collect()
+    })
+}
+
+/// Serialize one fleet frame: `{"nodes":[...]}` holding each tenant node that
+/// has a live in-memory entry. Looks up only the tenant's own ids — the old
+/// loop scanned the entire global metrics map on every frame of every stream.
+/// Nodes past the tier's limit (by pairing order) are marked `restricted`.
+fn build_fleet_frame(
+    nodes: &[FleetStreamNode],
+    node_limit: usize,
+    metrics: &HashMap<String, MetricsEntry>,
+) -> String {
+    let node_list: Vec<serde_json::Value> = nodes.iter().enumerate()
+        .filter_map(|(idx, node)| {
+            let entry = metrics.get(&node.id)?;
+            let mut obj = serde_json::json!({
+                "node_id":      node.id,
+                "last_seen_ms": entry.last_seen_ms,
+                "metrics":      entry.metrics,
+                "restricted":   idx >= node_limit,
+            });
+            if let Some(name) = &node.display_name {
+                obj["display_name"] = serde_json::Value::String(name.clone());
+            }
+            if let Some(tags) = &node.tags {
+                obj["tags"] = serde_json::Value::String(tags.clone());
+            }
+            Some(obj)
         })
-    });
-    let mut tick: u32 = 0;
+        .collect();
+    serde_json::to_string(&serde_json::json!({ "nodes": node_list }))
+        .unwrap_or_else(|_| r#"{"nodes":[]}"#.to_string())
+}
+
+/// Per-connection producer for GET /api/fleet/stream: a frame every 2 s, with
+/// the node set and tier refreshed every FLEET_STREAM_REFRESH_TICKS frames.
+async fn fleet_stream_task(
+    state:   AppState,
+    user_id: String,
+    org_id:  Option<String>,
+    tx:      mpsc::Sender<Result<Event, Infallible>>,
+) {
     // The stream token is checked only at connect (it expires in 60 s), so a
     // logout revocation must also end streams already open: each 60 s refresh
     // checks the user's revocation time against when this stream started.
     let stream_started_ms = now_ms() as i64;
+    let (tcol, tval) = tenant_scope(&user_id, &org_id);
 
-    let stream = interval_stream.map(move |_| {
-        tick += 1;
-        if tick.is_multiple_of(30) {
-            let uid_ref = uid_stream.clone();
-            let oid_ref = oid_stream.clone();
-            let revoked_ms: i64 = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    sqlx::query_scalar::<_, Option<i64>>(
-                        "SELECT streams_revoked_ms FROM users WHERE id = $1"
-                    ).bind(&uid_ref).fetch_optional(&pool).await
-                        .ok().flatten().flatten().unwrap_or(0)
-                })
-            });
+    let mut nodes = load_fleet_stream_nodes(tcol, tval, &state.pool).await.unwrap_or_default();
+    let mut tier  = resolve_tier(&user_id, &org_id, &state.pool).await;
+
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    // A slow client shouldn't get a burst of catch-up frames.
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut tick: u32 = 0;
+
+    loop {
+        interval.tick().await;
+        tick = tick.wrapping_add(1);
+        if tick.is_multiple_of(FLEET_STREAM_REFRESH_TICKS) {
+            let revoked_ms: i64 = sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT streams_revoked_ms FROM users WHERE id = $1"
+            ).bind(&user_id).fetch_optional(&state.pool).await
+                .ok().flatten().flatten().unwrap_or(0);
             if revoked_ms >= stream_started_ms {
-                return None;
+                return; // dropping tx ends the SSE response
             }
-            let tv = { let (_, v) = tenant_scope(&uid_ref, &oid_ref); v.to_owned() };
-            nodes = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    sqlx::query_scalar::<_, String>(
-                        &format!("SELECT wk_id FROM nodes WHERE {} = $1", tc)
-                    ).bind(&tv).fetch_all(&pool).await.unwrap_or_default().into_iter().collect()
-                })
-            });
-            ordered_nodes = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    sqlx::query_scalar::<_, String>(
-                        &format!("SELECT wk_id FROM nodes WHERE {} = $1 ORDER BY paired_at ASC", tc)
-                    ).bind(&tv).fetch_all(&pool).await.unwrap_or_default()
-                })
-            });
-            tier = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    resolve_tier(&uid_ref, &oid_ref, &pool).await
-                })
-            });
-            node_meta = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-                        &format!("SELECT wk_id, display_name, tags FROM nodes WHERE {} = $1 AND (display_name IS NOT NULL OR tags IS NOT NULL)", tc)
-                    ).bind(&tv).fetch_all(&pool).await.unwrap_or_default()
-                        .into_iter().map(|(id, dn, tg)| (id, (dn, tg))).collect()
-                })
-            });
+            // Keep the last good set on a transient DB error rather than
+            // blanking the dashboard until the next refresh.
+            if let Some(fresh) = load_fleet_stream_nodes(tcol, tval, &state.pool).await {
+                nodes = fresh;
+            }
+            tier = resolve_tier(&user_id, &org_id, &state.pool).await;
         }
 
-        let stream_limit = node_limit_for_tier(&tier, false);
-        let restricted_ids: HashSet<&str> = ordered_nodes.iter()
-            .skip(stream_limit).map(|s| s.as_str()).collect();
-
-        let metrics_map = state.metrics.read().unwrap();
-        let node_list: Vec<serde_json::Value> = metrics_map
-            .iter()
-            .filter(|(node_id, _)| nodes.contains(node_id.as_str()))
-            .map(|(node_id, entry)| {
-                let mut obj = serde_json::json!({
-                    "node_id":      node_id,
-                    "last_seen_ms": entry.last_seen_ms,
-                    "metrics":      entry.metrics,
-                    "restricted":   restricted_ids.contains(node_id.as_str()),
-                });
-                if let Some((dn, tg)) = node_meta.get(node_id.as_str()) {
-                    if let Some(name) = dn {
-                        obj["display_name"] = serde_json::Value::String(name.clone());
-                    }
-                    if let Some(tags) = tg {
-                        obj["tags"] = serde_json::Value::String(tags.clone());
-                    }
-                }
-                obj
-            })
-            .collect();
-
-        let data = serde_json::to_string(&serde_json::json!({ "nodes": node_list }))
-            .unwrap_or_else(|_| r#"{"nodes":[]}"#.to_string());
-        Some(Ok::<_, Infallible>(Event::default().data(data)))
-    })
-    .take_while(|frame| frame.is_some())
-    .map(|frame| frame.expect("take_while keeps only Some"));
-
-    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+        let data = {
+            let metrics_map = state.metrics.read().unwrap();
+            build_fleet_frame(&nodes, node_limit_for_tier(&tier, false), &metrics_map)
+        };
+        if tx.send(Ok(Event::default().data(data))).await.is_err() {
+            return; // client disconnected
+        }
+    }
 }
 
 /// GET /health
@@ -5682,7 +5764,7 @@ async fn handle_agent_version(
     };
 
     let result = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
-        let resp = ureq::get("https://api.github.com/repos/jeffgeiser/Wicklee/releases/latest")
+        let resp = HTTP_AGENT.get("https://api.github.com/repos/jeffgeiser/Wicklee/releases/latest")
             .set("User-Agent", "wicklee-cloud/1.0")
             .set("Accept", "application/vnd.github+json")
             .call()
@@ -6007,7 +6089,7 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
     let list_url = "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit=100";
     let tok1 = hf_token.clone();
     let list_resp = match tokio::task::spawn_blocking(move || {
-        let req = ureq::get(list_url);
+        let req = HTTP_AGENT.get(list_url);
         let req = if let Some(t) = tok1 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
         req.call().map_err(Box::new)
     }).await {
@@ -6043,7 +6125,7 @@ async fn refresh_cloud_model_catalog(pool: &sqlx::PgPool) -> usize {
             let _permit  = sem.acquire_owned().await.ok()?;
             let tree_url = format!("https://huggingface.co/api/models/{model_id}/tree/main");
             let tree_resp = tokio::task::spawn_blocking(move || {
-                let req = ureq::get(&tree_url);
+                let req = HTTP_AGENT.get(&tree_url);
                 let req = if let Some(t) = tok2 { req.set("Authorization", &format!("Bearer {t}")) } else { req };
                 req.call().map_err(Box::new)
             }).await.ok()?.ok()?;
@@ -6911,7 +6993,7 @@ fn send_email(to: &str, subject: &str, text: &str, html: &str) -> bool {
     let payload = serde_json::json!({
         "from": from, "to": [to], "subject": subject, "text": text, "html": html,
     });
-    match ureq::post("https://api.resend.com/emails")
+    match HTTP_AGENT.post("https://api.resend.com/emails")
         .set("Authorization", &format!("Bearer {api_key}"))
         .set("Content-Type", "application/json")
         .send_string(&payload.to_string())
@@ -6953,7 +7035,7 @@ fn send_pagerduty(routing_key: &str, node_id: &str, event_type: &str, detail: &s
             }
         }
     });
-    match ureq::post("https://events.pagerduty.com/v2/enqueue")
+    match HTTP_AGENT.post("https://events.pagerduty.com/v2/enqueue")
         .set("Content-Type", "application/json")
         .send_string(&payload.to_string())
     {
@@ -7537,6 +7619,21 @@ async fn evaluate_alerts(
     ).bind(user_id).bind(node_id).bind(now_ms() as i64)
     .fetch_all(pool).await.unwrap_or_default();
 
+    if rules.is_empty() { return; }
+
+    // Newest open event per rule for this node, loaded in ONE query rather
+    // than one per rule on every telemetry push. Same row the old per-rule
+    // `ORDER BY triggered_at DESC LIMIT 1` picked; a failed load reads as "no
+    // open event", exactly as the per-rule query's error did.
+    let rule_ids: Vec<&str> = rules.iter().map(|r| r.0.as_str()).collect();
+    let mut open_events: HashMap<String, (String, Option<i64>)> =
+        sqlx::query_as::<_, (String, String, Option<i64>)>(
+            "SELECT DISTINCT ON (rule_id) rule_id, id, quiet_until_ms FROM alert_events
+             WHERE node_id = $1 AND rule_id = ANY($2) AND resolved_at IS NULL
+             ORDER BY rule_id, triggered_at DESC"
+        ).bind(node_id).bind(&rule_ids).fetch_all(pool).await.unwrap_or_default()
+        .into_iter().map(|(rid, id, quiet)| (rid, (id, quiet))).collect();
+
     let now = now_ms();
 
     for (rule_id, event_type, threshold_value_opt, urgency, channel_type, config_json) in &rules {
@@ -7589,11 +7686,7 @@ async fn evaluate_alerts(
             _ => continue,
         };
 
-        let open_event: Option<(String, Option<i64>)> = sqlx::query_as(
-            "SELECT id, quiet_until_ms FROM alert_events
-             WHERE rule_id = $1 AND node_id = $2 AND resolved_at IS NULL
-             ORDER BY triggered_at DESC LIMIT 1"
-        ).bind(rule_id).bind(node_id).fetch_optional(pool).await.ok().flatten();
+        let open_event: Option<(String, Option<i64>)> = open_events.remove(rule_id);
 
         let debounce_ms: u64 = match urgency.as_str() {
             "debounce_5m"  => 5 * 60_000,
@@ -10457,7 +10550,7 @@ fn sync_tier_to_clerk(clerk_id: String, tier: String) {
         let body = serde_json::json!({
             "public_metadata": { "tier": tier }
         });
-        match ureq::request("PATCH", &url)
+        match HTTP_AGENT.request("PATCH", &url)
             .set("Authorization", &format!("Bearer {secret}"))
             .set("Content-Type", "application/json")
             .send_string(&body.to_string())
@@ -10988,7 +11081,7 @@ async fn handle_cloud_mcp(
         let map = state.metrics.read().unwrap();
         node_ids.iter().filter_map(|nid| {
             let e = map.get(nid)?;
-            Some((nid.clone(), MetricsEntry { last_seen_ms: e.last_seen_ms, metrics: e.metrics.clone() }))
+            Some((nid.clone(), e.clone()))
         }).collect()
     };
 
@@ -11411,7 +11504,7 @@ async fn main() {
         rows.into_iter()
             .map(|(node_id, last_seen, json_opt)| {
                 let metrics = json_opt.and_then(|j| serde_json::from_value::<MetricsPayload>(j).ok());
-                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics })
+                (node_id, MetricsEntry { last_seen_ms: last_seen as u64, metrics, snapshot_saved_ms: 0 })
             })
             .collect()
     };
@@ -11428,7 +11521,7 @@ async fn main() {
     if !initial_keys.is_empty() {
         println!("  JWKS \u{2192} {} key(s) loaded", initial_keys.len());
     }
-    let clerk_keys = Arc::new(RwLock::new(initial_keys));
+    let clerk_keys = Arc::new(RwLock::new(Arc::new(initial_keys)));
 
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsRow>(8_192);
     let (events_tx,  events_rx)  = mpsc::channel::<EventRow>(1_024);
@@ -11500,16 +11593,18 @@ async fn main() {
                 let new_keys = tokio::task::spawn_blocking(move || fetch_jwks(&url2))
                     .await.unwrap_or_default();
                 if !new_keys.is_empty() {
-                    *clerk_keys.write().unwrap() = new_keys;
+                    *clerk_keys.write().unwrap() = Arc::new(new_keys);
                     println!("[jwks] refreshed");
                 }
             }
         });
     }
 
-    // Purge expired stream tokens every 5 minutes.
-    let pool_cleanup = pool.clone();
+    // Purge expired stream tokens, stale rate-limit keys, and abandoned
+    // pairing claims every 5 minutes.
+    let state_cleanup = state.clone();
     tokio::spawn(async move {
+        let pool_cleanup = state_cleanup.pool.clone();
         loop {
             tokio::time::sleep(Duration::from_secs(300)).await;
             let now = now_ms() as i64;
@@ -11517,6 +11612,7 @@ async fn main() {
                 .bind(now).execute(&pool_cleanup).await;
             let _ = sqlx::query("DELETE FROM sessions WHERE created_at < $1")
                 .bind(legacy_session_cutoff()).execute(&pool_cleanup).await;
+            sweep_memory_and_claims(&state_cleanup).await;
         }
     });
 
@@ -12250,5 +12346,82 @@ mod outbound_and_token_tests {
         // Legacy plaintext rows still work and are flagged for re-hashing.
         assert_eq!(node_token_check(tok, tok), Some(true));
         assert_eq!(node_token_check(tok, "wk_wrong"), None);
+    }
+}
+
+#[cfg(test)]
+mod perf_path_tests {
+    use super::*;
+
+    fn node(id: &str, name: Option<&str>, tags: Option<&str>) -> FleetStreamNode {
+        FleetStreamNode { id: id.into(), display_name: name.map(Into::into), tags: tags.map(Into::into) }
+    }
+
+    fn entry(last_seen_ms: u64) -> MetricsEntry {
+        MetricsEntry { last_seen_ms, metrics: None, snapshot_saved_ms: 0 }
+    }
+
+    #[test]
+    fn fleet_frame_includes_only_live_tenant_nodes_and_restricts_by_pairing_order() {
+        let nodes = vec![
+            node("a", Some("alpha"), None),
+            node("b", None, Some("env:prod")),
+            node("offline", None, None), // no in-memory entry — omitted
+            node("c", None, None),
+        ];
+        let mut metrics = HashMap::new();
+        for (id, ts) in [("a", 1), ("b", 2), ("c", 3), ("other-tenant", 4)] {
+            metrics.insert(id.to_string(), entry(ts));
+        }
+
+        // Limit 2 by pairing order: a, b allowed; "offline" and c are past it.
+        let v: serde_json::Value = serde_json::from_str(&build_fleet_frame(&nodes, 2, &metrics)).unwrap();
+        let list = v["nodes"].as_array().unwrap();
+        let ids: Vec<&str> = list.iter().map(|n| n["node_id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["a", "b", "c"], "other tenants' nodes must never appear");
+        assert_eq!(list[0]["restricted"], false);
+        assert_eq!(list[1]["restricted"], false);
+        assert_eq!(list[2]["restricted"], true);
+        assert_eq!(list[0]["display_name"], "alpha");
+        assert!(list[0].get("tags").is_none());
+        assert_eq!(list[1]["tags"], "env:prod");
+        assert!(list[1].get("display_name").is_none());
+        assert_eq!(list[2]["last_seen_ms"], 3);
+        assert!(list[2]["metrics"].is_null());
+    }
+
+    #[test]
+    fn fleet_frame_empty_tenant_is_empty_list() {
+        let v: serde_json::Value =
+            serde_json::from_str(&build_fleet_frame(&[], usize::MAX, &HashMap::new())).unwrap();
+        assert_eq!(v, serde_json::json!({ "nodes": [] }));
+    }
+
+    #[test]
+    fn snapshot_persist_is_throttled_per_node() {
+        assert!(snapshot_persist_due(0, 5), "first push after boot writes");
+        assert!(!snapshot_persist_due(1_000, 1_000 + SNAPSHOT_PERSIST_MS - 1));
+        assert!(snapshot_persist_due(1_000, 1_000 + SNAPSHOT_PERSIST_MS));
+        // Clock stepping backwards must not panic or write.
+        assert!(!snapshot_persist_due(10_000, 5_000));
+    }
+
+    #[test]
+    fn prune_rate_limits_drops_idle_keys_and_trims_live_ones() {
+        let now = 10 * RATE_LIMIT_WINDOW_MS;
+        let mut map: HashMap<String, Vec<u64>> = HashMap::new();
+        map.insert("idle".into(), vec![now - RATE_LIMIT_WINDOW_MS - 1]);
+        map.insert("empty".into(), vec![]);
+        map.insert("live".into(), vec![now - RATE_LIMIT_WINDOW_MS - 5, now - 10, now]);
+        prune_rate_limits(&mut map, now);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["live"], vec![now - 10, now]);
+    }
+
+    #[test]
+    fn unowned_sweep_never_reaches_a_redeemable_claim() {
+        // activate accepts claims with paired_at >= now - PAIR_CODE_TTL_MS;
+        // the sweep must only delete strictly older ones.
+        const { assert!(UNOWNED_NODE_TTL_MS > PAIR_CODE_TTL_MS) };
     }
 }
