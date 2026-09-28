@@ -52,7 +52,8 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
       Set `PADDLE_CHECKOUT_ENABLED=true` **last**, after everything else is confirmed.
 
 ## 2. Grafana dashboard + catalog listing
-- [ ] Point a Prometheus scrape job at an agent (see `docs/GRAFANA.md`).
+- [ ] Point a Prometheus scrape job at `https://wicklee.dev/metrics` with a Team-tier API key (see `docs/GRAFANA.md`;
+      the endpoint lives on the cloud, not the agent, and needs the account on Team — do this after Paddle or on a comped account).
 - [ ] Grafana → Dashboards → New → Import `deploy/grafana/wicklee-fleet.json`, pick the Prometheus datasource.
 - [ ] After ~1 hour of data, screenshot with the thermal-penalty panel visible.
 - [ ] grafana.com/grafana/dashboards → Upload dashboard (JSON, screenshot, description, Prometheus datasource).
@@ -86,6 +87,9 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
 - [ ] **Decide on SSO.** Clerk Enterprise SSO is a paid add-on billed per connection. Options: self-serve
       SAML for Business customers, or hand-configure each connection when a deal closes
       (fine until the first request arrives). See `docs/SSO.md`.
+
+## Engineering follow-ups
+- [ ] Work through `docs/CODE_REVIEW.md` — security items S1–S4 before Paddle goes live.
 
 ## From earlier GTM notes (still open)
 - [ ] ~10 outreach targets for the design-partner program (`/design-partners`), then first emails.
