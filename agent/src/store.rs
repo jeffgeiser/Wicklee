@@ -579,7 +579,9 @@ impl Store {
     /// Conflicts (same ts_ms + node_id) are silently discarded — safe on restart
     /// within the same wall-clock second or minor clock adjustments.
     pub fn write_sample(&self, s: Sample) -> Result<(), duckdb::Error> {
-        self.0.lock().unwrap().execute(
+        // 1 Hz hot path: prepare_cached reuses the parsed/planned statement
+        // instead of re-parsing this 22-column INSERT every second.
+        self.0.lock().unwrap().prepare_cached(
             "INSERT INTO metrics_raw
              (ts_ms, node_id, model, tps,
               cpu_usage_pct, mem_used_mb, mem_total_mb,
@@ -590,6 +592,7 @@ impl Store {
               penalty_avg, nvidia_gpu_temp_c, vllm_cache_usage_perc)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (ts_ms, node_id) DO NOTHING",
+        )?.execute(
             params![
                 s.ts_ms,
                 s.node_id.as_str(),
@@ -744,6 +747,14 @@ impl Store {
             DELETE FROM node_events WHERE ts_ms < {event_cutoff};
         "))?;
 
+        // Fold the WAL into the main file after the hourly prune so deleted
+        // rows' space is reclaimable and the WAL doesn't grow between DuckDB's
+        // size-triggered auto-checkpoints. Best-effort: the aggregation itself
+        // already succeeded, so a failed checkpoint is only logged.
+        if let Err(e) = conn.execute_batch("CHECKPOINT;") {
+            eprintln!("[store] checkpoint after prune failed: {e}");
+        }
+
         Ok(())
     }
 
@@ -875,13 +886,14 @@ impl Store {
     /// Insert one inference trace.  Conflicts (duplicate id) are silently
     /// discarded — safe if the same done-packet is somehow processed twice.
     pub fn write_trace(&self, t: &TraceRow) {
-        let res = self.0.lock().unwrap().execute(
+        let conn = self.0.lock().unwrap();
+        let res = conn.prepare_cached(
             "INSERT INTO inference_traces
              (id, ts_ms, node_id, model, latency_ms, ttft_ms, tpot_ms, status,
               eval_count, eval_duration_ns)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (id) DO NOTHING",
-            params![
+        ).and_then(|mut stmt| stmt.execute(params![
                 t.id.as_str(),
                 t.ts_ms,
                 t.node_id.as_str(),
@@ -892,8 +904,7 @@ impl Store {
                 t.status,
                 t.eval_count,
                 t.eval_duration_ns,
-            ],
-        );
+            ]));
         if let Err(e) = res {
             eprintln!("[store] trace write error: {e}");
         }
@@ -1121,12 +1132,12 @@ impl Store {
         event_type: Option<&str>,
         message:    &str,
     ) {
-        let res = self.0.lock().unwrap().execute(
+        let conn = self.0.lock().unwrap();
+        let res = conn.prepare_cached(
             "INSERT INTO node_events (ts_ms, node_id, level, event_type, message)
              VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (ts_ms, node_id, message) DO NOTHING",
-            params![ts_ms, node_id, level, event_type, message],
-        );
+        ).and_then(|mut stmt| stmt.execute(params![ts_ms, node_id, level, event_type, message]));
         if let Err(e) = res {
             eprintln!("[store] event write error: {e}");
         }
@@ -1760,16 +1771,23 @@ impl Store {
 
     /// Write a batch of catalog entries (replaces existing for the same model_id).
     /// Tuple shape: (model_id, filename, quant_level, file_size, downloads, likes, fetched_at).
+    ///
+    /// One transaction for the whole batch: per-row autocommit made every
+    /// INSERT its own WAL commit while holding the store mutex. All-or-nothing
+    /// also means a failed refresh never leaves a half-written catalog.
     pub fn write_catalog(&self, entries: &[(String, String, String, u64, u64, u64, i64)]) -> Result<(), duckdb::Error> {
-        let conn = self.0.lock().unwrap();
-        for (model_id, filename, quant_level, file_size, downloads, likes, fetched_at) in entries {
-            conn.execute(
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
                 "INSERT OR REPLACE INTO model_catalog (model_id, filename, quant_level, file_size, downloads, likes, fetched_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
-                duckdb::params![model_id, filename, quant_level, file_size, downloads, likes, fetched_at],
             )?;
+            for (model_id, filename, quant_level, file_size, downloads, likes, fetched_at) in entries {
+                stmt.execute(duckdb::params![model_id, filename, quant_level, file_size, downloads, likes, fetched_at])?;
+            }
         }
-        Ok(())
+        tx.commit()
     }
 
     /// Check if the catalog is fresh (any entry fetched within TTL).
@@ -1940,4 +1958,74 @@ pub struct AuditRecord {
     pub ttft_ms:     Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tpot_ms:     Option<f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fresh on-disk store in a unique temp dir (DuckDB CHECKPOINT needs a file).
+    fn temp_store(tag: &str) -> (Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "wicklee-store-test-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("metrics.db")).unwrap();
+        (store, dir)
+    }
+
+    fn sample_json(ts_ms: i64) -> String {
+        format!(
+            r#"{{"node_id":"WK-T","timestamp_ms":{ts_ms},"cpu_usage_percent":10.0,
+                "used_memory_mb":1000,"total_memory_mb":8000}}"#
+        )
+    }
+
+    #[test]
+    fn cached_sample_insert_is_reusable_and_dedupes() {
+        let (store, dir) = temp_store("sample");
+        let base = 1_700_000_000_000_i64;
+        for i in 0..3 {
+            store.write_sample(Sample::from_broadcast_json(&sample_json(base + i * 1000)).unwrap()).unwrap();
+        }
+        // Duplicate (ts_ms, node_id) → ON CONFLICT DO NOTHING, not an error.
+        store.write_sample(Sample::from_broadcast_json(&sample_json(base)).unwrap()).unwrap();
+        let h = store.query_history("WK-T", base, base + 10_000, Resolution::Raw).unwrap();
+        assert_eq!(h.samples.len(), 3);
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn aggregation_prunes_and_checkpoints() {
+        let (store, dir) = temp_store("agg");
+        let now = 1_700_000_000_000_i64;
+        let stale = now - 2 * 86_400_000; // older than raw retention
+        store.write_sample(Sample::from_broadcast_json(&sample_json(stale)).unwrap()).unwrap();
+        store.write_sample(Sample::from_broadcast_json(&sample_json(now - 120_000)).unwrap()).unwrap();
+        store.run_aggregation(now).unwrap();
+        let h = store.query_history("WK-T", stale - 1, now, Resolution::Raw).unwrap();
+        assert_eq!(h.samples.len(), 1, "stale raw row pruned, recent kept");
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn write_catalog_batches_in_one_transaction() {
+        let (store, dir) = temp_store("catalog");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let rows: Vec<_> = (0..5u64)
+            .map(|i| (format!("org/m{i}"), format!("m{i}.Q4_K_M.gguf"), "Q4_K_M".to_string(), 1_000 + i, 10 * i, i, now))
+            .collect();
+        store.write_catalog(&rows).unwrap();
+        // Replaying the same batch replaces rather than duplicates.
+        store.write_catalog(&rows).unwrap();
+        assert!(store.catalog_is_fresh(24));
+        assert_eq!(store.query_catalog(None, 100).unwrap().len(), 5);
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

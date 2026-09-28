@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.up.railway.app";
 
 /// Spawn a background task that forwards live telemetry to the cloud every 2 s.
-/// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
+/// Subscribes to the existing broadcast channel (1 Hz metrics broadcaster) and
 /// throttles pushes to 1 per 2 s so we don't hammer Railway.
 /// Idles (skips pushes) while no session_token is set, e.g. after disconnect
 /// or a 410-Gone, and resumes on its own once the node is re-paired.
@@ -69,7 +69,7 @@ fn start_cloud_push_inner(
             .unwrap_or_else(std::time::Instant::now);
         let push_interval         = std::time::Duration::from_secs(2);
         // Track the last inference_state we pushed.  When it changes (e.g. idle-spd → live)
-        // we bypass the 2s throttle so the fleet/cloud view reflects the transition in <100 ms
+        // we bypass the 2s throttle so the fleet/cloud view reflects the transition on the next 1 Hz frame
         // rather than up to 2s later — eliminating the local-LIVE / cloud-IDLE-SPD divergence.
         let mut last_pushed_state: Option<String> = None;
 
