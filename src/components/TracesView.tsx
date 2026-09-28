@@ -877,8 +877,10 @@ const TraceTable: React.FC<{
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  const fetchTraces = async () => {
-    setLoading(true);
+  // The spinner is for the first load and explicit refreshes only — the 5 s
+  // background poll flipping it on every tick made the header flicker.
+  const fetchTraces = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
     try {
       const response = await fetch('/api/traces', {
         headers: { 'X-Tenant-ID': tenantId },
@@ -893,20 +895,20 @@ const TraceTable: React.FC<{
     } finally {
       setLoading(false);
     }
-  };
+  }, [tenantId]);
 
   useEffect(() => {
-    fetchTraces();
-    const interval = setInterval(fetchTraces, 5000);
+    fetchTraces(true);
+    const interval = setInterval(() => fetchTraces(), 5000);
     return () => clearInterval(interval);
-  }, [tenantId]);
+  }, [fetchTraces]);
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <div className="flex gap-2">
           <button
-            onClick={fetchTraces}
+            onClick={() => fetchTraces(true)}
             className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 transition-colors flex items-center gap-2"
           >
             <Database className="w-3.5 h-3.5" />

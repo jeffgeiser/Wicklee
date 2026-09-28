@@ -302,7 +302,7 @@ pub(crate) struct OllamaMetrics {
     /// Model embedding dimension (llama.embedding_length).
     /// head_dim = embedding_dim / num_heads (integer, typically 64, 128, or 256).
     pub(crate) ollama_embedding_dim:     Option<u64>,
-    /// Sustained tok/s: eval_rate from Ollama /api/generate probe every 30s.
+    /// Sustained tok/s: eval_rate from Ollama /api/generate scheduled probe ([probe] in config.toml).
     /// Reflects actual node throughput under current thermal/load conditions.
     pub(crate) ollama_tokens_per_second: Option<f32>,
     /// Prefill speed from probe: prompt_eval_count / prompt_eval_duration (tok/s).
@@ -316,7 +316,7 @@ pub(crate) struct OllamaMetrics {
     /// None = not yet determined (no expires_at change seen since agent start).
     pub(crate) ollama_inference_active: Option<bool>,
     /// True when the transparent proxy is active on :11434.
-    /// When true, tok/s comes from done-packet eval_count/eval_duration rather than the 30s probe.
+    /// When true, tok/s comes from done-packet eval_count/eval_duration rather than the scheduled probe.
     #[serde(default)]
     pub(crate) ollama_proxy_active: bool,
     /// Live TTFT from proxy done packets (rolling average, ms). Null when proxy inactive.
@@ -351,14 +351,25 @@ pub(crate) struct OllamaMetrics {
     /// that don't serve the Ollama HTTP API (e.g. ollama_llama_server on :34111).
     #[serde(skip)]
     pub(crate) validated_port: Option<u16>,
+    /// Set by the probe task on success to `now + probe interval + slack`.
+    /// While in the future, the tok/s baseline counts as fresh for IDLE-SPD
+    /// even though probes now fire only every few minutes.
+    #[serde(skip)]
+    pub(crate) baseline_fresh_until: Option<std::time::Instant>,
 }
 
 impl OllamaMetrics {
-    /// True for 30 s after the probe completes — matches the 30s probe interval so
-    /// IDLE-SPD displays continuously while Ollama is loaded and probes are running.
-    /// Used exclusively for the IDLE-SPD display state; attribution now uses AtomicBool.
+    /// True for 30 s after the probe completes. Gates Tier 3 physics (GPU
+    /// residency lingers after the probe) and triggers IDLE-SPD; attribution
+    /// uses the probe_active AtomicBool instead.
     pub(crate) fn recent_probe_baseline(&self) -> bool {
         self.last_probe_end.is_some_and(|t| t.elapsed().as_secs() < 30)
+    }
+
+    /// True while the last successful probe's baseline is still within its
+    /// scheduled refresh window — keeps IDLE-SPD steady between probes.
+    pub(crate) fn fresh_probe_baseline(&self) -> bool {
+        self.baseline_fresh_until.is_some_and(|t| t > std::time::Instant::now())
     }
 
     /// Frontend diagnostic field: true while the probe is actively running,
@@ -397,9 +408,12 @@ pub(crate) struct VllmMetrics {
     pub(crate) vllm_avg_queue_time_ms:        Option<f32>,
     pub(crate) vllm_prompt_tokens_total:      Option<u64>,
     pub(crate) vllm_generation_tokens_total:  Option<u64>,
-    /// Set when the 30s idle probe completes. Used for IDLE-SPD display state.
+    /// Set when the scheduled idle probe completes. Used for IDLE-SPD display state.
     #[serde(skip)]
     pub(crate) last_probe_end: Option<std::time::Instant>,
+    /// See OllamaMetrics::baseline_fresh_until.
+    #[serde(skip)]
+    pub(crate) baseline_fresh_until: Option<std::time::Instant>,
     // Histogram delta tracking (not serialized — internal state for windowed averages)
     #[serde(skip)]
     pub(crate) prev_ttft_sum:        Option<f64>,
@@ -420,6 +434,11 @@ impl VllmMetrics {
     pub(crate) fn recent_probe_baseline(&self) -> bool {
         self.last_probe_end.is_some_and(|t| t.elapsed().as_secs() < 30)
     }
+
+    /// Mirrors OllamaMetrics::fresh_probe_baseline().
+    pub(crate) fn fresh_probe_baseline(&self) -> bool {
+        self.baseline_fresh_until.is_some_and(|t| t > std::time::Instant::now())
+    }
 }
 
 // llama.cpp / llama-box runtime metrics — populated when llama-server is detected.
@@ -430,15 +449,23 @@ pub(crate) struct LlamacppMetrics {
     pub(crate) llamacpp_model_name:       Option<String>,
     pub(crate) llamacpp_tokens_per_sec:   Option<f32>,
     pub(crate) llamacpp_slots_processing: Option<u32>,
-    /// Set when the 30s idle probe completes. Used for IDLE-SPD display state.
+    /// Set when the scheduled idle probe completes. Used for IDLE-SPD display state.
     #[serde(skip)]
     pub(crate) last_probe_end: Option<std::time::Instant>,
+    /// See OllamaMetrics::baseline_fresh_until.
+    #[serde(skip)]
+    pub(crate) baseline_fresh_until: Option<std::time::Instant>,
 }
 
 impl LlamacppMetrics {
     /// True for 30 s after the probe completes — mirrors OllamaMetrics::recent_probe_baseline().
     pub(crate) fn recent_probe_baseline(&self) -> bool {
         self.last_probe_end.is_some_and(|t| t.elapsed().as_secs() < 30)
+    }
+
+    /// Mirrors OllamaMetrics::fresh_probe_baseline().
+    pub(crate) fn fresh_probe_baseline(&self) -> bool {
+        self.baseline_fresh_until.is_some_and(|t| t > std::time::Instant::now())
     }
 }
 
@@ -557,7 +584,7 @@ struct MetricsPayload {
     ollama_model_size_gb:     Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_quantization:      Option<String>,
-    /// Sustained tok/s from 30s probe (eval_rate field from Ollama). None until first probe completes.
+    /// Sustained tok/s from the scheduled probe (eval_rate field from Ollama). None until first probe completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     ollama_tokens_per_second: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -794,6 +821,43 @@ pub(crate) struct RuntimePortsConfig {
     pub(crate) sglang: Option<u16>,
 }
 
+/// Idle-probe settings. Each probe is a real ~20-token generation against an
+/// already-loaded model, used to measure the node's idle tok/s baseline
+/// (IDLE-SPD). Probes never load a model; they fire only when the baseline is
+/// missing, the model changed, or `interval_minutes` elapsed.
+///
+/// Example in config.toml:
+///
+/// ```toml
+/// [probe]
+/// enabled          = true   # false disables all synthetic probes
+/// interval_minutes = 10     # minimum gap between probes (min 1)
+/// ```
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct ProbeConfig {
+    #[serde(default = "default_probe_enabled")]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_probe_interval_minutes")]
+    pub(crate) interval_minutes: u64,
+}
+
+fn default_probe_enabled() -> bool { true }
+fn default_probe_interval_minutes() -> u64 { 10 }
+
+impl ProbeConfig {
+    /// Resolve the optional `[probe]` section into the harvester policy.
+    /// Absent section → defaults (enabled, 10 min). Interval is clamped to ≥ 1 min.
+    pub(crate) fn policy(cfg: Option<&ProbeConfig>) -> harvester::ProbePolicy {
+        match cfg {
+            None => harvester::ProbePolicy::default(),
+            Some(c) => harvester::ProbePolicy {
+                enabled:  c.enabled,
+                interval: Duration::from_secs(c.interval_minutes.max(1) * 60),
+            },
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct WickleeConfig {
     pub(crate) node_id: String,
@@ -816,6 +880,9 @@ pub(crate) struct WickleeConfig {
     /// "sovereign_dev" | "dedicated_server" (default) | "production_fleet".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) deployment_profile: Option<String>,
+    /// Idle-probe settings (`[probe]`). Absent → enabled, every 10 minutes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) probe: Option<ProbeConfig>,
 }
 
 #[derive(Clone)]
@@ -846,7 +913,7 @@ struct PairingStatusResponse {
 
 /// A timestamped log entry surfaced in the dashboard Live Activity panel.
 /// Written by background tasks (e.g. self-update) and drained into every
-/// MetricsPayload broadcast on the next 100 ms tick.
+/// MetricsPayload broadcast on the next 1 s tick.
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct LiveActivityEvent {
     pub(crate) message:      String,
@@ -878,15 +945,24 @@ fn push_event(
         log.push_back(event.clone());
         if log.len() > 20 { log.pop_front(); }
     }
+    // The DuckDB insert takes the store mutex, which the hourly aggregation can
+    // hold for seconds — so never run it on the caller's (async) thread. Fire-
+    // and-forget on the blocking pool; the synchronous path is only a fallback
+    // for callers outside a tokio runtime.
     #[cfg(not(target_env = "musl"))]
     if let Some(s) = store {
-        s.write_event(
+        let (s, node_id) = (s.clone(), node_id.to_string());
+        let write = move || s.write_event(
             event.timestamp_ms as i64,
-            node_id,
+            &node_id,
             event.level,
             event.event_type,
             &event.message,
         );
+        match tokio::runtime::Handle::try_current() {
+            Ok(h)  => { h.spawn_blocking(write); }
+            Err(_) => write(),
+        }
     }
 }
 
@@ -948,7 +1024,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 // ── Hardware Helpers ──────────────────────────────────────────────────────────
 
 /// Thermal via sysctl — Intel-only key; returns None on Apple Silicon.
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn read_thermal_sysctl() -> Option<String> {
     use sysctl::Sysctl;
     let ctl = sysctl::Ctl::new("machdep.xcpm.cpu_thermal_level").ok()?;
@@ -964,8 +1040,10 @@ fn read_thermal_sysctl() -> Option<String> {
 /// Windows thermal via WMI — queries MSAcpi_ThermalZoneTemperature.
 /// Temperature is in tenths of Kelvin; convert to Celsius for state mapping.
 /// Annotated as "estimated" in UI (thermal_source: "wmi").
+///
+/// Blocking (spawns wmic) — call via `spawn_blocking`.
 #[cfg(target_os = "windows")]
-fn read_thermal_sysctl() -> Option<String> {
+fn read_thermal_wmi() -> Option<String> {
     // Use wmic to query thermal zone temperature.
     let output = std::process::Command::new("wmic")
         .args([
@@ -1032,6 +1110,7 @@ fn read_iogpu_wired_limit_mb() -> Option<u64> {
 ///   80-99  → Elevated
 ///   50-79  → High
 ///   < 50   → Critical
+#[cfg(target_os = "macos")]
 async fn read_thermal_pmset() -> Option<String> {
     let out = tokio::process::Command::new("pmset")
         .args(["-g", "therm"])
@@ -1042,6 +1121,7 @@ async fn read_thermal_pmset() -> Option<String> {
     parse_pmset_therm(&String::from_utf8_lossy(&out.stdout))
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn parse_pmset_therm(output: &str) -> Option<String> {
     for line in output.lines() {
         let line = line.trim();
@@ -1101,6 +1181,7 @@ pub(crate) fn parse_pmset_therm(output: &str) -> Option<String> {
 
 /// GPU utilization via ioreg — no sudo.
 /// Tries `IOAccelerator` first (Intel/AMD), then `IOGPUDevice` (Apple Silicon AGX).
+#[cfg(target_os = "macos")]
 async fn read_gpu_ioreg() -> Option<f32> {
     for class in &["IOAccelerator", "IOGPUDevice"] {
         if let Some(v) = try_ioreg_class(class).await {
@@ -1110,6 +1191,7 @@ async fn read_gpu_ioreg() -> Option<f32> {
     None
 }
 
+#[cfg(target_os = "macos")]
 async fn try_ioreg_class(class: &str) -> Option<f32> {
     let out = tokio::process::Command::new("ioreg")
         .args(["-r", "-c", class])
@@ -1120,6 +1202,7 @@ async fn try_ioreg_class(class: &str) -> Option<f32> {
     parse_ioreg_gpu(&String::from_utf8_lossy(&out.stdout))
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn parse_ioreg_gpu(text: &str) -> Option<f32> {
     for line in text.lines() {
         // Intel / AMD: "Device Utilization %" = N  (integer percent, e.g. 42)
@@ -1158,7 +1241,7 @@ pub(crate) fn parse_ioreg_gpu(text: &str) -> Option<f32> {
 /// Apple Silicon chip name via `system_profiler SPHardwareDataType`.
 /// Parses the "Chip:" line which reads e.g. "Apple M3 Pro" directly.
 /// Falls back to None on non-Apple hardware or if the command is unavailable.
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 async fn read_apple_chip_name() -> Option<String> {
     let out = tokio::process::Command::new("system_profiler")
         .arg("SPHardwareDataType")
@@ -1177,8 +1260,6 @@ async fn read_apple_chip_name() -> Option<String> {
     None
 }
 
-#[cfg(target_os = "windows")]
-async fn read_apple_chip_name() -> Option<String> { None }
 
 /// CPU model name from `/proc/cpuinfo` on Linux.
 /// Reads the "model name" field and strips noisy suffixes so the UI gets a
@@ -1380,8 +1461,10 @@ fn start_swap_harvester() -> SwapMetrics {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         tokio::spawn(async move {
+            // Each reading is the end of one window and the start of the next,
+            // so the counter is read once per 2 s (one vm_stat spawn on macOS).
+            let mut before = read_swap_pages_out().await;
             loop {
-                let before = read_swap_pages_out().await;
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 let after  = read_swap_pages_out().await;
 
@@ -1394,7 +1477,7 @@ fn start_swap_harvester() -> SwapMetrics {
                             *guard = Some(mb_s);
                         }
                     }
-                // No additional sleep — the 2 s read gap above is the sampling interval.
+                before = after;
             }
         });
     }
@@ -1735,6 +1818,7 @@ fn start_linux_thermal_harvester() -> Arc<Mutex<Option<LinuxThermalResult>>> {
 ///
 /// Inactive and speculative pages are reclaimable cached data — excluding them
 /// prevents the metric from reading 99% on a healthy system.
+#[cfg(target_os = "macos")]
 async fn read_memory_pressure_vmstat() -> Option<f32> {
     let out = tokio::process::Command::new("vm_stat")
         .output()
@@ -1744,6 +1828,7 @@ async fn read_memory_pressure_vmstat() -> Option<f32> {
     parse_vmstat_pressure(&String::from_utf8_lossy(&out.stdout))
 }
 
+#[cfg(target_os = "macos")]
 fn parse_vmstat_pressure(text: &str) -> Option<f32> {
     let mut free:        u64 = 0;
     let mut active:      u64 = 0;
@@ -1830,6 +1915,7 @@ async fn try_evict_port(port: u16) -> bool {
 /// The process may already be root (launchd service) or not; powermetrics
 /// requires root for power sampling. When run without root it typically
 /// exits non-zero — we surface the stderr so ops can diagnose permissions.
+#[cfg(target_os = "macos")]
 async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
     let out = tokio::process::Command::new("powermetrics")
         // 5000 ms window: M2 token-decode is bursty (~28 ms/token at 35 tok/s).
@@ -1860,11 +1946,13 @@ async fn try_powermetrics_nosudo() -> Option<AppleSiliconMetrics> {
 /// Whether to emit the per-sample powermetrics diagnostics (label dump + power
 /// breakdown). Off by default — set WICKLEE_DEBUG_POWER=1 to enable. Without
 /// this gate these printed on every ~5 s sample forever, growing the log file.
+#[cfg(target_os = "macos")]
 fn power_debug_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("WICKLEE_DEBUG_POWER").is_ok())
 }
 
+#[cfg(target_os = "macos")]
 fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
     let mut m = AppleSiliconMetrics::default();
     for line in output.lines() {
@@ -1953,10 +2041,12 @@ fn parse_powermetrics(output: &str) -> AppleSiliconMetrics {
     m
 }
 
+#[cfg(target_os = "macos")]
 fn parse_mw(s: &str) -> Option<f32> {
     let n: f32 = s.split_whitespace().next()?.parse().ok()?;
     Some(n / 1000.0)
 }
+#[cfg(target_os = "macos")]
 fn parse_percent(s: &str) -> Option<f32> {
     s.trim_end_matches('%').split_whitespace().next()?.parse().ok()
 }
@@ -2166,7 +2256,7 @@ fn load_or_create_config() -> WickleeConfig {
             }
 
     // ── First-run: generate a new identity ───────────────────────────────────
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None, probe: None };
     save_config(&cfg);
     cfg
 }
@@ -2544,18 +2634,61 @@ fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
 // ── Background Harvester ──────────────────────────────────────────────────────
 
+/// Platform sensor harvester feeding `AppleSiliconMetrics`.
+///
+/// macOS: pmset / ioreg / vm_stat every 2 s + powermetrics every ~5 s.
+/// Windows: WMI thermal zone only (the other fields have no Windows source).
+/// Linux: nothing — every probe here is a macOS tool, and spawning them every
+/// 2 s just to fail was pure overhead; Linux sensors have their own harvesters.
 fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
     let shared = Arc::new(Mutex::new(AppleSiliconMetrics::default()));
-    let shared_clone = Arc::clone(&shared);
 
+    #[cfg(target_os = "macos")]
+    spawn_macos_metrics_harvester(Arc::clone(&shared));
+    #[cfg(target_os = "windows")]
+    spawn_windows_thermal_harvester(Arc::clone(&shared));
+
+    shared
+}
+
+/// Windows thermal poll cadence. wmic is a heavyweight process spawn and
+/// thermal zones move slowly, so there's no value in the 2 s macOS cadence.
+#[cfg(target_os = "windows")]
+const WMI_THERMAL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Consecutive wmic failures after which the poller gives up for the life of
+/// the process (wmic missing — it's deprecated/removed on newer Windows — or
+/// MSAcpi_ThermalZoneTemperature unsupported/denied on this machine).
+#[cfg(target_os = "windows")]
+const WMI_MAX_CONSECUTIVE_FAILURES: u32 = 3;
+
+#[cfg(target_os = "windows")]
+fn spawn_windows_thermal_harvester(shared: Arc<Mutex<AppleSiliconMetrics>>) {
+    tokio::spawn(async move {
+        let mut failures = 0u32;
+        let mut interval = tokio::time::interval(WMI_THERMAL_INTERVAL);
+        loop {
+            interval.tick().await;
+            // wmic is a blocking std::process::Command — keep it off the
+            // async workers.
+            let state = tokio::task::spawn_blocking(read_thermal_wmi).await.ok().flatten();
+            if state.is_some() { failures = 0; } else { failures += 1; }
+            if let Ok(mut g) = shared.lock() { g.thermal_state = state; }
+            if failures >= WMI_MAX_CONSECUTIVE_FAILURES {
+                eprintln!("[thermal] WMI thermal zone unavailable — disabling Windows thermal polling");
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_macos_metrics_harvester(shared_clone: Arc<Mutex<AppleSiliconMetrics>>) {
     tokio::spawn(async move {
         let chip_name = read_apple_chip_name().await;
         // Read once at startup — iogpu.wired_limit_mb reflects the hardware
         // budget, not runtime state. Apple Silicon only; None on Intel Macs.
-        #[cfg(target_os = "macos")]
         let wired_limit_mb = read_iogpu_wired_limit_mb();
-        #[cfg(not(target_os = "macos"))]
-        let wired_limit_mb: Option<u64> = None;
 
         // powermetrics samples over a 5 s window (try_powermetrics_nosudo uses
         // `-i 5000`), so awaiting it inline would gate this whole loop to ~5 s and
@@ -2629,8 +2762,6 @@ fn start_metrics_harvester() -> Arc<Mutex<AppleSiliconMetrics>> {
             }
         }
     });
-
-    shared
 }
 
 // ── WES v2: Thermal Penalty Sampler ───────────────────────────────────────────
@@ -2759,7 +2890,10 @@ fn start_wes_sampler(
                 if let Some(p) = nvidia.nvidia_throttle_penalty {
                     (p, "nvml")
                 } else if let Some(ref state) = apple.thermal_state {
-                    (thermal_penalty_v2(state.as_str()), "iokit")
+                    // macOS: pmset/sysctl. Windows: the platform harvester's
+                    // WMI thermal-zone reading lands in the same field.
+                    let src = if cfg!(target_os = "windows") { "wmi" } else { "iokit" };
+                    (thermal_penalty_v2(state.as_str()), src)
                 } else if let Some(ref lt) = linux {
                     let cpu_pct = f32::from_bits(cpu_usage_pct.load(std::sync::atomic::Ordering::Relaxed));
                     // Idle CPU override: clock_ratio at low CPU is frequency scaling, not throttle.
@@ -2769,10 +2903,6 @@ fn start_wes_sampler(
                         lt.direct_penalty.unwrap_or_else(|| thermal_penalty_v2(lt.state.as_str()))
                     };
                     (p, lt.source)
-                } else if let Some(ref state) = read_thermal_sysctl() {
-                    // Windows WMI path — read_thermal_sysctl() returns thermal state
-                    // string on Windows via WMI MSAcpi_ThermalZoneTemperature.
-                    (thermal_penalty_v2(state.as_str()), "wmi")
                 } else {
                     (1.0, "unavailable")
                 };
@@ -2904,7 +3034,9 @@ fn start_metrics_broadcaster(
         let runtime_config_cache = runtime_config_cache.clone();
         let runtime_port_overrides = runtime_port_overrides.clone();
         async move {
-        let mut sys = System::new_all();
+        // Only CPU + memory are read below; `new()` skips the process/disk/
+        // network enumeration that `new_all()` would perform.
+        let mut sys = System::new();
         let node_id = config_node_id;
         let hostname = System::host_name()
             .unwrap_or_else(|| node_id.clone());
@@ -2913,7 +3045,8 @@ fn start_metrics_broadcaster(
         let linux_chip_name = read_linux_chip_name();
 
         // Warm-up: two reads separated by 200 ms gives sysinfo an accurate CPU delta.
-        sys.refresh_all();
+        sys.refresh_cpu();
+        sys.refresh_memory();
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let mut interval = tokio::time::interval(Duration::from_millis(1_000));
@@ -5679,7 +5812,7 @@ async fn handle_model_candidates(
 
     // Fallback for CPU-only nodes: use 75% of system RAM as the model budget
     let vram_mb = if gpu_vram == 0 {
-        let mut sys = sysinfo::System::new_all();
+        let mut sys = sysinfo::System::new();
         sys.refresh_memory();
         (sys.total_memory() / 1024 / 1024) * 3 / 4
     } else {
@@ -5705,7 +5838,10 @@ async fn handle_model_candidates(
         fetch_hf_gguf(Some(term), limit).await
     } else {
         // Trending — use DuckDB cache, refresh if stale
-        if !store.catalog_is_fresh(24) {
+        // Blocking pool: the store mutex may be held by the hourly aggregation.
+        let st = store.clone();
+        let fresh = tokio::task::spawn_blocking(move || st.catalog_is_fresh(24)).await.unwrap_or(false);
+        if !fresh {
             let st = store.clone();
             refresh_model_catalog(st).await;
         }
@@ -5975,9 +6111,11 @@ async fn handle_mcp(
         let swap     = swap_metrics.read();
         let hostname = sysinfo::System::host_name().unwrap_or_else(|| node_id.0.to_string());
 
-        // Get basic system info
-        let mut sys = sysinfo::System::new_all();
+        // Get basic system info — only memory + the CPU list are read, so skip
+        // the full process/disk/network enumeration `new_all()` would do.
+        let mut sys = sysinfo::System::new();
         sys.refresh_memory();
+        sys.refresh_cpu();
         let total = sys.total_memory() / 1024 / 1024;
         let used  = sys.used_memory()  / 1024 / 1024;
 
@@ -6109,8 +6247,7 @@ async fn handle_mcp(
 
                 "get_observations" => {
                     // Fetch from local REST endpoint (backed by ObservationCache → DuckDB)
-                    let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap_or_default();
-                    match client.get("http://127.0.0.1:7700/api/observations").send().await {
+                    match local_http_client().get("http://127.0.0.1:7700/api/observations").send().await {
                         Ok(resp) if resp.status().is_success() => {
                             let body = resp.text().await.unwrap_or_else(|_| "{}".into());
                             Json(JsonRpcResponse::success(id, serde_json::json!({
@@ -6130,8 +6267,7 @@ async fn handle_mcp(
                         .unwrap_or(60).min(60);
                     let nid = node_id.0.as_str();
                     let url = format!("http://127.0.0.1:7700/api/history?node_id={nid}&minutes={minutes}");
-                    let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap_or_default();
-                    match client.get(&url).send().await {
+                    match local_http_client().get(&url).send().await {
                         Ok(resp) if resp.status().is_success() => {
                             let body = resp.text().await.unwrap_or_else(|_| "{}".into());
                             Json(JsonRpcResponse::success(id, serde_json::json!({
@@ -6150,7 +6286,7 @@ async fn handle_mcp(
                     let apple    = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
                     let wes      = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
 
-                    let mut sys = sysinfo::System::new_all();
+                    let mut sys = sysinfo::System::new();
                     sys.refresh_memory();
                     let total_mb     = sys.total_memory() / 1024 / 1024;
                     let available_mb = sys.available_memory() / 1024 / 1024;
@@ -6612,12 +6748,11 @@ async fn handle_tags(port_rx: tokio::sync::watch::Receiver<Option<u16>>) -> Json
         Some(p) => p,
         None => return Json(TagsResponse { models: vec![] }),
     };
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .unwrap_or_default();
     let models = async {
-        let resp = client.get(format!("http://127.0.0.1:{port}/api/tags")).send().await.ok()?;
+        let resp = local_http_client()
+            .get(format!("http://127.0.0.1:{port}/api/tags"))
+            .timeout(Duration::from_secs(3))
+            .send().await.ok()?;
         let json: serde_json::Value = resp.json().await.ok()?;
         let models = json["models"].as_array()?.iter().filter_map(|m| {
             Some(ModelInfo {
@@ -6673,214 +6808,52 @@ async fn handle_health(
     }))
 }
 
-/// Immutable proxy + runtime port config, set once at startup.
+/// Shared client for short loopback calls from request handlers (MCP tools,
+/// /api/tags). Built once instead of per request so the connection pool and
+/// client setup are reused; 5 s default timeout, overridable per request.
+fn local_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+/// Immutable proxy port config, set once at startup.
 #[derive(Clone)]
 struct ProxyPorts {
     listen: Option<u16>,
     target: Option<u16>,
-    runtime_overrides: Option<String>,
 }
 
+/// `GET /api/metrics` — SSE fallback for clients that can't open the WebSocket.
+///
+/// Relays the frames the 1 Hz broadcaster already serialised (same path as
+/// `ws_session`) instead of re-sampling sensors and rebuilding MetricsPayload
+/// per client — one construction site keeps the two transports identical.
 async fn handle_metrics(
-    axum::extract::Extension(apple_metrics):         axum::extract::Extension<Arc<Mutex<AppleSiliconMetrics>>>,
-    axum::extract::Extension(nvidia_metrics):        axum::extract::Extension<Arc<Mutex<NvidiaMetrics>>>,
-    axum::extract::Extension(ollama_metrics):        axum::extract::Extension<Arc<Mutex<OllamaMetrics>>>,
-    axum::extract::Extension(rapl_metrics):          axum::extract::Extension<Arc<Mutex<Option<f32>>>>,
-    axum::extract::Extension(linux_thermal_metrics): axum::extract::Extension<Arc<Mutex<Option<LinuxThermalResult>>>>,
-    axum::extract::Extension(vllm_metrics):          axum::extract::Extension<Arc<Mutex<VllmMetrics>>>,
-    axum::extract::Extension(llamacpp_metrics):      axum::extract::Extension<Arc<Mutex<LlamacppMetrics>>>,
-    axum::extract::Extension(wes_metrics):           axum::extract::Extension<Arc<Mutex<WesMetrics>>>,
-    axum::extract::Extension(swap_metrics):          axum::extract::Extension<SwapMetrics>,
-    axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
-    axum::extract::Extension(proxy_ports):           axum::extract::Extension<ProxyPorts>,
-    axum::extract::Extension(config_node_id):        axum::extract::Extension<NodeId>,
-    axum::extract::Extension(runtime_config_cache):  axum::extract::Extension<runtime_config::RuntimeConfigCache>,
+    axum::extract::Extension(tx): axum::extract::Extension<broadcast::Sender<String>>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
+    let (out_tx, out_rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
+    let mut rx = tx.subscribe();
 
     tokio::spawn(async move {
-        let proxy_listen_port = proxy_ports.listen;
-        let proxy_target_port = proxy_ports.target;
-        let runtime_port_overrides = proxy_ports.runtime_overrides;
-
-        let mut sys = System::new_all();
-        let node_id = config_node_id.0.as_str().to_owned();
-
-        let hostname = System::host_name().unwrap_or_else(|| node_id.clone());
-        let linux_chip_name = read_linux_chip_name();
-
-        sys.refresh_all();
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-
         loop {
-            interval.tick().await;
-            // Only CPU usage and memory are read below; avoid the per-second
-            // process/disk/network enumeration that `refresh_all()` performs.
-            sys.refresh_cpu();
-            sys.refresh_memory();
-
-            let timestamp_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-
-            let total     = sys.total_memory();
-            let used      = sys.used_memory();
-            let available = total.saturating_sub(used);
-
-            let apple         = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let nvidia        = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let ollama        = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let vllm          = vllm_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let llamacpp      = llamacpp_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let rapl_power    = rapl_metrics.lock().map(|g| *g).unwrap_or(None);
-            let linux_thermal = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
-            let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-            let swap_mb_s     = swap_metrics.read();
-            let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
-            let hw = read_hardware_signals(&apple, &nvidia, &ollama, &vllm, &llamacpp, &probe_active);
-            let inference_state_val = compute_inference_state(&hw).to_string();
-
-            let payload = MetricsPayload {
-                node_id:             node_id.clone(),
-                hostname:            hostname.clone(),
-                gpu_name:            nvidia.nvidia_gpu_name.clone().or(apple.gpu_name.clone()),
-                chip_name:           linux_chip_name.clone(),
-                cpu_usage_percent:   sys.global_cpu_info().cpu_usage(),
-                total_memory_mb:     total     / 1024 / 1024,
-                used_memory_mb:      used      / 1024 / 1024,
-                available_memory_mb: available / 1024 / 1024,
-                cpu_core_count:      sys.cpus().len(),
-                timestamp_ms,
-                // macOS: powermetrics; Linux: RAPL powercap; Windows: null
-                cpu_power_w:             apple.cpu_power_w.or(rapl_power),
-                ecpu_power_w:            apple.ecpu_power_w,
-                pcpu_power_w:            apple.pcpu_power_w,
-                apple_gpu_power_w:       apple.gpu_power_w,
-                apple_soc_power_w:       apple.soc_power_w,
-                gpu_utilization_percent: apple.gpu_utilization_percent,
-                memory_pressure_percent: apple.memory_pressure_percent,
-                gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
-                // macOS: pmset/sysctl; Linux: clock_ratio/coretemp/sysfs; Windows: WMI
-                // Idle CPU override applied for clock_ratio source (see resolve_thermal_state).
-                thermal_state:           resolve_thermal_state(&apple.thermal_state, &linux_thermal, sys.global_cpu_info().cpu_usage()),
-                nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
-                nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
-                nvidia_vram_total_mb:           nvidia.nvidia_vram_total_mb,
-                nvidia_gpu_temp_c:              nvidia.nvidia_gpu_temp_c,
-                nvidia_power_draw_w:            nvidia.nvidia_power_draw_w,
-                ollama_running:           ollama.ollama_running,
-                ollama_active_model:      ollama.ollama_active_model,
-                ollama_model_size_gb:     ollama.ollama_model_size_gb,
-                ollama_inference_active:  ollama.ollama_inference_active,
-                ollama_proxy_active:         if ollama.ollama_proxy_active { Some(true) } else { None },
-                ollama_proxy_avg_ttft_ms:    ollama.ollama_proxy_avg_ttft_ms,
-                ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
-                ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
-                active_models: {
-                    // Enrich per-model metrics with WES using power + thermal data.
-                    let total_power = apple.soc_power_w
-                        .or(nvidia.nvidia_power_draw_w)
-                        .or(rapl_power);
-                    let penalty = wes.penalty_avg.unwrap_or(1.0);
-                    let total_vram: u64 = ollama.active_models.as_ref()
-                        .map(|v| v.iter().filter_map(|m| m.vram_mb).sum()).unwrap_or(0);
-                    ollama.active_models.as_ref().map(|models| {
-                        models.iter().map(|m| {
-                            let mut enriched = m.clone();
-                            if let (Some(tps), Some(pw), Some(vram)) = (m.tok_s, total_power, m.vram_mb)
-                                && total_vram > 0 && pw > 0.1 && tps > 0.0 {
-                                    let share = vram as f32 / total_vram as f32;
-                                    let model_watts = pw * share;
-                                    enriched.wes = Some(tps / (model_watts * penalty));
-                                }
-                            enriched
-                        }).collect()
-                    })
-                },
-                // v0.9.0: Runtime Config Surface. Some(true) once any model
-                // has a cached config; None otherwise (saves payload bytes
-                // when the feature can't be used yet).
-                runtime_config_available: {
-                    let c = runtime_config_cache.lock().unwrap();
-                    if c.is_empty() { None } else { Some(true) }
-                },
-                proxy_listen_port,
-                proxy_target_port,
-                runtime_port_overrides: runtime_port_overrides.clone(),
-                ollama_is_probing:        ollama_is_probing_flag,
-                ollama_context_length:    ollama.ollama_context_length,
-                ollama_parameter_count:   ollama.ollama_parameter_count,
-                ollama_num_layers:        ollama.ollama_num_layers,
-                ollama_kv_heads:          ollama.ollama_kv_heads,
-                ollama_num_heads:         ollama.ollama_num_heads,
-                ollama_embedding_dim:     ollama.ollama_embedding_dim,
-                ollama_quantization:      ollama.ollama_quantization,
-                ollama_tokens_per_second:  ollama.ollama_tokens_per_second,
-                ollama_prompt_eval_tps:    ollama.ollama_prompt_eval_tps,
-                ollama_ttft_ms:            ollama.ollama_ttft_ms,
-                ollama_load_duration_ms:   ollama.ollama_load_duration_ms,
-                vllm_running:          vllm.vllm_running,
-                vllm_model_name:       vllm.vllm_model_name,
-                vllm_max_model_len:    vllm.vllm_max_model_len,
-                vllm_dtype:            crate::process_discovery::vllm_effective_dtype(),
-                vllm_tokens_per_sec:   vllm.vllm_tokens_per_sec,
-                vllm_cache_usage_perc: vllm.vllm_cache_usage_perc,
-                vllm_requests_running: vllm.vllm_requests_running,
-                vllm_requests_waiting:        vllm.vllm_requests_waiting,
-                vllm_requests_swapped:        vllm.vllm_requests_swapped,
-                vllm_avg_ttft_ms:             vllm.vllm_avg_ttft_ms,
-                vllm_avg_e2e_latency_ms:      vllm.vllm_avg_e2e_latency_ms,
-                vllm_avg_queue_time_ms:       vllm.vllm_avg_queue_time_ms,
-                vllm_prompt_tokens_total:     vllm.vllm_prompt_tokens_total,
-                vllm_generation_tokens_total: vllm.vllm_generation_tokens_total,
-                llamacpp_running:          llamacpp.llamacpp_running,
-                llamacpp_model_name:       llamacpp.llamacpp_model_name,
-                llamacpp_tokens_per_sec:   llamacpp.llamacpp_tokens_per_sec,
-                llamacpp_slots_processing: llamacpp.llamacpp_slots_processing,
-                os: {
-                    #[cfg(target_os = "macos")]   { "macOS".to_string() }
-                    #[cfg(target_os = "linux")]   { "Linux".to_string() }
-                    #[cfg(target_os = "windows")] { "Windows".to_string() }
-                    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-                    { "Unknown".to_string() }
-                },
-                arch: std::env::consts::ARCH.to_string(),
-                // SSE handler never generates live-activity events; broadcaster owns that.
-                live_activities: Vec::new(),
-                // WES v2 thermal-penalty window
-                penalty_avg:    wes.penalty_avg,
-                penalty_peak:   wes.penalty_peak,
-                thermal_source: wes.thermal_source,
-                sample_count:   if wes.sample_count > 0 { Some(wes.sample_count) } else { None },
-                wes_version:    2,
-                swap_write_mb_s: swap_mb_s,
-                clock_throttle_pct: nvidia.clock_throttle_pct.or_else(|| {
-                    linux_thermal.as_ref()
-                        .and_then(|lt| lt.clock_ratio)
-                        .map(|r| ((1.0 - r) * 100.0).clamp(0.0, 100.0) as f32)
-                }),
-                pcie_link_width:     nvidia.pcie_link_width,
-                pcie_link_max_width: nvidia.pcie_link_max_width,
-                model_baseline_tps:     None,
-                model_baseline_wes:     None,
-                model_baseline_samples: None,
-                agent_version:       env!("CARGO_PKG_VERSION").to_string(),
-                inference_state:     inference_state_val,
-            };
-
-            let event = match Event::default().json_data(&payload) {
-                Ok(e)  => e,
-                Err(_) => continue,
-            };
-
-            if tx.send(Ok(event)).await.is_err() { break; }
+            match rx.recv().await {
+                Ok(json) => {
+                    if out_tx.send(Ok(Event::default().data(json))).await.is_err() {
+                        break; // client disconnected
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue, // skip stale frames
+                Err(broadcast::error::RecvError::Closed)    => break,
+            }
         }
     });
 
-    Sse::new(ReceiverStream::new(rx))
+    Sse::new(ReceiverStream::new(out_rx))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
@@ -7503,12 +7476,17 @@ async fn main() {
     let runtime_config_cache = runtime_config::new_cache();
     // Keep a receiver for /api/tags before the harvester takes ownership.
     let tags_port_rx = ollama_port_rx.clone();
+    let probe_policy = ProbeConfig::policy(config.probe.as_ref());
+    if probe_policy.enabled {
+        eprintln!("[probe] idle probes every {} min (loaded models only)", probe_policy.interval.as_secs() / 60);
+    }
     let (ollama_metrics, probe_active) = harvester::start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         proxy_arc,
         ollama_port_rx,
         Arc::clone(&runtime_config_cache),
+        probe_policy,
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
@@ -7516,8 +7494,8 @@ async fn main() {
     // honour `[runtime_ports]` overrides) rather than rescanning processes.
     let vllm_cfg_port_rx     = vllm_port_rx.clone();
     let llamacpp_cfg_port_rx = llamacpp_port_rx.clone();
-    let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active));
-    let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active));
+    let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active), probe_policy);
+    let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active), probe_policy);
 
     // v0.9.0: Runtime Config Surface — dedicated 5-min pollers for vLLM and
     // llama.cpp. Both run alongside the existing metrics harvesters and write
@@ -7620,7 +7598,7 @@ async fn main() {
         Arc::clone(&probe_active),
         proxy_listen,
         proxy_target,
-        runtime_overrides.clone(),
+        runtime_overrides,
         config.node_id.clone(),
         Arc::clone(&model_baseline_cache),
         Arc::clone(&cpu_usage_atomic),
@@ -7665,7 +7643,11 @@ async fn main() {
                 println!("[store] metrics db: {}", db_path.display());
 
                 // Writer task — subscribes to broadcast, writes 1 sample/s to metrics_raw.
-                // Holding the Mutex < 1 ms per write; lagged frames are silently skipped.
+                // The insert runs on the blocking pool: it's normally < 1 ms, but
+                // the store mutex is also held by the hourly aggregation and by
+                // heavy read queries, and waiting on it must not park a tokio
+                // worker. Awaiting each write keeps inserts ordered and bounded
+                // (a backlog shows up as broadcast lag → skipped frames).
                 {
                     let s2  = s.clone();
                     let mut rx = broadcast_tx.subscribe();
@@ -7675,8 +7657,11 @@ async fn main() {
                                 Ok(json) => {
                                     match store::Sample::from_broadcast_json(&json) {
                                         Ok(sample) => {
-                                            if let Err(e) = s2.write_sample(sample) {
-                                                eprintln!("[store] write error: {e}");
+                                            let st = s2.clone();
+                                            match tokio::task::spawn_blocking(move || st.write_sample(sample)).await {
+                                                Ok(Err(e)) => eprintln!("[store] write error: {e}"),
+                                                Err(e)     => eprintln!("[store] write task failed: {e}"),
+                                                Ok(Ok(())) => {}
                                             }
                                         }
                                         Err(e) => eprintln!("[store] parse error: {e}"),
@@ -7697,12 +7682,19 @@ async fn main() {
                         tokio::time::sleep(Duration::from_secs(10)).await;
                         let sc = s2.clone();
                         let _ = tokio::task::spawn_blocking(move || {
+                            if let Err(e) = sc.prune_expired_dismissals(now_ms() as i64) {
+                                eprintln!("[store] dismissal prune error: {e}");
+                            }
                             if let Err(e) = sc.run_aggregation(now_ms() as i64) {
                                 eprintln!("[store] initial aggregation error: {e}");
                             }
                         }).await;
 
-                        let mut tick = tokio::time::interval(Duration::from_secs(3_600));
+                        // interval_at: a plain interval() fires its first tick
+                        // immediately, which re-ran the full aggregation (and
+                        // prune + checkpoint) right after the initial run above.
+                        let hour = Duration::from_secs(3_600);
+                        let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + hour, hour);
                         loop {
                             tick.tick().await;
                             let sc = s2.clone();
@@ -7913,7 +7905,7 @@ async fn main() {
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
-            .route("/ws",                 get(handle_ws))             // WebSocket primary (10 Hz)
+            .route("/ws",                 get(handle_ws))             // WebSocket primary (1 Hz)
             .route("/api/pair/status",    get(handle_pair_status))
             .route("/api/pair/generate",  post(handle_pair_generate))
             .route("/api/pair/claim",     post(handle_pair_claim))
@@ -7969,7 +7961,7 @@ async fn main() {
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(axum::extract::Extension(probe_active))
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
-         .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target, runtime_overrides }))
+         .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target }))
          .layer(axum::extract::Extension(Arc::clone(&runtime_config_cache)))
          .layer(cors)
     };
@@ -8138,6 +8130,55 @@ mod metrics_snapshot_tests {
         assert_eq!(resp.headers()[axum::http::header::CONTENT_TYPE], "application/json");
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert_eq!(&body[..], br#"{"n":2}"#);
+    }
+}
+
+#[cfg(test)]
+mod metrics_sse_tests {
+    use super::*;
+    use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn sse_relays_broadcast_frames_verbatim() {
+        let (tx, _) = broadcast::channel::<String>(4);
+        let resp = handle_metrics(axum::extract::Extension(tx.clone())).await.into_response();
+        let mut body = resp.into_body().into_data_stream();
+
+        tx.send(r#"{"inference_state":"idle"}"#.into()).unwrap();
+        let chunk = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await.expect("frame within 2s").expect("stream open").unwrap();
+        assert_eq!(&chunk[..], b"data: {\"inference_state\":\"idle\"}\n\n");
+    }
+}
+
+#[cfg(test)]
+mod probe_config_tests {
+    use super::*;
+
+    #[test]
+    fn absent_probe_section_defaults_enabled() {
+        let cfg: WickleeConfig = toml::from_str(r#"node_id = "WK-1""#).unwrap();
+        assert!(cfg.probe.is_none());
+        let p = ProbeConfig::policy(cfg.probe.as_ref());
+        assert!(p.enabled);
+        assert_eq!(p.interval, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn probe_section_parses_and_clamps() {
+        let cfg: WickleeConfig = toml::from_str(
+            "node_id = \"WK-1\"\n[probe]\nenabled = false\n",
+        ).unwrap();
+        let p = ProbeConfig::policy(cfg.probe.as_ref());
+        assert!(!p.enabled);
+        assert_eq!(p.interval, Duration::from_secs(600));
+
+        let cfg: WickleeConfig = toml::from_str(
+            "node_id = \"WK-1\"\n[probe]\ninterval_minutes = 0\n",
+        ).unwrap();
+        let p = ProbeConfig::policy(cfg.probe.as_ref());
+        assert!(p.enabled);
+        assert_eq!(p.interval, Duration::from_secs(60));
     }
 }
 

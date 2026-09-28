@@ -481,11 +481,17 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             setFleetEvents(prev => [...newEvents, ...prev].slice(0, MAX_EVENTS));
           }
 
-          // Derive restricted node set from the latest snapshot.
+          // Derive restricted node set from the latest snapshot. Keep the
+          // previous Set when membership is unchanged so the context value
+          // (and every consumer) isn't invalidated on each frame.
           const newRestrictedIds = new Set(
             fleet.nodes.filter(n => n.restricted).map(n => n.node_id)
           );
-          setRestrictedNodeIds(newRestrictedIds);
+          setRestrictedNodeIds(prev =>
+            prev.size === newRestrictedIds.size && [...newRestrictedIds].every(id => prev.has(id))
+              ? prev
+              : newRestrictedIds
+          );
 
           // Notify App.tsx so it can patch node hostnames.
           onNodesSnapshotRef.current?.(fleet.nodes);

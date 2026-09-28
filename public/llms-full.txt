@@ -534,7 +534,7 @@ The full telemetry payload sent every 1-2 seconds. All fields are optional (null
 - `vllm_tokens_per_sec`: f32
 
 ### Latency & Queue (v0.7.10+)
-- `ollama_ttft_ms`: f32 — Time to first token (probe baseline, ~30s)
+- `ollama_ttft_ms`: f32 — Time to first token (probe baseline, ≤ every 10 min)
 - `ollama_prompt_eval_tps`: f32 — Prompt processing speed (tok/s)
 - `ollama_load_duration_ms`: f32 — Model load time
 - `vllm_avg_ttft_ms`: f32 — TTFT from Prometheus histogram (production)
@@ -663,7 +663,7 @@ Evaluated by the cloud backend every 60 seconds.
 | Apple Silicon power | 5s window | powermetrics (requires root) |
 | NVIDIA GPU | 1 Hz | NVML API (zero-privilege) |
 | Ollama harvester | 2s | GET /api/ps (models, VRAM, expires_at) |
-| Ollama probe | ~30s | 20-token POST /api/generate (disabled when proxy active) |
+| Ollama probe | ≤10 min | 20-token POST /api/generate against an already-loaded model (disabled when proxy active or `[probe] enabled = false`) |
 | vLLM harvester | 2s | GET /metrics (Prometheus gauges + histograms) |
 | WES thermal sampler | 2s | 30-sample rolling window |
 | DuckDB local store | 2s | Batch INSERT, WAL mode |

@@ -21,7 +21,7 @@ open http://localhost:8080
 ## Licensing
 
 Self-hosting for production requires an **Enterprise license** — contact
-[jeff@wicklee.dev](mailto:jeff@wicklee.dev). Set the key as `WICKLEE_LICENSE_KEY`
+[sales@wicklee.dev](mailto:sales@wicklee.dev). Set the key as `WICKLEE_LICENSE_KEY`
 in `.env`. Without a key the control plane runs in **evaluation mode**: fully
 functional, but it announces itself as unlicensed at boot and in `/health`.
 
@@ -50,25 +50,49 @@ external service. It predates Clerk Organizations, so it has **no org/RBAC/SSO
 support and no sign-in UI** — it exists for headless/API-driven deployments and
 air-gapped evaluation. For a team-facing dashboard, use Clerk. The two paths are exclusive: the password routes return 404 whenever
 `CLERK_JWKS_URL` is set, and a legacy account is never auto-linked to a Clerk
-identity (set `users.clerk_id` by hand to migrate one).
+identity (set `users.clerk_id` by hand to migrate one). Legacy sessions expire
+30 days after login.
 
 ## Pairing agents to your control plane
 
-On each node, pair against your deployment instead of wicklee.dev — the pairing
-flow in the dashboard (Add Node) displays the exact command. The agent persists
-`fleet_url` in its config.toml and pushes telemetry every 2s to your instance only.
+Agents send pairing codes and telemetry to the URL in their `WICKLEE_CLOUD_URL`
+environment variable, which defaults to the hosted service. Set it on each node
+to your deployment's URL (the frontend works, since nginx proxies `/api/*`)
+**before** pairing:
+
+```bash
+# foreground
+WICKLEE_CLOUD_URL=https://wicklee.internal ~/.wicklee/bin/wicklee
+
+# installed service (Linux) — a drop-in survives --install-service rewrites
+sudo systemctl edit wicklee     # add: [Service]
+                                #      Environment=WICKLEE_CLOUD_URL=https://wicklee.internal
+sudo systemctl restart wicklee
+```
+
+On macOS add it under `EnvironmentVariables` in
+`/Library/LaunchDaemons/dev.wicklee.agent.plist`. Then pair as usual (Connect to
+Fleet on `localhost:7700`, enter the code under Add Node in your dashboard). The
+agent pushes telemetry every 2s to that URL only. (The `fleet_url` the agent
+writes to config.toml is a display label, not the push target.)
 
 ## What talks to the internet
 
 Sovereignty inventory for network policy:
 
-- **Nothing phones home to wicklee.dev.** Install telemetry pings come from
-  `install.sh` at install time, not from the control plane or a running agent.
+- **The control plane never phones home to wicklee.dev.** Install telemetry
+  pings come from `install.sh` at install time. One agent exception: a
+  **paired** agent checks `https://wicklee.dev/api/agent/version` for updates
+  (hardcoded — it does not follow `WICKLEE_CLOUD_URL`). Block it and agents
+  simply stop auto-updating; unpaired agents make no outbound calls.
 - `CLERK_JWKS_URL` — auth key refresh (your Clerk app), every 6h. Absent in DIY mode.
 - `api.resend.com` — only if `RESEND_API_KEY` is set (email alerts, weekly digest).
 - `huggingface.co` — only if `HUGGINGFACE_TOKEN` is set (Model Discovery catalog).
-- `api.github.com` — the agent's update check (`/api/agent/version` proxied per
-  deployment). Block it and the version banner simply goes stale.
+- `api.github.com` — the control plane's own `/api/agent/version` looks up the
+  latest release there. Block it and the version banner simply goes stale.
+- `github.com` (release downloads) — agents that auto-update fetch the new
+  binary and the release's `SHA256SUMS` directly and install only on a
+  checksum match. Block it and agents stay on their current version.
 - Anything you configure yourself: Slack/PagerDuty/webhook alert channels,
   OTel exporters, Prometheus scrapes, SIEM audit drains.
   Self-hosted mode may deliver these to private addresses (your SIEM on
@@ -84,6 +108,14 @@ you lose time-partitioning efficiency, not features. Migrations run automaticall
 at boot; upgrades are `git pull && docker compose up -d --build`.
 
 Back up the `pgdata` volume; that's the entire state of the control plane.
+
+## Reverse proxies and client IPs
+
+The cloud service reads the client address from `X-Forwarded-For`, counting
+`TRUSTED_PROXY_HOPS` entries from the right (default `1` — the bundled nginx).
+The auth and pairing rate limiters key on it. If you put another load balancer
+in front of the frontend, set `TRUSTED_PROXY_HOPS=2` in `.env` (one per proxy
+that appends to the header); the compose file passes it to the `cloud` service.
 
 ## Kubernetes (Helm)
 

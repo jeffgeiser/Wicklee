@@ -15,13 +15,13 @@ Single Rust binary, embedded React dashboard, Apple Silicon deep metal telemetry
 NVIDIA/NVML support, fleet pairing, hosted fleet aggregation, SSE-based real-time streaming.
 
 ### Intelligence Layer
-WES (Wicklee Efficiency Score) — tokens per watt with thermal penalty. 18 hardware observation patterns across thermal, power, memory, bandwidth, and inference domains.
+WES (Wicklee Efficiency Score) — tokens per watt with thermal penalty. 20 observation patterns (18 agent-evaluated, 2 cloud-evaluated) across thermal, power, memory, bandwidth, and inference domains.
 
 ### Inference Metrics
-Ollama and vLLM runtime detection. Prompt eval speed, TTFT, queue depth, KV cache utilization. Optional transparent proxy for production request metrics.
+Ollama, vLLM, and llama.cpp runtime detection. Prompt eval speed, TTFT, queue depth, KV cache utilization. Optional transparent proxy for production request metrics.
 
 ### Cloud Infrastructure
-Postgres time-series storage, 5-minute rollups, tiered history retention (24h Community, 7d Pro, 90d Team, 365d Business, unlimited Enterprise), fleet alerting with per-node pattern suppression.
+Postgres time-series storage, 5-minute rollups, tiered history retention (24h Community, 90d Team, 12 months Enterprise; grandfathered Pro keeps 7d, Business 365d), fleet alerting with per-node pattern suppression.
 
 ### Platform Support
 macOS (Apple Silicon + Intel), Linux (x86_64 + aarch64), Windows, NVIDIA GPU builds with NVML.
@@ -39,7 +39,7 @@ REST API for fleet telemetry. AI agent discovery via `llms.txt`, OpenAPI spec, a
 User-configurable thresholds for TTFT regression, throughput, and thermal events. Slack, email, and PagerDuty notification channels. PagerDuty uses Events API v2 with auto-resolve on incident lifecycle.
 
 ### Cloud MCP Server
-Fleet-aggregated MCP endpoint (`POST wicklee.dev/mcp`) for remote AI agents. 6 tools: fleet status, WES scores, node detail, best route, fleet insights, fleet observations. 2 resources: fleet status summary, fleet thermal states. Team+ tier, Clerk JWT auth.
+Fleet-aggregated MCP endpoint (`POST wicklee.dev/mcp`) for remote AI agents. 6 tools at launch: fleet status, WES scores, node detail, best route, fleet insights, fleet observations (now 9, adding inference profile, explain_slowdown, and fleet model fit). 2 resources: fleet status summary, fleet thermal states. Team+ tier, Clerk JWT auth.
 
 ### Clerk Organizations (Shared Fleet)
 Team dashboard sharing via Clerk Organizations. Org members see the same fleet — nodes, observations, alerts, and history are all scoped to the organization. Org inherits creator's subscription tier; syncs on Paddle upgrade/downgrade. Solo users unaffected.
@@ -51,9 +51,9 @@ Events API v2 integration for Team+ tier. Trigger and resolve events with dedup 
 Immutable, append-only audit trail for sensitive fleet operations, Postgres-backed (`audit_log` table, no UPDATE/DELETE paths anywhere in the codebase). `GET /api/audit-log` (Clerk JWT auth, tenant-scoped, cursor-paginated via `before`, filterable by `action`) is gated to Business+ for reads; events are recorded for every tier via a fire-and-forget `audit()` helper that never delays or fails the request and resolves the actor email server-side. `org_id` comes from the verified JWT claim, never a client header. Nine instrumented actions: `node.paired` / `node.removed` / `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created` / `api_key.deleted`, `stream_tokens.revoked`. Surfaced as the Audit Log section in Settings (Business+; action filter, load-more pagination, upgrade-nudge for lower tiers).
 
 ### Per-Tier Node Limits
-Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Business: 100 nodes (unlimited seats), Enterprise: unlimited. Enforced at pairing, fleet list, and SSE stream.
+Community: 3 nodes, Team: 10 or 25 nodes (`team_10` / `team`), Enterprise: unlimited. Grandfathered Pro (10) and Business (100) caps remain in `node_limit_for_tier()`. Enforced at pairing, fleet list, and SSE stream.
 
-### Five-Tier Pricing
+### Five-Tier Pricing (superseded September 2026 — see Team Plan Sizes below)
 Community (Free) → Pro ($29/mo) → Team ($49/seat/mo) → Business ($499/mo) → Enterprise (Contact Sales). Business adds 365-day history, unlimited seats, SSO/SAML, and audit logging. Paddle billing with webhook-driven tier sync.
 
 ### Team Plan Sizes — 10 / 25 nodes (September 2026)
@@ -94,7 +94,7 @@ Four DuckDB-backed intelligence endpoints on the agent + Cloud MCP tools. Infere
 19th observation pattern (info severity). Detects when a node sustains ≥65% of its theoretical memory-bandwidth ceiling for the loaded model+quant with GPU < 95% — explains "Low" tok/W as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/L40S/RTX, DGX Spark/GB10).
 
 ### Perplexity Tax — Empirical Quant Quality Cost
-Replaces the hand-tuned `QUALITY_DELTA` heuristics in `quantSweet.ts` and the coarse `quant_quality_factor()` multiplier in `cloud/main.rs` with empirical KL divergence + perplexity-delta data sourced from Unsloth Dynamic GGUF benchmarks and llama.cpp perplexity discussions. Single source of truth in `public/perplexity_baseline.json`; cloud embeds it via `include_str!` so frontend Quant Sweet Spot tiles and cloud-side fleet-discovery scoring agree.
+Replaces the hand-tuned `QUALITY_DELTA` heuristics in `quantSweet.ts` and the coarse `quant_quality_factor()` multiplier in `cloud/src/main.rs` with empirical KL divergence + perplexity-delta data sourced from Unsloth Dynamic GGUF benchmarks and llama.cpp perplexity discussions. Single source of truth in `public/perplexity_baseline.json`; cloud embeds it via `include_str!` so frontend Quant Sweet Spot tiles and cloud-side fleet-discovery scoring agree.
 
 Curated coverage for ~15 model families (Llama 3.1/3.2 8B-70B, Qwen 2.5 7B-72B, Mistral 7B, Mixtral 8x7B, Gemma 2 9B-27B, Phi-3 Mini, DeepSeek-R1 distills) with a "default" generic baseline as fallback. Lookup falls back: exact family → default → legacy heuristic. `quant_quality_factor()` becomes a continuous KLD-derived multiplier (0.0 at KLD=0.15, 1.0 at KLD=0). New "Perplexity Tax" block on ModelFitAnalysis detail view shows band label (Imperceptible / Mild / Noticeable / Severe / Unusable), KLD, and PPL delta. Quant Sweet Spot summary strip tile gains a Quality: line.
 
@@ -439,7 +439,7 @@ Pre-existing-population note from Pass 1: nodes paired before the 64-bit node-ID
 ### Full-Codebase Review — remaining MEDIUMs (June 2026; HIGHs all shipped)
 The mid-June four-surface review's HIGHs landed in five merged chunks (pairing hijack, Prometheus auth, org-tenancy sweep, agent races, frontend HIGHs, dead-code pass — see progress.md). Remaining verified MEDIUMs, roughly by value:
 1. **Cloud calculation fixes — SHIPPED** (wes_for_payload Apple SoC power, rollup straddling-bucket loss, the 24h hole in 7d+ charts, qf² in variant selection, plus the WES-drift evaluator that could never fire — its recent-24h window read metrics_5min, which never contains the last 24h). Still open from this group: OTel `export_interval_s` stored but ignored (fixed 30s tick).
-2. **Cloud perf/hardening**: N+1 per-node aggregation loops in wes-history / metrics-history / fleet-duty (single GROUP BY query instead); `auth_rate_limits` IP keys never evicted (slow leak; also trusts spoofable XFF); `/api/agent/version` hits the GitHub API uncached per request (60/hr anonymous limit — cache ~10 min); CSV export escaping (newlines/quotes/formula injection); signup runs bcrypt before the duplicate-email check (timing oracle + wasted work); duplicate `MAX_FREE_NODES`/`FREE_NODE_LIMIT` constants and the thrice-copied tier-limit ladder (`node_limit_for_tier()`); node session-token compare not constant-time (main.rs ~2294).
+2. **Cloud perf/hardening**: N+1 per-node aggregation loops in wes-history / metrics-history / fleet-duty (single GROUP BY query instead); `auth_rate_limits` IP keys never evicted (slow leak; the spoofable-XFF read was fixed in PR #61 via `TRUSTED_PROXY_HOPS`); `/api/agent/version` hits the GitHub API uncached per request (60/hr anonymous limit — cache ~10 min); CSV export escaping (newlines/quotes/formula injection); signup runs bcrypt before the duplicate-email check (timing oracle + wasted work); duplicate `MAX_FREE_NODES`/`FREE_NODE_LIMIT` constants and the thrice-copied tier-limit ladder (`node_limit_for_tier()`); node session-token compare not constant-time (main.rs ~2294).
 3. **Agent**: Apple Silicon power double-counted in all DuckDB cost/WES queries (`Sample.gpu_power_w` holds SoC total, consumers add `cpu_power_w` on top; CPU-only Linux nodes get NULL → $0 cost) — fix at `BroadcastFrame::into_sample` with a canonical `total_power_w`; `/api/model-candidates` runs the "24h background" catalog refresh inline on the request path (first request of the day hangs minutes — spawn the documented background task); `[pm_raw]` debug dump on every powermetrics cycle into unrotated `/var/log/wicklee.log` + missing `MissedTickBehavior::Skip` makes powermetrics sample continuously; Windows blocking `wmic` in async loops every 2s (tokio::process + cache the failure); `sc create` binPath unquoted (classic unquoted-service-path; the validator defers to "quoting at the call site" that doesn't exist); Pattern P slope ×6 vs the correct ×60 on 1Hz data (fires ~10× late; Pattern R is correct); audit-export dismissals ignore the date window; CSV `model` column unescaped (client-controlled via proxy).
 4. **Frontend**: `allNodeMetrics`/`lastSeenMsMap` never drop removed nodes (ghost data; defeats `pruneBuffers`); `useFleetCounts` hardcodes `status: 'online'` (counts are fiction — derive from `last_seen_ms`); `useFleetDuty` hardcodes `https://wicklee.dev` bypassing `cloudUrl.ts` (check if the hook is even still consumed after the Overview duty removal); audio regex `/\bsts?\b/` matches `st`/`sts` not `tts`/`stt` (modelCategory.ts); benchmark reports use `ollama_quantization` for vLLM runs and compute WES without PUE; `useInsightDismiss` state stales on key change; FleetModelDiscovery/ModelDiscoveryCard ~600-line copy-paste twins (already drifting) + the duplicated Active-Models VRAM panel inside Overview; the 1Hz Overview chart re-renders up to 3600 recharts points per SSE frame (downsample); `useSettings` runs side effects inside state updaters (StrictMode double-fire); `userApiKey` naming actually holds an Ollama base URL (SecurityView); index keys on shifting alert/violation lists; `efficiency.ts` doc comment teaches the wrong WES formula above a correct tooltip; two same-named `quantFamily()` functions with different semantics (rename one `quantSpeedBucket`).
 
@@ -465,7 +465,7 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 "Is this model right for this hardware?" Auto-computed from VRAM headroom, tok/s vs model size ratio, thermal behavior under load, swap pressure. Returns score + recommendation (e.g., "62/100 — VRAM tight, consider Q3_K_M or smaller variant").
 
 ### Kubernetes Operator
-Helm chart and operator for automated Wicklee agent deployment across GPU node pools.
+Operator for automated Wicklee agent deployment across GPU node pools (the control-plane Helm chart shipped in `deploy/helm/wicklee`; agent enrollment is the blocker — see `docs/SELF_HOSTING.md`).
 
 ### Install Telemetry
 Anonymous install event tracking (OS, arch, version) via fire-and-forget ping from `install.sh` to cloud endpoint. Powers activation funnel metrics without collecting PII.
@@ -478,4 +478,4 @@ Anonymous hardware benchmark submissions with public ranking. "MPG for AI" — c
 
 ## Contributing
 
-Issues and PRs welcome. See the [README](../README.md) for build instructions.
+Issues welcome; pull requests are not accepted at this time (see [CONTRIBUTING](../CONTRIBUTING.md)). See the [README](../README.md) for build instructions.

@@ -11,6 +11,7 @@ import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
 import { calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle } from '../utils/efficiency';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useFleetCounts } from '../hooks/useFleetCounts';
+import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -811,7 +812,8 @@ const NodesList: React.FC<NodesListProps> = ({
 
   // Local-only state
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
-  const [localConnected, setLocalConnected] = useState(false);
+  // ── Local agent stream (local only; shared connection) ─────────────────────
+  const { connected: localConnected } = useLocalMetricsStream(setLocalMetrics);
 
   const [search, setSearch]               = useState('');
   const [sortKey, setSortKey]             = useState<SortKey>('registered');
@@ -825,7 +827,6 @@ const NodesList: React.FC<NodesListProps> = ({
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
   const confirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const esRef    = useRef<EventSource | null>(null);
   const sortRef  = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -839,26 +840,6 @@ const NodesList: React.FC<NodesListProps> = ({
   // Single source of truth for all node counts.
   // Must be called before any early returns (Rules of Hooks).
   const counts = useFleetCounts(nodes);
-
-  // ── SSE (local only) ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!isLocalHost) return;
-    let retryTimer: ReturnType<typeof setTimeout>;
-    const connect = () => {
-      const es = new EventSource('/api/metrics');
-      esRef.current = es;
-      es.onmessage = ev => {
-        try { setLocalMetrics(JSON.parse(ev.data) as SentinelMetrics); setLocalConnected(true); }
-        catch { /* ignore */ }
-      };
-      es.onerror = () => {
-        setLocalConnected(false); es.close(); esRef.current = null;
-        retryTimer = setTimeout(connect, 3000);
-      };
-    };
-    connect();
-    return () => { esRef.current?.close(); clearTimeout(retryTimer); };
-  }, []);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

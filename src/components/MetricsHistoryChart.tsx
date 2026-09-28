@@ -212,10 +212,15 @@ const MetricsHistoryChart: React.FC<Props> = ({
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
 
   const selectedId = externalSelectedId ?? internalSelectedId;
-  const setSelectedId = (id: string) => {
-    if (externalOnNodeSelect) externalOnNodeSelect(id);
+  // Stable setter that reads the latest onNodeSelect through a ref, so
+  // fetchHistory (deps [getToken]) never calls a stale parent callback.
+  const externalOnNodeSelectRef = useRef(externalOnNodeSelect);
+  externalOnNodeSelectRef.current = externalOnNodeSelect;
+  const setSelectedId = useCallback((id: string) => {
+    const onSelect = externalOnNodeSelectRef.current;
+    if (onSelect) onSelect(id);
     else setInternalSelectedId(id);
-  };
+  }, []);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState<string | null>(null);
   const [lastFetch,  setLastFetch]  = useState(0);
@@ -258,7 +263,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [getToken]);
+  }, [getToken, setSelectedId]);
 
   // Abort the in-flight request when the range changes or on unmount, so a
   // slow earlier fetch can't land after a newer one (stale-overwrite race).

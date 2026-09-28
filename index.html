@@ -31,7 +31,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://clerk.wicklee.dev">
-<link rel="dns-prefetch" href="https://cdn.paddle.com">
 <!-- The font stylesheet is added by /fonts.js (async, same-origin — CSP has no
      'unsafe-inline' so the usual onload="this.media='all'" trick is blocked).
      Text paints in the system stack and swaps to Inter when it arrives, instead
@@ -92,10 +91,9 @@
 </head>
   <body>
     <div id="root" role="application" aria-label="Wicklee dashboard"></div>
-  <!-- defer: Paddle.js is only touched when a checkout opens, long after load.
-       As a synchronous script it blocked HTML parsing on every page — including
-       /pricing on a phone — until cdn.paddle.com answered. -->
-  <script src="https://cdn.paddle.com/paddle/v2/paddle.js" defer></script>
+  <!-- Paddle.js is not loaded here: it is only touched when a checkout opens,
+       so src/utils/loadPaddle.ts injects it on demand (CSP script-src already
+       allows https://*.paddle.com). -->
   <script type="module" src="/src/index.tsx"></script>
 </body>
 </html>

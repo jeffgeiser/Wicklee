@@ -27,6 +27,10 @@ pub(crate) struct HardwareSignals {
     pub(crate) last_user_request_ts: Option<std::time::Instant>,
     // IDLE-SPD display
     pub(crate) recent_probe: bool,
+    /// A probe baseline exists and is inside its scheduled refresh window.
+    /// IDLE-SPD only — unlike `recent_probe` it never gates Tier 3, so probes
+    /// spaced minutes apart don't blind the physics detector.
+    pub(crate) fresh_baseline: bool,
 }
 
 /// Build a HardwareSignals snapshot from the current sensor state.
@@ -59,6 +63,9 @@ pub(crate) fn read_hardware_signals(
         recent_probe:         ollama.recent_probe_baseline()
                               || vllm.recent_probe_baseline()
                               || llamacpp.recent_probe_baseline(),
+        fresh_baseline:       ollama.fresh_probe_baseline()
+                              || vllm.fresh_probe_baseline()
+                              || llamacpp.fresh_probe_baseline(),
     }
 }
 
@@ -110,7 +117,7 @@ impl std::fmt::Display for InferenceState {
 ///   Idle      Silicon at rest
 pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     // ── Tier 1: Exact runtime counts (zero heuristic) ────────────────────────
-    // The agent's own 30s baseline probe is a real completion request, so it
+    // The agent's own scheduled baseline probe is a real completion request, so it
     // shows up in these counts (num_requests_running / slots_processing).
     // While a probe is in flight, discount exactly one request — otherwise
     // every idle-node probe blipped LIVE and was pushed to the cloud via the
@@ -166,8 +173,9 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
 
     // ── IDLE-SPD: fresh probe baseline available ──────────────────────────────
     // Also requires a model in VRAM — no point showing IDLE-SPD if the runtime
-    // is running but has no model loaded.
-    if s.recent_probe && s.ai_model_loaded {
+    // is running but has no model loaded. `fresh_baseline` covers the gap
+    // between scheduled probes (minutes apart, see harvester::ProbePolicy).
+    if (s.recent_probe || s.fresh_baseline) && s.ai_model_loaded {
         return InferenceState::IdleSpd;
     }
 
@@ -202,6 +210,7 @@ mod tests {
             probe_active:         false,
             last_user_request_ts: None,
             recent_probe:         false,
+            fresh_baseline:       false,
         }
     }
 
@@ -220,7 +229,7 @@ mod tests {
     }
 
     // ── Tier 1 probe discount: the probe's own request must not read LIVE ───
-    // The 30s baseline probe is a real completion request, so it appears in
+    // The scheduled baseline probe is a real completion request, so it appears in
     // num_requests_running / slots_processing while in flight.
     #[test]
     fn vllm_probe_own_request_not_live() {
@@ -432,6 +441,46 @@ mod tests {
             ai_runtime_loaded: true,
             ai_model_loaded:   false,
             recent_probe:      true,
+            ..idle_signals()
+        };
+        assert_eq!(compute_inference_state(&s), InferenceState::Idle);
+    }
+
+    // ── Fresh (scheduled) baseline between probes → IDLE-SPD ────────────────
+    // Probes fire minutes apart; a baseline inside its refresh window keeps
+    // IDLE-SPD steady when the silicon is quiet.
+    #[test]
+    fn fresh_baseline_quiet_gpu_is_idle_spd() {
+        let s = HardwareSignals {
+            apple_gpu_pct:     Some(3.0),
+            ai_runtime_loaded: true,
+            ai_model_loaded:   true,
+            fresh_baseline:    true,
+            ..idle_signals()
+        };
+        assert_eq!(compute_inference_state(&s), InferenceState::IdleSpd);
+    }
+
+    // A fresh baseline must NOT gate Tier 3 the way recent_probe does:
+    // moderate GPU load long after the last probe is real inference.
+    #[test]
+    fn fresh_baseline_does_not_blind_physics() {
+        let s = HardwareSignals {
+            apple_gpu_pct:     Some(50.0),
+            ai_runtime_loaded: true,
+            ai_model_loaded:   true,
+            fresh_baseline:    true,
+            ..idle_signals()
+        };
+        assert_eq!(compute_inference_state(&s), InferenceState::Live);
+    }
+
+    // Fresh baseline with no model resident → plain IDLE.
+    #[test]
+    fn fresh_baseline_no_model_is_idle() {
+        let s = HardwareSignals {
+            ai_runtime_loaded: true,
+            fresh_baseline:    true,
             ..idle_signals()
         };
         assert_eq!(compute_inference_state(&s), InferenceState::Idle);

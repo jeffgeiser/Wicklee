@@ -45,6 +45,7 @@ import type { BenchmarkReport } from '../utils/benchmarkReport';
 import BenchmarkReportModal from './BenchmarkReportModal';
 import { computeModelFitScore } from '../utils/modelFit';
 import { useSettings } from '../hooks/useSettings';
+import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 
 // Tier 1 cards
 import ThermalDegradationCard  from './insights/tier1/ThermalDegradationCard';
@@ -1072,29 +1073,47 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     });
   }, []);
 
+  const { allNodeMetrics, lastSeenMsMap, addFleetEvent, fleetEvents } = useFleetStream();
+
   // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
   const isProOrAbove = tierIsProOrAbove(subscriptionTier);
 
   // Seed obsCacheRef from server observations on mount (Pro+ persistent cards)
+  // Server observations often arrive before the first fleet frame, so seeded
+  // cards would keep the raw node_id as their hostname. Re-run on
+  // allNodeMetrics and relabel those entries once a hostname is known.
   const serverSeededRef = useRef(false);
   useEffect(() => {
-    if (serverSeededRef.current || !isProOrAbove || serverObservations.length === 0) return;
-    serverSeededRef.current = true;
+    if (!isProOrAbove) return;
     const cache = obsCacheRef.current;
-    for (const obs of serverObservations) {
-      if (obs.state === 'acknowledged') continue;
-      const key = `${obs.alert_type}:${obs.node_id}`;
-      if (cache.has(key)) continue;
-      cache.set(key, {
-        insight:      serverObsToInsight(obs, allNodeMetrics[obs.node_id]?.hostname ?? obs.node_id),
-        firstFiredMs: obs.fired_at_ms,
-        resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
-      });
+    let changed = false;
+    if (!serverSeededRef.current && serverObservations.length > 0) {
+      serverSeededRef.current = true;
+      changed = true;
+      for (const obs of serverObservations) {
+        if (obs.state === 'acknowledged') continue;
+        const key = `${obs.alert_type}:${obs.node_id}`;
+        if (cache.has(key)) continue;
+        cache.set(key, {
+          insight:      serverObsToInsight(obs, allNodeMetrics[obs.node_id]?.hostname ?? obs.node_id),
+          firstFiredMs: obs.fired_at_ms,
+          resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
+        });
+      }
     }
-    setObsEntries(Array.from(cache.values()));
-  }, [serverObservations, isProOrAbove]);
+    if (!serverSeededRef.current) return;
+    for (const [key, entry] of cache) {
+      const { nodeId, hostname } = entry.insight;
+      if (hostname !== nodeId) continue;
+      const resolved = allNodeMetrics[nodeId]?.hostname;
+      if (!resolved || resolved === hostname) continue;
+      cache.set(key, { ...entry, insight: { ...entry.insight, hostname: resolved } });
+      changed = true;
+    }
+    if (changed) setObsEntries(Array.from(cache.values()));
+  }, [serverObservations, isProOrAbove, allNodeMetrics]);
 
   /**
    * Onset suppression map — tracks the last timestamp a pattern_onset event was
@@ -1143,8 +1162,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const nodeSessionStartRef = useRef<Record<string, number>>({});
   const nodeHadActivityRef  = useRef<Record<string, boolean>>({});
 
-  // Fleet data from SSE context
-  const { allNodeMetrics, lastSeenMsMap, addFleetEvent, fleetEvents } = useFleetStream();
+  // Fleet data from SSE context: destructured from useFleetStream() above,
+  // ahead of the observation-cache effect that depends on allNodeMetrics.
 
   // Merged event emitter — prop takes precedence, falls back to context
   const emitFleetEvent = onFleetEvent ?? addFleetEvent;
@@ -1161,70 +1180,41 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     return () => clearInterval(id);
   }, []);
 
-  // Local SSE (Cockpit only)
-  const esRef = useRef<EventSource | null>(null);
+  // Local agent stream (Cockpit only) — shared connection, see useLocalMetricsStream.
+  useLocalMetricsStream((data) => {
+    setLocalSentinel(data);
 
-  useEffect(() => {
-    if (!isLocalHost) return;
+    if (firstMessageTsRef.current === null) {
+      firstMessageTsRef.current = Date.now();
+    }
 
-    let retry: ReturnType<typeof setTimeout>;
+    const watts = getNodePowerW(data);
+    if (watts != null && wattReadingsRef.current.length < 10) {
+      wattReadingsRef.current = [...wattReadingsRef.current, watts];
+      if (wattReadingsRef.current.length === 10) {
+        const avg = wattReadingsRef.current.reduce((a, b) => a + b, 0) / 10;
+        setSessionBaselineWatts(avg);
+      }
+    }
 
-    const connect = () => {
-      const es = new EventSource('/api/metrics');
-      esRef.current = es;
-
-      es.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data) as SentinelMetrics;
-          setLocalSentinel(data);
-
-          if (firstMessageTsRef.current === null) {
-            firstMessageTsRef.current = Date.now();
-          }
-
-          const watts = getNodePowerW(data);
-          if (watts != null && wattReadingsRef.current.length < 10) {
-            wattReadingsRef.current = [...wattReadingsRef.current, watts];
-            if (wattReadingsRef.current.length === 10) {
-              const avg = wattReadingsRef.current.reduce((a, b) => a + b, 0) / 10;
-              setSessionBaselineWatts(avg);
-            }
-          }
-
-          // Track inference_state transitions for eviction / idle-resource cards.
-          const state = data.inference_state ?? 'idle';
-          const prev  = localInferenceStateRef.current;
-          if (state === 'live') {
-            setLocalIdleStartMs(null); // actively inferring — reset idle clock
-            if (!hadActivityRef.current) {
-              hadActivityRef.current = true;
-              setHadAnyActivity(true);
-            }
-          } else if (prev === 'live' || (prev === null && localIdlePreseededRef.current)) {
-            // Transitioned from live → idle (or first non-live frame after preseed)
-            setLocalIdleStartMs(ts => ts ?? Date.now());
-          } else if (prev === null && !localIdlePreseededRef.current) {
-            // First frame, preseed not yet done — set idle clock conservatively
-            setLocalIdleStartMs(ts => ts ?? Date.now());
-          }
-          localInferenceStateRef.current = state;
-        } catch { /* malformed frame */ }
-      };
-
-      es.onerror = () => {
-        es.close();
-        esRef.current = null;
-        retry = setTimeout(connect, 3_000);
-      };
-    };
-
-    connect();
-    return () => {
-      clearTimeout(retry);
-      esRef.current?.close();
-      esRef.current = null;
-    };
-  }, []);
+    // Track inference_state transitions for eviction / idle-resource cards.
+    const state = data.inference_state ?? 'idle';
+    const prev  = localInferenceStateRef.current;
+    if (state === 'live') {
+      setLocalIdleStartMs(null); // actively inferring — reset idle clock
+      if (!hadActivityRef.current) {
+        hadActivityRef.current = true;
+        setHadAnyActivity(true);
+      }
+    } else if (prev === 'live' || (prev === null && localIdlePreseededRef.current)) {
+      // Transitioned from live → idle (or first non-live frame after preseed)
+      setLocalIdleStartMs(ts => ts ?? Date.now());
+    } else if (prev === null && !localIdlePreseededRef.current) {
+      // First frame, preseed not yet done — set idle clock conservatively
+      setLocalIdleStartMs(ts => ts ?? Date.now());
+    }
+    localInferenceStateRef.current = state;
+  });
 
   // ── Localhost: pre-seed idle start from DuckDB history ───────────────────
   // Fetches the last hour of 1-min aggregates to find when inference was last
@@ -1253,7 +1243,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         }
       })
       .catch(() => {}); // non-fatal; SSE tracking fills in the gap
-  }, [isLocalHost, localSentinel?.node_id]);
+  }, [localSentinel?.node_id]);
 
   // ── Fleet activity tracking (Mission Control only) ────────────────────────
   // On every SSE frame, track inference_state transitions per node so eviction

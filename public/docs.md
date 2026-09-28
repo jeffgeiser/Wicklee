@@ -230,7 +230,7 @@ The agent computes inference state once per second as a pure function from senso
 TTFT (Time to First Token) resolution priority:
 1. **vLLM histogram** — production traffic (most accurate)
 2. **Proxy rolling average** — real requests through optional proxy
-3. **Ollama probe** — synthetic 20-token baseline (~30s cadence)
+3. **Ollama probe** — synthetic 20-token baseline (at most every 10 min, only against an already-loaded model)
 
 ---
 
@@ -1013,13 +1013,13 @@ Tools that require arguments (like `get_node_detail`):
 
 ## Inline Proxy (Ollama)
 
-By default, Wicklee monitors inference using a lightweight synthetic probe (20 tokens every ~30 seconds). The optional inline proxy intercepts real Ollama traffic to provide continuous, production-grade metrics with zero sampling gap.
+By default, Wicklee measures a baseline with a lightweight synthetic probe (20 tokens, at most every 10 minutes, only against a model that is already loaded — it never loads one). The optional inline proxy intercepts real Ollama traffic to provide continuous, production-grade metrics with zero sampling gap.
 
 ### What the proxy adds
 
 | Metric | Probe (default) | With Proxy |
 |--------|-----------------|------------|
-| tok/s | Synthetic baseline (~30s cadence) | Exact from real requests (continuous) |
+| tok/s | Synthetic baseline (≤ every 10 min) | Exact from real requests (continuous) |
 | TTFT | Cold-start synthetic | Rolling average from production traffic |
 | E2E Latency | — | Full request duration (prompt + generation) |
 | Request Count | — | Cumulative total since agent start |
@@ -1083,11 +1083,11 @@ The proxy works locally on all tiers (Community included). Proxy-derived metrics
 
 | Runtime | Without proxy | With proxy |
 |---------|--------------|------------|
-| **Ollama** | Synthetic probe (30s cadence); `/api/ps` for inference detection | Exact continuous tok/s, TTFT, E2E latency, request count — attributed per model |
+| **Ollama** | Synthetic probe (≤ every 10 min); `/api/ps` for inference detection | Exact continuous tok/s, TTFT, E2E latency, request count — attributed per model |
 | **vLLM** | Live aggregate throughput from Prometheus `/metrics` (exact, no proxy needed for single-model) | Per-model tok/s in multi-model deployments — see below |
 | **llama.cpp** | Synthetic probe | Not yet supported |
 
-**Ollama** is where the proxy has the most impact. Ollama doesn't expose request-level timing or per-model throughput natively — the proxy is the only way to get exact, continuous metrics without the 30-second sampling gap.
+**Ollama** is where the proxy has the most impact. Ollama doesn't expose request-level timing or per-model throughput natively — the proxy is the only way to get exact, continuous metrics without the gaps between synthetic probes.
 
 **vLLM** already exposes aggregate throughput and TTFT histograms via its `/metrics` Prometheus endpoint, so a proxy isn't needed for accurate single-model monitoring. However, if you run multiple models on a single vLLM instance, the Prometheus endpoint reports server-wide aggregate throughput — it doesn't break down tok/s by model. A proxy in front of vLLM reads the `"model"` field from each `/v1/chat/completions` request body and attributes throughput, TTFT, and request counts per model, enabling per-model WES scores and accurate Model Fit efficiency data. Without the proxy, multi-model vLLM nodes show `—` for per-model efficiency.
 
@@ -1120,6 +1120,14 @@ Returns standard Prometheus text format with 7 gauges per node, labeled by `node
 Wicklee is zero-config by default. Optional settings:
 
 **Config file:** `/Library/Application Support/Wicklee/config.toml` (macOS) or `/etc/wicklee/config.toml` (Linux)
+
+**Synthetic probe.** When no proxy is active, the agent measures a baseline tok/s by sending a 20-token request to a model that is *already loaded* (it never loads one), at most every `interval_minutes`. Turn it off entirely with:
+
+```toml
+[probe]
+enabled = false          # default true
+interval_minutes = 10    # default 10, minimum 1
+```
 
 | Setting | Default | Description |
 |---------|---------|-------------|

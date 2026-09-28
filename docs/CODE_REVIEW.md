@@ -6,7 +6,7 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Priority 1 — Security (fix before Paddle goes live)
 
-**Status:** S1–S4 and B1 fixed in PR #61. S5–S9 fixed in the follow-up PR (S9 takes effect from the first release published with `SHA256SUMS`).
+**Status:** S1–S4 and B1 fixed in PR #61. S5–S9 fixed in PR #63 (S9 takes effect from the first release published with `SHA256SUMS`).
 
 | # | Where | Issue | Fix | Effort |
 |---|---|---|---|---|
@@ -22,7 +22,7 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Priority 2 — Correctness bugs
 
-**Status:** B1 fixed in PR #61; B2–B10 fixed in the follow-up bug-fix PR.
+**Status:** B1 fixed in PR #61; B2–B10 fixed in PR #64.
 
 | # | Where | Issue | Effort |
 |---|---|---|---|
@@ -38,6 +38,8 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 | B10 | agent: two quant tables disagree (`main.rs:5095` vs `scoring.rs`) | Model-fit results differ depending on which path runs. | S |
 
 ## Priority 3 — Performance
+
+**Status:** fixed in the Priority 3 PR, except these follow-ups: webhook evaluation still runs one `webhook_state` query per subscription, and the alert debounce query runs per rule (only when a rule is about to fire); FleetStreamContext's `lastSeenMsMap` is still a new object every frame; the streaming `powermetrics` / `host_statistics64` rewrite on macOS was skipped.
 
 **Agent (overhead on the customer's host, which matters most for the product claim)**
 - **Idle probes send a real 20-token generation every 30 s.** If no model is loaded, the probe loads one, and each probe resets Ollama's keep_alive timer, so the GPU never idles down. Probe only when the baseline is stale, never load a model to probe, and add a `probe = false` option. (M)
@@ -61,6 +63,8 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Priority 4 — Dead code and cleanup
 
+**Status:** open.
+
 - **Frontend:** unreachable tabs (Scaffolding, AIProviders, Team, Profile, Security, Preferences, Pricing views plus their App cases, about 980 LOC). About 40 unused locals and components flagged by lint. Unused props (Overview `isPro`/`getToken`/`onUpgrade`, etc.). Unused exports `getCachedPerplexityBaseline` and `qualityMultiplier`. Duplicated helpers: 5× `CopyButton`, 4× `fmtAgo` (inconsistent output), the discovery-card helpers, `RANGE_CONFIG`, `TIER_STYLE`, 5× `IS_DEMO`/`IS_AGENT` despite `buildTarget.ts`.
 - **Cloud:** the unused deps `tower-http` and `futures-util`. The `ureq` + `reqwest` overlap (standardize on reqwest). `once_cell` → `LazyLock`. Retired Pro and Business price IDs still wired (keep them for grandfathered subscribers but document an end date). "requires Pro tier" 403s where other gates return 402. Dead `stripe_*` columns, `ObsSeverity`, `ppl_delta_pct`, and `is_pro`. Obsolete DuckDB and cmake lines in `cloud/Dockerfile`.
 - **Agent:** replace `self_update` with `self-replace` (drops indicatif, quick-xml, regex, semver and tempfile). Trim tokio `full`. Fix the "10 Hz" comment (the actual rate is 1 Hz). `cargo clippy` in agent/ fails without `frontend/dist`; add a stub dir or a build.rs guard so Rust CI can run on its own.
@@ -68,6 +72,6 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Feature ideas surfaced by the review
 - A Prometheus exporter **on the agent** (`/metrics` from the latest broadcast frame), so free and self-hosted users can use Grafana without the Team-tier cloud endpoint.
-- A one-shot `GET /api/metrics/snapshot` JSON endpoint on the agent (fixes B8 and makes scripting easy).
-- Stream proxy bodies instead of buffering them (fixes B4, enables multimodal prompts and blob uploads).
-- A dunning-aware Paddle lifecycle (grace period on past_due, a paused state) as part of B1.
+- A one-shot `GET /api/metrics/snapshot` JSON endpoint on the agent (fixes B8 and makes scripting easy). **Shipped in PR #64.**
+- Stream proxy bodies instead of buffering them (fixes B4, enables multimodal prompts and blob uploads). **Passthrough bodies stream as of PR #64; generate/chat still buffer (64 MB cap).**
+- A dunning-aware Paddle lifecycle (grace period on past_due, a paused state) as part of B1. **Done in PR #61:** past_due keeps the tier, paused revokes, resumed re-grants.
