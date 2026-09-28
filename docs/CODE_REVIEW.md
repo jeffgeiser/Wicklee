@@ -6,10 +6,12 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Priority 1 — Security (fix before Paddle goes live)
 
+**Status:** S1–S4 and B1 are fixed on branch `claude/elegant-clarke-j2rff4`. S5–S9 are still open.
+
 | # | Where | Issue | Fix | Effort |
 |---|---|---|---|---|
 | S1 | cloud `resolve_clerk_user` (~1273) | If exactly one user has `clerk_id IS NULL`, the next **new** Clerk sign-in is linked to that account. The public legacy `POST /api/auth/signup` creates such users, so someone can register with a password and capture the next stranger's Clerk account. | Remove the auto-link, or restrict it to a one-time migration by verified email. Retire the legacy signup and login routes. | S |
-| S2 | cloud Paddle webhook (~10150) | (a) Signature checking is **skipped entirely** when `PADDLE_WEBHOOK_SECRET` is unset. (b) `ts` is never checked, so a signed event can be replayed forever. (c) The HMAC runs over a `from_utf8_lossy` copy instead of the raw bytes. (d) Only the first `h1=` is checked, which breaks secret rotation. | Fail closed without the secret. Reject events where \|now−ts\| > 5 min. HMAC the raw body. Accept any matching `h1`. | S |
+| S2 | cloud Paddle webhook (~10150) | (a) `ts` is never checked, so a signed event can be replayed forever. (b) The HMAC runs over a `from_utf8_lossy` copy instead of the raw bytes. (c) Only the first `h1=` is checked, which breaks secret rotation. (It already failed closed when the secret was unset; the first report said otherwise, which was wrong.) | Reject events where \|now−ts\| > 5 min. HMAC the raw body. Accept any matching `h1`. | S |
 | S3 | cloud `client_ip` (~2004) | Trusts the first `X-Forwarded-For` entry, which the client controls. That makes the auth rate limiter (the only brake on guessing 6-digit pairing codes) bypassable. | Use the proxy-appended last hop. Add a per-user limit on activate. | S |
 | S4 | cloud activate (~5125) | The node-limit `COUNT` runs before the claim `UPDATE`, which is racy. `nodes.code` is not unique, so one activate can claim several nodes. | Add a unique partial index on `nodes(code) WHERE code IS NOT NULL`. Do the count and the claim in one transaction. | S |
 | S5 | cloud webhook, drain, OTel and alert URLs (~1746, 4642) | Only the `http(s)://` prefix is validated, which allows SSRF. The `/test` endpoints echo upstream status, so they work as an internal port scanner. | Resolve the host. Block loopback, private, link-local and metadata ranges. | M |
