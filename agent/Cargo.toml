@@ -33,6 +33,8 @@ reqwest       = { version = "0.12", default-features = false, features = ["json"
 # Binary self-replacement for the auto-update flow.
 # default-features = false: we use reqwest directly for downloads; only need self_replace().
 self_update   = { version = "0.41", default-features = false }
+# SHA-256 verification of auto-update downloads against the release's SHA256SUMS.
+sha2          = "0.10"
 # Local metrics store — three-tier DuckDB schema (raw 1Hz / 1-min / 1-hr).
 # `bundled` compiles DuckDB from source for a fully self-contained binary.
 # Gated to non-musl targets: musl static linking + DuckDB C++ is unsupported;

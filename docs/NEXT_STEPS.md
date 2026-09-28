@@ -89,7 +89,8 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
       (fine until the first request arrives). See `docs/SSO.md`.
 
 ## Engineering follow-ups
-- [ ] Work through `docs/CODE_REVIEW.md` — security items S1–S4 before Paddle goes live.
+- [x] Security items S1–S9 from `docs/CODE_REVIEW.md` fixed. Remaining: bugs B2–B10, performance, cleanup.
+- [ ] After the next agent release, confirm the release page lists a `SHA256SUMS` file (agents refuse to auto-update without it).
 
 ## From earlier GTM notes (still open)
 - [ ] ~10 outreach targets for the design-partner program (`/design-partners`), then first emails.

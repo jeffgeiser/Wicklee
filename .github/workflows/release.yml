@@ -288,6 +288,11 @@ jobs:
         with:
           merge-multiple: true
 
+      # Agents verify auto-update downloads against this file and refuse to
+      # install a release without it (agent/src/main.rs check_and_apply_update).
+      - name: Generate SHA256SUMS
+        run: sha256sum wicklee-agent-* > SHA256SUMS && cat SHA256SUMS
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -311,6 +316,7 @@ jobs:
             wicklee-agent-linux-aarch64
             wicklee-agent-linux-x86_64-nvidia
             wicklee-agent-linux-aarch64-nvidia
+            SHA256SUMS
 
   # ── Publish nightly release (main branch + tags + manual dispatch) ────────────
   # Updates the rolling nightly pre-release. Runs on both main pushes AND version
@@ -333,6 +339,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+
+      # Agents verify auto-update downloads against this file and refuse to
+      # install a release without it (agent/src/main.rs check_and_apply_update).
+      - name: Generate SHA256SUMS
+        run: sha256sum wicklee-agent-* > SHA256SUMS && cat SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -358,3 +369,4 @@ jobs:
             wicklee-agent-linux-aarch64
             wicklee-agent-linux-x86_64-nvidia
             wicklee-agent-linux-aarch64-nvidia
+            SHA256SUMS

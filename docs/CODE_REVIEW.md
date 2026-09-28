@@ -6,7 +6,7 @@ commit `9b70cb5`. Effort: S = under an hour, M = half a day to a day, L = severa
 
 ## Priority 1 — Security (fix before Paddle goes live)
 
-**Status:** S1–S4 and B1 are fixed on branch `claude/elegant-clarke-j2rff4`. S5–S9 are still open.
+**Status:** S1–S4 and B1 fixed in PR #61. S5–S9 fixed in the follow-up PR (S9 takes effect from the first release published with `SHA256SUMS`).
 
 | # | Where | Issue | Fix | Effort |
 |---|---|---|---|---|

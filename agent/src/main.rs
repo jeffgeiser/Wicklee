@@ -890,11 +890,59 @@ fn push_event(
     }
 }
 
-/// Response shape of GET https://wicklee.dev/api/agent/version
+/// Response shape of GET https://wicklee.dev/api/agent/version.
+/// `download_url` is deliberately ignored: the agent builds the URL itself
+/// from the tag (see `update_asset_urls`), so the version endpoint can only
+/// choose WHICH published release, never where the binary comes from.
 #[derive(Deserialize)]
 struct AgentVersionResponse {
-    latest:       String,
-    download_url: String,
+    latest: String,
+}
+
+/// Where release binaries are published. Auto-update downloads only from here.
+const UPDATE_RELEASE_BASE: &str = "https://github.com/jeffgeiser/Wicklee/releases/download";
+
+/// Release asset name for this build's platform (mirrors the cloud's map).
+fn update_asset_name(platform: &str) -> Option<&'static str> {
+    match platform {
+        "darwin-aarch64"      => Some("wicklee-agent-darwin-aarch64"),
+        "linux-x86_64"        => Some("wicklee-agent-linux-x86_64"),
+        "linux-aarch64"       => Some("wicklee-agent-linux-aarch64"),
+        "linux-x86_64-nvidia" => Some("wicklee-agent-linux-x86_64-nvidia"),
+        "windows-x86_64"      => Some("wicklee-agent-windows-x86_64.exe"),
+        _ => None,
+    }
+}
+
+/// (binary URL, SHA256SUMS URL) for a release tag. The tag must be a plain
+/// `vX.Y.Z` so it can't smuggle path segments into the URL.
+fn update_asset_urls(tag: &str, asset: &str) -> Option<(String, String)> {
+    let v = tag.strip_prefix('v')?;
+    let parts: Vec<&str> = v.split('.').collect();
+    if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit())) {
+        return None;
+    }
+    Some((
+        format!("{UPDATE_RELEASE_BASE}/{tag}/{asset}"),
+        format!("{UPDATE_RELEASE_BASE}/{tag}/SHA256SUMS"),
+    ))
+}
+
+/// Expected hex digest for `asset` from `sha256sum` output (`<hex>  <name>`,
+/// or `<hex> *<name>` in binary mode).
+fn expected_sha256(sums: &str, asset: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let mut it = line.split_whitespace();
+        let hash = it.next()?;
+        let name = it.next()?.trim_start_matches('*');
+        (name == asset && hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+            .then(|| hash.to_ascii_lowercase())
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ── Hardware Helpers ──────────────────────────────────────────────────────────
@@ -6920,6 +6968,7 @@ async fn check_and_apply_update(
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(10))
+        .https_only(true)
         .user_agent(format!("wicklee-agent/{current}"))
         .build()
     {
@@ -6946,10 +6995,33 @@ async fn check_and_apply_update(
     }
 
     let new_version = info.latest.trim_start_matches('v').to_string();
+    let Some(asset) = update_asset_name(platform) else {
+        eprintln!("[update] no release asset for platform {platform} — skipping");
+        return;
+    };
+    let Some((binary_url, sums_url)) = update_asset_urls(&format!("v{new_version}"), asset) else {
+        eprintln!("[update] refusing malformed release tag {:?}", info.latest);
+        return;
+    };
     eprintln!("[update] update available: v{current} → v{new_version}  downloading...");
 
+    // ── Expected checksum (fail closed) ────────────────────────────────────────
+    // The release's SHA256SUMS must list this asset; a release without one is
+    // not installed. Protects against a truncated/corrupted/substituted download.
+    let expected = match client.get(&sums_url).send().await {
+        Ok(r) if r.status().is_success() => match r.text().await {
+            Ok(t) => expected_sha256(&t, asset),
+            Err(_) => None,
+        },
+        _ => None,
+    };
+    let Some(expected) = expected else {
+        eprintln!("[update] no SHA256SUMS entry for {asset} in v{new_version} — not updating");
+        return;
+    };
+
     // ── Download binary ────────────────────────────────────────────────────────
-    let download_resp = match client.get(&info.download_url).send().await {
+    let download_resp = match client.get(&binary_url).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r)  => { eprintln!("[update] download returned {}", r.status()); return; }
         Err(e) => { eprintln!("[update] download request failed: {e}"); return; }
@@ -6960,6 +7032,11 @@ async fn check_and_apply_update(
         Ok(_)  => { eprintln!("[update] download completed with zero bytes — aborting"); return; }
         Err(e) => { eprintln!("[update] failed to read download body: {e}"); return; }
     };
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        eprintln!("[update] checksum mismatch for {asset}: expected {expected}, got {actual} — not updating");
+        return;
+    }
 
     // Write to a sibling temp file so rename stays on the same filesystem.
     let current_exe = match std::env::current_exe() {
@@ -8090,5 +8167,45 @@ mod thermal_tests {
     fn full_clocks_when_cool_are_normal() {
         let r = amd_clock_ratio_result(0.98, Some(55.0));
         assert_eq!(r.state, "Normal");
+    }
+}
+
+#[cfg(test)]
+mod update_integrity_tests {
+    use super::*;
+
+    #[test]
+    fn asset_urls_are_pinned_to_github_and_reject_odd_tags() {
+        let (bin, sums) = update_asset_urls("v0.7.3", "wicklee-agent-linux-x86_64").unwrap();
+        assert_eq!(bin, "https://github.com/jeffgeiser/Wicklee/releases/download/v0.7.3/wicklee-agent-linux-x86_64");
+        assert_eq!(sums, "https://github.com/jeffgeiser/Wicklee/releases/download/v0.7.3/SHA256SUMS");
+        for bad in ["0.7.3", "v0.7", "v0.7.3.1", "v0.7.x", "v0.7.3/../../evil", "v..", "nightly"] {
+            assert!(update_asset_urls(bad, "a").is_none(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn expected_sha256_parses_sha256sum_output() {
+        let h = "a".repeat(64);
+        let sums = format!("{h}  wicklee-agent-linux-x86_64\n{}  wicklee-agent-linux-aarch64\n", "b".repeat(64));
+        assert_eq!(expected_sha256(&sums, "wicklee-agent-linux-x86_64"), Some(h.clone()));
+        assert_eq!(expected_sha256(&format!("{h} *win.exe"), "win.exe"), Some(h.clone()));
+        // Exact name match only; malformed digests are ignored.
+        assert_eq!(expected_sha256(&sums, "wicklee-agent-linux-x86_64-nvidia"), None);
+        assert_eq!(expected_sha256("xyz  wicklee-agent-linux-x86_64", "wicklee-agent-linux-x86_64"), None);
+        assert_eq!(expected_sha256("", "a"), None);
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    #[test]
+    fn every_platform_has_an_asset() {
+        for p in ["darwin-aarch64", "linux-x86_64", "linux-aarch64", "linux-x86_64-nvidia", "windows-x86_64"] {
+            assert!(update_asset_name(p).is_some(), "{p}");
+        }
+        assert!(update_asset_name("unknown").is_none());
     }
 }

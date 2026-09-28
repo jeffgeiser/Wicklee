@@ -465,6 +465,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     // can arrive out of order, and an older event must not undo a newer one.
     sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS paddle_event_at TIMESTAMPTZ")
         .execute(pool).await.ok();
+    // Set by DELETE /api/auth/stream-token; fleet SSE streams opened before it
+    // end at their next refresh (stream tokens are only checked at connect).
+    sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS streams_revoked_ms BIGINT")
+        .execute(pool).await.ok();
 
     sqlx::query("
         CREATE TABLE IF NOT EXISTS sessions (
@@ -1051,13 +1055,10 @@ async fn run_pg_migrations(pool: &sqlx::PgPool) {
     sqlx::query("ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT NOT NULL DEFAULT 0")
         .execute(pool).await.ok();
 
-    // ── Backfill: if only one user exists, assign all orphaned nodes to them. ──
-    sqlx::query("
-        UPDATE nodes
-        SET user_id = (SELECT id FROM users LIMIT 1)
-        WHERE user_id IS NULL
-          AND (SELECT COUNT(*) FROM users) = 1
-    ").execute(pool).await.ok();
+    // (Removed: a boot-time backfill that gave every unowned node to the sole
+    // user whenever exactly one user existed. It ran on EVERY boot, so on a
+    // single-user install any pending or spam `/api/pair/claim` row became an
+    // owned node without the 6-digit activation step.)
 
     println!("  PG migrations complete");
 }
@@ -1177,6 +1178,29 @@ fn mint_node_token(_node_id: &str) -> String {
     // was guessable: node_id is not secret and the mint time is narrow, so an
     // attacker who knew a node_id could forge its telemetry token.
     format!("wk_{}", Uuid::new_v4().simple())
+}
+
+/// Node session tokens are stored hashed (`sha256:<hex>`), like API keys, so a
+/// database read doesn't hand out working telemetry credentials. Tokens
+/// minted before hashing are still plaintext rows; ingest accepts them and
+/// rewrites them hashed on first use.
+fn hash_node_token(token: &str) -> String {
+    use sha2::Digest;
+    format!("sha256:{}", hex::encode(sha2::Sha256::digest(token.as_bytes())))
+}
+
+/// Constant-time check of a presented node token against the stored value.
+/// Returns `Some(true)` when the stored value is a legacy plaintext token
+/// that should be re-stored hashed.
+fn node_token_check(stored: &str, presented: &str) -> Option<bool> {
+    use subtle::ConstantTimeEq;
+    if stored.starts_with("sha256:") {
+        let ok: bool = stored.as_bytes().ct_eq(hash_node_token(presented).as_bytes()).into();
+        ok.then_some(false)
+    } else {
+        let ok: bool = stored.as_bytes().ct_eq(presented.as_bytes()).into();
+        ok.then_some(true)
+    }
 }
 
 fn extract_bearer(headers: &HeaderMap) -> Option<String> {
@@ -1380,9 +1404,14 @@ async fn require_user_org_role(
     clerk_keys: &[JwkKey],
 ) -> Option<(String, Option<String>, OrgRole)> {
     // Legacy DIY sessions — no org concept, full control of own resources.
-    if let Ok(id) = sqlx::query_scalar::<_, String>(
-        "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1"
-    ).bind(token).fetch_one(pool).await {
+    // Only honored where password auth is enabled (no Clerk), and only for
+    // LEGACY_SESSION_TTL_MS after login; they used to be valid forever.
+    if legacy_auth_enabled()
+        && let Ok(id) = sqlx::query_scalar::<_, String>(
+            "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.token = $1 AND s.created_at >= $2"
+        ).bind(token).bind(legacy_session_cutoff()).fetch_one(pool).await
+    {
         return Some((id, None, OrgRole::Admin));
     }
 
@@ -1393,12 +1422,17 @@ async fn require_user_org_role(
     Some((user_id, org_id, role))
 }
 
-/// Returns (column_name, bind_value) for tenant-scoped queries.
-/// When user has an org_id, scope to org_id. Otherwise scope to user_id.
+/// Returns (column_predicate, bind_value) for tenant-scoped queries, used as
+/// `WHERE {col} = $n`. With an org, scope to org_id. Otherwise scope to the
+/// user's PERSONAL rows only: `org_id IS NULL AND user_id`. A bare `user_id`
+/// also matched rows the user created inside an org, so after being removed
+/// from the org they could still see and control those nodes (and read the
+/// org's audit entries) from a personal session. This matches the
+/// `COALESCE(org_id, user_id)` tenant key used elsewhere.
 fn tenant_scope<'a>(user_id: &'a str, org_id: &'a Option<String>) -> (&'static str, &'a str) {
     match org_id.as_deref() {
         Some(oid) => ("org_id", oid),
-        None => ("user_id", user_id),
+        None => ("org_id IS NULL AND user_id", user_id),
     }
 }
 
@@ -1475,6 +1509,13 @@ fn legacy_auth_enabled() -> bool {
     *FLAG.get_or_init(|| {
         std::env::var("CLERK_JWKS_URL").map(|v| v.trim().is_empty()).unwrap_or(true)
     })
+}
+
+/// Legacy password sessions expire this long after login.
+const LEGACY_SESSION_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+fn legacy_session_cutoff() -> i64 {
+    now_ms().saturating_sub(LEGACY_SESSION_TTL_MS) as i64
 }
 
 fn legacy_auth_disabled() -> axum::response::Response {
@@ -1757,9 +1798,9 @@ async fn handle_put_audit_drain(
         return (StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": "Audit logging requires Business tier or above", "upgrade": true }))).into_response();
     }
-    if !body.url.starts_with("https://") && !body.url.starts_with("http://") {
+    if let Err(e) = resolve_outbound(&body.url).await {
         return (StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "url must be http(s) — https strongly recommended" }))).into_response();
+            Json(serde_json::json!({ "error": format!("{e} (https strongly recommended)") }))).into_response();
     }
 
     let secret_bytes: [u8; 32] = std::array::from_fn(|_| rand::random());
@@ -2779,6 +2820,8 @@ async fn handle_revoke_stream_tokens(
 
     let _ = sqlx::query("DELETE FROM stream_tokens WHERE user_id = $1")
         .bind(&user_id).execute(&state.pool).await;
+    let _ = sqlx::query("UPDATE users SET streams_revoked_ms = $1 WHERE id = $2")
+        .bind(now_ms() as i64).bind(&user_id).execute(&state.pool).await;
 
     audit(&state.pool, &user_id, &None, "stream_tokens.revoked", "", serde_json::json!({}));
     StatusCode::NO_CONTENT
@@ -2809,6 +2852,12 @@ async fn handle_signup(
     if body.full_name.trim().is_empty() {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "Full name required" }))).into_response();
+    }
+    // Signup emails are never verified, so the DEV_ACCOUNT_EMAIL address
+    // (which bypasses node limits) can't be claimed through this route.
+    if is_dev_account(&email) {
+        return (StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "This address can't be registered here" }))).into_response();
     }
 
     let password = body.password.clone();
@@ -2910,6 +2959,7 @@ async fn handle_me(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    if !legacy_auth_enabled() { return legacy_auth_disabled(); }
     let token = match extract_bearer(&headers) {
         Some(t) => t,
         None => return (StatusCode::UNAUTHORIZED,
@@ -2920,8 +2970,8 @@ async fn handle_me(
         "SELECT u.id, u.email, u.full_name, u.role, u.is_pro
          FROM sessions s
          JOIN users u ON u.id = s.user_id
-         WHERE s.token = $1"
-    ).bind(&token).fetch_one(&state.pool).await;
+         WHERE s.token = $1 AND s.created_at >= $2"
+    ).bind(&token).bind(legacy_session_cutoff()).fetch_one(&state.pool).await;
 
     match row {
         Err(_) => (StatusCode::UNAUTHORIZED,
@@ -3011,7 +3061,7 @@ async fn handle_claim(
            -- nodes reach this path (owned ones are rejected above).
            paired_at     = EXCLUDED.paired_at,
            last_seen     = EXCLUDED.last_seen"
-    ).bind(&node_id).bind(&body.fleet_url).bind(&token).bind(&body.code).bind(ts)
+    ).bind(&node_id).bind(&body.fleet_url).bind(hash_node_token(&token)).bind(&body.code).bind(ts)
     .execute(&state.pool).await;
 
     state.metrics.write().unwrap()
@@ -3198,8 +3248,18 @@ async fn handle_telemetry(
 
     let desired_profile: Option<String> = match node_row {
         None => return StatusCode::GONE.into_response(), // 410 — node deleted from fleet
-        Some((ref t, _)) if t != &bearer => return StatusCode::UNAUTHORIZED.into_response(),
-        Some((_, dp)) => dp,
+        Some((stored, dp)) => match node_token_check(&stored, &bearer) {
+            None => return StatusCode::UNAUTHORIZED.into_response(),
+            Some(needs_rehash) => {
+                if needs_rehash {
+                    let _ = sqlx::query(
+                        "UPDATE nodes SET session_token = $1 WHERE wk_id = $2 AND session_token = $3"
+                    ).bind(hash_node_token(&bearer)).bind(&node_id).bind(&stored)
+                    .execute(&state.pool).await;
+                }
+                dp
+            }
+        },
     };
 
     let duck_row = metrics_row_from_payload(&payload, ts);
@@ -4693,9 +4753,9 @@ async fn handle_webhook_create(
     }
 
     // Validate body.
-    if !body.url.starts_with("https://") && !body.url.starts_with("http://") {
+    if let Err(e) = resolve_outbound(&body.url).await {
         return (StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "url must be http(s)" }))).into_response();
+            Json(serde_json::json!({ "error": e }))).into_response();
     }
     if !SUPPORTED_WEBHOOK_EVENTS.contains(&body.event_type.as_str()) {
         return (StatusCode::BAD_REQUEST,
@@ -4883,6 +4943,146 @@ async fn handle_webhook_test(
     }
 }
 
+// ── Outbound URL guard (SSRF) ─────────────────────────────────────────────────
+//
+// Webhook, audit-drain, OTel and Slack URLs are customer-supplied, and the
+// `/test` endpoints echo the receiver's status code. Unchecked, that turns the
+// control plane into a probe of its own network (Railway internal services,
+// cloud metadata at 169.254.169.254, localhost admin ports). Every outbound
+// call to such a URL goes through `resolve_outbound*`, which:
+//   - requires http(s) and a host,
+//   - resolves the host and rejects any non-public address,
+//   - returns the checked addresses so the client is PINNED to them (no DNS
+//     rebinding between check and connect),
+// and the clients built from it never follow redirects (a public receiver
+// could otherwise 302 us to an internal address).
+// Self-hosted installs deliver to their own private network by design, so
+// private targets are allowed there (or with OUTBOUND_ALLOW_PRIVATE=true).
+
+fn outbound_private_allowed() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        is_self_hosted()
+            || matches!(std::env::var("OUTBOUND_ALLOW_PRIVATE").as_deref(), Ok("true") | Ok("1"))
+    })
+}
+
+fn is_public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let o = ip.octets();
+    !(ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
+        || ip.is_broadcast() || ip.is_multicast() || ip.is_documentation()
+        || o[0] == 0                                  // 0.0.0.0/8
+        || (o[0] == 100 && (o[1] & 0xc0) == 64)       // 100.64.0.0/10 CGNAT
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0)    // 192.0.0.0/24
+        || (o[0] == 198 && (o[1] & 0xfe) == 18)       // 198.18.0.0/15
+        || o[0] >= 240)                               // reserved
+}
+
+fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => is_public_ipv4(v4),
+        std::net::IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public_ipv4(v4);
+            }
+            let seg = v6.segments();
+            !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast()
+                || (seg[0] & 0xfe00) == 0xfc00                 // fc00::/7 ULA
+                || (seg[0] & 0xffc0) == 0xfe80                 // fe80::/10 link-local
+                || (seg[0] == 0x0064 && seg[1] == 0xff9b)      // 64:ff9b::/96 NAT64
+                || (seg[0] == 0x2001 && seg[1] == 0x0db8))     // documentation
+        }
+    }
+}
+
+/// A validated outbound destination: the parsed URL, its host as written,
+/// and the resolved addresses a client must be pinned to.
+struct OutboundTarget {
+    url:   reqwest::Url,
+    host:  String,
+    addrs: Vec<std::net::SocketAddr>,
+}
+
+enum OutboundHost {
+    Ip(std::net::IpAddr),
+    Name(String),
+}
+
+fn parse_outbound_url(raw: &str) -> Result<(reqwest::Url, OutboundHost, u16), String> {
+    let url = reqwest::Url::parse(raw.trim()).map_err(|_| "url is not a valid URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("url must be http(s)".into());
+    }
+    let host = url.host_str().filter(|h| !h.is_empty())
+        .ok_or_else(|| "url must include a host".to_string())?
+        .to_string();
+    let port = url.port_or_known_default().ok_or_else(|| "url has no port".to_string())?;
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let h = match bare.parse::<std::net::IpAddr>() {
+        Ok(ip) => OutboundHost::Ip(ip),
+        Err(_) => OutboundHost::Name(host),
+    };
+    Ok((url, h, port))
+}
+
+fn check_outbound_addrs(addrs: Vec<std::net::SocketAddr>) -> Result<Vec<std::net::SocketAddr>, String> {
+    if addrs.is_empty() {
+        return Err("url host does not resolve".into());
+    }
+    if !outbound_private_allowed() && addrs.iter().any(|a| !is_public_ip(a.ip())) {
+        return Err("url resolves to a private, loopback or link-local address, which is not allowed".into());
+    }
+    Ok(addrs)
+}
+
+/// Async validation + resolution (request handlers, reqwest delivery).
+async fn resolve_outbound(raw: &str) -> Result<OutboundTarget, String> {
+    let (url, host, port) = parse_outbound_url(raw)?;
+    let (host, addrs) = match host {
+        OutboundHost::Ip(ip) => (ip.to_string(), vec![std::net::SocketAddr::new(ip, port)]),
+        OutboundHost::Name(name) => {
+            let addrs: Vec<_> = tokio::net::lookup_host((name.as_str(), port)).await
+                .map_err(|_| "url host does not resolve".to_string())?.collect();
+            (name, addrs)
+        }
+    };
+    Ok(OutboundTarget { url, host, addrs: check_outbound_addrs(addrs)? })
+}
+
+/// Blocking validation + resolution (ureq delivery inside spawn_blocking).
+fn resolve_outbound_blocking(raw: &str) -> Result<OutboundTarget, String> {
+    use std::net::ToSocketAddrs;
+    let (url, host, port) = parse_outbound_url(raw)?;
+    let (host, addrs) = match host {
+        OutboundHost::Ip(ip) => (ip.to_string(), vec![std::net::SocketAddr::new(ip, port)]),
+        OutboundHost::Name(name) => {
+            let addrs: Vec<_> = (name.as_str(), port).to_socket_addrs()
+                .map_err(|_| "url host does not resolve".to_string())?.collect();
+            (name, addrs)
+        }
+    };
+    Ok(OutboundTarget { url, host, addrs: check_outbound_addrs(addrs)? })
+}
+
+/// reqwest client pinned to the target's checked addresses, no redirects.
+fn pinned_reqwest_client(t: &OutboundTarget, timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(&t.host, &t.addrs)
+        .build().map_err(|e| e.to_string())
+}
+
+/// ureq agent pinned to the target's checked addresses, no redirects.
+fn pinned_ureq_agent(t: &OutboundTarget, timeout: Duration) -> ureq::Agent {
+    let addrs = t.addrs.clone();
+    ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout(timeout)
+        .resolver(move |_: &str| Ok(addrs.clone()))
+        .build()
+}
+
 /// Sign + POST a webhook payload. Returns the receiver's HTTP status on
 /// success or an error message on transport failure.  Fire-and-forget on
 /// caller side — we don't retry; a 5xx receiver is the operator's problem.
@@ -4895,10 +5095,9 @@ async fn deliver_webhook(url: &str, secret: &str, payload: &serde_json::Value) -
     mac.update(body.as_bytes());
     let sig = hex::encode(mac.finalize().into_bytes());
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build().map_err(|e| e.to_string())?;
-    let resp = client.post(url)
+    let target = resolve_outbound(url).await?;
+    let client = pinned_reqwest_client(&target, Duration::from_secs(5))?;
+    let resp = client.post(target.url.clone())
         .header("Content-Type", "application/json")
         .header("X-Wicklee-Signature", format!("sha256={sig}"))
         .header("User-Agent", "Wicklee-Webhook/1.0")
@@ -5355,12 +5554,27 @@ async fn handle_fleet_stream(
         })
     });
     let mut tick: u32 = 0;
+    // The stream token is checked only at connect (it expires in 60 s), so a
+    // logout revocation must also end streams already open: each 60 s refresh
+    // checks the user's revocation time against when this stream started.
+    let stream_started_ms = now_ms() as i64;
 
     let stream = interval_stream.map(move |_| {
         tick += 1;
         if tick.is_multiple_of(30) {
             let uid_ref = uid_stream.clone();
             let oid_ref = oid_stream.clone();
+            let revoked_ms: i64 = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    sqlx::query_scalar::<_, Option<i64>>(
+                        "SELECT streams_revoked_ms FROM users WHERE id = $1"
+                    ).bind(&uid_ref).fetch_optional(&pool).await
+                        .ok().flatten().flatten().unwrap_or(0)
+                })
+            });
+            if revoked_ms >= stream_started_ms {
+                return None;
+            }
             let tv = { let (_, v) = tenant_scope(&uid_ref, &oid_ref); v.to_owned() };
             nodes = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
@@ -5420,8 +5634,10 @@ async fn handle_fleet_stream(
 
         let data = serde_json::to_string(&serde_json::json!({ "nodes": node_list }))
             .unwrap_or_else(|_| r#"{"nodes":[]}"#.to_string());
-        Ok::<_, Infallible>(Event::default().data(data))
-    });
+        Some(Ok::<_, Infallible>(Event::default().data(data)))
+    })
+    .take_while(|frame| frame.is_some())
+    .map(|frame| frame.expect("take_while keeps only Some"));
 
     Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
@@ -6672,7 +6888,11 @@ struct CreateRuleRequest {
 
 fn send_slack(webhook_url: &str, blocks_json: &str) -> bool {
     let body = format!(r#"{{"blocks":{blocks_json}}}"#);
-    match ureq::post(webhook_url)
+    let target = match resolve_outbound_blocking(webhook_url) {
+        Ok(t) => t,
+        Err(e) => { eprintln!("[slack] refusing webhook url: {e}"); return false; }
+    };
+    match pinned_ureq_agent(&target, Duration::from_secs(10)).post(target.url.as_str())
         .set("Content-Type", "application/json")
         .send_string(&body)
     {
@@ -8585,6 +8805,14 @@ async fn handle_create_channel(
     if body.channel_type == "pagerduty" && !is_team_or_above(&tier) {
         return (StatusCode::PAYMENT_REQUIRED,
             Json(serde_json::json!({ "error": "PagerDuty alerts require Team tier or above" }))).into_response();
+    }
+    if body.channel_type == "slack" {
+        let cfg: serde_json::Value = serde_json::from_str(&body.config_json).unwrap_or_default();
+        let url = cfg.get("webhook_url").and_then(|v| v.as_str()).unwrap_or("");
+        if let Err(e) = resolve_outbound(url).await {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("webhook_url: {e}") }))).into_response();
+        }
     }
 
     let id = Uuid::new_v4().to_string();
@@ -10532,6 +10760,11 @@ async fn handle_put_otel_config(
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Team tier required"}))).into_response();
     }
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+    if body.enabled && !body.endpoint_url.trim().is_empty()
+        && let Err(e) = resolve_outbound(&body.endpoint_url).await
+    {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("endpoint_url: {e}")}))).into_response();
+    }
     let interval = body.export_interval_s.clamp(15, 300);
     sqlx::query("
         INSERT INTO otel_config (user_id, enabled, endpoint_url, auth_headers, export_interval_s, created_at, updated_at)
@@ -10651,7 +10884,12 @@ async fn otel_exporter_task(state: AppState) {
 
             // Fire-and-forget: POST to OTLP endpoint using ureq in a blocking task.
             tokio::task::spawn_blocking(move || {
-                let mut req = ureq::post(&format!("{endpoint}/v1/metrics"))
+                let target = match resolve_outbound_blocking(&format!("{}/v1/metrics", endpoint.trim_end_matches('/'))) {
+                    Ok(t) => t,
+                    Err(e) => { eprintln!("[otel] refusing endpoint: {e}"); return; }
+                };
+                let mut req = pinned_ureq_agent(&target, Duration::from_secs(10))
+                    .post(target.url.as_str())
                     .set("Content-Type", "application/json");
 
                 // Parse auth headers JSON and apply them.
@@ -11159,10 +11397,10 @@ async fn main() {
 
     run_pg_migrations(&pool).await;
 
-    // One-shot node purge.
-    if std::env::var("RESET_NODES").as_deref() == Ok("1") {
-        sqlx::query("DELETE FROM nodes").execute(&pool).await.expect("RESET_NODES purge failed");
-        println!("  RESET_NODES=1 \u{2014} all nodes purged.");
+    // RESET_NODES (a "one-shot" DELETE FROM nodes that in fact ran on every
+    // boot while the variable stayed set) was removed. Purge by hand in SQL.
+    if std::env::var("RESET_NODES").is_ok() {
+        eprintln!("  RESET_NODES is set but no longer does anything \u{2014} unset it.");
     }
 
     // Pre-load known nodes. If last_telemetry_json is available, seed the in-memory cache.
@@ -11277,6 +11515,8 @@ async fn main() {
             let now = now_ms() as i64;
             let _ = sqlx::query("DELETE FROM stream_tokens WHERE expires_ms < $1")
                 .bind(now).execute(&pool_cleanup).await;
+            let _ = sqlx::query("DELETE FROM sessions WHERE created_at < $1")
+                .bind(legacy_session_cutoff()).execute(&pool_cleanup).await;
         }
     });
 
@@ -11824,10 +12064,10 @@ mod tenancy_tests {
         assert_eq!(col, "org_id");
         assert_eq!(val, "org_abc");
 
-        // No org → personal scope.
+        // No org → personal scope, excluding rows created inside an org.
         let none: Option<String> = None;
         let (col, val) = tenant_scope("user_1", &none);
-        assert_eq!(col, "user_id");
+        assert_eq!(col, "org_id IS NULL AND user_id");
         assert_eq!(val, "user_1");
     }
 
@@ -11941,5 +12181,74 @@ mod security_tests {
         assert_eq!(client_ip_from_xff(Some("203.0.113.9"), 3), "203.0.113.9");
         assert_eq!(client_ip_from_xff(Some(" , "), 1), "unknown");
         assert_eq!(client_ip_from_xff(None, 1), "unknown");
+    }
+}
+
+#[cfg(test)]
+mod outbound_and_token_tests {
+    use super::*;
+    use std::net::{IpAddr, SocketAddr};
+
+    fn ip(s: &str) -> IpAddr { s.parse().unwrap() }
+
+    #[test]
+    fn public_ip_classification() {
+        for bad in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254",
+                    "100.64.0.1", "0.0.0.0", "255.255.255.255", "224.0.0.1", "198.18.0.1",
+                    "::1", "::", "fc00::1", "fd12::1", "fe80::1", "::ffff:127.0.0.1",
+                    "::ffff:169.254.169.254", "64:ff9b::a00:1"] {
+            assert!(!is_public_ip(ip(bad)), "{bad} should be blocked");
+        }
+        for good in ["8.8.8.8", "1.1.1.1", "34.120.1.1", "2606:4700::1111", "::ffff:8.8.8.8"] {
+            assert!(is_public_ip(ip(good)), "{good} should be allowed");
+        }
+    }
+
+    #[test]
+    fn outbound_url_parsing() {
+        assert!(parse_outbound_url("ftp://example.com/x").is_err());
+        assert!(parse_outbound_url("file:///etc/passwd").is_err());
+        assert!(parse_outbound_url("not a url").is_err());
+        let (_, h, port) = parse_outbound_url("https://hooks.slack.com/services/x").unwrap();
+        assert!(matches!(h, OutboundHost::Name(ref n) if n == "hooks.slack.com"));
+        assert_eq!(port, 443);
+        let (_, h, port) = parse_outbound_url("http://[::1]:8080/").unwrap();
+        assert!(matches!(h, OutboundHost::Ip(a) if a == ip("::1")));
+        assert_eq!(port, 8080);
+        let (_, h, _) = parse_outbound_url("http://169.254.169.254/latest/meta-data").unwrap();
+        assert!(matches!(h, OutboundHost::Ip(_)));
+    }
+
+    #[test]
+    fn outbound_addr_check_rejects_any_private_answer() {
+        // Tests run without SELF_HOSTED / OUTBOUND_ALLOW_PRIVATE.
+        let public: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        let private: SocketAddr = "10.0.0.5:443".parse().unwrap();
+        assert!(check_outbound_addrs(vec![public]).is_ok());
+        // One private record among public ones is enough to refuse (rebinding).
+        assert!(check_outbound_addrs(vec![public, private]).is_err());
+        assert!(check_outbound_addrs(vec![]).is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_outbound_rejects_literal_internal_targets() {
+        assert!(resolve_outbound("http://127.0.0.1:5432/").await.is_err());
+        assert!(resolve_outbound("http://169.254.169.254/latest/meta-data").await.is_err());
+        assert!(resolve_outbound("http://[::1]/").await.is_err());
+        assert!(resolve_outbound("https://8.8.8.8/hook").await.is_ok());
+    }
+
+    #[test]
+    fn node_token_hashing_and_legacy_plaintext() {
+        let tok = "wk_0123456789abcdef";
+        let stored = hash_node_token(tok);
+        assert!(stored.starts_with("sha256:"));
+        assert_eq!(node_token_check(&stored, tok), Some(false));
+        assert_eq!(node_token_check(&stored, "wk_wrong"), None);
+        // A presented value equal to the stored HASH must not authenticate.
+        assert_eq!(node_token_check(&stored, &stored), None);
+        // Legacy plaintext rows still work and are flagged for re-hashing.
+        assert_eq!(node_token_check(tok, tok), Some(true));
+        assert_eq!(node_token_check(tok, "wk_wrong"), None);
     }
 }
