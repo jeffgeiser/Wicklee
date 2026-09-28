@@ -23,9 +23,16 @@ Self-serve checkout is **off**. `GET /api/billing/config` returns
 2. a real (non-`pri_placeholder*`) Team price ID is configured
 3. `PADDLE_CLIENT_TOKEN` is non-empty
 
-While it's off, the in-app upgrade modal routes to `/pricing` instead of opening
-the Paddle overlay. Nothing can be mis-billed, and nothing needs doing in Paddle
-until you actually want to take card payments.
+The same check is exposed publicly (no auth, boolean only — no token or price
+IDs) at `GET /api/billing/status` → `{"checkout_enabled": bool}`, so `/pricing`
+knows the answer for signed-out visitors too.
+
+Every in-app upgrade CTA (the upgrade modal, Insights teaser cards) routes to
+`/pricing`; checkout starts only from the Team card there, for the size (10 /
+25 nodes) and billing period (monthly / annual) the buyer selected. While
+checkout is off — or the status is unknown or errors — the Team card shows its
+`Contact us` mailto instead. Nothing can be mis-billed, and nothing needs doing
+in Paddle until you actually want to take card payments.
 
 The kill switch is explicit on purpose: a configured price ID looks identical
 whether it points at the current $200 Team plan or the retired $49 one, so the

@@ -105,7 +105,7 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
 
           <div className="grid grid-cols-1 gap-3 text-left">
             {[
-              { icon: Zap, title: 'Unlimited Fleet Nodes', desc: 'Connect 4+ nodes — no restrictions on active fleet size.' },
+              { icon: Zap, title: 'Up to 25 Fleet Nodes', desc: 'Grow past Community\'s 3 nodes — pick a 10- or 25-node plan.' },
               { icon: Shield, title: 'Full Alert Wiring', desc: 'Slack + email alerts for all pattern engine events.' },
               { icon: Globe, title: 'API Access (600 req/min)', desc: 'Build automation on live fleet telemetry via REST API.' }
             ].map((item, i) => (
@@ -126,7 +126,7 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
               onClick={onUpgrade}
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-500/20"
             >
-              Upgrade to Team
+              See Team plans
             </button>
             <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
               Maybe later
@@ -221,7 +221,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   const navigate = useCallback((path: string) => {
     window.history.pushState(null, '', path);
-    setCurrentPath(path);
+    // Route on the pathname only — `path` may carry a query string
+    // (/sign-up?redirect_url=…, /pricing?plan=…), which must not break the
+    // exact-match route checks below.
+    setCurrentPath(window.location.pathname);
   }, []);
 
   useEffect(() => {
@@ -420,8 +423,9 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   // whether it points at the current $200 plan or the retired $49 one, so that
   // flag is an explicit operator assertion, not something either side can infer.
   //
-  // Resolves false when checkout can't run, so callers fall back to /pricing
-  // rather than billing the wrong amount or failing silently.
+  // Resolves false when checkout can't run, so the caller (the Team card on
+  // PricingPage) falls back to its contact CTA rather than billing the wrong
+  // amount or failing silently.
   const openTeamCheckout = useCallback(async (
     cycle: 'monthly' | 'annual' = 'monthly',
     plan: 'team_10' | 'team' = 'team',
@@ -485,12 +489,17 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     }
   }, [getToken, currentUser.email]);
 
-  const handleUpgrade = useCallback(async () => {
+  // Self-serve checkout starts only from the Team card on /pricing, where the
+  // size and billing period are chosen explicitly. Builds without cloud
+  // billing (agent binary, demo, localhost) get the contact CTA only.
+  const teamCheckout = IS_AGENT || IS_DEMO || isLocalHost ? undefined : openTeamCheckout;
+
+  // The upgrade modal sends people to /pricing to pick a size and billing
+  // period; it used to open a 25-node monthly checkout directly.
+  const handleUpgrade = useCallback(() => {
     setIsUpgradeModalOpen(false);
-    // Falls back to the pricing page (contact CTAs) whenever self-serve
-    // checkout isn't live.
-    if (!(await openTeamCheckout('monthly'))) navigate('/pricing');
-  }, [openTeamCheckout, navigate]);
+    navigate('/pricing');
+  }, [navigate]);
 
   const handleToggleSentinel = (nodeId: string) => {
     setNodes(prev => prev.map(node => 
@@ -558,6 +567,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         onNavigate={navigate}
         onSignIn={() => navigate('/sign-in')}
         onSignUp={() => navigate('/sign-up')}
+        onTeamCheckout={teamCheckout}
       />
     );
   }
@@ -636,6 +646,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
             deepLink={insightsDeepLink}
             onDeepLinkConsumed={() => setInsightsDeepLink(undefined)}
             onNavigateToModels={() => setActiveTab(DashboardTab.MODELS)}
+            onNavigateToPricing={() => navigate('/pricing')}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
@@ -671,11 +682,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       case DashboardTab.PREFERENCES:
         return <PreferencesView currentTenant={currentTenant} theme={theme} />;
       case DashboardTab.PRICING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} embedded />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       case DashboardTab.AI_PROVIDERS:
         return <AIProvidersView />;
       case DashboardTab.BILLING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} embedded />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       default:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
