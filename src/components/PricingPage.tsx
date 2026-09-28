@@ -342,9 +342,12 @@ const PricingPage: React.FC<PricingPageProps> = ({
                   ...tierDef,
                   price:    usd(cycle === 'annual' ? teamSize.annual : teamSize.monthly),
                   period:   cycle === 'annual' ? '/yr' : '/mo',
+                  // Paddle prices are tax-exclusive: sales tax / VAT is
+                  // added at checkout by location (EU/UK businesses with a
+                  // VAT ID reverse-charge), so say so before the overlay does.
                   billing:  cycle === 'annual'
-                    ? `Billed annually — ${usd(teamSize.annual)} per year`
-                    : `Billed monthly — ${usd(teamSize.monthly)} per month`,
+                    ? `Billed annually — ${usd(teamSize.annual)} per year, plus tax where applicable`
+                    : `Billed monthly — ${usd(teamSize.monthly)} per month, plus tax where applicable`,
                   subPrice: cycle === 'annual'
                     ? `Save ${usd(annualSaving)} vs. ${usd(teamSize.monthly * 12)} paid monthly — 2 months free`
                     : `Or ${usd(teamSize.annual)}/yr billed annually — save ${usd(annualSaving)}`,
