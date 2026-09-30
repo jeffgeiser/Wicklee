@@ -1,4 +1,48 @@
 {
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus datasource that scrapes the Wicklee /metrics endpoint",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.4.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
+  "id": null,
   "annotations": {
     "list": []
   },
@@ -22,17 +66,6 @@
   "description": "Hardware-first view of a local AI inference fleet: tokens per watt (WES), thermal penalty, throughput, latency and power. Scrapes the Wicklee cloud Prometheus endpoint (Team tier or above). See docs/GRAFANA.md.",
   "templating": {
     "list": [
-      {
-        "name": "DS_PROMETHEUS",
-        "label": "Prometheus",
-        "type": "datasource",
-        "query": "prometheus",
-        "current": {},
-        "hide": 0,
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false
-      },
       {
         "name": "node",
         "label": "Node",
