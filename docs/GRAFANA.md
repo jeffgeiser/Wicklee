@@ -54,13 +54,22 @@ scrape_configs:
     scrape_interval: 30s
 ```
 
-Mint the key in the dashboard under **API Keys**. Org-scoped keys (Admin-minted)
-see the whole org fleet; personal keys see only your own nodes.
+Mint the key in the dashboard under **API Keys**. Keys start with `wk_live_`
+and the full key is shown **only once**, at creation — copy it then. The ID
+shown in the key list afterwards is the key's identifier, not the key itself,
+and won't authenticate. Org-scoped keys (Admin-minted) see the whole org fleet;
+personal keys see only your own nodes.
 
 `scrape_interval` is a free choice — paid tiers allow 600 API requests per
 rolling minute, so even a 1 s interval is inside the budget. Bear in mind the
 limit is per key and shared with any other API use, so give Prometheus its own
 key rather than reusing one that also drives automation.
+
+If the target shows **down** with a `401` and the body
+`Invalid API key or rate limit exceeded`, that one message covers **both**
+cases: a wrong/revoked key (or the key ID pasted instead of the `wk_live_…`
+key) *and* a key that has exceeded its per-minute budget. Check the key first;
+if it's correct, look for other clients sharing it.
 
 For **Grafana Alloy** or the OpenTelemetry Collector, the same job works as a
 `prometheus.scrape` component. Wicklee also has a native OTel exporter
@@ -70,9 +79,31 @@ For **Grafana Alloy** or the OpenTelemetry Collector, the same job works as a
 
 1. Grafana → **Dashboards → New → Import**.
 2. Upload `deploy/grafana/wicklee-fleet.json` (or paste its contents).
-3. Pick your Prometheus datasource when prompted — the dashboard takes it as a
-   `DS_PROMETHEUS` variable rather than hardcoding a uid, so it imports cleanly
-   into any instance.
+3. Grafana then shows an import form with a **Prometheus** dropdown — pick the
+   datasource that scrapes Wicklee and click **Import**.
+
+The file is in Grafana's "exported for sharing" format: it declares a
+`DS_PROMETHEUS` datasource input in `__inputs`, and every panel, target and the
+`node` variable reference `${DS_PROMETHEUS}`. Grafana substitutes the uid of the
+datasource you pick at import time, so nothing is hardcoded and it imports
+cleanly into any instance. `id` is `null` so it never collides with an existing
+dashboard. The uid is `wicklee-fleet`; if you already have it, the import form
+flags the conflict and offers to overwrite (or change the uid to keep both).
+
+Importing via the HTTP API works the same way — pass the input explicitly:
+
+```bash
+curl -s -u admin:… -H 'Content-Type: application/json' \
+  -X POST http://localhost:3000/api/dashboards/import \
+  -d "{\"dashboard\": $(cat deploy/grafana/wicklee-fleet.json), \"overwrite\": true,
+       \"inputs\": [{\"name\": \"DS_PROMETHEUS\", \"type\": \"datasource\",
+                    \"pluginId\": \"prometheus\", \"value\": \"YOUR_DATASOURCE_UID\"}]}"
+```
+
+File provisioning (`providers:` → `type: file`) does **not** process
+`__inputs`, so for a provisioned copy replace `${DS_PROMETHEUS}` with your
+datasource uid first, e.g.
+`sed 's/\${DS_PROMETHEUS}/YOUR_DATASOURCE_UID/g' wicklee-fleet.json`.
 
 It has a `node` multi-select (populated from `label_values(wicklee_power_watts,
 node_id)`), a fleet summary row, efficiency, throughput/latency, hardware, and a
