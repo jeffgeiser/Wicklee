@@ -64,6 +64,10 @@ SSO being a per-deal support burden and being a self-service feature — worth
 checking whether it's available on the current plan before committing to manual
 setup in a contract.
 
+> **Decision (2026-09-29):** hosted SSO connections are configured manually,
+> per customer, using the steps above. We'll revisit Clerk self-serve SSO when
+> the first customer asks for it.
+
 ### The domain gotcha worth stating up front
 
 SAML authentication requires the user's email domain to **exactly** match the

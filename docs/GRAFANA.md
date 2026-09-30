@@ -54,11 +54,9 @@ scrape_configs:
     scrape_interval: 30s
 ```
 
-Mint the key in the dashboard under **API Keys**. Keys start with `wk_live_`
-and the full key is shown **only once**, at creation — copy it then. The ID
-shown in the key list afterwards is the key's identifier, not the key itself,
-and won't authenticate. Org-scoped keys (Admin-minted) see the whole org fleet;
-personal keys see only your own nodes.
+Mint the key in the dashboard under **API Keys**. The full `wk_live_…` key is
+shown **only once**, at creation — copy it then. Org-scoped keys (Admin-minted)
+see the whole org fleet; personal keys see only your own nodes.
 
 `scrape_interval` is a free choice — paid tiers allow 600 API requests per
 rolling minute, so even a 1 s interval is inside the budget. Bear in mind the
@@ -67,9 +65,12 @@ key rather than reusing one that also drives automation.
 
 If the target shows **down** with a `401` and the body
 `Invalid API key or rate limit exceeded`, that one message covers **both**
-cases: a wrong/revoked key (or the key ID pasted instead of the `wk_live_…`
-key) *and* a key that has exceeded its per-minute budget. Check the key first;
-if it's correct, look for other clients sharing it.
+cases: a wrong/revoked key *and* a key that has exceeded its per-minute
+budget. Check the key first; if it's correct, look for other clients sharing it.
+
+A valid key on the **Community** tier gets `402 Payment Required` instead
+(`"Prometheus metrics requires Team tier or above"`) — `/metrics` needs Team or
+above.
 
 For **Grafana Alloy** or the OpenTelemetry Collector, the same job works as a
 `prometheus.scrape` component. Wicklee also has a native OTel exporter
