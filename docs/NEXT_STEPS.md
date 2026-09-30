@@ -11,22 +11,24 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
 - [x] Cloudflare Web Analytics already running (real-visitor Core Web Vitals under
       Cloudflare → Analytics & Logs → Web Analytics).
 
-## 1. Paddle — sandbox first, then live
+## 1. Paddle — sandbox first, then live ✅ done (September 29, 2026)
+
+Sandbox purchase, webhook and cancel tested for both sizes; live Paddle and self-serve checkout are on in production. Prices are tax-exclusive (the Team card says so).
 
 ### Sandbox setup
-- [ ] Catalog → Products: create one product, **Wicklee Team**.
-- [ ] Add four prices (the name appears on the invoice):
+- [x] Catalog → Products: create one product, **Wicklee Team**.
+- [x] Add four prices (the name appears on the invoice):
   - Wicklee Team, up to 10 nodes — $99 monthly
   - Wicklee Team, up to 10 nodes — $990 annual
   - Wicklee Team, up to 25 nodes — $200 monthly
   - Wicklee Team, up to 25 nodes — $2,000 annual
-- [ ] Copy the four `pri_…` IDs.
-- [ ] Developer Tools → Notifications: destination `<cloud host>/api/webhooks/paddle`, subscribed to
+- [x] Copy the four `pri_…` IDs.
+- [x] Developer Tools → Notifications: destination `<cloud host>/api/webhooks/paddle`, subscribed to
       `subscription.activated`, `subscription.updated`, `subscription.canceled`, `subscription.past_due`,
       `subscription.paused`, `subscription.resumed`. Copy its signing secret. (Events must arrive within
       5 minutes of their timestamp, so the cloud host's clock has to be right.)
-- [ ] Developer Tools → Authentication: copy the client-side token.
-- [ ] Railway, cloud service variables, then redeploy:
+- [x] Developer Tools → Authentication: copy the client-side token.
+- [x] Railway, cloud service variables, then redeploy:
   ```
   PADDLE_ENV=sandbox
   PADDLE_CLIENT_TOKEN=<sandbox client token>
@@ -39,17 +41,17 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
   ```
 
 ### Sandbox test (both sizes)
-- [ ] Sign in with a test account, `/pricing`, buy the 10-node size with card `4242 4242 4242 4242`.
-- [ ] Railway logs show `[billing] paddle: <user> → team_10`.
-- [ ] Badge shows **Team · 10**; adding an 11th node returns the 402 pointing at the 25-node plan.
-- [ ] Cancel, repeat with the 25-node size; log line ends `→ team`.
+- [x] Sign in with a test account, `/pricing`, buy the 10-node size with card `4242 4242 4242 4242`.
+- [x] Railway logs show `[billing] paddle: <user> → team_10`.
+- [x] Badge shows **Team · 10**; adding an 11th node returns the 402 pointing at the 25-node plan.
+- [x] Cancel, repeat with the 25-node size; log line ends `→ team`.
 
 ### Go live
-- [ ] **Start early:** Checkout → Website approval for `wicklee.dev` (can take 1–2 days).
-- [ ] Recreate the product and four prices in the live account. Archive the retired Pro,
+- [x] **Start early:** Checkout → Website approval for `wicklee.dev` (can take 1–2 days).
+- [x] Recreate the product and four prices in the live account. Archive the retired Pro,
       per-seat Team and Business prices.
-- [ ] Live webhook destination + secret; live client token.
-- [ ] Railway: `PADDLE_ENV=production`, the four live price IDs, live token/secret.
+- [x] Live webhook destination + secret; live client token.
+- [x] Railway: `PADDLE_ENV=production`, the four live price IDs, live token/secret.
       Set `PADDLE_CHECKOUT_ENABLED=true` **last**, after everything else is confirmed.
 
 ## 2. Grafana dashboard + catalog listing
