@@ -139,9 +139,9 @@ Singular fields (ollama_active_model, ollama_tokens_per_second) report most-rece
 
 Agent-evaluated (18 patterns, 10-min DuckDB buffer, every 10s):
 Community (9): thermal_drain, phantom_load, wes_velocity_drop, memory_trajectory,
-power_jitter, swap_io_pressure, clock_drift, nvidia_thermal_redline, vram_overcommit
+power_jitter, swap_io_pressure, clock_drift, pcie_lane_degradation, vram_overcommit
 Pro (9): power_gpu_decoupling, bandwidth_saturation, efficiency_drag,
-pcie_lane_degradation, vllm_kv_cache_saturation, ttft_regression, latency_spike,
+nvidia_thermal_redline, vllm_kv_cache_saturation, ttft_regression, latency_spike,
 vllm_queue_saturation, bandwidth_ceiling_reached
 
 Cloud-evaluated (2 patterns, Pro):
@@ -165,8 +165,8 @@ The entire fleet backend runs on your infrastructure: `deploy/self-hosted/docker
 
 Full detail: https://wicklee.dev/pricing
 
-- Community: Free, unlimited local nodes, 3 nodes in the cloud fleet view, 24h history, 9 patterns, local API + MCP, Ollama proxy, community support
-- Team: $99/mo ($990/yr) for up to 10 nodes, or $200/mo ($2,000/yr) for up to 25 nodes in the cloud fleet view — same features at both sizes; above 25 nodes, contact us. Includes 90-day history, Fleet API (/api/v1/*), chargeback + idle-waste + capacity planner + migration advisor, SLOs with error budgets, benchmark export, email support
+- Community: Free, unlimited local nodes, 3 nodes in the cloud fleet view, 24h history, 9 patterns, local API + MCP, Fleet API (/api/v1/* core endpoints, 60 req/min), Ollama proxy, community support
+- Team: $99/mo ($990/yr) for up to 10 nodes, or $200/mo ($2,000/yr) for up to 25 nodes in the cloud fleet view — same features at both sizes; above 25 nodes, contact us. Includes 90-day history, Fleet API at 600 req/min plus the Team analytics endpoints, chargeback + idle-waste + capacity planner + migration advisor, SLOs with error budgets, benchmark export, email support
 - Enterprise: Custom pricing, everything in Team + self-hosted control plane (Docker Compose or Helm), SSO/SAML, audit log export + SIEM drain, 12-month history, SLA + dedicated support, custom deployment support
 
 Contact for Team or Enterprise: jeff@wicklee.dev

@@ -121,7 +121,7 @@ For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates 
 | Patterns | 9 | 20 | 20 |
 | Alerts | — | Slack, Email, PagerDuty | Slack, Email, PagerDuty |
 | Local API + MCP | ✅ | ✅ | ✅ |
-| Fleet API (`/api/v1/*`) | — | ✅ | ✅ |
+| Fleet API (`/api/v1/*`) | ✅ core endpoints, 60 req/min | ✅ + analytics, 600 req/min | ✅ + analytics, 600 req/min |
 | Cloud MCP | — | ✅ | ✅ |
 | OTel + Prometheus | — | ✅ | ✅ |
 | Cost & chargeback reports | — | ✅ | ✅ |
