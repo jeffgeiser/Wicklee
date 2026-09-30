@@ -1284,7 +1284,7 @@ WES Version:     2
                     <Td>GPU temperature &gt; 85°C sustained or &gt; 90°C instantaneous — driver will aggressively throttle clocks. NVIDIA only</Td>
                     <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d TEMPERATURE</code></Td>
                     <Td mono>2 min</Td>
-                    <Td>Community</Td>
+                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-emerald-400">vram_overcommit</code></Td>
@@ -1319,7 +1319,7 @@ WES Version:     2
                     <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only, no root required. Not available on virtualised GPUs.</Td>
                     <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d PCIE</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Team</Td>
+                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-pink-400">vllm_kv_cache_saturation</code></Td>

@@ -623,14 +623,14 @@ Community (9):
 - **power_jitter:** Power CV > 20% during inference
 - **swap_io_pressure:** Swap write > 2 MB/s sustained (model spilling to disk)
 - **clock_drift:** Clock throttle > 15% with Normal thermal
-- **nvidia_thermal_redline:** GPU temp > 85C sustained or > 90C instant
+- **pcie_lane_degradation:** PCIe link width below rated max (NVIDIA only)
 - **vram_overcommit:** Model size > 90% of VRAM capacity
 
 Pro (9):
 - **power_gpu_decoupling:** High power + low GPU% during inference
 - **bandwidth_saturation:** Low GPU% + high VRAM + dropping WES
 - **efficiency_drag:** WES penalty > 30% with Normal thermal
-- **pcie_lane_degradation:** PCIe link width below rated max (NVIDIA only)
+- **nvidia_thermal_redline:** GPU temp > 85C sustained or > 90C instant
 - **vllm_kv_cache_saturation:** KV cache > 90% sustained
 - **ttft_regression:** TTFT slope > +5 ms/min with mean > 100 ms
 - **latency_spike:** Recent E2E latency > 1.5x baseline and > 500 ms
@@ -685,8 +685,8 @@ Evaluated by the cloud backend every 60 seconds.
 
 | Tier | Price | Nodes in fleet view | History | Features |
 |------|-------|---------------------|---------|----------|
-| Community | Free | 3 | 24h | Unlimited local nodes, 9 patterns, local API + MCP, Ollama proxy, community support |
-| Team | $200/mo ($2,000/yr) | Unlimited | 90 days | 18 patterns, custom alerts (Slack/email/PagerDuty), threshold webhooks, shared dashboards, Fleet API, Cloud MCP, OTel/Prometheus export, chargeback, idle-waste, capacity planner, migration advisor, SLOs with error budgets, benchmark export, email support |
+| Community | Free | 3 | 24h | Unlimited local nodes, 9 patterns, local API + MCP, Fleet API core endpoints (60 req/min), Ollama proxy, community support |
+| Team | $99/mo ($990/yr) for 10 nodes · $200/mo ($2,000/yr) for 25 | 10 or 25 | 90 days | 20 patterns, custom alerts (Slack/email/PagerDuty), threshold webhooks, shared dashboards, Fleet API at 600 req/min + analytics endpoints, Cloud MCP, OTel/Prometheus export, chargeback, idle-waste, capacity planner, migration advisor, SLOs with error budgets, benchmark export, email support |
 | Enterprise | Custom | Unlimited | 12 months | Everything in Team + self-hosted control plane (Docker Compose or Helm), SSO/SAML, audit log export + SIEM drain, SLA + dedicated support, custom deployment support |
 
 Contact for Team or Enterprise: jeff@wicklee.dev. `pro` and `business` remain
