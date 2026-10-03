@@ -1,0 +1,34 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "wicklee.fullname" . }}
+  labels:
+    {{- include "wicklee.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ required "ingress.tls.secretName is required when tls.enabled" .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # Everything goes through the frontend — its nginx proxies /api/*,
+          # /mcp, and /metrics to the cloud Service, exactly like wicklee.dev.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "wicklee.fullname" . }}-frontend
+                port:
+                  number: 80
+{{- end }}

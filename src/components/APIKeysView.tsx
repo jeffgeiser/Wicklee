@@ -3,6 +3,8 @@ import { Key, Plus, Trash2, Copy, Check, X, Terminal, ChevronRight } from 'lucid
 import { useAuth } from '@clerk/clerk-react';
 import type { ApiKey, CreateApiKeyResponse } from '../types';
 import { CLOUD_URL } from '../utils/cloudUrl';
+import { CopyButton } from './shared/CopyButton';
+import { IS_DEMO } from '../utils/buildTarget';
 
 // For display in the Quick Reference — always the public URL.
 const DISPLAY_URL = 'https://wicklee.dev';
@@ -25,22 +27,6 @@ function fmtRelative(ms: number | null): string {
 }
 
 // ── Subcomponents ─────────────────────────────────────────────────────────────
-
-const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, className = '' }) => {
-  const [done, setDone] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(text);
-    setDone(true);
-    setTimeout(() => setDone(false), 2000);
-  };
-  return (
-    <button onClick={copy} className={`transition-colors ${className}`} title="Copy">
-      {done
-        ? <Check className="w-3.5 h-3.5 text-green-400" />
-        : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-};
 
 // ── One-time key reveal modal ─────────────────────────────────────────────────
 
@@ -103,16 +89,17 @@ const KeyRevealModal: React.FC<{
 // ── Create Key Modal ──────────────────────────────────────────────────────────
 
 const CreateKeyModal: React.FC<{
-  onSubmit: (name: string) => Promise<void>;
+  onSubmit: (name: string, scope: 'personal' | 'org') => Promise<void>;
   onClose: () => void;
   loading: boolean;
   error: string | null;
 }> = ({ onSubmit, onClose, loading, error }) => {
   const [name, setName] = useState('');
+  const [scope, setScope] = useState<'personal' | 'org'>('personal');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name.trim()) onSubmit(name.trim());
+    if (name.trim()) onSubmit(name.trim(), scope);
   };
 
   return (
@@ -137,6 +124,29 @@ const CreateKeyModal: React.FC<{
               className="w-full bg-gray-900 border border-gray-700 focus:border-indigo-500 text-white text-sm rounded-xl px-4 py-3 outline-none transition-colors placeholder:text-gray-600"
             />
             <p className="text-xs text-gray-600 mt-1.5">A label to identify where this key is used.</p>
+          </div>
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-2 block">
+              Scope
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setScope('personal')}
+                className={`text-left rounded-xl border px-3 py-2.5 transition-colors ${scope === 'personal' ? 'border-indigo-500/60 bg-indigo-500/10' : 'border-gray-700 hover:border-gray-500'}`}
+              >
+                <p className={`text-xs font-semibold ${scope === 'personal' ? 'text-indigo-300' : 'text-gray-300'}`}>Personal</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Sees your own nodes only.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setScope('org')}
+                className={`text-left rounded-xl border px-3 py-2.5 transition-colors ${scope === 'org' ? 'border-indigo-500/60 bg-indigo-500/10' : 'border-gray-700 hover:border-gray-500'}`}
+              >
+                <p className={`text-xs font-semibold ${scope === 'org' ? 'text-indigo-300' : 'text-gray-300'}`}>Organization</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Whole org fleet. Org Admins only; org must be active.</p>
+              </button>
+            </div>
           </div>
           {error && (
             <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
@@ -167,8 +177,14 @@ const CreateKeyModal: React.FC<{
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+// Demo builds have no ClerkProvider — a build-time-constant branch keeps the
+// hook order stable while supplying stub auth (the fetch shim serves the data).
+const useAuthMaybe = () =>
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  IS_DEMO ? { getToken: async () => 'demo', isSignedIn: true } : useAuth();
+
 const APIKeysView: React.FC = () => {
-  const { getToken, isSignedIn } = useAuth();
+  const { getToken, isSignedIn } = useAuthMaybe();
 
   const [keys, setKeys]               = useState<ApiKey[]>([]);
   const [loading, setLoading]         = useState(true);
@@ -219,7 +235,7 @@ const APIKeysView: React.FC = () => {
 
   // ── Create key ─────────────────────────────────────────────────────────────
 
-  const handleCreate = async (name: string) => {
+  const handleCreate = async (name: string, scope: 'personal' | 'org') => {
     setCreating(true);
     setCreateError(null);
     try {
@@ -228,7 +244,7 @@ const APIKeysView: React.FC = () => {
       const r = await fetch(`${CLOUD_URL}/api/v1/keys`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, scope }),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({})) as { error?: string };
@@ -357,12 +373,20 @@ const APIKeysView: React.FC = () => {
                         <Key className="w-4 h-4" />
                       </div>
                       <span className="text-sm font-semibold text-gray-200">{k.name}</span>
+                      {k.scope === 'org' && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300">
+                          Org
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2 font-mono text-xs text-gray-500">
-                      <span>wk_live_••••••••</span>
-                      <CopyButton text={k.key_id} className="text-gray-600 hover:text-gray-300" />
+                      {/* The key itself is stored only as a hash and shown once, at
+                          creation — there is nothing to copy here. (This used to copy
+                          k.key_id, the record's internal UUID, which looks like a key
+                          but doesn't authenticate.) */}
+                      <span title="Shown once when created. Lost it? Revoke it and create a new key.">wk_live_••••••••</span>
                     </div>
                   </td>
                   <td className="px-6 py-4">
@@ -421,7 +445,7 @@ const APIKeysView: React.FC = () => {
                   <p className="text-[10px] text-gray-600 mb-1">Request Header</p>
                   <div className="flex items-center gap-2 bg-gray-900 rounded-lg px-3 py-2">
                     <code className="font-mono text-xs text-indigo-300 flex-1">X-API-Key: wk_live_…</code>
-                    <CopyButton text="X-API-Key: YOUR_KEY_HERE" className="text-gray-600 hover:text-gray-400" />
+                    <CopyButton text="X-API-Key: wk_live_YOUR_KEY_HERE" className="text-gray-600 hover:text-gray-400" />
                   </div>
                 </div>
               </div>

@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex};
 pub(crate) const CLOUD_URL: &str = "https://vibrant-fulfillment-production-62c0.up.railway.app";
 
 /// Spawn a background task that forwards live telemetry to the cloud every 2 s.
-/// Subscribes to the existing broadcast channel (already runs at 10 Hz) and
+/// Subscribes to the existing broadcast channel (1 Hz metrics broadcaster) and
 /// throttles pushes to 1 per 2 s so we don't hammer Railway.
-/// Stops automatically when the session_token is cleared (on disconnect).
+/// Idles (skips pushes) while no session_token is set, e.g. after disconnect
+/// or a 410-Gone, and resumes on its own once the node is re-paired.
 ///
 /// On non-musl targets, embeds the latest evaluated observations from the shared
 /// ObservationCache into each push so the fleet dashboard gets pattern data
@@ -19,16 +20,18 @@ pub(crate) fn start_cloud_push(
     pairing_state: Arc<Mutex<PairingState>>,
     broadcast_tx:  tokio::sync::broadcast::Sender<String>,
     obs_cache:     crate::ObservationCache,
+    profile:       Arc<Mutex<crate::DeploymentProfile>>,
 ) {
-    start_cloud_push_inner(pairing_state, broadcast_tx, Some(obs_cache));
+    start_cloud_push_inner(pairing_state, broadcast_tx, Some(obs_cache), profile);
 }
 
 #[cfg(target_env = "musl")]
 pub(crate) fn start_cloud_push(
     pairing_state: Arc<Mutex<PairingState>>,
     broadcast_tx:  tokio::sync::broadcast::Sender<String>,
+    profile:       Arc<Mutex<crate::DeploymentProfile>>,
 ) {
-    start_cloud_push_inner(pairing_state, broadcast_tx, None);
+    start_cloud_push_inner(pairing_state, broadcast_tx, None, profile);
 }
 
 fn start_cloud_push_inner(
@@ -38,16 +41,18 @@ fn start_cloud_push_inner(
     obs_cache:     Option<crate::ObservationCache>,
     #[cfg(target_env = "musl")]
     _obs_cache:    Option<()>,
+    profile:       Arc<Mutex<crate::DeploymentProfile>>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
     use std::ops::ControlFlow;
 
-    // Supervised so a panic restarts the push loop, but its deliberate exits
-    // (broadcast channel closed; 410-Gone after the node is removed from the
-    // fleet) return ControlFlow::Break and are NOT restarted.
+    // Supervised so a panic restarts the push loop, but its deliberate exit
+    // (broadcast channel closed) returns ControlFlow::Break and is NOT
+    // restarted. A 410-Gone only clears the token; the loop keeps idling.
     crate::supervisor::supervise_until("cloud-push", move || {
         let pairing_state = pairing_state.clone();
         let broadcast_tx  = broadcast_tx.clone();
+        let profile       = profile.clone();
         #[cfg(not(target_env = "musl"))]
         let obs_cache     = obs_cache.clone();
         async move {
@@ -64,7 +69,7 @@ fn start_cloud_push_inner(
             .unwrap_or_else(std::time::Instant::now);
         let push_interval         = std::time::Duration::from_secs(2);
         // Track the last inference_state we pushed.  When it changes (e.g. idle-spd → live)
-        // we bypass the 2s throttle so the fleet/cloud view reflects the transition in <100 ms
+        // we bypass the 2s throttle so the fleet/cloud view reflects the transition on the next 1 Hz frame
         // rather than up to 2s later — eliminating the local-LIVE / cloud-IDLE-SPD divergence.
         let mut last_pushed_state: Option<String> = None;
 
@@ -100,6 +105,12 @@ fn start_cloud_push_inner(
             // overwrite it.
             let patched = if let Some(mut val) = parsed {
                 val["node_id"] = serde_json::json!(wk_id);
+                // Fleet config management: report the ACTUAL running profile
+                // so the dashboard can show intent vs. actual.
+                let current_profile = profile.lock()
+                    .map(|p| *p)
+                    .unwrap_or(crate::DeploymentProfile::DedicatedServer);
+                val["deployment_profile"] = serde_json::json!(current_profile.as_str());
                 // Embed current observations from the shared cache (non-musl only).
                 // Empty array is omitted by the cloud's serde(default) — no overhead.
                 #[cfg(not(target_env = "musl"))]
@@ -136,16 +147,43 @@ fn start_cloud_push_inner(
                 .await;
             match resp {
                 Ok(r) if r.status().as_u16() == 410 => {
-                    // 410 Gone — node was removed from fleet. Clear pairing state.
+                    // 410 Gone — node was removed from fleet. Clear pairing state
+                    // (memory + config.toml) but keep looping: with no token the
+                    // loop idles, and pushes resume as soon as the user re-pairs.
                     eprintln!("[cloud_push] 410 Gone — node removed from fleet. Clearing pairing state.");
-                    if let Ok(mut ps) = pairing_state.lock() {
-                        ps.cloud_session_token = None;
-                        ps.status = crate::PairingStatus::Unpaired;
-                    }
-                    return ControlFlow::Break(()); // node removed — stop permanently
+                    if let Ok(mut ps) = pairing_state.lock()
+                        // Don't clobber a fresh token from a re-pair that raced this push.
+                        && ps.cloud_session_token.as_deref() == Some(session_token.as_str()) {
+                            ps.cloud_session_token = None;
+                            ps.status = crate::PairingStatus::Unpaired;
+                            crate::update_config(|cfg| {
+                                cfg.fleet_url = None;
+                                cfg.session_token = None;
+                            });
+                        }
+                    continue;
                 }
                 Ok(r) if r.status().is_success() => {
                     last_pushed_state = curr_state;
+                    // Fleet config management: the telemetry response carries
+                    // the cloud-side desired profile (NULL = keep local).
+                    // Apply within this push cycle: shared state (the 10s
+                    // evaluator re-reads it) + config.toml (survives restart).
+                    if let Ok(body) = r.json::<serde_json::Value>().await
+                        && let Some(desired) = body.get("desired_profile").and_then(|v| v.as_str())
+                            && matches!(desired, "sovereign_dev" | "dedicated_server" | "production_fleet") {
+                                let next = crate::DeploymentProfile::from_config(Some(desired));
+                                let changed = profile.lock()
+                                    .map(|mut p| if *p != next { *p = next; true } else { false })
+                                    .unwrap_or(false);
+                                if changed {
+                                    let persisted = next.as_str().to_string();
+                                    crate::update_config(move |cfg| {
+                                        cfg.deployment_profile = Some(persisted);
+                                    });
+                                    eprintln!("[cloud_push] fleet config applied: deployment_profile → {desired}");
+                                }
+                            }
                 }
                 _ => {} // Network error or non-2xx — retry next cycle
             }

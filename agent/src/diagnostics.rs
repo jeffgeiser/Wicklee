@@ -89,7 +89,7 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                 .timeout(Duration::from_secs(2))
                 .build().ok()?;
             let resp = client
-                .get(format!("http://127.0.0.1:{port}/api/metrics"))
+                .get(format!("http://127.0.0.1:{port}/api/metrics/snapshot"))
                 .send().await.ok()?;
             let json: serde_json::Value = resp.json().await.ok()?;
             // apple_soc_power_w is populated only when powermetrics succeeds
@@ -118,8 +118,8 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
     {
         // NVML — not available in musl builds
         #[cfg(not(target_env = "musl"))]
-        match Nvml::init() {
-            Ok(nvml) => {
+        // No NVIDIA on this machine → Err, and we stay silent.
+        if let Ok(nvml) = Nvml::init() {
                 let count = nvml.device_count().unwrap_or(0);
                 if count > 0
                     && let Ok(dev) = nvml.device_by_index(0) {
@@ -140,8 +140,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                             platform_rows.push(row("GPU Pwr", &format!("{:.0}W", mw as f64 / 1000.0)));
                         }
                     }
-            }
-            Err(_) => {} // no NVIDIA on this machine — silent
         }
 
         // RAPL CPU power (powercap, no sudo needed)

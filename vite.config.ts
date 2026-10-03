@@ -94,6 +94,8 @@ const STATIC_ROUTES: { path: string; priority: string }[] = [
   // Prometheus scrape endpoint on wicklee.dev (nginx exact match), so it must
   // never appear here or crawlers would fetch scrape text.
   { path: '/metrics-reference', priority: '0.5' },
+  { path: '/trust',           priority: '0.6' },
+  { path: '/design-partners', priority: '0.6' },
   { path: '/terms',   priority: '0.2' },
   { path: '/privacy', priority: '0.2' },
   { path: '/refund',  priority: '0.2' },
@@ -139,7 +141,7 @@ const sitemapPlugin = (): Plugin => ({
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
   return {
     server: {
       port: 3000,
@@ -156,8 +158,9 @@ export default defineConfig(() => {
     },
     build: {
       // Output directly into the agent crate so RustEmbed picks it up at
-      // compile time via #[folder = "frontend/dist"].
-      outDir: 'agent/frontend/dist',
+      // compile time via #[folder = "frontend/dist"]. Demo builds go to their
+      // own dir — a static bundle for demo.wicklee.dev / the HF Space.
+      outDir: mode === 'demo' ? 'dist-demo' : 'agent/frontend/dist',
       emptyOutDir: true,
       // Dashboard embeds Recharts + React; single-chunk is fine for a local
       // binary where there's no CDN or HTTP/2 multiplexing benefit to splitting.

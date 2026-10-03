@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Boxes, ChevronRight, ChevronDown } from 'lucide-react';
 import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
 import { wesColorClass } from '../utils/wes';
+import { CLOUD_URL } from '../utils/cloudUrl';
+import { useFleetStream } from '../contexts/FleetStreamContext';
+import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
 import FleetModelDiscovery from './insights/FleetModelDiscovery';
 
@@ -9,6 +12,8 @@ interface ModelsPageProps {
   isLocalHost: boolean;
   getToken?: () => Promise<string | null>;
   nodes: FleetNode[];
+  /** Deep-link into Insights → Performance (fleet efficiency, planning, cost governance). */
+  onNavigateToInsightsPerformance?: () => void;
 }
 
 // ── Section wrapper — thin rule, small-caps eyebrow, optional inline meta ──
@@ -74,36 +79,25 @@ interface LoadedModelRow {
   node_id: string;
   node_label: string;
   model: ModelLiveMetrics;
-  /** The node's current sentinel.ollama_active_model — used to decide Active vs Idle status. */
-  sentinel_active_model: string | null;
+  /** Runtime-aware Active flag: Ollama rows compare against the node's
+   *  ollama_active_model (most-recently-inferenced per /api/ps); vLLM and
+   *  llama.cpp keep the model resident, so Active = inference_state 'live'. */
+  active: boolean;
 }
 
 const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
   const [fleetNodes, setFleetNodes] = useState<Array<{ node_id: string; metrics: SentinelMetrics | null; display_name?: string | null }>>([]);
 
-  // Localhost: subscribe to /api/metrics SSE (self-contained — doesn't share Overview's WS)
-  useEffect(() => {
-    if (!isLocalHost) return;
-    let es: EventSource | null = null;
-    try {
-      es = new EventSource('http://localhost:7700/api/metrics');
-      es.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data) as SentinelMetrics;
-          setLocalSentinel(data);
-        } catch { /* ignore parse errors */ }
-      };
-      es.onerror = () => { /* keep retrying */ };
-    } catch { /* ignore */ }
-    return () => { es?.close(); };
-  }, [isLocalHost]);
+  // Localhost: shared local-agent metrics stream (same connection Overview uses).
+  useLocalMetricsStream(setLocalSentinel, isLocalHost);
 
-  // Fleet: poll /api/fleet every 3s. We deliberately don't reach into
-  // useFleetStream's allNodeMetrics here — different upstream populating
-  // schedules made the React state miss singular ollama_active_model on
-  // first paint, even though the underlying SSE was sending it. Hitting
-  // /api/fleet directly is simpler and matches Recent/Swaps' pattern.
+  // Fleet: live frames come from the fleet SSE (useFleetStream). A direct
+  // /api/fleet fetch still seeds first paint — stream state used to miss the
+  // singular ollama_active_model before its first frame landed — and covers
+  // nodes the stream holds no metrics for. That fetch was a 3 s poll
+  // duplicating the SSE; it now only refreshes every 30 s.
+  const { allNodeMetrics, lastSeenMsMap } = useFleetStream();
   useEffect(() => {
     if (isLocalHost || !getToken) return;
     let cancelled = false;
@@ -111,7 +105,7 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       try {
         const token = await getToken();
         if (!token || cancelled) return;
-        const res = await fetch('/api/fleet', {
+        const res = await fetch(`${CLOUD_URL}/api/fleet`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (!res.ok || cancelled) return;
@@ -121,30 +115,58 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       } catch { /* ignore transient fetch errors */ }
     };
     fetchOnce();
-    const id = setInterval(fetchOnce, 3_000);
+    const id = setInterval(fetchOnce, 30_000);
     return () => { cancelled = true; clearInterval(id); };
   }, [isLocalHost, getToken]);
 
   const rows: LoadedModelRow[] = useMemo(() => {
     const out: LoadedModelRow[] = [];
     const collectFromSentinel = (s: SentinelMetrics, label: string) => {
-      const shared = {
-        node_id: s.node_id,
-        node_label: label,
-        sentinel_active_model: s.ollama_active_model ?? null,
-      };
+      const shared = { node_id: s.node_id, node_label: label };
 
-      // Multi-model path
+      // ── Ollama ──
       if (s.active_models?.length) {
+        // Multi-model path
         for (const m of s.active_models) {
-          out.push({ ...shared, model: m });
+          out.push({ ...shared, model: m, active: m.model === s.ollama_active_model });
         }
-        return;
+      } else {
+        // Single-model fallback (legacy singular fields)
+        const fallback = singleModelFallback(s);
+        if (fallback) {
+          out.push({ ...shared, model: fallback, active: true });
+        }
       }
-      // Single-model fallback (legacy singular fields)
-      const fallback = singleModelFallback(s);
-      if (fallback) {
-        out.push({ ...shared, model: fallback });
+
+      // ── vLLM ── model identity lives in vllm_model_name, never in the
+      // Ollama-shaped fields above — without this branch, pure-vLLM nodes
+      // vanish from this page while Fleet Status still shows their model.
+      if (s.vllm_running && s.vllm_model_name) {
+        out.push({
+          ...shared,
+          active: s.inference_state === 'live' || (s.vllm_requests_running ?? 0) > 0,
+          model: {
+            model: s.vllm_model_name,
+            quantization: s.vllm_dtype ?? null,
+            vram_mb: s.nvidia_vram_used_mb && s.nvidia_vram_used_mb > 0 ? s.nvidia_vram_used_mb : null,
+            tok_s: s.vllm_tokens_per_sec ?? null,
+            request_count: s.vllm_requests_running ?? 0,
+          } as ModelLiveMetrics,
+        });
+      }
+
+      // ── llama.cpp ── same blind spot as vLLM.
+      if (s.llamacpp_running && s.llamacpp_model_name) {
+        out.push({
+          ...shared,
+          active: s.inference_state === 'live' || (s.llamacpp_slots_processing ?? 0) > 0,
+          model: {
+            model: s.llamacpp_model_name,
+            quantization: null,
+            tok_s: s.llamacpp_tokens_per_sec ?? null,
+            request_count: s.llamacpp_slots_processing ?? 0,
+          } as ModelLiveMetrics,
+        });
       }
     };
 
@@ -152,14 +174,27 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       const s = localSentinel;
       if (s) collectFromSentinel(s, s.hostname || s.node_id);
     } else {
+      // Stream metrics (fresher) win; the polled list fills in the rest.
+      // Stream hostnames already carry display_name (FleetStreamContext).
+      // Once the stream has a frame, it is authoritative for membership, so a
+      // node removed (or an org switched) since the last poll drops at once.
+      const streamHasFrame = Object.keys(lastSeenMsMap).length > 0;
+      const seen = new Set<string>();
       for (const node of fleetNodes) {
+        if (streamHasFrame && !(node.node_id in lastSeenMsMap)) continue;
+        seen.add(node.node_id);
+        const live = allNodeMetrics[node.node_id];
+        if (live) { collectFromSentinel(live, live.hostname || node.node_id); continue; }
         if (!node.metrics) continue;
         const label = node.display_name || node.metrics.hostname || node.node_id;
         collectFromSentinel(node.metrics, label);
       }
+      for (const [nodeId, live] of Object.entries(allNodeMetrics)) {
+        if (!seen.has(nodeId)) collectFromSentinel(live, live.hostname || nodeId);
+      }
     }
     return out;
-  }, [isLocalHost, localSentinel, fleetNodes]);
+  }, [isLocalHost, localSentinel, fleetNodes, allNodeMetrics, lastSeenMsMap]);
 
   const nodeCount = useMemo(() => {
     const seen = new Set(rows.map(r => r.node_id));
@@ -167,7 +202,7 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   }, [rows]);
 
   const activeCount = useMemo(() =>
-    rows.filter(r => r.model.model === r.sentinel_active_model).length,
+    rows.filter(r => r.active).length,
   [rows]);
 
   const meta = rows.length === 0
@@ -224,9 +259,10 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
                       ? 'GPU memory currently allocated to this model.'
                       : undefined;
 
-                  // Status: ● Active if this model is the node's currently-active one
-                  // (most-recently-inferenced per /api/ps), ○ Idle otherwise.
-                  const isActive = r.model.model === r.sentinel_active_model;
+                  // Status: ● Active per the runtime-aware flag computed at
+                  // collection (Ollama: most-recently-inferenced per /api/ps;
+                  // vLLM/llama.cpp: currently inferring), ○ Idle otherwise.
+                  const isActive = r.active;
 
                   return (
                     <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
@@ -285,8 +321,8 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
     const fetchData = async () => {
       try {
         const url = isLocalHost
-          ? 'http://localhost:7700/api/model-comparison?hours=168'
-          : '/api/v1/fleet/model-comparison?hours=168';
+          ? '/api/model-comparison?hours=168'
+          : `${CLOUD_URL}/api/v1/fleet/model-comparison?hours=168`;
         const headers: Record<string, string> = {};
         if (!isLocalHost && getToken) {
           const token = await getToken();
@@ -400,8 +436,8 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
     const fetchData = async () => {
       try {
         const url = isLocalHost
-          ? 'http://localhost:7700/api/model-switches?hours=24'
-          : '/api/v1/fleet/model-switches?hours=24';
+          ? '/api/model-switches?hours=24'
+          : `${CLOUD_URL}/api/v1/fleet/model-switches?hours=24`;
         const headers: Record<string, string> = {};
         if (!isLocalHost && getToken) {
           const token = await getToken();
@@ -501,7 +537,11 @@ const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
 // Long-term: Swaps belongs in the Observability tab as a `model_swap_thrashing`
 // alert pattern (fires when swap frequency exceeds threshold). For now it
 // lives here as a manual deep-dive. See backlog.
-const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
+const PastActivityFooter: React.FC<{
+  isLocalHost: boolean;
+  getToken?: () => Promise<string | null>;
+  onNavigateToInsightsPerformance?: () => void;
+}> = ({ isLocalHost, getToken, onNavigateToInsightsPerformance }) => {
   const [openSection, setOpenSection] = useState<'recent' | 'swaps' | null>(null);
 
   const ToggleButton: React.FC<{ id: 'recent' | 'swaps'; label: string; hint: string }> = ({ id, label, hint }) => {
@@ -524,7 +564,24 @@ const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Prom
     <div className="space-y-3 pt-6 border-t border-gray-800">
       <p className="text-[10px] tracking-widest uppercase text-gray-600 font-medium">Past activity</p>
       <ToggleButton id="recent" label="7-day model performance comparison" hint="WES, tok/s, watts, TTFT, cost per model" />
-      {openSection === 'recent' && <RecentSection isLocalHost={isLocalHost} getToken={getToken} />}
+      {openSection === 'recent' && (
+        <>
+          <RecentSection isLocalHost={isLocalHost} getToken={getToken} />
+          {/* Handoff: this table answers "which model earns its watts" — the
+              team/fleet money questions live one tab over. */}
+          {onNavigateToInsightsPerformance && (
+            <p className="text-[11px] text-gray-600 px-1">
+              Cost attribution by team, capacity planning, and idle-waste recovery live on{' '}
+              <button
+                onClick={onNavigateToInsightsPerformance}
+                className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40 underline-offset-2 transition-colors"
+              >
+                Insights → Performance
+              </button>.
+            </p>
+          )}
+        </>
+      )}
       <ToggleButton id="swaps" label="Model swap activity" hint="last 24h · transitions and idle gaps" />
       {openSection === 'swaps' && <SwapsSection isLocalHost={isLocalHost} getToken={getToken} />}
     </div>
@@ -532,10 +589,14 @@ const PastActivityFooter: React.FC<{ isLocalHost: boolean; getToken?: () => Prom
 };
 
 // ── Page ────────────────────────────────────────────────────────────────────
-const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
+const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, onNavigateToInsightsPerformance }) => {
   return (
     <div className="space-y-6 p-4 sm:p-6 max-w-7xl mx-auto">
-      {/* Page header — establishes identity, doesn't duplicate section subtitles */}
+      {/* Page header — establishes identity, doesn't duplicate section subtitles.
+          Platform contract: this tab is the MODEL axis — what's loaded and where,
+          what each model ran and cost, what you could add. Live node telemetry is
+          Intelligence; fleet efficiency/planning/cost governance over time is
+          Insights → Performance. Keep new features on the right side of that line. */}
       <header className="flex items-start gap-3 pb-2">
         <div className="h-10 w-10 rounded-xl bg-blue-600/10 border border-blue-600/20 flex items-center justify-center text-blue-400">
           <Boxes className="w-5 h-5" />
@@ -543,7 +604,21 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
         <div>
           <h1 className="text-2xl font-bold text-white">Models</h1>
           <p className="text-sm text-gray-400 mt-1">
-            What's loaded across your fleet, and what could you add. Inference performance lives on the Intelligence tab.
+            What's loaded and where, what each model ran and cost, and what you could add.
+            Live node telemetry is on Intelligence
+            {onNavigateToInsightsPerformance ? (
+              <>
+                ; fleet efficiency, planning, and cost governance live on{' '}
+                <button
+                  onClick={onNavigateToInsightsPerformance}
+                  className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40 underline-offset-2 transition-colors"
+                >
+                  Insights → Performance
+                </button>.
+              </>
+            ) : (
+              '; fleet efficiency, planning, and cost governance live on Insights → Performance.'
+            )}
           </p>
         </div>
       </header>
@@ -553,7 +628,7 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken }) => {
       <BrowseSection isLocalHost={isLocalHost} getToken={getToken} />
 
       {/* Demoted secondary views — collapsed by default, expand for deep history. */}
-      <PastActivityFooter isLocalHost={isLocalHost} getToken={getToken} />
+      <PastActivityFooter isLocalHost={isLocalHost} getToken={getToken} onNavigateToInsightsPerformance={onNavigateToInsightsPerformance} />
     </div>
   );
 };

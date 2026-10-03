@@ -1,4 +1,4 @@
-export interface PostFrontmatter {
+interface PostFrontmatter {
   title?: string;
   date?: string;
   description?: string;

@@ -17,9 +17,9 @@ import {
   patternIcon,
   hookColor,
   ActionIdBadge,
-  CopyButton,
   ConfidenceBar,
 } from './ObservationCard';
+import { LabeledCopyButton } from '../shared/CopyButton';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -204,7 +204,7 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
           {insight.actions.length > 0 && !isResolved && (
             <div className="flex flex-wrap gap-2">
               {insight.actions.map(action => (
-                <CopyButton
+                <LabeledCopyButton
                   key={action.copyText}
                   text={action.copyText}
                   label={action.label}

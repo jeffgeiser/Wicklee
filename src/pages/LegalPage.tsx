@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
+import { CONTACT_EMAIL, PRIVACY_EMAIL, mailto } from '../utils/contact';
 
 type LegalTab = 'terms' | 'privacy' | 'refund';
 
@@ -71,7 +72,7 @@ const TermsOfService: React.FC = () => (
     <p>These Terms of Service ("Terms") govern your use of Wicklee ("Service"), operated by Wicklee ("we", "us", "our"). By using the Service, you agree to these Terms.</p>
 
     <h2>1. Service Description</h2>
-    <p>Wicklee is a sovereign GPU fleet monitoring platform for local AI inference. The Service consists of:</p>
+    <p>Wicklee is a sovereign GPU fleet monitoring platform for self-hosted AI inference. The Service consists of:</p>
     <ul>
       <li><strong>Agent:</strong> A local binary installed on your machine(s) that collects hardware and inference telemetry. The agent runs entirely on your device and does not transmit data unless you explicitly enable fleet pairing.</li>
       <li><strong>Cloud Dashboard:</strong> An optional hosted service at wicklee.dev for fleet aggregation, team collaboration, and alerting.</li>
@@ -84,15 +85,14 @@ const TermsOfService: React.FC = () => (
     <h2>3. Subscription Tiers</h2>
     <p>The Service is offered in multiple tiers:</p>
     <ul>
-      <li><strong>Community (Free):</strong> Up to 3 nodes, 24-hour history, 9 observation patterns, local MCP server, local inline proxy.</li>
-      <li><strong>Pro ($9/month):</strong> Up to 10 nodes, 7-day history, 18 observation patterns, Slack and email alerts, custom alert thresholds, fleet proxy metrics, node naming.</li>
-      <li><strong>Team ($19/seat/month, 3-seat minimum):</strong> Up to 25 nodes, 90-day history, OpenTelemetry and Prometheus export, Cloud MCP, PagerDuty alerts, shared dashboards.</li>
-      <li><strong>Enterprise:</strong> Custom pricing and terms. Contact us for details.</li>
+      <li><strong>Community (Free):</strong> Unlimited local nodes, up to 3 nodes in the cloud fleet view, 24-hour history, 9 observation patterns, local API and MCP server, local inline proxy.</li>
+      <li><strong>Team ($99/month or $990/year for up to 10 nodes; $200/month or $2,000/year for up to 25 nodes):</strong> Up to 10 or 25 nodes in the cloud fleet view depending on plan size, 90-day history, 18 observation patterns, Fleet API access, OpenTelemetry and Prometheus export, Cloud MCP, Slack/email/PagerDuty alerts, shared dashboards, cost and chargeback reporting, capacity planning, SLOs with error budgets.</li>
+      <li><strong>Enterprise:</strong> Custom pricing and terms. Everything in Team, plus a self-hosted control plane, SSO/SAML, audit log export and SIEM streaming, 12-month history, and a service level agreement. Contact us for details.</li>
     </ul>
     <p>Pricing is subject to change with 30 days notice to existing subscribers.</p>
 
     <h2>4. Billing</h2>
-    <p>Paid subscriptions are billed monthly through our payment processor, Paddle. By subscribing, you authorize recurring charges. Subscriptions renew automatically unless cancelled before the next billing cycle.</p>
+    <p>Paid subscriptions are billed monthly or annually through our payment processor, Paddle. By subscribing, you authorize recurring charges. Subscriptions renew automatically unless cancelled before the next billing cycle.</p>
 
     <h2>5. Data and Sovereignty</h2>
     <p>The Wicklee agent is designed to be sovereign by default:</p>
@@ -133,7 +133,7 @@ const TermsOfService: React.FC = () => (
     <p>We may update these Terms from time to time. Material changes will be communicated via email or dashboard notification at least 30 days in advance. Continued use of the Service after changes constitutes acceptance.</p>
 
     <h2>12. Contact</h2>
-    <p>Questions about these Terms? Contact us at <a href="mailto:legal@wicklee.dev">legal@wicklee.dev</a>.</p>
+    <p>Questions about these Terms? Contact us at <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a>.</p>
   </>
 );
 
@@ -221,7 +221,7 @@ const PrivacyPolicy: React.FC = () => (
     <p>We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated date.</p>
 
     <h2>11. Contact</h2>
-    <p>Privacy questions? Contact us at <a href="mailto:privacy@wicklee.dev">privacy@wicklee.dev</a>.</p>
+    <p>Privacy questions? Contact us at <a href={mailto(PRIVACY_EMAIL)}>{PRIVACY_EMAIL}</a>.</p>
   </>
 );
 
@@ -233,7 +233,7 @@ const RefundPolicy: React.FC = () => (
     <h2>1. Free Tier</h2>
     <p>The Community tier is free and requires no payment. No refund applies.</p>
 
-    <h2>2. Pro and Team Subscriptions</h2>
+    <h2>2. Team Subscriptions</h2>
 
     <h3>14-Day Money-Back Guarantee</h3>
     <p>If you are not satisfied with your paid subscription, you may request a full refund within 14 days of your initial purchase. No questions asked.</p>
@@ -242,16 +242,16 @@ const RefundPolicy: React.FC = () => (
     <p>After the 14-day window, subscriptions are non-refundable for the current billing period. You may cancel at any time, and your access will continue until the end of your current billing cycle.</p>
 
     <h2>3. Annual Subscriptions</h2>
-    <p>If annual billing is offered, the 14-day money-back guarantee applies from the date of purchase. After 14 days, a prorated refund may be issued at our discretion for the unused portion of the annual term.</p>
+    <p>For annual plans, the 14-day money-back guarantee applies from the date of purchase. After 14 days, a prorated refund may be issued at our discretion for the unused portion of the annual term.</p>
 
     <h2>4. Downgrades</h2>
-    <p>If you downgrade from a higher tier to a lower tier (e.g., Team to Pro, or Pro to Community), the change takes effect at the end of your current billing cycle. No prorated refund is issued for downgrades.</p>
+    <p>If you downgrade from a higher tier to a lower tier (e.g., Team to Community), the change takes effect at the end of your current billing cycle. No prorated refund is issued for downgrades.</p>
 
     <h2>5. Service Issues</h2>
     <p>If the cloud service experiences significant downtime or degradation that materially affects your use, we may issue credits or refunds at our discretion. The local agent is not affected by cloud service availability and continues to function independently.</p>
 
     <h2>6. How to Request a Refund</h2>
-    <p>To request a refund, contact us at <a href="mailto:support@wicklee.dev">support@wicklee.dev</a> with your account email and the reason for your request. Refunds are processed through Paddle and typically appear within 5-10 business days.</p>
+    <p>To request a refund, contact us at <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a> with your account email and the reason for your request. Refunds are processed through Paddle and typically appear within 5-10 business days.</p>
 
     <h2>7. Enterprise</h2>
     <p>Enterprise contracts have separate terms. Refund policies for Enterprise customers are governed by the individual agreement.</p>

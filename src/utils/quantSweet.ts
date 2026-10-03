@@ -147,7 +147,7 @@ function activeModelName(node: SentinelMetrics): string | null {
 
 // ── Recommendation output ─────────────────────────────────────────────────────
 
-export type RecommendationKind =
+type RecommendationKind =
   | 'upgrade'      // strong: Q2/Q3 → Q4
   | 'consider'     // optional: Q4 → Q6_K if headroom allows
   | 'sweet-spot'   // already optimal: Q5/Q6

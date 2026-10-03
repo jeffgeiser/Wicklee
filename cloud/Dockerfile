@@ -3,10 +3,10 @@ FROM rust:1.88-slim AS builder
 
 WORKDIR /app
 
-# DuckDB bundled feature compiles DuckDB from C++ source.
-# build-essential provides g++/gcc/make; cmake drives the DuckDB configure step.
+# build-essential provides the C toolchain the `cc` crate needs to compile
+# ring (rustls crypto backend, pulled in via sqlx/reqwest/ureq).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential cmake \
+ && apt-get install -y --no-install-recommends build-essential \
  && rm -rf /var/lib/apt/lists/*
 
 # Cache dependency compilation separately from source changes.
@@ -26,8 +26,9 @@ RUN cargo build --release
 # ── Stage 2: minimal runtime image ────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# wget: used by the self-hosted docker-compose healthcheck (GET /health).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates wget \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/wicklee-cloud /usr/local/bin/wicklee-cloud

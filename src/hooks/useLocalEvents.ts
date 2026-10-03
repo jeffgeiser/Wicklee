@@ -278,7 +278,6 @@ export function useLocalEvents(
     }
   // sentinel reference changes every frame (new object each WS/SSE message).
   // connected is a primitive — changes are always caught.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sentinel, connected]);
 
   // On every fresh connect, fetch the agent's recent-events ring buffer.
@@ -287,7 +286,7 @@ export function useLocalEvents(
   useEffect(() => {
     if (!connected) return;
 
-    fetch('http://localhost:7700/api/events/recent')
+    fetch('/api/events/recent')
       .then(r => r.ok ? r.json() : [])
       .then((acts: LiveActivityEvent[]) => {
         if (!acts.length) return;
@@ -312,7 +311,6 @@ export function useLocalEvents(
         }
       })
       .catch(() => { /* agent not yet ready — silently ignore */ });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
   return events;

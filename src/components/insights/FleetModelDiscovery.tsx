@@ -14,8 +14,9 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Server, Loader2, AlertCircle } from 'lucide-react';
+import { Search, Package, ExternalLink, ChevronDown, ChevronRight, Server, Loader2, AlertCircle } from 'lucide-react';
 import { ELECTRICITY_RATE_USD_PER_KWH } from '../../utils/efficiency';
+import { CLOUD_URL } from '../../utils/cloudUrl';
 import {
   quantQualityHint,
   recommendedQuant,
@@ -26,39 +27,15 @@ import {
   DEFAULT_CONTEXT_LENGTH,
   contextLengthLabel,
 } from '../../utils/quantQuality';
-import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow, type TpsProjection } from '../../utils/modelHistory';
+import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
 import { inferCategory, categoryDescription, ALL_CATEGORIES, type ModelCategory } from '../../utils/modelCategory';
 import { useSettings } from '../../hooks/useSettings';
-import DiscoveryHoverCard, { type DiscoveryHoverRow } from './DiscoveryHoverCard';
-
-// ── Projection-tier helpers (mirror of ModelDiscoveryCard helpers) ────────
-function projConfidenceLabel(c: TpsProjection['confidence']): string {
-  switch (c) {
-    case 'cohort':      return 'measured';
-    case 'sample':      return 'measured (1 sample)';
-    case 'bandwidth':   return 'scaled estimate';
-    case 'theoretical': return 'spec estimate';
-  }
-}
-function projConfidenceBody(p: TpsProjection): string {
-  switch (p.confidence) {
-    case 'cohort':
-      return `Average across ${p.count} similar-size models that have actually run on this fleet. Highest fidelity.`;
-    case 'sample':
-      return `Single similar-size measurement on this fleet, shown as a point estimate ±10%.`;
-    case 'bandwidth':
-      return `Scaled from your fleet's measured throughput on a different-size model. Inference is memory-bandwidth-bound: tok/s ∝ 1/size.`;
-    case 'theoretical':
-      return `Estimated from this node's chip memory bandwidth and the model's file size. No telemetry needed — refines once a model runs.`;
-  }
-}
-function projConfidenceRows(p: TpsProjection): DiscoveryHoverRow[] {
-  return [
-    { label: 'Range',  value: `${p.min} – ${p.max} tok/s` },
-    { label: 'Source', value: projConfidenceLabel(p.confidence), accent: p.confidence === 'theoretical' ? 'amber' : 'cyan' },
-    ...(p.count > 0 ? [{ label: 'Samples', value: `${p.count}` } as DiscoveryHoverRow] : []),
-  ];
-}
+import DiscoveryHoverCard from './DiscoveryHoverCard';
+import { RowCopyButton, CopyButton } from '../shared/CopyButton';
+import {
+  fitColors, fitGradeLabel, fmtDl, shortModelName, uploaderName,
+  projConfidenceLabel, projConfidenceBody, projConfidenceRows,
+} from './discoveryHelpers';
 
 /** Sort modes for the Discovery results list. Default = 'fit' (current behavior). */
 type SortMode = 'fit' | 'popularity' | 'speed' | 'cost' | 'size_asc' | 'size_desc';
@@ -97,89 +74,6 @@ interface FleetDiscoveryResponse {
   models:         FleetModel[];
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fitColors(score: number) {
-  if (score >= 80) return { dot: 'bg-emerald-500', badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20', bar: 'bg-emerald-500' };
-  if (score >= 60) return { dot: 'bg-green-500',   badge: 'bg-green-500/15 text-green-400 border-green-500/20',       bar: 'bg-green-500' };
-  if (score >= 40) return { dot: 'bg-yellow-500',  badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20',    bar: 'bg-yellow-500' };
-  if (score > 0)   return { dot: 'bg-orange-500',  badge: 'bg-orange-500/15 text-orange-400 border-orange-500/20',    bar: 'bg-orange-500' };
-  return             { dot: 'bg-red-900',    badge: 'bg-red-900/20 text-red-500 border-red-900/30',           bar: 'bg-red-900' };
-}
-
-function fmtDl(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}K`;
-  return `${n}`;
-}
-
-function shortName(model_id: string): string {
-  return model_id.split('/').pop() ?? model_id;
-}
-
-function uploaderName(model_id: string): string | null {
-  const parts = model_id.split('/');
-  return parts.length > 1 ? parts[0] : null;
-}
-
-/** Word label for a fit score, used in the line-2 "Excellent fit on 3 nodes". */
-function fitGradeLabel(score: number): string {
-  if (score >= 80) return 'Excellent';
-  if (score >= 60) return 'Good';
-  if (score >= 40) return 'Tight';
-  if (score > 0)   return 'Marginal';
-  return "Won't Fit";
-}
-
-// ── Copy button ───────────────────────────────────────────────────────────────
-
-const CopyButton: React.FC<{ text: string }> = ({ text }) => {
-  const [copied, setCopied] = useState(false);
-  const handle = () => {
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
-  };
-  return (
-    <button onClick={handle} title="Copy" className="p-1 rounded hover:bg-gray-700/60 transition-colors">
-      {copied
-        ? <Check className="w-3 h-3 text-emerald-400" />
-        : <Copy className="w-3 h-3 text-gray-500 hover:text-gray-300" />}
-    </button>
-  );
-};
-
-/**
- * Per-row inline copy button. Used on line 1 of the summary row — must
- * not propagate the click to the row's expand toggle. Renders as a
- * compact button with icon + "Copy" label that flips to "Copied!" for
- * 1.5 s on success.
- */
-const RowCopyButton: React.FC<{ text: string; title?: string }> = ({ text, title }) => {
-  const [copied, setCopied] = useState(false);
-  const handle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <button
-      onClick={handle}
-      title={title ?? 'Copy pull command'}
-      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border transition-colors ${
-        copied
-          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
-          : 'bg-gray-800/60 border-gray-700/60 text-gray-400 hover:text-cyan-300 hover:border-cyan-500/30'
-      }`}
-    >
-      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-      <span>{copied ? 'Copied!' : 'Copy pull'}</span>
-    </button>
-  );
-};
-
 /**
  * Visual fit-bars — one colored bar per node in the fleet, color-coded
  * by that node's fit score. Width is uniform so the strip is a quick
@@ -188,7 +82,7 @@ const RowCopyButton: React.FC<{ text: string; title?: string }> = ({ text, title
 const FitBars: React.FC<{ nodes: NodeFit[]; getScore: (n: NodeFit) => number }> = ({ nodes, getScore }) => (
   <span className="inline-flex items-center gap-0.5">
     {nodes.map(n => {
-      const c = fitColors(getScore(n));
+      const c = fitColors(getScore(n), 'dim');
       return (
         <span
           key={n.node_id}
@@ -263,7 +157,7 @@ const FleetModelRow: React.FC<{
   const effectiveScore = focusedNode
     ? (nodeScoresAtCtx.get(focusedNode.node_id)?.score ?? focusedNode.fit_score)
     : Math.max(...Array.from(nodeScoresAtCtx.values()).map((v: { score: number; label: string }) => v.score), 0);
-  const best = fitColors(effectiveScore);
+  const best = fitColors(effectiveScore, 'dim');
 
   // When a node is focused, report fit status for just that node; otherwise fleet-wide count.
   const fittingNodes = focusNodeId
@@ -343,9 +237,9 @@ const FleetModelRow: React.FC<{
           <div className="min-w-0 flex-1">
             <div
               className="text-xs text-gray-200 font-mono truncate"
-              title={shortName(model.model_id)}
+              title={shortModelName(model.model_id)}
             >
-              {shortName(model.model_id)}
+              {shortModelName(model.model_id)}
             </div>
             {uploader && (
               <div className="text-[10px] text-gray-600 truncate" title={uploader}>
@@ -403,7 +297,7 @@ const FleetModelRow: React.FC<{
             {projForRow ? (
               <DiscoveryHoverCard
                 heading={`≈${((projForRow.min + projForRow.max) / 2).toFixed(0)} tok/s · ${projConfidenceLabel(projForRow.confidence)}`}
-                body={projConfidenceBody(projForRow)}
+                body={projConfidenceBody(projForRow, 'fleet')}
                 rows={projConfidenceRows(projForRow)}
               >
                 <span className={projForRow.confidence === 'theoretical' ? 'text-gray-500 italic' : 'text-gray-400'}>
@@ -494,7 +388,7 @@ const FleetModelRow: React.FC<{
                 displayLabel = fit.label;
                 displayScore = fit.score;
               }
-              const nc = fitColors(displayScore);
+              const nc = fitColors(displayScore, 'dim');
               const displayName = node.hostname ?? node.node_id;
               const isFocused = focusNodeId === node.node_id;
               const isRecommended = hasRecQuant && node.best_quant?.toUpperCase() === recQuant.toUpperCase();
@@ -565,7 +459,7 @@ const FleetModelRow: React.FC<{
                       <code className="text-[10px] text-cyan-400/70 font-mono truncate max-w-[200px] hidden lg:inline">
                         {node.pull_cmd}
                       </code>
-                      <CopyButton text={node.pull_cmd} />
+                      <CopyButton text={node.pull_cmd} variant="compact" />
                     </div>
                   )}
                 </div>
@@ -583,7 +477,7 @@ const FleetModelRow: React.FC<{
                 <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">
                   {pullNode.pull_cmd}
                 </code>
-                <CopyButton text={pullNode.pull_cmd} />
+                <CopyButton text={pullNode.pull_cmd} variant="compact" />
               </div>
             </div>
           )}
@@ -635,7 +529,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
       const params = new URLSearchParams({ limit: '200' });
       if (query)  params.set('search', query);
       if (nodeId) params.set('node_id', nodeId);
-      const resp = await fetch(`/api/fleet/model-candidates?${params}`, {
+      const resp = await fetch(`${CLOUD_URL}/api/fleet/model-candidates?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!resp.ok) throw new Error(`${resp.status}`);

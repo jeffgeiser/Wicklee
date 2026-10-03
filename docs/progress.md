@@ -2,9 +2,666 @@
 
 *A running log of what shipped, what was learned, and what's next. Most recent entry first.*
 
-> **Canonical references:** `docs/ROADMAP.md` (product roadmap, phases, tier structure) · `docs/progress.md` (this file — engineering journal, most-recent-first)
+> **Canonical references:** `docs/ROADMAP.md` (product roadmap, phases, tier structure) · `docs/progress.md` (this file — engineering journal, most-recent-first) · `docs/NEXT_STEPS.md` (founder checklist — open items that need a human) · `docs/QA_CHECKLIST.md` (standing manual release checks)
 
 ---
+
+## September 28, 2026 — Security + bug-fix sweep from the code review (PRs #61–#64)
+
+Worked through Priorities 1–2 of `docs/CODE_REVIEW.md` before Paddle goes live. S1–S9 and B1–B10 are closed; Priority 3 (performance) is in progress.
+
+- **#61 — auth, billing, pairing (S1–S4, B1).** No more auto-linking a new Clerk identity to a password account; legacy `/api/auth/signup|login` return 404 whenever `CLERK_JWKS_URL` is set. Paddle webhook: 5-minute timestamp tolerance, HMAC over raw bytes, any `h1` may match; tier follows `data.status` (active/trialing grant, paused/canceled revoke, past_due keeps the tier), out-of-order events skipped, `subscription.paused`/`resumed` handled. `client_ip` reads `X-Forwarded-For` from the right (`TRUSTED_PROXY_HOPS`, default 1). Activate counts and claims in one transaction.
+- **#63 — hardening (S5–S9).** Webhook, audit-drain, OTel and Slack URLs are resolved and refused when private, loopback, link-local, CGNAT or metadata (allowed under `SELF_HOSTED` or `OUTBOUND_ALLOW_PRIVATE=true`); redirects never followed. Personal tenant scope now requires `org_id IS NULL`. Boot-time node backfill and `RESET_NODES` removed. Legacy sessions expire after 30 days (and `/api/auth/me` is off under Clerk); node tokens stored as sha256, compared in constant time. Agent auto-update installs only when the binary matches the release's `SHA256SUMS`, which the release workflow now publishes.
+- **#62 — SPA routes.** `_redirects` rewrites to `/` instead of `/index.html`, so direct hits on `/pricing`, `/terms`, `/trust` etc. stop bouncing to the homepage. Legal copy covers annual plans and drops Pro.
+- **#64 — bugs (B2–B10).** Dashboard socket leak and stale org data on org switch/sign-out fixed; local-agent calls use relative URLs. Agent proxy streams passthrough bodies and uses connect/read timeouts (no 300 s cap); telemetry push recovers after a 410 and re-pair; `panic = "abort"` dropped so the supervisor can recover loops; runtime-config pollers honour `[runtime_ports]`; one quant table. New **`GET /api/metrics/snapshot`** returns the latest frame as JSON (`/api/metrics` is SSE).
+- Docs pass against the current code: retired Pro/Business labels replaced with Team/Enterprise in public docs, pattern count 20, llama.cpp listed as a runtime, self-hosted agent pairing via `WICKLEE_CLOUD_URL`, and README build steps fixed.
+
+---
+
+## July 16, 2026 — Trust page + Design-Partner program page (GTM Rocks 5/6, pulled forward)
+
+GTM decision recorded: for the near-term mid-market/enterprise goal, the enterprise motions (Rocks 5–6) were pulled ahead of the developer-volume rocks — enterprise lead times are longest, and the product completed the Business/Enterprise claim set this month (RBAC, audit+SIEM, org keys, SLOs, cost governance, self-hosted, Helm; SSO in progress).
+
+- **`/trust`** — the security-reviewer page: transmitted-vs-never-leaves data split, tenancy-from-JWT + RBAC + hardened pairing, append-only audit with export/SIEM story, hosted vs self-hosted deployment models, and an **honest compliance section** (independent review June 2026: yes; SOC 2: not yet, planned when a deal requires it — the GTM doc's own guidance). Every claim on the page is shipped behavior; nothing aspirational.
+- **`/design-partners`** — the offer page: 3–5 companies, Business free for 12 months ↔ logo + case study + monthly feedback call; targeted at regulated/on-prem verticals with real fleets. Mailto CTA pre-structures the application (company / fleet / what you run and why). Cross-links /trust.
+- Both routed in App.tsx, added to STATIC_PAGE_META + the sitemap (0.6 priority), and linked from the landing footer. GTM execution tracker items checked with dates.
+
+Founder-side next (needs the human): SSO/Clerk enablement, demo Space upload, ~10 outreach targets, first emails.
+
+---
+
+## July 16, 2026 — Helm chart for the control plane (item 13 v1) + /mcp proxy fix
+
+- **`deploy/helm/wicklee`** — the Kubernetes equivalent of the compose bundle: cloud Deployment (SELF_HOSTED=true, env via Secret, /health readiness+liveness), frontend Deployment (nginx same-origin proxy: `BACKEND_HOST` = cloud Service, `RESOLVER` = CoreDNS ClusterIP via `frontend.dnsResolver`), optional TimescaleDB StatefulSet + PVC or `externalDatabaseUrl`, optional Ingress (single rule — the frontend proxies API paths). `required` guards fail fast on missing images/passwords. **Validated with helm 4.0.4**: lint clean, `helm template` rendered for bundled-PG, external-DB + Ingress, and missing-password paths.
+- **Production bug found while writing the Ingress comment**: nginx.conf never proxied `/mcp` — the documented `POST wicklee.dev/mcp` Cloud MCP endpoint fell into the SPA catch-all and returned index.html to MCP clients. Added a `/mcp` proxy block (covers `/mcp/manifest` too); fixes wicklee.dev on next frontend deploy and the chart inherits it.
+- **Operator honestly deferred**: an agent DaemonSet can't self-enroll — pairing is an interactive 6-digit flow. Recorded design sketch (org-scoped enrollment tokens, Admin-minted, RBAC + audited) in ROADMAP; SELF_HOSTING.md's "Agents on Kubernetes" section explains the current recipe and the blocker instead of pretending.
+- SELF_HOSTING.md Kubernetes section rewritten with build/push/install steps and the values that matter (Clerk publishable key is build-time-baked; dnsResolver must match CoreDNS).
+
+---
+
+## July 16, 2026 — Models ↔ Insights/Performance rationalization (IA pass)
+
+Audited both surfaces for overlap and coherence after the July feature wave. Finding: **no hard duplication** (discovery lives only on Models; Model Fit's canonical home on Performance was a deliberate v0.7.x decision) — the gap was legibility and connection, not placement. The platform IA is three axes: **Intelligence = now** (live tiles/fleet status), **Models = the model axis** (what's loaded/where across all runtimes, what ran & cost per model, what to add), **Insights → Performance = efficiency & money over time** (fit, trends, SLA, thermal, chargeback, capacity, migration, idle waste).
+
+- **ModelsPage header contract rewritten** — the old subtitle claimed "inference performance lives on the Intelligence tab," which was both stale and contradicted by Models' own Recent section. New copy names both neighbors accurately, with a live deep-link into Insights → Performance (reusing the existing `insightsDeepLink` mechanism; hidden when the user's tier can't see Insights). A code comment pins the contract for future feature placement.
+- **Cross-links at the handoffs** — MigrationAdvisorCard gains "view loaded models →" (its recommendations act on the Loaded table); the Models 7-day comparison gains a pointer to cost attribution/planning on Performance. New `onNavigateToModels` prop threaded App → AIInsights → card.
+- **docs.md** — new "where things live" table under Multi-Model Monitoring documenting the three-axis split.
+
+---
+
+## July 16, 2026 — Self-Hosted Control Plane v1 (item 12)
+
+- **`deploy/self-hosted/docker-compose.yml`** — TimescaleDB + the cloud binary + the nginx frontend, the exact images behind wicklee.dev. Frontend built with `VITE_CLOUD_URL="/"` (same-origin) and nginx's existing `BACKEND_HOST` envsubst pointed at `cloud:8081`, so zero new plumbing. `.env.example` documents required vs optional (Resend/HF degrade gracefully).
+- **`SELF_HOSTED=true`** — `is_self_hosted()` (OnceLock env check) short-circuits `resolve_tier` + `resolve_node_tier` to `enterprise`: no Paddle in the box, entitlement came with the license. Covers JWT reads, API-key reads (validate_api_key resolves via resolve_tier), and background paths (digest, alerts) in one place.
+- **License: soft-enforced deliberately.** `WICKLEE_LICENSE_KEY` presence-checked: masked boot log, `licensed` flag added to `/health` **only in self-hosted mode** (the endpoint keeps leaking zero platform stats on wicklee.dev), unlicensed = evaluation mode with a sales pointer. Cryptographic validation + issuance is the follow-up — hard-gating with no issuance infra would brick legitimate evals.
+- **`docs/SELF_HOSTING.md`** — quick start, licensing, the auth choice (Clerk BYO-app = supported UI path with orgs/RBAC/SSO; DIY legacy sessions documented honestly as API-only, no org/RBAC/UI), agent pairing, **network-egress inventory** (nothing phones home to wicklee.dev; each optional outbound named for firewall policy), backup surface, and the Compose→K8s mapping note pending item 13.
+- cloud/Dockerfile runtime image gained `wget` for the compose healthcheck.
+- Docs: Sovereignty sections in docs.md + llms.txt now carry the self-hosted story; ROADMAP item 12 → v1 SHIPPED with follow-ups.
+
+---
+
+## July 16, 2026 — Idle-Waste & Right-Sizing Report + Weekly Digest (item 10)
+
+### `GET /api/v1/fleet/idle-waste?days=1..90` (Team+)
+- **Phantom load** = model held in memory while the node is NOT inferring. Idle/active energy split: per-sample `inference_state` on raw rows (exact), `inference_duty_pct` on 5-min rollups (proportional) — `IDLE_WASTE_BASE` CTE reuses chargeback's 30s-cadence energy conventions (rollups for the window + raw trailing day).
+- **Actions**: `unload_idle_model` per node×model with monthly-normalized `recovers_usd_month` (so 7d and 30d reports advise consistently; thresholds >$0.005/window + >1h idle, top 10); `consolidate` for nodes inferring <10% of a ≥24h-covered window. Baseline idle (no model loaded) reported separately as context, not counted as phantom.
+- Quant-swap savings deliberately deferred — honest version needs the agent's Quant Sweet Spot output on the wire.
+
+### Weekly digest (Resend)
+- `digest_settings` — one row per tenant (org members share), owner user_id + org_id kept for tier re-resolution at send time (audit_drains pattern). `GET/PUT /api/digest` (Team+, PUT audited `digest.updated`, email validated when enabling).
+- `idle_digest_task` — hourly tick; sends the 7-day report when ≥7d since last send; tier re-checked at delivery; `last_sent_ms` advances **only on successful send** so a Resend outage retries next tick. Subject carries the numbers: "Wicklee weekly: $X burned idle · $Y/mo recoverable".
+- Shared `compute_idle_waste()` feeds both the HTTP handler and the email so they can never disagree.
+
+### UI
+- **IdleWasteCard** on Insights → Performance below Capacity Planner/Migration Advisor: 7/30/90d picker, totals strip (burned idle / idle energy share / recoverable per month), kind-badged action list, and the digest opt-in footer (email + enable/disable) — subscription managed where the report lives, not buried in Settings.
+
+Docs: api.md, docs.md, llms.txt, llms-full.txt (response examples), DocsPage fleet table, ROADMAP item 10 → SHIPPED with follow-ups.
+
+---
+
+## July 15, 2026 — Capacity Planner (procurement scenarios) + Migration Advisor
+
+### Capacity Planner with procurement scenarios (Team+ — Readiness Program item 11)
+- **`GET /api/v1/fleet/capacity?target_tok_s=&kwh_rate=&days=1..90`** — observed per-node tok/s + watts (5-min rollups UNION raw trailing day, chargeback conventions), nodes classified Apple/NVIDIA from their live power source, median measured tok/W per class. Scenarios: units of each of 12 hardware profiles (M4 → H100) needed to close the gap to `target_tok_s`, with cost/day at 24h duty — priced from the fleet's OWN measured efficiency, never vendor benchmarks. Every scenario carries a `basis` string; >16-unit scenarios omitted; default target = 2× current sustained.
+- **CapacityPlannerCard** on Insights → Performance — sustained/target/gap strip with inline target input, Apple/NVIDIA filter, scenario table sorted by cost/day, basis on hover.
+
+### Cross-Node Model Migration Advisor (Team+)
+- **`GET /api/v1/fleet/migration-advisor`** — live placement snapshot from the metrics cache (model identity across Ollama/vLLM/llama.cpp, live WES via `wes_for_payload`, free memory = NVIDIA VRAM free or Apple `available_memory_mb`) vs peers' 7-day demonstrated WES. Recommends moves with ≥20% estimated gain where the model fits with 1.2× headroom (unknown footprint assumes 8 GB); top 10 by gain.
+- **MigrationAdvisorCard** beside the planner — from→to rows with WES delta and free memory; honest "models are well-placed" empty state.
+
+Both endpoints follow the chargeback pattern: `require_user_and_org` (JWT-claim tenancy) + `resolve_tier` + `is_team_or_above` + `tenant_scope`. Docs updated: DocsPage Fleet API table, docs.md, llms.txt, llms-full.txt (with response examples). Closes the last two pre-July roadmap entries in this family — Deployment Profiles had already shipped via fleet config management (item 8).
+
+Also this session (PR #35): Models tab Loaded table was blind to vLLM/llama.cpp nodes (Ollama-only field collection — the DGX Spark vanished while Fleet Status showed it); Overview WES/tok-W tiles claimed "no active inference" when the actual gap was missing power telemetry (unprivileged Apple agent → no powermetrics) — both fixed.
+
+---
+
+## ⇢ Session handoff — current state (2026-07-04)
+
+**Everything below is MERGED to `main`.** PR #29 (audit logging + export/SIEM
+drain, RBAC, org-wide API keys, deployment profiles, pricing fix) and PR #30
+(Phase 2: tags, silences, SLOs) — the working branch
+`claude/recent-progress-summary-jgw3rd` is reset onto `main` after each merge.
+A fresh session starts from `main` / the reset branch as normal.
+
+**ACTIVE ITERATION FOCUS:** the ★ Business & Enterprise Readiness Program at
+the top of `ROADMAP.md` → Planned (July 2026 strategic review; 16 items,
+5 phases, each with implementation pointers + acceptance criteria).
+
+**Program scoreboard:**
+- **Phase 1 (trust gap): DONE** except item 2 — SSO/SAML is parked until the
+  owner has time for the Clerk dashboard work (the roadmap item records the
+  two options; the code side is trivial).
+- **Phase 2 (reliability): COMPLETE** — tags (6), silences (7), SLOs v1 (5),
+  fleet config management (8).
+- **Phase 3 (cost governance): 1 of 3** — chargeback/showback v1 (item 9)
+  shipped. **Next up: item 10, idle-waste & right-sizing report** (phantom-
+  load fleet rollup + quant-advisor savings + weekly email digest via the
+  existing Resend path), then item 11 (capacity planner).
+- Phase 3 (cost governance — the moat), Phase 4 (enterprise deployment),
+  Phase 5 (AI-native) are specced and waiting.
+- **GTM plan lives in `docs/GTM.md`** (July 2026): ecosystem embedding
+  (HF Space/Dataset, MCP registries, runtime docs, Grafana catalog), the
+  WES-leaderboard data flywheel, partnerships (hardware vendors, MSPs,
+  FinOps), monthly rocks. Six GTM-driven product items added to ROADMAP
+  (demo fleet mode, leaderboard engine, fit badge, MSP console, share
+  links, FOCUS export).
+
+**Deployment notes:** cloud changes go live on the next Railway deploy (all
+migrations are additive and run at startup: audit_log, audit_drains,
+api_keys.org_id, alert_rules.tag, webhook_subscriptions.tag, alert_silences,
+slo_definitions/slo_windows). Agent-side deployment profiles need a release
+tag (currently v0.10.0 → v0.11.0) to reach nodes.
+
+**Cleanup available:** `origin/claude/recovered-audit-logging` is a redundant
+backup branch from the recovery, safe to delete.
+
+**Process lessons (bit us this session):**
+- Push WIP to a *remote* branch before a container idles — ephemeral working
+  trees are not backups.
+- When running `cargo` in the background, let the tool's own backgrounding handle
+  it; a trailing `&` inside a backgrounded call double-forks and returns a bogus
+  "exit 0" while the build runs orphaned (this masked a real E0063).
+- The agent bin embeds `agent/frontend/dist` via rust-embed, so `cargo check`/
+  `test` on the agent requires `npm run build:agent` first, or `StaticAssets::get`
+  fails to resolve.
+- Pricing/tier facts live across ~9 surfaces (llms.txt, llms-full.txt, docs.md,
+  DocsPage.tsx, PricingPage, README, Legal/ToS, Settings upgrade copy, types.ts) —
+  they must all move together on any pricing change.
+
+---
+
+## Early July 2026 — Demo fleet mode (GTM Rock 2, item 1)
+
+The evaluate-before-install killer: the full cloud dashboard running against
+a synthetic fleet — no Clerk, no backend, no account. `npm run build:demo`
+emits a purely static bundle for demo.wicklee.dev and the Hugging Face Space.
+
+### Architecture (three small modules, zero production-code forks)
+- **`src/demo/demoFleet.ts`** — deterministic generator: six nodes with
+  personality (M4 Max studio, 4090 pair on env:prod, H100 box, a Mac mini
+  that thermally throttles every ~4 min, an edge node that drops offline
+  every 5 min, a model swap every ~2.5 min). Seeded PRNG + sines over
+  wall-clock time — no stored state, same demo every visit.
+- **`src/demo/demoEventSource.ts`** — a fake EventSource that feeds frames
+  through the PRODUCTION FleetStreamContext processing path at 1 Hz, so
+  events, smoothing, thermal transitions, and model-swap detection all run
+  their real code.
+- **`src/demo/demoApi.ts`** — fetch shim intercepting every `/api/*` call
+  (CLOUD_URL-prefixed AND same-origin relative — ModelsPage uses relative
+  URLs) with fixtures for history charts, observations, SLOs (one healthy,
+  one burning), chargeback, audit log, alerts/silences, webhooks, keys,
+  thermal budget. Writes return a friendly read-only 403 the settings
+  panels surface verbatim. Unknown /api paths → graceful 404.
+
+### The Clerk seam
+`AppCore` already takes auth as props (the agent build renders it without
+Clerk), so demo renders it directly with a fake Team-tier user. Four
+components gated Clerk on `IS_AGENT` only and crashed the demo (useAuth
+without ClerkProvider): Sidebar account actions, AddNodeModal, APIKeysView,
+TeamManagement — all now gate on demo too (build-time consts keep hook
+order stable).
+
+### Verification
+Playwright smoke test against the built bundle in the preinstalled
+Chromium (proxy-bypassed, served on a non-localhost alias so the app
+doesn't flip into agent mode): banner, node names, model names, install
+one-liner all render; zero page errors. First run caught real bugs:
+VRAM overcommit on the 4090 fixtures (26.6/24 GB) and empty TTFT tiles —
+both fixed (capped VRAM, proxy-TTFT fields added). Screenshot delivered.
+
+### Remaining (founder)
+demo.wicklee.dev DNS + static hosting, HF Space creation — exact steps and
+the Space README (front-matter included) in `docs/DEMO.md`.
+
+---
+
+## Early July 2026 — Chargeback & showback v1 (Readiness Program, Phase 3 item 9)
+
+Phase 3 (cost governance — the moat) opens with the report finance asks
+for: **$ per million tokens by team, from measured data**. Datadog/Langfuse
+see tokens; DCGM sees watts; only Wicklee has both in one store.
+
+### Design
+- **One shared base CTE** (`CHARGEBACK_BASE`): per-sample energy and token
+  estimates from the 5-min rollup (older than 24h) UNION the raw trailing-
+  day tail — the same retention-hole handling as wes/metrics-history, and
+  the same energy conventions as cost-by-model (30s cadence, watts × hours
+  ÷ 1000) so the two surfaces can never disagree. Tokens ≈ tok/s × covered
+  seconds (sampled-throughput estimate; per-request exact counts are a
+  follow-up when trace shipping lands — stated in the UI footer).
+- **Four groupings from one endpoint** (`GET /api/v1/fleet/chargeback`,
+  Team+, days 1–90, kwh_rate param): by team tag (LATERAL unnest of the
+  comma-separated nodes.tags — multi-tag nodes count under each tag,
+  documented as showback-not-double-billing; untagged → `(untagged)`),
+  by model, by node, and a daily trend; run concurrently via tokio::join.
+  Each row: energy_kwh, cost_usd, tokens_m, `usd_per_mtok`, hours_covered.
+- **Finance CSV**: `&format=csv&group=tag|model|node|daily` — one grouping,
+  `csv_escape`-hardened, `Content-Disposition` download, audited as
+  `chargeback.exported` (consistent with the audit-export precedent).
+
+### UI
+Chargeback & Showback card on Insights → Performance (cloud, Team+ with
+upsell): 7/30/90-day picker, totals strip (cost / kWh / tokens / $ per 1M
+tokens headline), grouping tabs, per-row table, CSV download, and an honest
+footer about estimation and tag overlap.
+
+Verified: cloud `cargo test` 24 green, compile clean, `tsc` clean,
+vitest 80.
+
+---
+
+## Early July 2026 — Fleet config management v1 (Readiness Program, Phase 2 item 8 — Phase 2 COMPLETE)
+
+Deployment profiles were node-local (config.toml + localhost API) — fine
+for 3 nodes, unusable at 25. Profiles are now settable centrally, and the
+delivery mechanism cost zero new connections.
+
+### The delivery trick
+The agent already POSTs telemetry every 2s and the cloud already runs an
+indexed auth query per push. Fleet config rides both: the auth query now
+also fetches `nodes.desired_profile`, and the telemetry response (upgraded
+204 → 200+JSON — old agents check only `is_success()` and ignore bodies)
+carries it back. The agent's `cloud_push` success arm applies a changed
+desired profile within one push cycle: shared `Arc<Mutex<DeploymentProfile>>`
+(the 10s evaluator re-reads it each tick) + `update_config` persistence so
+it survives restarts.
+
+### Truth, not intent
+`cloud_push` also injects the ACTUAL running profile into every outgoing
+frame (at the same place it already patches node_id and embeds
+observations), and the cloud's `MetricsPayload` + frontend `SentinelMetrics`
+carry it — so the dashboard shows what each node is really running, and an
+intent-vs-actual drift indicator is now possible (roadmap follow-up).
+
+### Setting it
+- **Per node (Pro+):** `PATCH /api/nodes/:id { desired_profile }`
+  (validated; empty clears → agent keeps local choice; audited in
+  `node.updated`). Surfaced as a Profile select column in Settings → Node
+  Configuration showing the actual profile from the live frame.
+- **Bulk by tag (Team+, Member+ RBAC):** `POST /api/fleet/config
+  { tag, desired_profile }` — tag-predicate UPDATE across the tenant,
+  returns `nodes_affected`, audited as `fleet_config.applied`. "All
+  env:prod nodes run production_fleet" is one call.
+
+### Compatibility
+Old agents: ignore the response body, keep local profiles — the feature
+activates per node as agents upgrade. Old cloud + new agent: the injected
+`deployment_profile` frame field lands in serde(default) and is dropped
+harmlessly by pre-upgrade clouds.
+
+**Phase 2 (reliability maturity) is now complete**: tags → silences →
+SLOs → fleet config. Next: Phase 3 (cost governance — showback/chargeback,
+idle-waste reports, capacity planner).
+
+Verified: cloud `cargo test` 24 green, agent compile clean, `tsc` clean,
+vitest 80.
+
+---
+
+## Early July 2026 — SLOs with error budgets v1 (Readiness Program, Phase 2 item 5)
+
+The Phase-2 headliner: *"our internal inference API met SLO 99.2% of the
+month"* is now a sentence Wicklee can produce.
+
+### The architectural constraint that shaped everything
+Per-request `inference_traces` live agent-side in DuckDB and are never
+shipped to the cloud; cloud-side, TTFT survives only in `metrics_raw`
+(1 Hz samples, 24h retention — the 5-min rollup doesn't carry it). So
+monthly percentiles over raw data are impossible cloud-side. The answer is
+the standard one: **time-slice SLOs**. The evaluator writes one verdict per
+SLO per 5-minute window into `slo_windows`; compliance = good windows /
+counted windows over a rolling 30 days. Verdict rows are tiny and persist
+independently of raw-telemetry retention.
+
+### What shipped
+- **Definitions** (`slo_definitions`, Team+, ≤20/fleet): name, metric,
+  threshold, target_pct (50–99.99), optional tag / node scope (tag matching
+  reuses the item-6 predicate). Three v1 SLIs from `metrics_raw` via
+  `percentile_cont`, filtered to active-inference samples: `ttft_p95_ms`
+  (≤), `tok_s_p50` (≥), `wes_p50` (≥) — latency, throughput, efficiency.
+  Idle windows yield NULL SLI and are **not counted against the budget** (a
+  fleet that served nothing overnight didn't violate its latency SLO).
+- **Evaluator** (`slo_evaluator_task`, 5-min loop): computes the SLI for
+  the just-completed aligned window, writes idempotently (`ON CONFLICT DO
+  NOTHING` — restarts can't double-count), re-checks tier per SLO so
+  downgraded tenants stop evaluating.
+- **Error-budget burn alerts**: rolling 30d — allowed bad windows = total ×
+  (1 − target); burn = bad/allowed. Fires `slo_budget_burn` through the
+  existing `deliver_alert` channel fan-out (Slack/email/PagerDuty) to the
+  SLO creator's channels, **once per crossing** of 50/90/100% via a
+  `last_burn_notified` latch that resets when burn recovers below 25% as
+  the rolling window ages bad slices out.
+- **API**: `POST/GET/DELETE /api/slo` — Team+, Member+ RBAC, audited
+  (`slo.created`/`slo.deleted`). GET returns each definition with live
+  status: 30d compliance %, burn %, bad/total windows, latest window SLI.
+- **UI**: Settings → SLOs & Error Budgets — create form (objective picker
+  with ≤/≥ semantics per metric, target presets 95–99.9%, tag/node scope),
+  per-SLO card with compliance %, color-banded budget-burn bar, latest
+  window verdict, and an honest footer: SLIs are sampled-telemetry, not
+  per-request — per-request percentiles remain on each node's SLA Monitor.
+- Unit tests: SLI direction table (≤ for TTFT, ≥ for the rest, boundary
+  inclusive) + metric registry completeness. 24 cloud tests green.
+
+### Deferred (recorded on the roadmap item)
+Monthly SLO report (email + endpoint), per-request-trace SLIs (needs trace
+shipping — the Fleet SLA Aggregation item), dashboard SLO cards outside
+Settings.
+
+Verified: cloud `cargo test` 24 green (2 new), compile clean first try,
+`tsc` clean, vitest 80.
+
+---
+
+## Early July 2026 — Alert silences & maintenance windows (Readiness Program, Phase 2 item 7)
+
+The "planned GPU driver upgrade paged everyone" fix, built directly on the
+tags substrate from item 6.
+
+### Design
+- **One table covers both concepts**: `alert_silences` (tenant-scoped — org
+  members share) with `starts_at`/`ends_at`. A silence starting now is a
+  silence; a future `starts_at` is a scheduled maintenance window. Same
+  storage, same matching, same UI list.
+- **Suppression lives in the evaluator queries**, not post-hoc: both
+  `evaluate_alerts` and `evaluate_webhooks` gained a `NOT EXISTS` predicate
+  on the telemetry hot path, so silenced conditions simply never fire —
+  no notification to dedupe, no cooldown interaction. The alerts evaluator
+  resolves the node's tenant via `COALESCE(nodes.org_id, nodes.user_id)`
+  (rules are per-user but silences are shared); the webhook evaluator is
+  already tenant-keyed.
+- **Match dimensions compose**: node_id, tag (same case/space-insensitive
+  membership match as scoping, same `valid_scope_tag` validation), and
+  event_type (NULL = all; vocabulary = `SILENCEABLE_EVENTS`, the union of
+  the alert-rule and threshold-webhook event types — one silence mutes both
+  systems).
+- CRUD: `POST/GET/DELETE /api/alerts/silences` — Pro+ tier, Member+ (RBAC),
+  duration clamped 1min–30d, `starts_at` ≤90d out with a 60s clock-skew
+  grace, reason ≤200 chars. List returns active + upcoming with an `active`
+  flag (expired rows age out of the list, stay in the table). Creation and
+  deletion are audit-logged (`alert_silence.created/deleted`).
+
+### UI
+Settings → Alerts gained a Silences block: create form (duration presets
+30m–7d, node scope, tag scope, event type, optional future start via
+datetime-local, reason) and a list with Silencing/Scheduled badges,
+scope · window summary, and end-early/cancel.
+
+### Known gap (recorded on the roadmap item)
+The fleet-alert evaluator (zombied_engine etc.) and the node-offline
+notification path don't yet honor silences — custom alert rules and
+threshold webhooks do. Escalation policies (the item's third phase) need an
+ack model, so they slot after SLOs; the fleet-path silencing folds in then.
+
+Verified: cloud `cargo test` 22 green, `tsc` clean, vitest 80.
+
+---
+
+## Early July 2026 — Environments & tags v1 (Readiness Program, Phase 2 item 6)
+
+Phase 2 opened with tags rather than SLOs — deliberately out of roadmap
+order, because SLO definitions and alert silences are both *per-tag/env*;
+tags are the substrate the rest of Phase 2 scopes against.
+
+### Starting point
+`nodes.tags` existed as a free-text column written by `PATCH /api/nodes/:id`
+and read by nothing — not the SSE stream, not alerts, not webhooks. There
+wasn't even a UI to set it.
+
+### What shipped
+- **Editable**: new Tags column in Settings → Node Configuration
+  (`NodeOverrideRow` gained a tags input synced on blur via
+  `saveTagsToCloud`, mirroring the display-name flow). Convention: comma-
+  separated; `env:` prefix reserved for environments (`env:prod`).
+- **On the wire**: the SSE stream's display-name cache became a `node_meta`
+  cache carrying `(display_name, tags)`; FleetStreamContext patches tags
+  into `metrics.tags` so every consumer can tag-filter with zero extra
+  fetches (`SentinelMetrics.tags` / `FleetNode.tags` types added).
+- **Scoping**: `alert_rules.tag` + `webhook_subscriptions.tag` (nullable,
+  additive migrations). Both evaluator queries gained the same predicate —
+  case- and space-insensitive membership match against the comma-separated
+  `nodes.tags` (`',' || replace(lower(tags),' ','') || ','` LIKE). Scope
+  tags are validated by `valid_scope_tag` (letters/digits/`: - _ .`, ≤64 —
+  comma-free so they can't collide with storage, %-free so they can't game
+  the LIKE). Tag inputs added to the alert-rule form (SettingsView) and the
+  webhook form (WebhooksSection); both list views show the tag.
+- Rule/webhook create audits carry the tag; composes with node_id scope
+  (both must match when both set).
+
+### Deferred (recorded on the roadmap item, not silent)
+Overview tag-filter chips, `?tag=` on V1 fleet/rollup endpoints, and the
+tag dimension on cost/WES rollups — they unlock when SLOs (item 5) consume
+tags next.
+
+Verified: cloud `cargo test` 22 green (2 new scope_tag tests), `tsc` clean,
+vitest 80.
+
+---
+
+## Early July 2026 — Org-wide API keys (Readiness Program, Phase 1 item 4)
+
+Closes the June security review's "org-wide API keys" deferral and completes
+Phase 1 of the Readiness Program (except SSO, parked for owner Clerk time).
+Previously a Team member's key saw only their personal nodes — CI/automation
+had to ride on an individual's account.
+
+### Design
+- `api_keys.org_id` (NULL = personal — every existing key keeps its exact
+  behavior). An org key is bound to the verified org claim at mint time.
+- `validate_api_key` now returns `(key_id, user_id, org_id, tier)`. Tier is
+  resolved through `resolve_tier` — org keys inherit the ORG's subscription
+  (also replacing the legacy `users.is_pro` flag for rate-limit tiering with
+  the modern field every JWT-side gate uses).
+- All **7 API-key-authed sites** switched from `WHERE user_id = $1` to the
+  `tenant_scope` predicate (scripted transform with per-site count
+  assertions, compiled first try): `/api/v1/fleet`, `fleet/wes`,
+  `nodes/{id}`, `route/best`, `insights/latest`, `models/discover`, and
+  Prometheus `/metrics`. The insights/discover/prometheus handlers also
+  dropped their per-request `users.subscription_tier` lookups in favor of
+  the tier validate now returns.
+- **Lifecycle + RBAC:** `POST /api/v1/keys` takes `scope: "personal"|"org"`
+  (default personal; viewer-blocked either way). Org scope requires an
+  active org in the session AND the Admin role. GET lists personal + the
+  active org's keys (visible to all members — shared infrastructure), each
+  with its scope. DELETE: personal = owner; org = any Admin of the key's
+  org (proper 403-vs-404 distinction when a non-admin targets an org key).
+  All mints/revokes audited with scope.
+- **Drive-by fix:** the Prometheus tier gate was `tier != "team" && tier !=
+  "enterprise"` — which locked **Business** out of a feature its tier
+  includes ("everything in Team +"). Now `is_team_or_above`.
+
+### Frontend + docs
+APIKeysView: scope picker (Personal / Organization) in the create modal,
+amber Org badge in the key list; `scope` threaded through `ApiKey` /
+`CreateApiKeyResponse` types. Docs updated: docs.md Fleet API key-scopes
+paragraph, DocsPage key rows, llms.txt, llms-full.txt. Both roadmap entries
+(Readiness item 4 + the June security-review deferral) flipped to SHIPPED.
+
+Verified: cloud `cargo test` 20 green, compile clean first try, `tsc`
+clean, vitest 80.
+
+---
+
+## Early July 2026 — Audit export + SIEM drain (Readiness Program, Phase 1 item 3)
+
+Enterprises don't read audit logs in a Settings panel — they pull them into
+Splunk/Datadog. Two delivery paths shipped (item 2, SSO, is parked until the
+owner has time for the Clerk dashboard work):
+
+### Export
+`GET /api/audit-log/export?format=csv|json&action=&from=&to=` — Business+,
+same tenant scoping as the read endpoint, chronological, 100k-row cap,
+`Content-Disposition` attachment. CSV goes through a new `csv_escape` helper:
+RFC-4180 quoting plus spreadsheet formula-injection hardening (`= + - @`
+cells get a leading apostrophe) — audit fields like `target` can carry
+client-influenced strings (node display names). The helper is unit-tested and
+is the reusable fix for the June review's still-open CSV-escaping MEDIUM on
+the fleet export. Every export is itself audited (`audit_log.exported` with
+format + row count).
+
+### SIEM drain
+One per tenant (`audit_drains`: tenant_id PK + owner user_id/org_id so the
+delivery loop can re-resolve tier). `PUT /api/audit-log/drain { url }` is
+**org-Admin-only** (first consumer of RBAC's `is_admin` beyond node removal)
++ Business+; generates a 32-byte HMAC secret returned ONCE (re-PUT rotates
+it and re-enables a disabled drain). The delivery cursor starts at the
+tenant's current max audit id — the drain streams NEW events; backfill is
+the export's job. `audit_drain_task` (60s loop, spawned with the other cloud
+evaluators) ships ≤500-event JSON batches through the existing
+`deliver_webhook` (HMAC-SHA256 `X-Wicklee-Signature`, 5s timeout), re-checks
+tier at delivery time so downgraded tenants stop draining, and auto-disables
+after 20 consecutive failures (mirroring webhook subscriptions). Drain
+config changes are audited (`audit_drain.created/deleted`).
+
+### UI + docs
+AuditLogSection gained CSV/JSON export buttons (blob download, respects the
+action filter), and a SIEM drain panel: status (active / auto-disabled /
+failure count / last delivery), reveal-once secret with copy, URL form,
+remove. Docs propagated across docs.md, DocsPage, llms.txt, llms-full.txt
+(including the batch payload spec); retention stated as ≥365d Business /
+unlimited Enterprise (purge enforcement is a roadmap follow-up).
+
+Verified: cloud `cargo test` 20 green (3 new csv_escape tests), compile
+clean first try, `tsc` clean, vitest 80.
+
+---
+
+## Early July 2026 — RBAC v1 (Business & Enterprise Readiness, Phase 1 item 1)
+
+First feature of the ★ Business & Enterprise Readiness Program (see ROADMAP).
+The July strategic review found every org member could delete nodes, rewire
+alerts, and reconfigure OTel — no role was ever checked; the Clerk JWT's role
+claim was parsed and thrown away, exactly like the org_id claim was before the
+June tenancy fix.
+
+### Design
+- `validate_clerk_jwt` now returns `(sub, org_id, org_role)`, handling both
+  Clerk token shapes: v1 top-level `org_id`/`org_role` ("org:admin") and v2
+  nested `o: { id, rol }` (bare "admin"). The nested `o.id` also backstops
+  org_id resolution for v2 tokens.
+- `OrgRole { Admin, Member, Viewer }` with deliberate mapping rules: solo
+  users (no org in session) = Admin over their own resources (tenancy scoping
+  already confines them); "admin" → Admin; custom "viewer" role → Viewer;
+  **anything unknown → Member, never Admin** (a bespoke Clerk ops role must
+  not be locked out of day-to-day work, and must never be escalated).
+- `require_user_org_role()` is the new core; `require_user_and_org` and
+  `require_user_info` became thin wrappers, so the ~28 read-only call sites
+  needed zero changes. Only mutating handlers switched to the role-aware
+  helper (mechanical transform, applied by script, compiled first try).
+
+### Policy (enforced at 15 handlers)
+- **Viewer → 403 on every mutation:** update node, alert channel/rule
+  create+delete+test, webhook create/delete/test, acknowledge/resolve/submit
+  observations, OTel config PUT, pair/activate. 403 body carries
+  `role_required` so the frontend can render a real message (sections already
+  display `err.error`).
+- **Admin-only:** node removal (`handle_delete_node`).
+- **Deliberately ungated:** stream-token revoke (self-scoped — users revoke
+  their own tokens); personal API keys (per-user by design, see the org-keys
+  item — an org viewer's personal key reaches only their personal nodes).
+
+### Tests + docs
+4 new `rbac_tests` (role parsing incl. prefix variants and the
+unknown-role→Member rule, policy table); 17 cloud tests green. Docs updated
+across docs.md (Roles table in Teams & Orgs), DocsPage.tsx, llms.txt,
+llms-full.txt. Follow-ups on the roadmap item: role-aware UI hiding,
+`access.denied` audit events, Admin-gated org key minting.
+
+---
+
+## Early July 2026 — Deployment Profiles (agent)
+
+The second feature lost with the reclaimed container, rebuilt fresh on the
+v0.10.0 baseline. A single intent selector that coherently shifts how
+sensitively a node's local observation patterns fire — the roadmap's
+"eliminate per-pattern threshold knobs in favor of one declaration."
+
+### The design choice
+`evaluate_local_observations` is a ~1,200-line function with thresholds as
+inline literals across ~20 patterns. Rewriting every literal per-profile
+would be huge and risky. Instead, three coherent levers thread through the
+function at the chokepoints all patterns already share:
+- **`density_scale`** multiplies the two base densities (`min_density_5m`
+  = 210, `min_density_10m` = 420) that every pattern derives its
+  evidence-window requirement from — one change, all patterns shift.
+- **`evidence_ratio`** replaces the hardcoded `0.70` sustained-fraction
+  gate at the three ratio-gated patterns (thermal_drain, phantom_load,
+  swap_io_pressure).
+- **`min_confidence`** is a final `obs.retain()` filter dropping
+  low-confidence observations before return.
+
+| Profile | density_scale | evidence_ratio | min_confidence |
+|---|---|---|---|
+| sovereign_dev | 1.15 | 0.85 | 0.50 |
+| dedicated_server (default) | 1.00 | 0.70 | 0.00 |
+| production_fleet | 0.65 | 0.55 | 0.00 |
+
+**dedicated_server is byte-for-behavior identical to the pre-profile
+baseline** (scale 1.0, gate 0.70, no floor) — a locked unit test asserts
+this so the default can never silently drift. sovereign_dev raises the bar
+(mixed-use laptop shouldn't cry wolf); production_fleet lowers it (serving
+users → warn early). A test also asserts the three profiles are strictly
+ordered on all three levers and that scaled dev densities stay within their
+windows (≤300 / ≤600 samples @1Hz).
+
+### Plumbing
+- `deployment_profile: Option<String>` added to `WickleeConfig` (persists
+  to config.toml; None → dedicated_server).
+- Shared `Arc<Mutex<DeploymentProfile>>` initialized from config, re-read by
+  the 10s evaluator each tick (a runtime switch lands within one cycle),
+  exposed to handlers via an axum `Extension` layer.
+- `GET /api/deployment-profile` (current + selectable set with each
+  profile's tuning) and `PUT /api/deployment-profile` (validates, updates
+  shared state, persists via `update_config`). Localhost/agent, no auth.
+- Frontend `settings/DeploymentProfileSection.tsx` — three selectable
+  intent cards (same-origin fetch to the agent on :7700), rendered in
+  Settings only in localhost/agent mode (`!isCloudMode`).
+- Docs: ROADMAP → Shipped; llms-full.txt gained the endpoint spec.
+
+Verified: agent `cargo check` clean, deployment_profile unit tests green,
+frontend `tsc` clean, vitest (80) green. Only Deployment Profiles remains
+node-local — a future enhancement could push the active profile in
+telemetry so the fleet view shows each node's intent.
+
+## Early July 2026 — Audit Logging (Business+) shipped + a session-recovery story
+
+### The recovery
+A prior session built a batch of tier features (audit logging, Team
+intelligence, webhook event subscriptions, deployment profiles) on a
+**stale local `main`**, committed them, and on push discovered local
+`main` was ~150 commits behind the real `origin/main` (v0.10.0) — where
+most of that work had already shipped independently, and where a security
+fix had removed the org-tenancy pattern the code depended on. It chose
+"preserve + sync + port" and was mid-port of audit logging (adapting it
+to the new JWT-tenancy baseline) when it ran out of budget. The container
+was later reclaimed; the in-flight work survived only as one uncommitted
+`cloud/src/main.rs` in a local Mac working tree. We recovered that diff,
+pushed it to a branch, and finished the feature here. **Lesson (recorded
+as convention):** push WIP to a remote branch before the container idles
+— ephemeral working trees are not backups; the two never-pushed commits
+were unrecoverable.
+
+### What shipped — Audit Logging (Business+)
+The last **Planned** Business-tier item is now Shipped. Immutable,
+append-only trail of sensitive fleet operations.
+- **Backend** (`cloud/src/main.rs`): `audit_log` table (BIGSERIAL,
+  `ts`/`user_id`/`org_id`/`actor_email`/`action`/`target`/`details` JSONB;
+  user+ts and org+ts indexes; no UPDATE/DELETE path exists anywhere).
+  Fire-and-forget `audit()` helper — spawns off the request path, resolves
+  the actor email server-side, never delays or fails the caller. `org_id`
+  is taken from the verified `require_user_and_org` JWT claim, never a
+  client header. `GET /api/audit-log` reads are Business+-gated
+  (`is_business_or_above`), `tenant_scope`d, cursor-paginated (`before`),
+  and `action`-filterable, returning `{ entries, next_before }`.
+- **Instrumentation — 9 actions.** The recovered port wired five
+  (`api_key.created`/`deleted`, `node.removed`, `node.paired`,
+  `stream_tokens.revoked`); this pass added the four the roadmap spec
+  named but the port hadn't reached: `alert_rule.created`,
+  `alert_channel.created`, `webhook.created`, `node.updated` — each at the
+  handler's success path, referencing move-bound fields before they're
+  consumed by the response.
+- **Frontend**: new `settings/AuditLogSection.tsx` — Business+ gated via
+  `usePermissions`-style tier check, action-filter dropdown, load-more
+  cursor pagination, domain-coloured action chips, and an upgrade-nudge
+  locked state for lower tiers. Wired into `SettingsView` after the OTel
+  section. (Note: the pre-existing `AuditLogRecord` type in `types.ts` is
+  unrelated — it's the localhost TracesView CSV export — so the section
+  defines its own cloud-audit `AuditEntry` type.)
+- **Docs**: ROADMAP moved Audit Logging → Shipped; `public/llms-full.txt`
+  gained the `GET /api/audit-log` endpoint spec.
+- **Verification**: cloud `cargo check`/`cargo test` (13) green, frontend
+  `tsc` clean, vitest (80) green.
+
+### Known follow-ups (not in this change)
+- **`public/llms-full.txt` still carries stale pricing** ($9 Pro / $19
+  Team / "from $200" Enterprise, no Business tier) — a drift the prior
+  session had fixed on its lost branch. `public/llms.txt` is correct
+  ($29/$49/$499). Worth a focused doc-pricing sweep.
+- **Deployment Profiles** (agent-side `sovereign_dev` /
+  `dedicated_server` / `production_fleet`) — also built on the lost
+  branch, still absent on `origin/main`, still Planned.
+- The audit `before` cursor uses strict `ts <` so two entries sharing an
+  exact millisecond could straddle a page boundary — acceptable at
+  current volume; revisit with a `(ts, id)` composite cursor if needed.
 
 ## Mid June 2026 — Full-codebase quality review + fix campaign
 

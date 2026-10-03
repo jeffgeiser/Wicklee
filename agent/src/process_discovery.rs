@@ -392,9 +392,19 @@ fn socket_port_for_pid(_pid: u32, _listen_maps: &[HashMap<u64, u16>]) -> Option<
 /// When multiple processes match the same runtime (e.g. main server + worker
 /// sub-processes), the one with an **explicit `--port` flag** wins over a
 /// default-port candidate, and an explicit-port candidate suppresses Tier 3.
+///
+/// Synchronous: walks /proc (or the platform equivalent). Async callers on a
+/// hot path should run it via `spawn_blocking` (see [`start_discovery_loop`]).
 pub fn scan_runtimes() -> HashMap<&'static str, u16> {
+    // Only name (always populated) and argv are read below. The plain
+    // `refresh_processes()` gathers memory/CPU/disk/exe for every process but
+    // NOT argv — sysinfo 0.30 defaults `cmd` to `UpdateKind::Never`, which left
+    // `cmd` empty and silently disabled cmdline-marker and `--port` detection.
+    // `OnlyIfNotSet` reads /proc/<pid>/cmdline once per process lifetime.
     let mut sys = sysinfo::System::new();
-    sys.refresh_processes();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessRefreshKind::new().with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+    );
 
     // Per-runtime candidate state:
     //   explicit  — true when at least one matching process had an explicit --port flag.
@@ -543,7 +553,11 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
         loop {
             ticker.tick().await;
 
-            let active: HashMap<&str, u16> = scan_runtimes().into_iter().collect();
+            // A full process walk is synchronous file I/O — run it on the
+            // blocking pool so it never stalls a tokio worker. If the scan
+            // panics, skip this cycle rather than reporting every runtime gone.
+            let Ok(scan) = tokio::task::spawn_blocking(scan_runtimes).await else { continue };
+            let active: HashMap<&str, u16> = scan.into_iter().collect();
 
             for (name, tx) in &txs {
                 let new_val = active.get(name).copied();

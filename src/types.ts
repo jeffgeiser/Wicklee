@@ -34,6 +34,13 @@ export interface ModelLiveMetrics {
 export interface SentinelMetrics {
   node_id: string;
   hostname?: string;
+  /** Comma-separated node tags (cloud-side, from nodes.tags — patched into
+   *  the metrics object by FleetStreamContext; never sent by the agent).
+   *  Convention: `env:` prefix reserved for environments (env:prod). */
+  tags?: string | null;
+  /** Actual deployment profile the agent is running (fleet config mgmt —
+   *  injected into the telemetry frame by the agent's cloud_push). */
+  deployment_profile?: string | null;
   /** GPU model name — NVIDIA: nvmlDeviceGetName; Apple: system_profiler chip description */
   gpu_name?: string;
   /** CPU/chip name for non-GPU nodes — Linux: /proc/cpuinfo model name */
@@ -328,27 +335,13 @@ export interface ObservabilityNavParams {
   centerMs?: number;
 }
 
-/** Unified audit record combining events, traces, and dismissals. */
-export interface AuditLogRecord {
-  ts_ms:       number;
-  timestamp:   string;
-  record_type: 'event' | 'trace' | 'dismissal';
-  node_id:     string;
-  level:       string;
-  event_type?: string;
-  message:     string;
-  model?:      string;
-  latency_ms?: number;
-  ttft_ms?:    number;
-  tpot_ms?:    number;
-}
 
 /**
  * A single MIG (Multi-Instance GPU) slice on an NVIDIA Hopper or Blackwell device.
  * Reported when the device is MIG-partitioned. Each slice surfaces as a virtual
  * sub-row in Fleet Status — independent WES, VRAM, and thermal attribution.
  */
-export interface MIGInstance {
+interface MIGInstance {
   /** MIG profile name, e.g. "3g.40gb" or "1g.10gb" */
   profile:       string;
   vram_used_mb:  number;
@@ -430,17 +423,18 @@ export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
 
 /**
  * Subscription tier stored in Clerk publicMetadata.tier.
- * Community = free, Pro = $9/mo, Team = $29/mo, Enterprise = $199/mo.
+ *
+ * Sold tiers: Community (free), Team ($200/mo), Enterprise (custom).
+ * 'pro' and 'business' are RETAINED, not sold — existing accounts still hold
+ * them and the cloud tier gates still honour them. Keep both in this union and
+ * in every tier-rank table, or those accounts silently lose access (see the
+ * tierRank map in MetricsHistoryChart for the bug this caused).
  */
-export type SubscriptionTier = 'community' | 'pro' | 'team' | 'business' | 'enterprise';
+// `team_10` and `team` are the two sizes of one plan (10 / 25 nodes) — same
+// features, different node cap. `pro` and `business` are retired but still
+// identify grandfathered subscriptions.
+export type SubscriptionTier = 'community' | 'pro' | 'team_10' | 'team' | 'business' | 'enterprise';
 
-/** OpenTelemetry export configuration (Team+ tier). */
-export interface OtelConfig {
-  enabled: boolean;
-  endpoint_url: string;
-  auth_headers: string;  // JSON string: {"Authorization": "Bearer xxx"}
-  export_interval_s: number;
-}
 
 /**
  * Insights capability level derived from SubscriptionTier.
@@ -467,7 +461,7 @@ export interface Tenant {
   name: string;
 }
 
-export type FleetPairingStatus = 'unpaired' | 'pending' | 'connected';
+type FleetPairingStatus = 'unpaired' | 'pending' | 'connected';
 
 /** Ambient status of the live telemetry connection, used to drive logo + status dot animations. */
 export type ConnectionState = 'connected' | 'degraded' | 'idle' | 'disconnected';
@@ -488,6 +482,8 @@ export interface FleetNode {
   restricted?: boolean;
   /** Custom display name set by Pro+ users. Takes priority over hostname. */
   display_name?: string | null;
+  /** Comma-separated node tags (Pro+, set in Settings → Node Configuration). */
+  tags?: string | null;
 }
 
 /** Values exposed by FleetStreamContext to consumers via useFleetStream(). */
@@ -524,15 +520,10 @@ export enum DashboardTab {
   MODELS = 'models',
   NODES = 'nodes',
   TRACES = 'traces',
-  SCAFFOLDING = 'scaffolding',
   AI_INSIGHTS = 'ai_insights',
   TEAM = 'team',
-  PROFILE = 'profile',
-  SECURITY = 'security',
   API_KEYS = 'api_keys',
-  PREFERENCES = 'preferences',
   PRICING = 'pricing',
-  AI_PROVIDERS = 'ai_providers',
   BILLING = 'billing',
   SETTINGS = 'settings',
 }
@@ -546,6 +537,8 @@ export interface ApiKey {
   name:         string;
   created_at:   number;        // unix ms
   last_used_ms: number | null;
+  /** "personal" (default) or "org" — org keys see the whole org fleet. */
+  scope?:       'personal' | 'org';
 }
 
 /** Response body for POST /api/v1/keys — raw key shown once, then gone. */
@@ -554,6 +547,7 @@ export interface CreateApiKeyResponse {
   key:        string;          // raw wk_live_... — copy immediately
   name:       string;
   created_at: number;          // unix ms
+  scope?:     'personal' | 'org';
 }
 
 // ── Local metric history (agent /api/history) ─────────────────────────────────
@@ -606,6 +600,7 @@ export interface HistoryResponse {
 export const TIER_BADGE: Record<SubscriptionTier, { label: string; color: string }> = {
   community:  { label: 'Community',  color: 'text-gray-400  bg-gray-500/10  border-gray-500/20'  },
   pro:        { label: 'Pro',        color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' },
+  team_10:    { label: 'Team · 10',  color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
   team:       { label: 'Team',       color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
   business:   { label: 'Business',  color: 'text-teal-400  bg-teal-500/10  border-teal-500/20'  },
   enterprise: { label: 'Enterprise', color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },

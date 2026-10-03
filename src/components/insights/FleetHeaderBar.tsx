@@ -7,7 +7,7 @@
  */
 
 import React from 'react';
-import { Thermometer, Zap, HardDrive } from 'lucide-react';
+
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

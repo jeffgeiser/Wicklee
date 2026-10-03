@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wicklee.fullname" . }}-cloud
+  labels:
+    {{- include "wicklee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloud
+spec:
+  replicas: {{ .Values.cloud.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: cloud
+  template:
+    metadata:
+      labels:
+        {{- include "wicklee.labels" . | nindent 8 }}
+        app.kubernetes.io/component: cloud
+    spec:
+      containers:
+        - name: cloud
+          image: "{{ required "cloud.image.repository is required (no public registry yet — build from cloud/Dockerfile)" .Values.cloud.image.repository }}:{{ .Values.cloud.image.tag }}"
+          imagePullPolicy: {{ .Values.cloud.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.cloud.port }}
+          env:
+            - name: SELF_HOSTED
+              value: "true"
+            - name: PORT
+              value: {{ .Values.cloud.port | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ include "wicklee.fullname" . }}-env
+          readinessProbe:
+            httpGet: { path: /health, port: {{ .Values.cloud.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: {{ .Values.cloud.port }} }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.cloud.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wicklee.fullname" . }}-cloud
+  labels:
+    {{- include "wicklee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloud
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cloud
+  ports:
+    - port: {{ .Values.cloud.port }}
+      targetPort: {{ .Values.cloud.port }}

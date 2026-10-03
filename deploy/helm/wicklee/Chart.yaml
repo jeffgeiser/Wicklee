@@ -1,0 +1,14 @@
+apiVersion: v2
+name: wicklee
+description: >-
+  Wicklee self-hosted control plane — sovereign GPU fleet monitoring for local
+  AI inference. Deploys the cloud backend, the dashboard frontend, and
+  (optionally) a bundled TimescaleDB. Kubernetes equivalent of
+  deploy/self-hosted/docker-compose.yml.
+type: application
+version: 0.1.0
+appVersion: "0.11.0"
+keywords: [monitoring, gpu, inference, llm, sovereign]
+home: https://wicklee.dev
+sources:
+  - https://github.com/jeffgeiser/Wicklee

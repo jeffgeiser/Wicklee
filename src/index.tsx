@@ -3,11 +3,14 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
+import { perfMark } from './utils/perfMark';
+// Build-time flags (.env.agent / .env.demo) — Rollup folds them to constants
+// and eliminates the dead branches below.
+import { IS_AGENT, IS_DEMO } from './utils/buildTarget';
 
-// Build-time flag injected by Vite when `vite build --mode agent` is used.
-// The value is baked into the bundle at compile time via .env.agent, not read
-// at runtime. Rollup treats it as a constant and eliminates dead branches.
-const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
+// First line of app code to run — everything before this mark is HTML parse,
+// entry-chunk download and module evaluation.
+perfMark('wk:entry-start');
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Could not find root element to mount to');
@@ -22,7 +25,22 @@ const root = ReactDOM.createRoot(rootElement);
 // true (build-time constant), so Rollup excludes the Clerk module from the
 // agent bundle entirely.
 (async () => {
-  if (IS_AGENT) {
+  if (IS_DEMO) {
+    // Demo build: no Clerk, no backend. A fetch shim serves synthetic
+    // fixtures for every /api/* call, and FleetStreamContext runs against a
+    // fake EventSource — the production dashboard on generated data.
+    const { installDemoFetch } = await import('./demo/demoApi');
+    installDemoFetch();
+    const { default: DemoBanner } = await import('./demo/DemoBanner');
+    root.render(
+      <React.StrictMode>
+        <ErrorBoundary surface="cloud">
+          <App />
+          <DemoBanner />
+        </ErrorBoundary>
+      </React.StrictMode>
+    );
+  } else if (IS_AGENT) {
     // Agent / local binary: no Clerk. Auth is cloud-only.
     root.render(
       <React.StrictMode>
@@ -35,13 +53,27 @@ const root = ReactDOM.createRoot(rootElement);
     // Cloud build: Clerk is dynamically imported so the module is absent from
     // the agent bundle. Dynamic imports in Rollup dead-code branches are
     // tree-shaken when the branch condition is a build-time constant.
-    const { ClerkProvider } = await import('@clerk/clerk-react');
+    //
+    // CloudApp (the Clerk-hooks bridge) is imported here too, in parallel, and
+    // handed to <App> ready-made. Rendering it through React.lazy instead
+    // commits a null Suspense fallback first, and React then holds the real
+    // content back until ~300 ms after that fallback (its flicker-avoidance
+    // throttle) — a fixed, CPU-independent delay on every cold load, measured
+    // at 310–340 ms between render and first app paint. Both chunks are
+    // <link rel=modulepreload>ed by the postbuild step, so awaiting them here
+    // costs no extra round-trip.
+    const [{ ClerkProvider }, { default: CloudApp }] = await Promise.all([
+      import('@clerk/clerk-react'),
+      import('./components/CloudApp'),
+    ]);
+    perfMark('wk:clerk-module');
     const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string;
+    perfMark('wk:render-called');
     root.render(
       <React.StrictMode>
         <ClerkProvider publishableKey={clerkPubKey}>
           <ErrorBoundary surface="cloud">
-            <App />
+            <App cloudApp={CloudApp} />
           </ErrorBoundary>
         </ClerkProvider>
       </React.StrictMode>

@@ -21,6 +21,7 @@ interface WebhookSub {
   url:           string;
   event_type:    string;
   node_id:       string | null;
+  tag?:          string | null;
   threshold:     number | null;
   cooldown_s:    number;
   enabled:       boolean;
@@ -60,6 +61,7 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
   const [formUrl,        setFormUrl]        = useState('');
   const [formEvent,      setFormEvent]      = useState('thermal_state_changed');
   const [formNodeId,     setFormNodeId]     = useState<string>('');
+  const [formTag,        setFormTag]        = useState<string>('');
   const [formThreshold,  setFormThreshold]  = useState<string>('1.0');
   const [formCooldown,   setFormCooldown]   = useState<string>('60');
   const [submitting,     setSubmitting]     = useState(false);
@@ -104,6 +106,7 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
         cooldown_s: parseInt(formCooldown, 10) || 60,
       };
       if (formNodeId)            body.node_id   = formNodeId;
+      if (formTag.trim())        body.tag       = formTag.trim();
       if (evMeta.needsThreshold) body.threshold = parseFloat(formThreshold);
 
       const res = await fetch(`${CLOUD_URL}/api/v1/webhooks`, {
@@ -195,7 +198,7 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
           <div className="rounded-xl bg-violet-500/5 border border-violet-500/20 px-5 py-4 flex items-start gap-3">
             <Lock size={14} className="text-violet-400 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-200">Threshold Webhooks — Pro+</p>
+              <p className="text-xs font-semibold text-gray-200">Threshold Webhooks — Team+</p>
               <p className="text-[11px] text-gray-500 leading-relaxed">
                 Replace polling with sub-second push notifications. Subscribe to thermal/inference state transitions and WES threshold crossings; Wicklee POSTs an HMAC-signed payload to your URL the moment a condition triggers. Essential for NRO and agent-automation loops.
               </p>
@@ -205,7 +208,7 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Pro
+            Upgrade to Team
           </button>
         </div>
       </div>
@@ -310,6 +313,17 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
               </select>
             </div>
           </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-widest text-gray-500 mb-1 block">Tag scope (optional)</label>
+            <input
+              type="text"
+              value={formTag}
+              onChange={e => setFormTag(e.target.value)}
+              placeholder="env:prod"
+              title="Fires only for nodes bearing this tag (set tags in Settings → Node Configuration). Composes with node scope."
+              className="w-full px-3 py-2 text-xs bg-gray-900 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-600 focus:border-violet-500 focus:outline-none"
+            />
+          </div>
           {eventMeta.needsThreshold && (
             <div>
               <label className="text-[10px] uppercase tracking-widest text-gray-500 mb-1 block">
@@ -376,6 +390,7 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
                       {sub.threshold != null && <> · threshold <span className="font-mono text-gray-400">{sub.threshold}</span></>}
                       {sub.node_id && <> · node <span className="font-mono text-gray-400">{sub.node_id}</span></>}
                       {!sub.node_id && <> · all nodes</>}
+                      {sub.tag && <> · tag <span className="font-mono text-gray-400">{sub.tag}</span></>}
                       {' · cooldown '}<span className="font-mono text-gray-400">{sub.cooldown_s}s</span>
                     </p>
                     <p className="text-[10px] text-gray-600 mt-0.5">Last fired: {lastFired}</p>

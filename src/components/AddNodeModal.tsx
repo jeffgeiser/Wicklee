@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, CloudLightning, AlertCircle, CheckCircle2, Copy, Check, ArrowRight, Terminal } from 'lucide-react';
+import { X, CloudLightning, AlertCircle, CheckCircle2, ArrowRight, Terminal } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
+import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
+import { CopyButton } from './shared/CopyButton';
 
 interface AddNodeModalProps {
   isOpen: boolean;
@@ -9,30 +11,6 @@ interface AddNodeModalProps {
   cloudUrl: string;
 }
 
-// Build-time flag — AddNodeModal is cloud-only; agent builds never need it.
-const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-
-// ── Inline copy button ────────────────────────────────────────────────────────
-const CopyBtn: React.FC<{ text: string }> = ({ text }) => {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-      className="p-1.5 text-gray-600 hover:text-white transition-colors shrink-0"
-      title="Copy"
-    >
-      {copied
-        ? <Check className="w-3.5 h-3.5 text-green-400" />
-        : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-};
-
 // ── Code row: comment + copyable command ──────────────────────────────────────
 const CmdRow: React.FC<{ cmd: string; comment?: string }> = ({ cmd, comment }) => (
   <div className="flex items-start justify-between gap-2">
@@ -40,7 +18,7 @@ const CmdRow: React.FC<{ cmd: string; comment?: string }> = ({ cmd, comment }) =
       {comment && <p className="text-[10px] text-gray-600 font-mono mb-0.5">{comment}</p>}
       <p className="text-sm font-mono text-gray-100 break-all leading-snug">{cmd}</p>
     </div>
-    <CopyBtn text={cmd} />
+    <CopyButton text={cmd} className="p-1.5 text-gray-600 hover:text-white shrink-0" />
   </div>
 );
 
@@ -66,8 +44,8 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
     }
   }, [isOpen]);
 
-  // In agent builds ClerkProvider is absent — bail before calling useAuth().
-  if (IS_AGENT) return null;
+  // In agent/demo builds ClerkProvider is absent — bail before calling useAuth().
+  if (IS_AGENT || IS_DEMO) return null;
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const { getToken } = useAuth();
 
@@ -124,7 +102,7 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
         setError(
           res.status === 429 ? `Too many attempts — try again in ${retryAfter ?? '60'}s.` :
           res.status === 401 ? 'Session expired. Sign out and sign back in to continue.' :
-          res.status === 402 ? 'Node limit reached. Upgrade to Wicklee Pro to pair unlimited nodes.' :
+          res.status === 402 ? (serverMsg ?? 'Node limit reached for your plan. Team plans cover 10 or 25 nodes — see Pricing.') :
           res.status >= 500  ? 'Wicklee is temporarily unavailable. Please try again shortly.' :
           (serverMsg ?? 'Pairing failed. Check the code and try again.')
         );

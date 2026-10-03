@@ -21,14 +21,9 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, theme, connectionState = 'disconnected', isLocalHost = false }) => {
   const titles: Record<string, string> = {
-    [DashboardTab.SCAFFOLDING]:  'Fleet Scaffolding',
     [DashboardTab.TEAM]:         'Team & Memberships',
-    [DashboardTab.PROFILE]:      'User Profile',
-    [DashboardTab.SECURITY]:     'Account Security',
     [DashboardTab.API_KEYS]:     'Manage API Keys',
-    [DashboardTab.PREFERENCES]:  'System Preferences',
     [DashboardTab.PRICING]:      'Fleet Pricing',
-    [DashboardTab.AI_PROVIDERS]: 'AI Key Vault',
   };
 
   return (

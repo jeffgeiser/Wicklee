@@ -53,7 +53,7 @@ interface ParsedContext {
 
 function parseContext(json: string | null): ParsedContext {
   if (!json) return { chips: [] };
-  let raw: Record<string, unknown> = {};
+  let raw: Record<string, unknown>;
   try { raw = JSON.parse(json); } catch { return { chips: [] }; }
 
   const hook            = typeof raw.hook === 'string' ? raw.hook : undefined;

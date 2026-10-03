@@ -11,13 +11,13 @@
  * sitemap plugin in vite.config.ts.
  */
 
-export const SITE_ORIGIN = 'https://wicklee.dev';
-export const SITE_NAME   = 'Wicklee';
+const SITE_ORIGIN = 'https://wicklee.dev';
+const SITE_NAME   = 'Wicklee';
 
 /** Social/link-preview card (1200×630). Regenerate via scripts/gen-og-image.mjs. */
-export const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
+const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
 
-export const DEFAULT_TITLE       = 'Wicklee — Local AI inference, finally observable.';
+export const DEFAULT_TITLE       = 'Wicklee — Private AI, finally observable.';
 export const DEFAULT_DESCRIPTION =
   'Routing intelligence. True inference cost. Thermal state. Live, across every node. ' +
   'Built for Ollama and vLLM. Install in 60 seconds — nothing to configure.';
@@ -107,9 +107,23 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
   },
   '/pricing': {
     title:       'Pricing — Wicklee',
-    description: 'Free for 3 nodes. Pro, Team, and Business tiers for growing fleets — ' +
-                 'longer history, alerting, SLA monitoring, and fleet APIs.',
+    description: 'Community free forever — unlimited local nodes, 3 in the cloud fleet view. ' +
+                 'Team from $99/mo (10 nodes) or $200/mo (25 nodes) adds 90-day history, the Fleet API, ' +
+                 'chargeback and capacity planning. Enterprise is self-hosted, with SSO and audit export.',
     path:        '/pricing',
+  },
+  '/trust': {
+    title:       'Trust & Security — Wicklee',
+    description: 'What leaves a node (hardware telemetry) vs what never does (prompts, templates). ' +
+                 'Tenancy, RBAC, append-only audit with SIEM streaming, and the self-hosted control plane.',
+    path:        '/trust',
+  },
+  '/design-partners': {
+    title:       'Design Partner Program — Wicklee',
+    description: 'Running private AI in production? A small number of design partners get ' +
+                 'the Enterprise tier free for 12 months — SSO, RBAC, audit export, SLOs and cost ' +
+                 'governance on your real fleet — for a logo, a case study, and monthly feedback.',
+    path:        '/design-partners',
   },
   '/terms': {
     title:       'Terms of Service — Wicklee',
