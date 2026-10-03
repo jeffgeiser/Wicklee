@@ -209,6 +209,22 @@ const PricingPage: React.FC<PricingPageProps> = ({
   );
   const [cycle, setCycle] = React.useState<BillingCycle>(fromUrl.cycle ?? 'monthly');
 
+  // Terms / Refund / Privacy links shown next to checkout. Real hrefs so they
+  // work without JS and open in a new tab; a plain click stays in the SPA.
+  const legalLink = (path: '/terms' | '/refund' | '/privacy', label: string) => (
+    <a
+      href={path}
+      onClick={e => {
+        if (!onNavigate || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        onNavigate(path);
+      }}
+      className="text-gray-400 hover:text-gray-200 underline underline-offset-2"
+    >
+      {label}
+    </a>
+  );
+
   // ── Self-serve checkout ──────────────────────────────────────────────────
   const checkoutWired = !!onTeamCheckout;
   const [checkoutStatus, setCheckoutStatus] = React.useState<CheckoutStatus>('unknown');
@@ -494,6 +510,9 @@ const PricingPage: React.FC<PricingPageProps> = ({
                     ) : !isLoggedIn ? (
                       <p className="text-[11px] text-gray-500 text-center">You'll create an account (or sign in) first.</p>
                     ) : null}
+                    <p className="text-[11px] text-gray-500 text-center leading-relaxed">
+                      By purchasing you agree to the {legalLink('/terms', 'Terms')} and {legalLink('/refund', 'Refund Policy')}.
+                    </p>
                   </div>
                 ) : (
                   <a href={tier.cta.href} className={ctaCls}>
@@ -505,6 +524,14 @@ const PricingPage: React.FC<PricingPageProps> = ({
             );
           })}
         </div>
+
+        {/* Legal footer — Paddle (merchant of record) expects the Terms,
+            Refund and Privacy pages to be reachable from where people buy. */}
+        <p className="text-[11px] text-gray-500 text-center leading-relaxed -mt-6">
+          Prices in USD, excluding applicable taxes (calculated at checkout). Orders are processed by Paddle.com, our merchant of record.
+          By purchasing you agree to the {legalLink('/terms', 'Terms of Service')} and {legalLink('/refund', 'Refund Policy')}.
+          See also our {legalLink('/privacy', 'Privacy Policy')}.
+        </p>
 
         {/* ── What every tier includes ─────────────────────────────── */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">

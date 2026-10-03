@@ -60,16 +60,22 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
           {activeTab === 'privacy' && <PrivacyPolicy />}
           {activeTab === 'refund' && <RefundPolicy />}
         </div>
-        <p className="text-xs text-gray-600 mt-12">Last updated: April 3, 2026</p>
+        <p className="text-xs text-gray-600 mt-12">Last updated: October 3, 2026</p>
       </div>
     </div>
   );
 };
 
+// Every "Paddle" mention below describes Paddle.com as merchant of record,
+// not a mere processor: Paddle sells the subscription to the buyer, so the
+// Terms, Privacy and Refund tabs must agree on that. Plan contents follow the
+// cards in src/components/PricingPage.tsx (the source of truth) and retention
+// follows cloud/src/maintenance.rs + agent/src/store.rs — change them together.
+
 const TermsOfService: React.FC = () => (
   <>
     <h1>Terms of Service</h1>
-    <p>These Terms of Service ("Terms") govern your use of Wicklee ("Service"), operated by Wicklee ("we", "us", "our"). By using the Service, you agree to these Terms.</p>
+    <p>These Terms of Service ("Terms") govern your use of Wicklee ("Service"). Wicklee is a product of Noorth Labs ("Noorth Labs", "we", "us", "our"), which operates the Service. By using the Service, you agree to these Terms.</p>
 
     <h2>1. Service Description</h2>
     <p>Wicklee is a sovereign GPU fleet monitoring platform for self-hosted AI inference. The Service consists of:</p>
@@ -82,19 +88,23 @@ const TermsOfService: React.FC = () => (
     <h2>2. Accounts</h2>
     <p>Cloud features require an account. You are responsible for maintaining the security of your account credentials. You must provide accurate information when creating an account. One person or legal entity may not maintain more than one free account.</p>
 
-    <h2>3. Subscription Tiers</h2>
-    <p>The Service is offered in multiple tiers:</p>
+    <h2>3. Plans</h2>
+    <p>The Service is offered in the plans below. The <a href="/pricing">pricing page</a> has the full, current feature list for each plan; if it and this summary ever differ, the pricing page applies.</p>
     <ul>
-      <li><strong>Community (Free):</strong> Unlimited local nodes, up to 3 nodes in the cloud fleet view, 24-hour history, 9 observation patterns, local API and MCP server, local inline proxy.</li>
-      <li><strong>Team ($99/month or $990/year for up to 10 nodes; $200/month or $2,000/year for up to 25 nodes):</strong> Up to 10 or 25 nodes in the cloud fleet view depending on plan size, 90-day history, 18 observation patterns, Fleet API access, OpenTelemetry and Prometheus export, Cloud MCP, Slack/email/PagerDuty alerts, shared dashboards, cost and chargeback reporting, capacity planning, SLOs with error budgets.</li>
-      <li><strong>Enterprise:</strong> Custom pricing and terms. Everything in Team, plus a self-hosted control plane, SSO/SAML, audit log export and SIEM streaming, 12-month history, and a service level agreement. Contact us for details.</li>
+      <li><strong>Community (free):</strong> Unlimited local nodes, up to 3 nodes in the cloud fleet view, 24-hour cloud metric history, local API and MCP server, Fleet API core endpoints at 60 requests/minute, and community support via GitHub issues.</li>
+      <li><strong>Team ($99/month or $990/year for up to 10 nodes; $200/month or $2,000/year for up to 25 nodes):</strong> Everything in Community, plus up to 10 or 25 nodes in the cloud fleet view depending on plan size, 90-day metric history, Fleet API at 600 requests/minute plus the analytics endpoints, cost and chargeback reports, idle-waste and right-sizing reports, capacity planning, SLOs with error budgets, benchmark report export, and email support. Both sizes have the same features; the size sets the node limit.</li>
+      <li><strong>Enterprise:</strong> Custom pricing and terms set out in a separate written agreement. Everything in Team, plus options such as a self-hosted control plane, SSO/SAML, audit log export and SIEM streaming, extended metric history, a service level agreement, and dedicated support.</li>
     </ul>
-    <p>Pricing is subject to change with 30 days notice to existing subscribers.</p>
+    <p>Prices are in US dollars and exclude applicable taxes. Sales tax, VAT, or GST is calculated by Paddle at checkout based on your location and added to the price shown. Pricing is subject to change with 30 days notice to existing subscribers.</p>
 
-    <h2>4. Billing</h2>
-    <p>Paid subscriptions are billed monthly or annually through our payment processor, Paddle. By subscribing, you authorize recurring charges. Subscriptions renew automatically unless cancelled before the next billing cycle.</p>
+    <h2>4. Billing and Merchant of Record</h2>
+    <p>Our order process is conducted by our online reseller Paddle.com. Paddle.com is the Merchant of Record for all our orders: Paddle sells the subscription to you, handles billing and invoicing, collects and remits sales tax and VAT, and appears on your card or bank statement. Paddle provides all customer service inquiries and handles returns related to payment. Your purchase is also subject to <a href="https://www.paddle.com/legal/buyer-terms" target="_blank" rel="noopener noreferrer">Paddle's Buyer Terms</a>.</p>
+    <p>Paid subscriptions are billed in advance, monthly or annually. By subscribing, you authorize recurring charges. Subscriptions renew automatically at the end of each billing period unless cancelled before the renewal date.</p>
 
-    <h2>5. Data and Sovereignty</h2>
+    <h2>5. Cancellation</h2>
+    <p>You may cancel a paid subscription at any time, using the subscription management link in any Paddle receipt or subscription email (or by looking up your order at <a href="https://paddle.net" target="_blank" rel="noopener noreferrer">paddle.net</a>), or by emailing <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a> from your account email. Cancellation stops the next renewal; you keep paid features until the end of the billing period you have already paid for, after which your account moves to the Community plan. Cancelling does not by itself trigger a refund; see the <a href="/refund">Refund Policy</a>.</p>
+
+    <h2>6. Data and Sovereignty</h2>
     <p>The Wicklee agent is designed to be sovereign by default:</p>
     <ul>
       <li>The agent runs locally and makes no outbound connections unless you explicitly enable fleet pairing.</li>
@@ -103,44 +113,47 @@ const TermsOfService: React.FC = () => (
       <li>You may unpair from the fleet at any time, immediately stopping all data transmission.</li>
     </ul>
 
-    <h2>6. Acceptable Use</h2>
+    <h2>7. Acceptable Use</h2>
     <p>You agree not to:</p>
     <ul>
       <li>Reverse engineer, decompile, or disassemble the Service beyond what is permitted by the FSL-1.1-Apache-2.0 license.</li>
       <li>Use the Service to compete with Wicklee by offering a hosted or managed monitoring service based on our software.</li>
       <li>Transmit malicious data or attempt to exploit the Service infrastructure.</li>
       <li>Share API keys or account access with unauthorized parties.</li>
-      <li>Exceed published rate limits (600 requests/minute for API access).</li>
+      <li>Exceed the API rate limits for your plan (60 requests/minute on Community, 600 requests/minute on Team).</li>
     </ul>
 
-    <h2>7. License</h2>
+    <h2>8. License</h2>
     <p>The Wicklee software is licensed under FSL-1.1-Apache-2.0 (Functional Source License). This means:</p>
     <ul>
       <li>You may use, copy, modify, and redistribute the software for any purpose except competing with Wicklee as a hosted service.</li>
       <li>After four years from each release date, the software converts to Apache 2.0 (fully permissive open source).</li>
     </ul>
 
-    <h2>8. Availability and Support</h2>
-    <p>We strive to maintain high availability but do not guarantee specific uptime for the cloud service. The local agent operates independently and is not affected by cloud service availability. Support is provided on a best-effort basis for Community tier and via email for paid tiers.</p>
+    <h2>9. Availability and Support</h2>
+    <p>We strive to maintain high availability but do not guarantee specific uptime for the cloud service unless an Enterprise agreement says otherwise. The local agent operates independently and is not affected by cloud service availability. Support is provided on a best-effort basis via GitHub issues for Community and via email for paid plans.</p>
 
-    <h2>9. Limitation of Liability</h2>
-    <p>The Service is provided "as is" without warranty of any kind. We are not liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service. Our total liability is limited to the amount you paid us in the 12 months preceding the claim.</p>
+    <h2>10. Limitation of Liability</h2>
+    <p>The Service is provided "as is" without warranty of any kind. We are not liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service. Our total liability is limited to the amount you paid for the Service in the 12 months preceding the claim.</p>
 
-    <h2>10. Termination</h2>
-    <p>You may cancel your subscription at any time. We may suspend or terminate your account for violations of these Terms. Upon termination, your access to cloud features will cease, but the local agent will continue to function independently.</p>
+    <h2>11. Termination</h2>
+    <p>We may suspend or terminate your account for violations of these Terms. Upon termination, your access to cloud features will cease, but the local agent will continue to function independently. Cloud data is then handled as described in the <a href="/privacy">Privacy Policy</a>.</p>
 
-    <h2>11. Changes to Terms</h2>
+    <h2>12. Governing Law and Disputes</h2>
+    <p>These Terms are governed by the laws of the Commonwealth of Virginia, United States, without regard to its conflict-of-law rules. Any dispute arising out of or relating to these Terms or the Service will be brought exclusively in the state or federal courts located in the Commonwealth of Virginia, and you and we consent to the personal jurisdiction of those courts. Nothing in this section limits any mandatory consumer protection rights you have under the law of the country where you live.</p>
+
+    <h2>13. Changes to Terms</h2>
     <p>We may update these Terms from time to time. Material changes will be communicated via email or dashboard notification at least 30 days in advance. Continued use of the Service after changes constitutes acceptance.</p>
 
-    <h2>12. Contact</h2>
-    <p>Questions about these Terms? Contact us at <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a>.</p>
+    <h2>14. Contact</h2>
+    <p>Questions about these Terms? Contact Noorth Labs at <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a>.</p>
   </>
 );
 
 const PrivacyPolicy: React.FC = () => (
   <>
     <h1>Privacy Policy</h1>
-    <p>This Privacy Policy explains how Wicklee ("we", "us", "our") collects, uses, and protects your information.</p>
+    <p>This Privacy Policy explains how Noorth Labs ("we", "us", "our"), which makes and operates Wicklee, collects, uses, and protects your information.</p>
 
     <h2>1. Our Privacy Principle</h2>
     <p>Wicklee is built on a principle of structural privacy. The agent runs entirely on your machine and makes zero outbound connections by default. We can only receive data you explicitly choose to send by enabling fleet pairing.</p>
@@ -160,7 +173,7 @@ const PrivacyPolicy: React.FC = () => (
     <h3>When you create a cloud account:</h3>
     <ul>
       <li><strong>Account information:</strong> Email address, name (provided via Clerk authentication).</li>
-      <li><strong>Subscription data:</strong> Billing status, tier, payment history (processed by Paddle; we do not store payment card details).</li>
+      <li><strong>Subscription data:</strong> Plan, billing status, and subscription and customer identifiers. Payments are taken by Paddle.com as merchant of record; Paddle collects your payment and billing details directly and we never receive or store your card details.</li>
     </ul>
 
     <h3>What we never collect:</h3>
@@ -180,19 +193,22 @@ const PrivacyPolicy: React.FC = () => (
 
     <h2>4. Data Storage and Retention</h2>
     <ul>
-      <li><strong>Local data:</strong> The agent stores up to 1 hour of metrics in a local DuckDB database on your machine. This data never leaves your device unless fleet pairing is enabled.</li>
-      <li><strong>Cloud data:</strong> Raw telemetry is retained for 2 days. 5-minute rollups are retained for 90 days. Node events are retained for 30 days.</li>
+      <li><strong>Local data:</strong> The agent stores metrics in a local DuckDB database on your machine: 1-second samples for 24 hours, 1-minute aggregates for 30 days, and 1-hour aggregates for 90 days. This data never leaves your device unless fleet pairing is enabled.</li>
+      <li><strong>Cloud data:</strong> Raw telemetry is rolled up into 5-minute aggregates after 24 hours and kept no longer than 2 days. 5-minute aggregates are kept for up to 12 months; how much history you can view depends on your plan (24 hours on Community, 90 days on Team). Node events and resolved observations are kept for 30 days.</li>
       <li><strong>Account data:</strong> Retained for the lifetime of your account and deleted within 30 days of account closure.</li>
     </ul>
 
-    <h2>5. Data Sharing</h2>
-    <p>We do not sell your data. We share information only with:</p>
+    <h2>5. Data Sharing and Service Providers</h2>
+    <p>We do not sell your data. We share information only with the service providers below, and only as needed for them to provide their service:</p>
     <ul>
-      <li><strong>Clerk:</strong> Authentication provider (email, name).</li>
-      <li><strong>Paddle:</strong> Payment processor (billing information).</li>
-      <li><strong>Railway:</strong> Infrastructure provider (hosting; data is encrypted in transit and at rest).</li>
+      <li><strong>Clerk:</strong> Authentication and account management (email, name, sign-in data).</li>
+      <li><strong>Paddle.com:</strong> Merchant of record for all purchases. Paddle sells the subscription to you and processes your payment, billing details, invoices, and sales tax/VAT under its own privacy policy, and shares subscription status with us.</li>
+      <li><strong>Railway:</strong> Cloud hosting and database (data is encrypted in transit and at rest).</li>
+      <li><strong>Cloudflare:</strong> Website delivery, bot protection on sign-in (Turnstile), email routing for our wicklee.dev addresses, and privacy-friendly page-view analytics.</li>
+      <li><strong>Resend:</strong> Delivery of alert and weekly digest emails (recipient email address and message content).</li>
+      <li><strong>Google Fonts:</strong> Web fonts loaded by wicklee.dev pages (your browser requests the fonts, which shares your IP address with Google).</li>
     </ul>
-    <p>We may disclose information if required by law or to protect our rights.</p>
+    <p>If you configure integrations such as Slack, PagerDuty, webhooks, OpenTelemetry, or SIEM export, we send the alert or telemetry data you choose to the destination you configure. We may disclose information if required by law or to protect our rights.</p>
 
     <h2>6. Your Rights</h2>
     <ul>
@@ -212,7 +228,7 @@ const PrivacyPolicy: React.FC = () => (
     </ul>
 
     <h2>8. Cookies</h2>
-    <p>wicklee.dev uses essential cookies for authentication (via Clerk). We use Cloudflare analytics for basic page view metrics. We do not use advertising or tracking cookies.</p>
+    <p>wicklee.dev uses essential cookies for authentication (via Clerk) and checkout (via Paddle). We use Cloudflare analytics for basic page view metrics. We do not use advertising or tracking cookies.</p>
 
     <h2>9. Children</h2>
     <p>The Service is not directed at children under 16. We do not knowingly collect information from children.</p>
@@ -221,40 +237,46 @@ const PrivacyPolicy: React.FC = () => (
     <p>We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated date.</p>
 
     <h2>11. Contact</h2>
-    <p>Privacy questions? Contact us at <a href={mailto(PRIVACY_EMAIL)}>{PRIVACY_EMAIL}</a>.</p>
+    <p>Privacy questions? Contact Noorth Labs at <a href={mailto(PRIVACY_EMAIL)}>{PRIVACY_EMAIL}</a>.</p>
   </>
 );
 
 const RefundPolicy: React.FC = () => (
   <>
     <h1>Refund Policy</h1>
-    <p>We want you to be satisfied with Wicklee. This policy explains how refunds work for paid subscriptions.</p>
+    <p>We want you to be satisfied with Wicklee. This policy explains how refunds work for paid subscriptions. Purchases are made through Paddle.com, our merchant of record, which issues all refunds.</p>
 
-    <h2>1. Free Tier</h2>
-    <p>The Community tier is free and requires no payment. No refund applies.</p>
+    <h2>1. Community (Free)</h2>
+    <p>The Community plan is free and requires no payment. No refund applies.</p>
 
     <h2>2. Team Subscriptions</h2>
+    <p>Team is billed monthly or annually, at either plan size (up to 10 or up to 25 nodes). The same rules apply to both sizes.</p>
 
     <h3>14-Day Money-Back Guarantee</h3>
-    <p>If you are not satisfied with your paid subscription, you may request a full refund within 14 days of your initial purchase. No questions asked.</p>
+    <p>You may request a full refund within 14 days of your initial purchase of a Team subscription, and within 14 days of each annual renewal charge. No questions asked; telling us why is optional.</p>
 
     <h3>After 14 Days</h3>
-    <p>After the 14-day window, subscriptions are non-refundable for the current billing period. You may cancel at any time, and your access will continue until the end of your current billing cycle.</p>
+    <ul>
+      <li><strong>Annual billing:</strong> After the 14-day window, the current annual period is non-refundable. Cancelling stops the next renewal, and you keep Team features until the end of the paid year.</li>
+      <li><strong>Monthly billing:</strong> Monthly renewal charges are not refundable once made. You can cancel at any time; cancelling stops the next renewal, and you keep Team features until the end of the paid month.</li>
+    </ul>
+    <p>See the <a href="/terms">Terms of Service</a> for how to cancel.</p>
 
-    <h2>3. Annual Subscriptions</h2>
-    <p>For annual plans, the 14-day money-back guarantee applies from the date of purchase. After 14 days, a prorated refund may be issued at our discretion for the unused portion of the annual term.</p>
+    <h2>3. Plan Changes</h2>
+    <p>To change plan size, email <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a>.</p>
+    <ul>
+      <li><strong>Upgrades</strong> (for example, Team 10 nodes to Team 25 nodes) take effect immediately. Paddle prorates the charge, crediting the unused part of your current period against the new price.</li>
+      <li><strong>Downgrades</strong> (Team 25 nodes to Team 10 nodes, or Team to Community) take effect at the start of your next billing period. You keep your current plan until then, and no partial refund is issued for the remainder of the current period.</li>
+    </ul>
 
-    <h2>4. Downgrades</h2>
-    <p>If you downgrade from a higher tier to a lower tier (e.g., Team to Community), the change takes effect at the end of your current billing cycle. No prorated refund is issued for downgrades.</p>
+    <h2>4. Service Issues</h2>
+    <p>If the cloud service experiences significant downtime or degradation that materially affects your use, contact us and we will work with you on a fair resolution, such as a service credit. This is in addition to the 14-day guarantee above. The local agent is not affected by cloud service availability and continues to function independently.</p>
 
-    <h2>5. Service Issues</h2>
-    <p>If the cloud service experiences significant downtime or degradation that materially affects your use, we may issue credits or refunds at our discretion. The local agent is not affected by cloud service availability and continues to function independently.</p>
+    <h2>5. How to Request a Refund</h2>
+    <p>Email <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a> from your account email (or include it), ideally with your Paddle order number from your receipt. You can also contact Paddle directly for help with a refund or charge, using the link in your Paddle receipt email or at <a href="https://paddle.net" target="_blank" rel="noopener noreferrer">paddle.net</a>. Refunds are issued by Paddle to your original payment method and typically appear within 5–10 business days.</p>
 
-    <h2>6. How to Request a Refund</h2>
-    <p>To request a refund, contact us at <a href={mailto(CONTACT_EMAIL)}>{CONTACT_EMAIL}</a> with your account email and the reason for your request. Refunds are processed through Paddle and typically appear within 5-10 business days.</p>
-
-    <h2>7. Enterprise</h2>
-    <p>Enterprise contracts have separate terms. Refund policies for Enterprise customers are governed by the individual agreement.</p>
+    <h2>6. Enterprise</h2>
+    <p>Enterprise contracts have separate terms. Refunds for Enterprise customers are governed by the individual agreement.</p>
   </>
 );
 
