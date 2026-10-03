@@ -54,8 +54,9 @@ interface PricingPageProps {
 //   - "90-day metric history" is the range-selector limit for Team
 //     (MetricsHistoryChart RANGE_CONFIG minTier), not a storage guarantee.
 //   - "12-month metric history" matches the real nightly prune in
-//     cloud/src/main.rs, which deletes metrics_5min older than 365 days for
-//     every tenant. Do NOT promote this to "unlimited" without first making
+//     cloud/src/maintenance.rs, which deletes metrics_5min older than 365
+//     days for every tenant, and the 1Y range in utils/historyRange.ts
+//     (Enterprise + grandfathered Business) that makes it viewable. Do NOT promote this to "unlimited" without first making
 //     that prune tier-aware.
 //   - Audit log export is Business+/Enterprise in code (isBusinessOrAbove), so
 //     it is listed under Enterprise only.

@@ -7,7 +7,7 @@
 import type { SubscriptionTier } from '../types';
 import { tierLabel } from './tier';
 
-export type TimeRange = '1h' | '24h' | '7d' | '30d' | '90d';
+export type TimeRange = '1h' | '24h' | '7d' | '30d' | '90d' | '1y';
 
 export const RANGE_CONFIG: Record<TimeRange, {
   label:      string;
@@ -20,11 +20,17 @@ export const RANGE_CONFIG: Record<TimeRange, {
   '7d':  { label: '7D',  minTier: 'pro',       historyMin: 7,  fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
   '30d': { label: '30D', minTier: 'team',      historyMin: 30, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
   '90d': { label: '90D', minTier: 'team',      historyMin: 90, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) },
+  // Full metrics_5min retention (365-day nightly prune), daily buckets.
+  // minTier is 'business' so grandfathered Business keeps it; the upgrade
+  // label below names Enterprise, the plan actually sold.
+  '1y':  { label: '1Y',  minTier: 'business',  historyMin: 365, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) },
 };
 
-export const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d'];
+export const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d', '1y'];
 
 /** "Requires <tier>" label for a locked range; empty for Community ranges. */
 export function tierUpgradeLabel(minTier: SubscriptionTier): string {
-  return minTier === 'community' ? '' : tierLabel(minTier);
+  if (minTier === 'community') return '';
+  // Business is retired — a locked Business-level range sells Enterprise.
+  return tierLabel(minTier === 'business' ? 'enterprise' : minTier);
 }
