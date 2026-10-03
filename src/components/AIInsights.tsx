@@ -31,9 +31,9 @@ import {
   Check} from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier, ObservabilityNavParams } from '../types';
-import { useFleetObservations } from '../hooks/useFleetObservations';
-import type { FleetObservation } from '../hooks/useFleetObservations';
-import { useFleetDuty } from '../hooks/useFleetDuty';
+import { useFleetObservations as useCloudFleetObservations } from '../cloud/hooks/useFleetObservations';
+import type { FleetObservation } from '../cloud/hooks/useFleetObservations';
+import { useFleetDuty as useCloudFleetDuty } from '../cloud/hooks/useFleetDuty';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 
 import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
@@ -68,16 +68,16 @@ import InsightsLiteCard   from './insights/InsightsLiteCard';
 import InsightsTeaseCard  from './insights/InsightsTeaseCard';
 import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
-import WESHistoryChart from './WESHistoryChart';
-import MetricsHistoryChart from './MetricsHistoryChart';
-import ThermalBudgetCard from './insights/ThermalBudgetCard';
-import ChargebackCard from './insights/ChargebackCard';
-import CapacityPlannerCard from './insights/CapacityPlannerCard';
-import MigrationAdvisorCard from './insights/MigrationAdvisorCard';
-import IdleWasteCard from './insights/IdleWasteCard';
+import WESHistoryChart from '../cloud/WESHistoryChart';
+import MetricsHistoryChart from '../cloud/MetricsHistoryChart';
+import ThermalBudgetCard from '../cloud/insights/ThermalBudgetCard';
+import ChargebackCard from '../cloud/insights/ChargebackCard';
+import CapacityPlannerCard from '../cloud/insights/CapacityPlannerCard';
+import MigrationAdvisorCard from '../cloud/insights/MigrationAdvisorCard';
+import IdleWasteCard from '../cloud/insights/IdleWasteCard';
 
 import AccordionObservationCard from './insights/AccordionObservationCard';
-import FleetObservationCard from './insights/FleetObservationCard';
+import FleetObservationCard from '../cloud/insights/FleetObservationCard';
 
 import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
@@ -89,7 +89,20 @@ import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
+import { IS_AGENT, IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
+
+// The two fleet hooks are cloud-only. They must still be called on every
+// render (rules of hooks), so the agent build swaps in inert stand-ins at
+// module scope: IS_AGENT folds at build time and the src/cloud imports above
+// drop out of the agent bundle.
+const noFleetObservations: typeof useCloudFleetObservations = () => ({
+  observations: [],
+  loading: false,
+  refresh: async () => {},
+  acknowledge: async () => {},
+});
+const useFleetObservations = IS_AGENT ? noFleetObservations : useCloudFleetObservations;
+const useFleetDuty: typeof useCloudFleetDuty = IS_AGENT ? () => null : useCloudFleetDuty;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

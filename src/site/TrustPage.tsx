@@ -13,7 +13,7 @@ import {
   ArrowLeft, ShieldCheck, Server, Cloud, Lock, Eye, EyeOff,
   FileText, Network, KeyRound, Building2,
 } from 'lucide-react';
-import { CONTACT_EMAIL, mailto } from '../utils/contact';
+import { CONTACT_EMAIL, mailto } from './utils/contact';
 
 interface TrustPageProps {
   onNavigate: (path: string) => void;

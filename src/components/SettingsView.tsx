@@ -4,11 +4,11 @@ import { version as pkgVersion } from '../../package.json';
 import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock, Key, ChevronRight, Globe } from 'lucide-react';
 import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
-import WebhooksSection from './settings/WebhooksSection';
-import AuditLogSection from './settings/AuditLogSection';
-import SsoSection from './settings/SsoSection';
-import ModelGovernanceSection from './settings/ModelGovernanceSection';
-import SLOSection from './settings/SLOSection';
+import WebhooksSection from '../cloud/settings/WebhooksSection';
+import AuditLogSection from '../cloud/settings/AuditLogSection';
+import SsoSection from '../cloud/settings/SsoSection';
+import ModelGovernanceSection from '../cloud/settings/ModelGovernanceSection';
+import SLOSection from '../cloud/settings/SLOSection';
 import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,

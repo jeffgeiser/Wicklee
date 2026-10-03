@@ -4,8 +4,8 @@
  * unlocks the range, the history depth it needs, and the x-axis formatter.
  */
 
-import type { SubscriptionTier } from '../types';
-import { tierLabel } from './tier';
+import type { SubscriptionTier } from '../../types';
+import { tierLabel } from '../../utils/tier';
 
 export type TimeRange = '1h' | '24h' | '7d' | '30d' | '90d' | '1y';
 

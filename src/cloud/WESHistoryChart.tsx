@@ -1,4 +1,4 @@
-import { RANGE_CONFIG, RANGES, tierUpgradeLabel, type TimeRange } from '../utils/historyRange';
+import { RANGE_CONFIG, RANGES, tierUpgradeLabel, type TimeRange } from './utils/historyRange';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,

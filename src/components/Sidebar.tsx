@@ -8,7 +8,7 @@ import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
 
 // Clerk account actions are lazy-loaded so @clerk/clerk-react is never imported
 // in agent builds. The dynamic import is tree-shaken when IS_AGENT is true.
-const LazyClerkAccountActions = React.lazy(() => import('./ClerkAccountActions'));
+const LazyClerkAccountActions = IS_AGENT ? ((() => null) as never) : React.lazy(() => import('../cloud/ClerkAccountActions'));
 
 interface SidebarProps {
   activeTab: DashboardTab;

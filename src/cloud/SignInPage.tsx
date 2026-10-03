@@ -1,6 +1,6 @@
 import React from 'react';
 import { SignIn } from '@clerk/clerk-react';
-import { safeRedirectPath } from '../utils/authRedirect';
+import { safeRedirectPath } from './utils/authRedirect';
 
 interface SignInPageProps {
   onNavigate: (path: string) => void;

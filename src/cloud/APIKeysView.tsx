@@ -3,7 +3,7 @@ import { Key, Plus, Trash2, Copy, Check, X, Terminal, ChevronRight } from 'lucid
 import { useAuth } from '@clerk/clerk-react';
 import type { ApiKey, CreateApiKeyResponse } from '../types';
 import { CLOUD_URL } from '../utils/cloudUrl';
-import { CopyButton } from './shared/CopyButton';
+import { CopyButton } from '../components/shared/CopyButton';
 import { IS_DEMO } from '../utils/buildTarget';
 
 // For display in the Quick Reference — always the public URL.

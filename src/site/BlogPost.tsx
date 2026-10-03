@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import Logo from './Logo';
-import { parseFrontmatter, slugToTitle, formatDate } from '../utils/parseFrontmatter';
+import Logo from '../components/Logo';
+import { parseFrontmatter, slugToTitle, formatDate } from './utils/parseFrontmatter';
 import { setPageMeta } from '../utils/pageMeta';
 
 interface BlogPostProps {

@@ -30,12 +30,12 @@ import {
 import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
 import { inferCategory, categoryDescription, ALL_CATEGORIES, type ModelCategory } from '../../utils/modelCategory';
 import { useSettings } from '../../hooks/useSettings';
-import DiscoveryHoverCard from './DiscoveryHoverCard';
-import { RowCopyButton, CopyButton } from '../shared/CopyButton';
+import DiscoveryHoverCard from '../../components/insights/DiscoveryHoverCard';
+import { RowCopyButton, CopyButton } from '../../components/shared/CopyButton';
 import {
   fitColors, fitGradeLabel, fmtDl, shortModelName, uploaderName,
   projConfidenceLabel, projConfidenceBody, projConfidenceRows,
-} from './discoveryHelpers';
+} from '../../components/insights/discoveryHelpers';
 
 /** Sort modes for the Discovery results list. Default = 'fit' (current behavior). */
 type SortMode = 'fit' | 'popularity' | 'speed' | 'cost' | 'size_asc' | 'size_desc';

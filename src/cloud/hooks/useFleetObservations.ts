@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { CLOUD_URL } from '../utils/cloudUrl';
+import { CLOUD_URL } from '../../utils/cloudUrl';
 
 export interface FleetObservation {
   id:             string;
